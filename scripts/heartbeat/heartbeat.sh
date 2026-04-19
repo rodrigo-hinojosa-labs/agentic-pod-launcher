@@ -162,16 +162,17 @@ run_claude_session() {
   cfg_dir=$(ensure_heartbeat_config_dir 2>/dev/null || true)
   [ -n "$cfg_dir" ] || cfg_dir="$HOME/.claude"
   cfg_sq=$(sh_sq "$cfg_dir")
-  # --dangerously-skip-permissions lets the heartbeat's ephemeral claude
-  # run tools without waiting for approval. Safe here because (a) the
-  # config dir is isolated so no cross-contamination with the interactive
-  # session, (b) the prompt itself should discourage tool use since
-  # stdout is forwarded verbatim to the notifier, (c) the heartbeat is
-  # short-lived and non-interactive so there's no way to confirm prompts
-  # anyway — without this flag claude would just print "requires approval"
-  # notes and fail to use any tool.
+  # The heartbeat launches an ephemeral, non-interactive claude, so we:
+  #   - --dangerously-skip-permissions: no human is there to approve
+  #     tool prompts. Safe because the config dir is isolated, the run
+  #     is short-lived, and stdout is forwarded to the notifier verbatim.
+  #   - --permission-mode auto: override the user-level
+  #     `permissions.defaultMode: plan` that start_services.sh sets for
+  #     the interactive agent session. Plan mode makes sense when a
+  #     human reviews proposed changes; for a cron tick with nobody
+  #     watching, auto just runs the prompt and exits.
   tmux new-session -d -s "$sess" -c "$WORKSPACE_DIR" \
-    "CLAUDE_CONFIG_DIR=$cfg_sq claude --print --dangerously-skip-permissions $prompt_sq > $log_sq 2>&1; echo HEARTBEAT_DONE >> $log_sq"
+    "CLAUDE_CONFIG_DIR=$cfg_sq claude --print --dangerously-skip-permissions --permission-mode auto $prompt_sq > $log_sq 2>&1; echo HEARTBEAT_DONE >> $log_sq"
 
   local waited=0
   while [ "$waited" -lt "$HEARTBEAT_TIMEOUT" ]; do

@@ -104,7 +104,7 @@ El watchdog también detecta automáticamente si `bun server.ts` muere (otro mod
 **Ejemplo de secuencia:**
 
 ```bash
-# Desde tu terminal, cuando Donna no contesta:
+# Desde tu terminal, cuando el agente no contesta:
 docker exec -u agent {{AGENT_NAME}} heartbeatctl kick-channel
 # heartbeatctl: killed tmux session 'agent' — watchdog will respawn in ~2s
 
