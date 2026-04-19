@@ -128,21 +128,34 @@ has_telegram_token() {
   [ -n "$val" ]
 }
 
-# Pre-accept Claude Code's "bypass permissions" one-time warning by flipping
-# skipDangerousModePermissionPrompt=true in the user settings. Without this,
-# the first launch with --dangerously-skip-permissions hangs on an
-# interactive confirmation dialog — which breaks an automated flow where
-# the user interacts only via Telegram.
+# Pre-configure the user's Claude settings for headless operation:
+#   - skipDangerousModePermissionPrompt=true — dismiss the one-time
+#     `--dangerously-skip-permissions` warning dialog so the first launch
+#     doesn't hang waiting for a y/N the user can't press (they only
+#     interact via Telegram).
+#   - permissions.defaultMode=auto — start every session in auto mode
+#     (Claude prefers action over clarifying questions). Matches the
+#     agent's intended "pick up Telegram messages and just do things"
+#     behavior without the user having to run `/auto` every session.
+# Both heartbeat and interactive sessions read from the same settings.json
+# (heartbeat's isolated config dir symlinks this file), so setting these
+# once here covers both launch paths.
 pre_accept_bypass_permissions() {
   local settings="$HOME/.claude/settings.json"
   [ -f "$settings" ] || return 0
-  local current
-  current=$(jq -r '.skipDangerousModePermissionPrompt // false' "$settings" 2>/dev/null || echo "false")
-  [ "$current" = "true" ] && return 0
-  log "pre-accepting --dangerously-skip-permissions in $settings"
+  local need_skip need_auto
+  need_skip=$(jq -r '.skipDangerousModePermissionPrompt // false' "$settings" 2>/dev/null || echo "false")
+  need_auto=$(jq -r '.permissions.defaultMode // ""' "$settings" 2>/dev/null || echo "")
+  if [ "$need_skip" = "true" ] && [ "$need_auto" = "auto" ]; then
+    return 0
+  fi
+  log "pre-configuring headless settings (skip-perms prompt + defaultMode=auto) in $settings"
   local tmp
   tmp=$(mktemp)
-  if jq '. + {skipDangerousModePermissionPrompt: true}' "$settings" > "$tmp" 2>/dev/null; then
+  if jq '
+    .skipDangerousModePermissionPrompt = true
+    | .permissions = ((.permissions // {}) + {defaultMode: "auto"})
+  ' "$settings" > "$tmp" 2>/dev/null; then
     mv "$tmp" "$settings"
   else
     rm -f "$tmp"
