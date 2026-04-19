@@ -60,3 +60,39 @@ teardown() { teardown_tmp_dir; }
   [[ "$output" == *"*/30"* ]]           # from the crontab
   [[ "$output" == *"interval: \"2m\""* ]] # from agent.yml
 }
+
+@test "reload rewrites heartbeat.conf with HEARTBEAT_CRON derived from interval" {
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" reload
+  [ "$status" -eq 0 ]
+  grep -q 'HEARTBEAT_CRON="\*/2 \* \* \* \*"' "$WORKSPACE/scripts/heartbeat/heartbeat.conf"
+  grep -q 'HEARTBEAT_INTERVAL="2m"' "$WORKSPACE/scripts/heartbeat/heartbeat.conf"
+}
+
+@test "reload rewrites crontab with new schedule and no user field" {
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" reload
+  [ "$status" -eq 0 ]
+  grep -q '^\*/2 \* \* \* \* /workspace/scripts/heartbeat/heartbeat.sh' "$HEARTBEATCTL_CRONTAB_FILE"
+  # must not contain "agent" as argv[0]
+  ! grep -qE '^[^#]*\* agent ' "$HEARTBEATCTL_CRONTAB_FILE"
+}
+
+@test "reload creates logs/ dir if missing" {
+  rm -rf "$WORKSPACE/scripts/heartbeat/logs"
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" reload
+  [ -d "$WORKSPACE/scripts/heartbeat/logs" ]
+}
+
+@test "reload fails cleanly when interval is invalid in agent.yml" {
+  yq -i '.features.heartbeat.interval = "45m"' "$WORKSPACE/agent.yml"
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" reload
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"interval"* || "$output" == *"accepted"* ]]
+}
+
+@test "reload comments crontab when enabled=false in agent.yml" {
+  yq -i '.features.heartbeat.enabled = false' "$WORKSPACE/agent.yml"
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" reload
+  [ "$status" -eq 0 ]
+  grep -q '^# paused:' "$HEARTBEATCTL_CRONTAB_FILE"
+  ! grep -qE '^\*/2' "$HEARTBEATCTL_CRONTAB_FILE"
+}
