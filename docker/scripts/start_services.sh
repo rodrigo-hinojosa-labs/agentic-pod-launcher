@@ -236,6 +236,23 @@ session_alive() {
   tmux has-session -t "$SESSION" 2>/dev/null
 }
 
+# When the session was launched with --channels, the bun plugin server
+# should stay alive for the session's lifetime. If bun dies silently
+# (plugin crash, upstream stdin close, etc.), claude keeps running but
+# stops receiving Telegram messages — visible to the user as the agent
+# ghosting. Detect this and respawn the session so a fresh plugin
+# attaches.
+channel_plugin_alive() {
+  # Only enforce if the session was launched with --channels. We detect
+  # that by checking whether any current tmux pane's command contains
+  # --channels — cheaper than re-parsing the launch command.
+  if pgrep -f -- "--channels " >/dev/null 2>&1; then
+    pgrep -f "bun server.ts" >/dev/null 2>&1
+  else
+    return 0
+  fi
+}
+
 log "starting tmux session '$SESSION'"
 if ! start_session; then
   log "ERROR: initial tmux session failed to start"
@@ -252,8 +269,14 @@ while true; do
     echo "CRITICAL: crond died — exiting container (docker restart policy will revive)"
     exit 1
   fi
-  if session_alive; then
+  if session_alive && channel_plugin_alive; then
     continue
+  fi
+
+  if session_alive && ! channel_plugin_alive; then
+    log "channel plugin (bun server.ts) died — killing tmux for respawn"
+    tmux kill-session -t "$SESSION" 2>/dev/null || true
+    sleep 1
   fi
 
   now=$(date +%s)
