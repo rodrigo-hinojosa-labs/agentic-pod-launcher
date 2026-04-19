@@ -395,10 +395,10 @@ ATLASSIAN_${upper}_TOKEN=${ws_token}
   local hb_enabled hb_interval hb_prompt
   hb_enabled=$(ask_yn "Enable heartbeat (periodic auto-execution)?" "y")
   hb_interval="30m"
-  hb_prompt="Check status and report"
+  hb_prompt="Status check — return a short plain-text report (uptime, notable issues). No tool use; your stdout is forwarded verbatim to the notifier."
   if [ "$hb_enabled" = "true" ]; then
     hb_interval=$(ask "Default interval" "30m")
-    hb_prompt=$(ask "Default prompt" "Check status and report")
+    hb_prompt=$(ask "Default prompt" "Status check — return a short plain-text report (uptime, notable issues). No tool use; your stdout is forwarded verbatim to the notifier.")
   fi
   echo ""
 

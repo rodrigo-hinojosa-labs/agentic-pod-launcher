@@ -85,7 +85,7 @@ cmd_reload() {
   interval=$(_yq '.features.heartbeat.interval // "30m"')
   timeout=$(_yq '.features.heartbeat.timeout // 300')
   retries=$(_yq '.features.heartbeat.retries // 1')
-  prompt=$(_yq '.features.heartbeat.default_prompt // "Check status and report"')
+  prompt=$(_yq '.features.heartbeat.default_prompt // "Status check — return a short plain-text report (uptime, notable issues). No tool use; your stdout is forwarded verbatim to the notifier."')
   channel=$(_yq '.notifications.channel // "none"')
 
   # Validate + derive cron

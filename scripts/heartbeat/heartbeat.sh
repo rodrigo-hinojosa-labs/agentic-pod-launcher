@@ -29,7 +29,7 @@ source "$CONF_FILE"
 
 HEARTBEAT_TIMEOUT="${HEARTBEAT_TIMEOUT:-300}"
 HEARTBEAT_RETRIES="${HEARTBEAT_RETRIES:-1}"
-HEARTBEAT_PROMPT="${HEARTBEAT_PROMPT:-Check status and report}"
+HEARTBEAT_PROMPT="${HEARTBEAT_PROMPT:-Status check — return a short plain-text report (uptime, notable issues). No tool use; your stdout is forwarded verbatim to the notifier.}"
 NOTIFY_CHANNEL="${NOTIFY_CHANNEL:-none}"
 HEARTBEAT_CRON="${HEARTBEAT_CRON:-}"
 TRIGGER="${HEARTBEAT_TRIGGER:-cron}"
@@ -162,8 +162,16 @@ run_claude_session() {
   cfg_dir=$(ensure_heartbeat_config_dir 2>/dev/null || true)
   [ -n "$cfg_dir" ] || cfg_dir="$HOME/.claude"
   cfg_sq=$(sh_sq "$cfg_dir")
+  # --dangerously-skip-permissions lets the heartbeat's ephemeral claude
+  # run tools without waiting for approval. Safe here because (a) the
+  # config dir is isolated so no cross-contamination with the interactive
+  # session, (b) the prompt itself should discourage tool use since
+  # stdout is forwarded verbatim to the notifier, (c) the heartbeat is
+  # short-lived and non-interactive so there's no way to confirm prompts
+  # anyway — without this flag claude would just print "requires approval"
+  # notes and fail to use any tool.
   tmux new-session -d -s "$sess" -c "$WORKSPACE_DIR" \
-    "CLAUDE_CONFIG_DIR=$cfg_sq claude --print $prompt_sq > $log_sq 2>&1; echo HEARTBEAT_DONE >> $log_sq"
+    "CLAUDE_CONFIG_DIR=$cfg_sq claude --print --dangerously-skip-permissions $prompt_sq > $log_sq 2>&1; echo HEARTBEAT_DONE >> $log_sq"
 
   local waited=0
   while [ "$waited" -lt "$HEARTBEAT_TIMEOUT" ]; do

@@ -33,7 +33,7 @@ features:
     interval: "30m"
     timeout: 300
     retries: 1
-    default_prompt: "Check status and report"
+    default_prompt: "Status check — return a short plain-text report (uptime, notable issues). No tool use; your stdout is forwarded verbatim to the notifier."
 mcps:
   defaults:
     - fetch
