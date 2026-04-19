@@ -131,12 +131,92 @@ CT
   echo "heartbeatctl: reloaded (interval=$interval cron='$cron' enabled=$enabled channel=$channel)"
 }
 
+_crond_pid() {
+  # Best-effort: return pid of crond, empty if not running
+  pgrep -x crond 2>/dev/null | head -1
+}
+
+_enrich_state() {
+  # Read state.json, overlay crond {alive,pid}, emit to stdout
+  local state_raw
+  state_raw=$(cat "$STATE_FILE" 2>/dev/null || echo '{}')
+  local pid alive
+  pid=$(_crond_pid)
+  if [ -n "$pid" ]; then alive=true; else alive=false; fi
+  printf '%s' "$state_raw" | jq -c --arg pid "$pid" --argjson alive "$alive" '
+    .crond = {alive:$alive, pid:($pid | if . == "" then null else tonumber end)}
+  '
+}
+
+cmd_status() {
+  [ -f "$STATE_FILE" ] || { echo "heartbeatctl: $STATE_FILE missing — has the heartbeat ever run? try 'heartbeatctl reload'" >&2; return 2; }
+  local schema
+  schema=$(jq -r '.schema // 0' "$STATE_FILE" 2>/dev/null || echo 0)
+  if [ "$schema" != "1" ]; then
+    echo "heartbeatctl: unknown state.json schema '$schema' — refusing to parse" >&2
+    return 1
+  fi
+
+  local enriched
+  enriched=$(_enrich_state)
+
+  if [ "${1:-}" = "--json" ]; then
+    printf '%s\n' "$enriched"
+    return 0
+  fi
+
+  # Pretty
+  printf '%s' "$enriched" | jq -r '
+    "heartbeat: " + (if .enabled then "ENABLED" else "PAUSED" end)
+    + "\n  interval: " + .interval + "   cron: " + .cron
+    + "\n  prompt:   " + (.prompt | .[0:120] + (if length > 120 then "…" else "" end))
+    + "\n  notifier: " + .notifier_channel
+    + "\n  last run: " + .last_run.status + "  @ " + .last_run.ts + "  (" + (.last_run.duration_ms|tostring) + "ms, attempt " + (.last_run.attempt|tostring) + ")"
+    + "\n  counters: runs=" + (.counters.total_runs|tostring)
+      + " ok=" + (.counters.ok|tostring)
+      + " timeout=" + (.counters.timeout|tostring)
+      + " error=" + (.counters.error|tostring)
+      + " streak_fail=" + (.counters.consecutive_failures|tostring)
+      + (if .counters.success_rate_24h then "  24h=" + ((.counters.success_rate_24h*100|floor)|tostring) + "%" else "" end)
+    + "\n  crond:    " + (if .crond.alive then "alive (pid " + (.crond.pid|tostring) + ")" else "DOWN" end)
+    + "\n  updated:  " + .updated_at'
+  echo
+
+  # Tail of last 5 runs
+  if [ -f "$RUNS_FILE" ]; then
+    echo "recent runs:"
+    tail -5 "$RUNS_FILE" | jq -r '"  " + .ts + "  " + .status + "  " + (.duration_ms|tostring) + "ms  " + (.prompt | .[0:60])'
+  fi
+}
+
+cmd_logs() {
+  local n=20 json=false
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -n) n="$2"; shift 2 ;;
+      --json) json=true; shift ;;
+      *) echo "logs: unknown flag '$1'" >&2; return 1 ;;
+    esac
+  done
+  [ -f "$RUNS_FILE" ] || { echo "heartbeatctl: no runs yet"; return 0; }
+  if [ "$json" = true ]; then
+    tail -n "$n" "$RUNS_FILE"
+  else
+    printf '%-21s  %-8s  %-7s  %-5s  %s\n' "TS" "STATUS" "DUR" "ATTMPT" "PROMPT"
+    tail -n "$n" "$RUNS_FILE" | jq -r '
+      [.ts, .status, ((.duration_ms|tostring)+"ms"), (.attempt|tostring), (.prompt|.[0:60])]
+      | @tsv' | awk -F'\t' '{printf "%-21s  %-8s  %-7s  %-5s  %s\n", $1,$2,$3,$4,$5}'
+  fi
+}
+
 main() {
   local sub="${1:-help}"; shift || true
   case "$sub" in
     help|-h|--help|"") cmd_help ;;
-    show) cmd_show ;;
-    reload) cmd_reload ;;
+    show) cmd_show "$@" ;;
+    reload) cmd_reload "$@" ;;
+    status) cmd_status "$@" ;;
+    logs)   cmd_logs   "$@" ;;
     *) echo "heartbeatctl: unknown command '$sub' (see 'heartbeatctl help')" >&2; exit 1 ;;
   esac
 }
