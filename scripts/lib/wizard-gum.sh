@@ -15,10 +15,13 @@ _log_qa() {
 }
 
 # ask PROMPT DEFAULT → user input or default
+# The default is shown as a placeholder hint (gray, inside the field) so the
+# user can type immediately without having to delete a pre-filled value.
+# Empty submit (just Enter) falls back to $default via the :- substitution.
 ask() {
   local prompt="$1" default="$2" result
   if [ -n "$default" ]; then
-    result=$("$GUM" input --prompt "$prompt: " --value "$default" --placeholder "$default") || result="$default"
+    result=$("$GUM" input --prompt "$prompt: " --placeholder "$default") || result="$default"
   else
     result=$("$GUM" input --prompt "$prompt: " --placeholder "...") || result=""
   fi
