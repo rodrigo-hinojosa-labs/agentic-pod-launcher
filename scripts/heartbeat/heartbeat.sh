@@ -61,8 +61,37 @@ is_prior_session_alive() {
 run_id=$(gen_run_id)
 session="${AGENT_NAME}-hb-${run_id}"
 ts=$(iso8601)
+last_session_log=""
 
 notifier_json='{"channel":"none","ok":true,"latency_ms":0,"error":null}'
+
+# claude_output FILE → prints the model's response from a session log,
+# stripping the HEARTBEAT_DONE sentinel and capping length so it fits
+# typical notifier constraints (Telegram: 4096 chars, log file: any).
+# Falls back to a minimal OK line if the log is missing or empty.
+claude_output() {
+  local file="${1:-}"
+  local max_chars="${2:-3500}"
+  if [ -z "$file" ] || [ ! -f "$file" ]; then
+    printf 'Heartbeat OK (%s) — %dms (no output)\n' "$TRIGGER" "$duration_ms"
+    return
+  fi
+  # Drop the sentinel, drop any ANSI escapes that claude --print may emit
+  # under a tmux-allocated TTY, trim trailing whitespace, cap length.
+  local body
+  body=$(grep -v '^HEARTBEAT_DONE$' "$file" \
+    | sed $'s/\x1b\\[[0-9;?]*[a-zA-Z]//g' \
+    | awk 'NF || p {print; p=1}' \
+    | sed -e :a -e '/^[[:space:]]*$/{$d;N;ba' -e '}')
+  if [ -z "$body" ]; then
+    printf 'Heartbeat OK (%s) — %dms (empty output)\n' "$TRIGGER" "$duration_ms"
+    return
+  fi
+  if [ "${#body}" -gt "$max_chars" ]; then
+    body="${body:0:$max_chars}…"
+  fi
+  printf '%s\n' "$body"
+}
 
 invoke_notifier() {
   local status="$1" msg="$2"
@@ -81,6 +110,9 @@ run_claude_session() {
   local attempt="$1"
   local sess="${session}-a${attempt}"
   local log_file="$SESSION_LOG_DIR/${sess}.log"
+  # Track the last session's log path globally so the notifier can
+  # forward claude's actual response instead of a generic "OK".
+  last_session_log="$log_file"
   local start=$(date +%s)
 
   if ! command -v claude >/dev/null 2>&1; then
@@ -155,7 +187,12 @@ case "$status" in
       prev_ok=$(jq -r '.counters.ok // 0' "$STATE_FILE" 2>/dev/null || echo 0)
       [ $(( (prev_ok + 1) % NOTIFY_SUCCESS_EVERY )) -ne 0 ] && notify_this=false
     fi
-    [ "$notify_this" = true ] && invoke_notifier "ok" "Heartbeat OK ($TRIGGER) — ${duration_ms}ms"
+    if [ "$notify_this" = true ]; then
+      # Forward claude's actual response instead of a canned OK — this is
+      # the point of a custom HEARTBEAT_PROMPT. The canned fallback fires
+      # only when the session log is missing or empty.
+      invoke_notifier "ok" "$(claude_output "$last_session_log")"
+    fi
     ;;
   timeout) invoke_notifier "timeout" "Heartbeat TIMEOUT (${duration_ms}ms) — check $session log" ;;
   error)   invoke_notifier "error"   "Heartbeat ERROR (exit=$claude_exit_code)" ;;
