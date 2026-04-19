@@ -239,6 +239,65 @@ cmd_resume() {
   echo "heartbeatctl: resumed"
 }
 
+# _mutate EXPR VALIDATOR VALUE
+# Runs validator(value) first; if 0, backs up agent.yml, applies yq -i EXPR,
+# runs reload, and on any failure restores agent.yml and reloads with the
+# prior state. EXPR uses strenv(V) to read the value.
+_mutate() {
+  local expr="$1" validator="$2" value="$3"
+  if ! "$validator" "$value"; then return 1; fi
+  local prev="$AGENT_YML.prev"
+  cp "$AGENT_YML" "$prev"
+  if ! V="$value" yq -i "$expr" "$AGENT_YML"; then
+    cp "$prev" "$AGENT_YML"; rm -f "$prev"
+    echo "heartbeatctl: yq mutation failed" >&2; return 2
+  fi
+  if ! cmd_reload; then
+    cp "$prev" "$AGENT_YML"; rm -f "$prev"
+    cmd_reload >/dev/null 2>&1 || true
+    echo "heartbeatctl: reload failed after mutation — rolled back" >&2
+    return 2
+  fi
+  rm -f "$prev"
+}
+
+_v_interval() {
+  interval_to_cron "$1" >/dev/null 2>&1 || { echo "invalid interval: $1 (see 'heartbeatctl help')" >&2; return 1; }
+}
+_v_notifier() {
+  case "$1" in none|log|telegram) return 0 ;;
+    *) echo "invalid notifier: $1 (none|log|telegram)" >&2; return 1 ;;
+  esac
+}
+_v_timeout() {
+  [[ "$1" =~ ^[1-9][0-9]*$ ]] && [ "$1" -ge 10 ] || { echo "timeout must be integer >= 10" >&2; return 1; }
+}
+_v_retries() {
+  [[ "$1" =~ ^[0-5]$ ]] || { echo "retries must be integer 0..5" >&2; return 1; }
+}
+_v_prompt() {
+  local len=${#1}
+  [ "$len" -gt 0 ] && [ "$len" -le 4000 ] || { echo "prompt must be 1..4000 chars" >&2; return 1; }
+}
+
+cmd_set_interval() { _mutate '.features.heartbeat.interval = strenv(V)' _v_interval "$1"; }
+cmd_set_notifier() { _mutate '.notifications.channel = strenv(V)'     _v_notifier "$1"; }
+cmd_set_timeout()  { _mutate '.features.heartbeat.timeout = (strenv(V)|tonumber)' _v_timeout "$1"; }
+cmd_set_retries()  { _mutate '.features.heartbeat.retries = (strenv(V)|tonumber)' _v_retries "$1"; }
+
+cmd_set_prompt() {
+  local v="${1:-}"
+  if [ -z "$v" ] && [ ! -t 0 ]; then v=$(cat); fi
+  _mutate '.features.heartbeat.default_prompt = strenv(V)' _v_prompt "$v"
+  # Warn if telegram without secrets
+  if [ "$(yq -r '.notifications.channel' "$AGENT_YML")" = "telegram" ]; then
+    if ! grep -q '^NOTIFY_BOT_TOKEN=' "$WORKSPACE/.env" 2>/dev/null || \
+       ! grep -q '^NOTIFY_CHAT_ID=' "$WORKSPACE/.env" 2>/dev/null; then
+      echo "heartbeatctl: WARN — notifications.channel=telegram but .env missing NOTIFY_BOT_TOKEN/NOTIFY_CHAT_ID" >&2
+    fi
+  fi
+}
+
 cmd_test() {
   local prompt=""
   while [ "$#" -gt 0 ]; do
@@ -265,6 +324,11 @@ main() {
     pause)  cmd_pause ;;
     resume) cmd_resume ;;
     test)   cmd_test "$@" ;;
+    set-interval) cmd_set_interval "${1:-}" ;;
+    set-prompt)   cmd_set_prompt   "${1:-}" ;;
+    set-notifier) cmd_set_notifier "${1:-}" ;;
+    set-timeout)  cmd_set_timeout  "${1:-}" ;;
+    set-retries)  cmd_set_retries  "${1:-}" ;;
     *) echo "heartbeatctl: unknown command '$sub' (see 'heartbeatctl help')" >&2; exit 1 ;;
   esac
 }

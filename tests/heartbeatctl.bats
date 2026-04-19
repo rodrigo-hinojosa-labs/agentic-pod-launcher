@@ -192,3 +192,60 @@ JS
   run jq -r '.trigger' "$WORKSPACE/scripts/heartbeat/logs/runs.jsonl"
   [ "$output" = "manual" ]
 }
+
+@test "set-interval 15m updates agent.yml and heartbeat.conf" {
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" set-interval 15m
+  [ "$status" -eq 0 ]
+  run yq -r '.features.heartbeat.interval' "$WORKSPACE/agent.yml"
+  [ "$output" = "15m" ]
+  grep -q 'HEARTBEAT_CRON="\*/15 \* \* \* \*"' "$WORKSPACE/scripts/heartbeat/heartbeat.conf"
+}
+
+@test "set-interval 45m rejected — agent.yml untouched" {
+  local before
+  before=$(yq -r '.features.heartbeat.interval' "$WORKSPACE/agent.yml")
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" set-interval 45m
+  [ "$status" -ne 0 ]
+  run yq -r '.features.heartbeat.interval' "$WORKSPACE/agent.yml"
+  [ "$output" = "$before" ]
+  [ ! -f "$WORKSPACE/agent.yml.prev" ]
+}
+
+@test "set-prompt updates the prompt and conf" {
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" set-prompt "Report CPU load"
+  [ "$status" -eq 0 ]
+  run yq -r '.features.heartbeat.default_prompt' "$WORKSPACE/agent.yml"
+  [ "$output" = "Report CPU load" ]
+  grep -q 'HEARTBEAT_PROMPT="Report CPU load"' "$WORKSPACE/scripts/heartbeat/heartbeat.conf"
+}
+
+@test "set-notifier log updates channel" {
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" set-notifier log
+  [ "$status" -eq 0 ]
+  run yq -r '.notifications.channel' "$WORKSPACE/agent.yml"
+  [ "$output" = "log" ]
+  grep -q 'NOTIFY_CHANNEL="log"' "$WORKSPACE/scripts/heartbeat/heartbeat.conf"
+}
+
+@test "set-notifier bogus rejected" {
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" set-notifier carrier-pigeon
+  [ "$status" -ne 0 ]
+}
+
+@test "set-timeout validates integer range" {
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" set-timeout 5
+  [ "$status" -ne 0 ]
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" set-timeout 120
+  [ "$status" -eq 0 ]
+  run yq -r '.features.heartbeat.timeout' "$WORKSPACE/agent.yml"
+  [ "$output" = "120" ]
+}
+
+@test "set-retries validates 0..5" {
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" set-retries 2
+  [ "$status" -eq 0 ]
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" set-retries 10
+  [ "$status" -ne 0 ]
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" set-retries -1
+  [ "$status" -ne 0 ]
+}
