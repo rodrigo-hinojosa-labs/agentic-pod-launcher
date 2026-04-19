@@ -177,6 +177,11 @@ run_wizard() {
   echo " agentic-pod-launcher — Interactive Setup"
   echo "═══════════════════════════════════════════════════"
   echo ""
+  echo " Tips:"
+  echo "   · defaults are pre-filled — Enter to accept"
+  echo "   · Ctrl+U clears the field to type your own"
+  echo "   · Ctrl+C aborts the wizard"
+  echo ""
 
   # ── 1. Identity ─────────────────────────────────────
   echo "▸ Agent identity"

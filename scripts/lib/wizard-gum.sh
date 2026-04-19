@@ -28,14 +28,14 @@ _abort_if_interrupted() {
 }
 
 # ask PROMPT DEFAULT → user input or default
-# The default is shown as a placeholder hint (gray, inside the field) so the
-# user can type immediately without having to delete a pre-filled value.
-# Empty submit (just Enter) falls back to $default via the :- substitution.
-# Ctrl+C exits the wizard cleanly (see _abort_if_interrupted).
+# The default is pre-filled into the field (gum --value) so it can be
+# accepted with a single Enter. To replace it with a custom value, press
+# Ctrl+U to clear the field in one keystroke, then type. Ctrl+C aborts
+# the whole wizard via _abort_if_interrupted.
 ask() {
   local prompt="$1" default="$2" result rc=0
   if [ -n "$default" ]; then
-    result=$("$GUM" input --prompt "$prompt: " --placeholder "$default") || rc=$?
+    result=$("$GUM" input --prompt "$prompt: " --value "$default") || rc=$?
   else
     result=$("$GUM" input --prompt "$prompt: " --placeholder "...") || rc=$?
   fi
