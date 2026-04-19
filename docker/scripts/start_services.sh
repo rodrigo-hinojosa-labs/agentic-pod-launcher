@@ -268,6 +268,92 @@ channel_plugin_alive() {
   fi
 }
 
+# Bridge watchdog: detects the silent-stuck case where bun is alive
+# and polling Telegram, but its MCP notifications aren't reaching
+# Claude's session (an upstream plugin bug). The channel_plugin_alive
+# check above only catches cases where bun itself died; this watchdog
+# covers the much more common "bun alive, bridge broken" state.
+#
+# Mechanic:
+#   - Peek the most recent Telegram message via getUpdates with a
+#     negative offset (safe, does NOT confirm/claim the message so
+#     bun's own polling is unaffected — documented in Telegram Bot
+#     API: "Negative values of offset retrieve the last updates not
+#     confirming any").
+#   - If the message is 20-300s old and its text does not appear
+#     anywhere in Claude's tmux pane AND Claude is not currently
+#     processing something (no spinner), count as suspicious.
+#   - After 3 consecutive suspicions (~15s of consistent stuck state)
+#     kick the session. The existing respawn logic brings up a fresh
+#     bun + claude and the bridge is restored.
+#   - 60s cooldown after each kick prevents a stuck loop from
+#     restarting too fast.
+#
+# Skipped whenever: Claude is busy (has a spinner in the pane), the
+# latest message is very fresh (<20s, bun may not have polled yet),
+# or the latest message is very old (>300s, already water under the
+# bridge).
+bridge_watchdog() {
+  local last_kick=0
+  local last_suspect_mid=""
+  local suspect_count=0
+  while true; do
+    sleep 5
+    [ -f /workspace/.env ] || continue
+    local tok
+    tok=$(grep -E '^TELEGRAM_BOT_TOKEN=' /workspace/.env 2>/dev/null | head -1 | cut -d= -f2-)
+    [ -z "$tok" ] && continue
+
+    local now
+    now=$(date +%s)
+    [ $((now - last_kick)) -lt 60 ] && continue
+    pgrep -f -- "--channels " >/dev/null 2>&1 || continue
+    pgrep -f "bun server.ts" >/dev/null 2>&1 || continue   # let channel_plugin_alive handle dead bun
+
+    local resp
+    resp=$(curl -s --max-time 3 "https://api.telegram.org/bot${tok}/getUpdates?offset=-1&limit=1&timeout=0" 2>/dev/null)
+    [ -z "$resp" ] && continue
+    if ! printf '%s' "$resp" | jq -e '.ok == true' >/dev/null 2>&1; then continue; fi
+
+    local ts mid txt
+    ts=$(printf '%s' "$resp" | jq -r '.result | last | .message.date // 0')
+    mid=$(printf '%s' "$resp" | jq -r '.result | last | .message.message_id // 0')
+    txt=$(printf '%s' "$resp" | jq -r '.result | last | .message.text // ""')
+    [ "$mid" = "0" ] && continue
+
+    local age=$((now - ts))
+    [ $age -lt 20 ] && continue
+    [ $age -gt 300 ] && continue
+
+    local pane
+    pane=$(tmux capture-pane -t "$SESSION" -pS -400 2>/dev/null || echo "")
+    if printf '%s' "$pane" | grep -qE '(Ebbing|Precipitating|Deciphering|thinking|Calling plugin)'; then
+      continue
+    fi
+    if [ -n "$txt" ] && printf '%s' "$pane" | grep -qF -- "$txt"; then
+      continue
+    fi
+
+    if [ "$mid" = "$last_suspect_mid" ]; then
+      suspect_count=$((suspect_count + 1))
+    else
+      suspect_count=1
+      last_suspect_mid="$mid"
+    fi
+
+    if [ "$suspect_count" -ge 3 ]; then
+      log "bridge watchdog: msg_id=$mid age=${age}s text=\"${txt:0:60}\" not in pane and Claude idle — kicking"
+      tmux kill-session -t "$SESSION" 2>/dev/null || true
+      last_kick=$now
+      suspect_count=0
+      last_suspect_mid=""
+    fi
+  done
+}
+
+bridge_watchdog &
+log "bridge watchdog started (pid $!)"
+
 log "starting tmux session '$SESSION'"
 if ! start_session; then
   log "ERROR: initial tmux session failed to start"
