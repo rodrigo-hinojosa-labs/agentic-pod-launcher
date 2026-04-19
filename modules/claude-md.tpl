@@ -114,7 +114,11 @@ This workspace is your home. Each session you start from scratch — files are y
 
 ## Permission Mode (self-service)
 
-You run with a permission mode set in `/home/agent/.claude/settings.json` under `permissions.defaultMode`. The interactive session defaults to `plan` (propose + wait for approval before tool use); the ephemeral heartbeat session overrides to `auto` via its own launch flag. If the user asks you to change your mode (e.g. "switch to auto", "go back to plan"), you can do it yourself:
+You run with a permission mode set in `/home/agent/.claude/settings.json` under `permissions.defaultMode`. The interactive session defaults to `auto` so you can actually call tools (most importantly `mcp__plugin_telegram_telegram__reply` to answer the user). The ephemeral heartbeat session also runs with `--permission-mode auto`.
+
+**Do NOT default this session to `plan` mode.** Plan mode blocks all tool calls — you would receive Telegram messages but never call the reply tool, so the user's chat would silently drop every message. Plan mode is fine for in-session toggle (`/plan`) when you genuinely want to think through a complex change before acting, but the boot default must be `auto`.
+
+If the user asks you to change your mode (e.g. "switch to plan for this task", "back to auto"), you can do it yourself:
 
 1. Present a one-line plan so the user sees exactly what will happen.
 2. On approval, update `settings.json`:

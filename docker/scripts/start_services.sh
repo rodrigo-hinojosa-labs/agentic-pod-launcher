@@ -133,12 +133,13 @@ has_telegram_token() {
 #     `--dangerously-skip-permissions` warning dialog so the first launch
 #     doesn't hang waiting for a y/N the user can't press (they only
 #     interact via Telegram).
-#   - permissions.defaultMode=plan — the interactive agent session
-#     starts in plan mode (describe the plan, wait for approval before
-#     edits/tool runs). Safer default for a chat-driven workflow where
-#     the user isn't watching the container terminal live. The
-#     ephemeral heartbeat invocation overrides with --permission-mode
-#     auto so scheduled runs don't stall on approval.
+#   - permissions.defaultMode=auto — start every session in auto mode.
+#     Critical: plan mode blocks ALL tool execution (Claude only proposes
+#     plans, never acts), which means it never calls the telegram reply
+#     MCP tool — so the agent looks like it ghosts every Telegram message.
+#     auto is the only sane default for a chat-driven agent. Users who
+#     want plan-style behavior for sensitive tasks can switch in-session
+#     with /plan; the next message reverts to auto on session restart.
 # Both heartbeat and interactive sessions read from the same settings.json
 # (heartbeat's isolated config dir symlinks this file), so setting these
 # once here covers both launch paths.
@@ -148,15 +149,15 @@ pre_accept_bypass_permissions() {
   local need_skip need_mode
   need_skip=$(jq -r '.skipDangerousModePermissionPrompt // false' "$settings" 2>/dev/null || echo "false")
   need_mode=$(jq -r '.permissions.defaultMode // ""' "$settings" 2>/dev/null || echo "")
-  if [ "$need_skip" = "true" ] && [ "$need_mode" = "plan" ]; then
+  if [ "$need_skip" = "true" ] && [ "$need_mode" = "auto" ]; then
     return 0
   fi
-  log "pre-configuring headless settings (skip-perms prompt + defaultMode=plan) in $settings"
+  log "pre-configuring headless settings (skip-perms prompt + defaultMode=auto) in $settings"
   local tmp
   tmp=$(mktemp)
   if jq '
     .skipDangerousModePermissionPrompt = true
-    | .permissions = ((.permissions // {}) + {defaultMode: "plan"})
+    | .permissions = ((.permissions // {}) + {defaultMode: "auto"})
   ' "$settings" > "$tmp" 2>/dev/null; then
     mv "$tmp" "$settings"
   else
