@@ -24,6 +24,27 @@ if command -v heartbeatctl >/dev/null 2>&1; then
   heartbeatctl reload || echo "WARN: heartbeatctl reload failed, using default crontab" >&2
 fi
 
+# ── 1b. Clear stale telegram pairing pending ──────────────
+# The claude-plugins-official/telegram plugin persists access state
+# (allowFrom + pending) across container restarts. If a `pending` code
+# from a previous session survives the restart, the plugin can reply
+# "Pairing required" to an already-paired sender before the in-memory
+# allowFrom check catches up — visible to users as a flaky first
+# message after restart. Clearing pending on each boot is safe: any
+# in-flight pairing is invalidated (user just retries), already-paired
+# allowFrom is preserved.
+telegram_access_json="/home/agent/.claude/channels/telegram/access.json"
+if [ -f "$telegram_access_json" ] && command -v jq >/dev/null 2>&1; then
+  tmp_access=$(mktemp)
+  if jq '.pending = {}' "$telegram_access_json" > "$tmp_access" 2>/dev/null; then
+    mv "$tmp_access" "$telegram_access_json"
+    chmod 0600 "$telegram_access_json"
+    log "cleared stale telegram pairing pending"
+  else
+    rm -f "$tmp_access"
+  fi
+fi
+
 # ── 2. Config ─────────────────────────────────────────────
 SESSION="agent"
 WORKDIR="/workspace"

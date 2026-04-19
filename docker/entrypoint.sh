@@ -53,11 +53,16 @@ fi
 #    rescans mtimes every minute, so a mutation via `heartbeatctl
 #    set-interval 2m` takes effect within ~1 minute (sync tick + crond
 #    tick). No SIGHUP — busybox crond dies on SIGHUP.
+#
+#    Comparison uses byte-identity (cmp -s), not mtime. busybox sh's
+#    `-nt` rounds to whole seconds, and entrypoint + heartbeatctl
+#    reload can both write within the same second at container start,
+#    making mtime-based detection miss the update.
 (
   while true; do
     sleep 15
     if [ -f "$STAGING_CRONTAB" ] && \
-       [ "$STAGING_CRONTAB" -nt "$CRONTAB_DST" ]; then
+       ! cmp -s "$STAGING_CRONTAB" "$CRONTAB_DST"; then
       cp "$STAGING_CRONTAB" "$CRONTAB_DST" 2>/dev/null && \
         chmod 0644 "$CRONTAB_DST" 2>/dev/null
     fi
