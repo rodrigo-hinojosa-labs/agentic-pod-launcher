@@ -108,11 +108,11 @@ invoke_notifier() {
 
 # ensure_heartbeat_config_dir — prepare an isolated CLAUDE_CONFIG_DIR for
 # the ephemeral heartbeat session so it never touches the interactive
-# Donna session (Donna's channels/bot.pid, session history, MCP auth
-# cache, etc.). We symlink the files that must be shared (OAuth
-# credentials, user settings, plugin cache) and give the heartbeat its
-# own empty channels/sessions/cache dirs. Idempotent — re-running fixes
-# missing links but never clobbers existing real files.
+# agent session (its channels/bot.pid, session history, MCP auth cache,
+# etc.). We symlink the files that must be shared (OAuth credentials,
+# user settings, plugin cache) and give the heartbeat its own empty
+# channels/sessions/cache dirs. Idempotent — re-running fixes missing
+# links but never clobbers existing real files.
 ensure_heartbeat_config_dir() {
   local src="$HOME/.claude"
   local dst="$HOME/.claude-heartbeat"
@@ -126,7 +126,8 @@ ensure_heartbeat_config_dir() {
     fi
   done
   # Isolate runtime state. An empty dir per-heartbeat ensures no cross-
-  # contamination with Donna's live channels plugin (bot.pid, access.json).
+  # contamination with the interactive agent's live channels plugin
+  # (bot.pid, access.json).
   mkdir -p "$dst/channels" "$dst/sessions" "$dst/cache"
   printf '%s\n' "$dst"
 }
@@ -156,7 +157,7 @@ run_claude_session() {
   log_sq=$(sh_sq "$log_file")
   # Prepare the isolated heartbeat config dir; fall back to the shared
   # dir if the isolation step fails for any reason (prefer a working
-  # heartbeat over a pristine Donna session).
+  # heartbeat over a pristine interactive-session config).
   local cfg_dir
   cfg_dir=$(ensure_heartbeat_config_dir 2>/dev/null || true)
   [ -n "$cfg_dir" ] || cfg_dir="$HOME/.claude"

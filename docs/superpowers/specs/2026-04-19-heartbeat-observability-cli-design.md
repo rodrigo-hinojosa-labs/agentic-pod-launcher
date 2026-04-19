@@ -86,7 +86,7 @@ One JSON object per line, append-only. Written by `heartbeat.sh` at end-of-run (
   "duration_ms": 12480,
   "claude_exit_code": 0,
   "prompt": "Check status and report",
-  "tmux_session": "dockertest-hb-a3f2",
+  "tmux_session": "<agent>-hb-a3f2",
   "notifier": {
     "channel": "telegram",
     "ok": true,
