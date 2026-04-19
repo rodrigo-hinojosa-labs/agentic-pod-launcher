@@ -106,6 +106,31 @@ invoke_notifier() {
   fi
 }
 
+# ensure_heartbeat_config_dir — prepare an isolated CLAUDE_CONFIG_DIR for
+# the ephemeral heartbeat session so it never touches the interactive
+# Donna session (Donna's channels/bot.pid, session history, MCP auth
+# cache, etc.). We symlink the files that must be shared (OAuth
+# credentials, user settings, plugin cache) and give the heartbeat its
+# own empty channels/sessions/cache dirs. Idempotent — re-running fixes
+# missing links but never clobbers existing real files.
+ensure_heartbeat_config_dir() {
+  local src="$HOME/.claude"
+  local dst="$HOME/.claude-heartbeat"
+  [ -d "$src" ] || return 1
+  mkdir -p "$dst"
+  # Share auth, config, user-level settings, plugin cache.
+  local f
+  for f in .credentials.json .claude.json settings.json plugins; do
+    if [ -e "$src/$f" ]; then
+      ln -sfn "$src/$f" "$dst/$f"
+    fi
+  done
+  # Isolate runtime state. An empty dir per-heartbeat ensures no cross-
+  # contamination with Donna's live channels plugin (bot.pid, access.json).
+  mkdir -p "$dst/channels" "$dst/sessions" "$dst/cache"
+  printf '%s\n' "$dst"
+}
+
 run_claude_session() {
   local attempt="$1"
   local sess="${session}-a${attempt}"
@@ -126,11 +151,18 @@ run_claude_session() {
   # characters ("; `, etc.) single-quote-escaped. tmux will pass this to
   # the default shell via `-c`, and without the escaping a prompt like
   # `hi"; rm -rf /; echo "bye` would be interpreted as a command.
-  local prompt_sq log_sq
+  local prompt_sq log_sq cfg_sq
   prompt_sq=$(sh_sq "$HEARTBEAT_PROMPT")
   log_sq=$(sh_sq "$log_file")
+  # Prepare the isolated heartbeat config dir; fall back to the shared
+  # dir if the isolation step fails for any reason (prefer a working
+  # heartbeat over a pristine Donna session).
+  local cfg_dir
+  cfg_dir=$(ensure_heartbeat_config_dir 2>/dev/null || true)
+  [ -n "$cfg_dir" ] || cfg_dir="$HOME/.claude"
+  cfg_sq=$(sh_sq "$cfg_dir")
   tmux new-session -d -s "$sess" -c "$WORKSPACE_DIR" \
-    "claude --print $prompt_sq > $log_sq 2>&1; echo HEARTBEAT_DONE >> $log_sq"
+    "CLAUDE_CONFIG_DIR=$cfg_sq claude --print $prompt_sq > $log_sq 2>&1; echo HEARTBEAT_DONE >> $log_sq"
 
   local waited=0
   while [ "$waited" -lt "$HEARTBEAT_TIMEOUT" ]; do
