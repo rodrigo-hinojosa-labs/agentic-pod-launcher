@@ -17,9 +17,12 @@ set -euo pipefail
 # capture (e.g. build_claude_cmd via $(...)) aren't polluted.
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [start_services] $*" >&2; }
 
-# ── 1. crond ──────────────────────────────────────────────
-log "starting crond"
-crond -b -L /workspace/claude.cron.log
+# ── 1. Heartbeat schedule reload ──────────────────────────
+# Reload the heartbeat schedule from agent.yml. Tolerate reload failure —
+# the default crontab from entrypoint is still in place.
+if command -v heartbeatctl >/dev/null 2>&1; then
+  heartbeatctl reload || echo "WARN: heartbeatctl reload failed, using default crontab" >&2
+fi
 
 # ── 2. Config ─────────────────────────────────────────────
 SESSION="agent"
@@ -224,6 +227,10 @@ fi
 # `tmux has-session`.
 while true; do
   sleep 2
+  if ! pgrep -x crond >/dev/null 2>&1; then
+    echo "CRITICAL: crond died — exiting container (docker restart policy will revive)"
+    exit 1
+  fi
   if session_alive; then
     continue
   fi

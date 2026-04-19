@@ -110,6 +110,13 @@ RUN chmod +x /opt/agent-admin/entrypoint.sh \
              /opt/agent-admin/scripts/wizard-container.sh \
              /opt/agent-admin/scripts/write_container_info.sh
 
+# Heartbeat CLI and helper libs (image-baked, stable code).
+COPY scripts/heartbeatctl /opt/agent-admin/scripts/heartbeatctl
+COPY scripts/lib/interval.sh /opt/agent-admin/scripts/lib/interval.sh
+COPY scripts/lib/state.sh    /opt/agent-admin/scripts/lib/state.sh
+RUN chmod +x /opt/agent-admin/scripts/heartbeatctl \
+  && ln -s /opt/agent-admin/scripts/heartbeatctl /usr/local/bin/heartbeatctl
+
 # Workspace is bind-mounted at runtime; /home/agent is a named volume.
 WORKDIR /workspace
 
