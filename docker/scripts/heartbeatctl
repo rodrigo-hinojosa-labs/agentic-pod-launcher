@@ -39,6 +39,7 @@ Control:
   pause                   Comment crontab line, set enabled=false in agent.yml.
   resume                  Inverse of pause.
   reload                  Re-read agent.yml, regenerate conf + crontab, SIGHUP crond.
+  kick-channel            Force-respawn the tmux session when Telegram chat ghosts.
 
 Mutate (all atomic with rollback against agent.yml.prev):
   set-interval  <Nm|Nh>
@@ -326,6 +327,26 @@ cmd_test() {
     bash "$runner" ${prompt:+--prompt "$prompt"}
 }
 
+# kick-channel — force-respawn the tmux session when the Telegram plugin
+# stops forwarding messages to claude. The bug is upstream in the MCP
+# stdio routing between claude-plugins-official/telegram and claude
+# itself: bun stays alive and keeps polling Telegram, but its
+# `notifications/claude/channel` messages don't reach the session.
+# This command kills the tmux session; start_services.sh watchdog
+# respawns it within ~2 seconds with a fresh plugin attachment.
+cmd_kick_channel() {
+  if ! command -v tmux >/dev/null 2>&1; then
+    echo "heartbeatctl: tmux not available — cannot kick session" >&2
+    return 2
+  fi
+  if ! tmux has-session -t agent 2>/dev/null; then
+    echo "heartbeatctl: tmux session 'agent' not found — nothing to kick" >&2
+    return 2
+  fi
+  tmux kill-session -t agent
+  echo "heartbeatctl: killed tmux session 'agent' — watchdog will respawn in ~2s"
+}
+
 main() {
   local sub="${1:-help}"; shift || true
   case "$sub" in
@@ -337,6 +358,7 @@ main() {
     pause)  cmd_pause ;;
     resume) cmd_resume ;;
     test)   cmd_test "$@" ;;
+    kick-channel) cmd_kick_channel ;;
     set-interval) cmd_set_interval "${1:-}" ;;
     set-prompt)   cmd_set_prompt   "${1:-}" ;;
     set-notifier) cmd_set_notifier "${1:-}" ;;
