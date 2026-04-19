@@ -87,4 +87,43 @@ docker compose build && docker compose up -d
 
 ## Troubleshooting
 
-Issues comunes y soluciones en [docs/getting-started.md](docs/getting-started.md) (plugin no conecta, permisos, crond silencioso, UID mismatch, etc.).
+### El agente deja de responder en Telegram ("ghosting")
+
+Síntoma: mandas mensajes por Telegram al bot de chat, el agente responde una vez tras un reinicio y luego se queda en silencio. `ps` muestra que `bun server.ts` y `claude` siguen vivos, pero los mensajes no llegan a Claude. Es un bug conocido del puente MCP del plugin `claude-plugins-official/telegram` (upstream, no de este repo).
+
+**Recuperación:**
+
+```bash
+docker exec -u agent {{AGENT_NAME}} heartbeatctl kick-channel
+```
+
+Mata la sesión tmux `agent`; el watchdog de `start_services.sh` la respawna en ~2 segundos con el plugin re-conectado fresco. Tu siguiente mensaje debería llegar.
+
+El watchdog también detecta automáticamente si `bun server.ts` muere (otro modo de falla distinto) y hace el respawn sin intervención. `kick-channel` es para cuando bun está vivo pero el puente se quedó colgado.
+
+**Ejemplo de secuencia:**
+
+```bash
+# Desde tu terminal, cuando Donna no contesta:
+docker exec -u agent {{AGENT_NAME}} heartbeatctl kick-channel
+# heartbeatctl: killed tmux session 'agent' — watchdog will respawn in ~2s
+
+# Mandas "hola" por Telegram. El agente responde.
+```
+
+### Otros comandos útiles (`heartbeatctl`)
+
+```bash
+docker exec -u agent {{AGENT_NAME}} heartbeatctl status   # estado + último run
+docker exec -u agent {{AGENT_NAME}} heartbeatctl logs     # últimos 20 runs
+docker exec -u agent {{AGENT_NAME}} heartbeatctl test     # un tick manual
+docker exec -u agent {{AGENT_NAME}} heartbeatctl pause    # pausar heartbeat
+docker exec -u agent {{AGENT_NAME}} heartbeatctl resume   # reanudar
+docker exec -u agent {{AGENT_NAME}} heartbeatctl set-interval 5m   # cambiar intervalo
+```
+
+Referencia completa (todos los subcomandos + reglas de validación + timing de propagación): [docs/heartbeatctl.md](docs/heartbeatctl.md).
+
+### Otros issues
+
+Plugin no conecta en primer boot, prompts de permisos, crond silencioso, UID mismatch, etc. en [docs/getting-started.md](docs/getting-started.md).

@@ -87,4 +87,43 @@ docker compose build && docker compose up -d
 
 ## Troubleshooting
 
-Common issues and fixes live in [docs/getting-started.md](docs/getting-started.md) (plugin not connected, permission prompts, crond silent, UID mismatch, etc.).
+### The agent stops responding on Telegram ("ghosting")
+
+Symptom: you send Telegram messages to the chat bot, the agent replies once after a restart and then goes silent. `ps` shows `bun server.ts` and `claude` still alive, but messages do not reach Claude. It is a known bug in the MCP bridge inside `claude-plugins-official/telegram` (upstream, not this repo).
+
+**Recovery:**
+
+```bash
+docker exec -u agent {{AGENT_NAME}} heartbeatctl kick-channel
+```
+
+This kills the `agent` tmux session; the watchdog in `start_services.sh` respawns it in ~2 seconds with a freshly reconnected plugin. Your next Telegram message should go through.
+
+The watchdog also auto-detects when `bun server.ts` dies (a different failure mode) and respawns without intervention. `kick-channel` is for the case where bun is alive but the bridge is hung.
+
+**Example flow:**
+
+```bash
+# From your terminal, when the agent stops responding:
+docker exec -u agent {{AGENT_NAME}} heartbeatctl kick-channel
+# heartbeatctl: killed tmux session 'agent' — watchdog will respawn in ~2s
+
+# Send "hello" on Telegram. Agent replies.
+```
+
+### Other useful `heartbeatctl` commands
+
+```bash
+docker exec -u agent {{AGENT_NAME}} heartbeatctl status   # dashboard + last run
+docker exec -u agent {{AGENT_NAME}} heartbeatctl logs     # last 20 runs
+docker exec -u agent {{AGENT_NAME}} heartbeatctl test     # manual tick now
+docker exec -u agent {{AGENT_NAME}} heartbeatctl pause    # pause heartbeat
+docker exec -u agent {{AGENT_NAME}} heartbeatctl resume   # resume
+docker exec -u agent {{AGENT_NAME}} heartbeatctl set-interval 5m   # change interval
+```
+
+Full reference (all subcommands, validation rules, propagation timing): [docs/heartbeatctl.md](docs/heartbeatctl.md).
+
+### Other issues
+
+Plugin not connected on first boot, permission prompts, crond silent, UID mismatch, etc. live in [docs/getting-started.md](docs/getting-started.md).
