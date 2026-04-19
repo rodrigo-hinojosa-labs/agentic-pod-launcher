@@ -293,106 +293,20 @@ channel_plugin_alive() {
 # latest message is very fresh (<20s, bun may not have polled yet),
 # or the latest message is very old (>300s, already water under the
 # bridge).
-bridge_watchdog() {
-  # The watchdog must NEVER kill itself by accident — it's the last
-  # line of defense against telegram bridge stalls. Disable strict
-  # error handling for the loop body so a single curl/jq/test failure
-  # does not silently terminate the subshell. We handle errors
-  # explicitly with `|| true` and conditional checks below.
-  set +eo pipefail
-
-  local last_kick=0
-  local last_suspect_mid=""
-  local suspect_count=0
-  local grace_until=$((SECONDS + 60))  # initial grace: do not kick during the first 60s of the container's life
-
-  while true; do
-    sleep 5
-
-    if [ "$SECONDS" -lt "$grace_until" ]; then
-      continue
-    fi
-
-    if [ ! -f /workspace/.env ]; then
-      continue
-    fi
-
-    local tok
-    tok=$(grep -E '^TELEGRAM_BOT_TOKEN=' /workspace/.env 2>/dev/null | head -1 | cut -d= -f2- || true)
-    if [ -z "$tok" ]; then
-      continue
-    fi
-
-    local now
-    now=$(date +%s)
-    if [ $((now - last_kick)) -lt 90 ]; then
-      continue   # post-kick cooldown — give Claude time to fully boot
-    fi
-
-    if ! pgrep -f -- "--channels " >/dev/null 2>&1; then
-      continue
-    fi
-    if ! pgrep -f "bun server.ts" >/dev/null 2>&1; then
-      continue   # let channel_plugin_alive handle dead bun
-    fi
-
-    local resp
-    resp=$(curl -s --max-time 3 "https://api.telegram.org/bot${tok}/getUpdates?offset=-1&limit=1&timeout=0" 2>/dev/null || true)
-    if [ -z "$resp" ]; then
-      continue
-    fi
-    if ! printf '%s' "$resp" | jq -e '.ok == true' >/dev/null 2>&1; then
-      continue
-    fi
-
-    local ts mid txt
-    ts=$(printf '%s' "$resp" | jq -r '.result | last | .message.date // 0' 2>/dev/null || echo 0)
-    mid=$(printf '%s' "$resp" | jq -r '.result | last | .message.message_id // 0' 2>/dev/null || echo 0)
-    txt=$(printf '%s' "$resp" | jq -r '.result | last | .message.text // ""' 2>/dev/null || echo "")
-    if [ "$mid" = "0" ] || [ "$mid" = "null" ]; then
-      continue
-    fi
-
-    local age=$((now - ts))
-    if [ "$age" -lt 25 ] || [ "$age" -gt 300 ]; then
-      continue   # too fresh (bun may not have polled) or too old (already settled)
-    fi
-
-    # Critical: skip messages older than the last kick. After a kick the
-    # pane is fresh and old messages cannot be recovered — they would
-    # forever look "stuck" and cause kick loops.
-    if [ "$ts" -lt "$last_kick" ]; then
-      continue
-    fi
-
-    local pane
-    pane=$(tmux capture-pane -t "$SESSION" -pS -400 2>/dev/null || echo "")
-    if printf '%s' "$pane" | grep -qE '(Ebbing|Precipitating|Deciphering|thinking|Calling plugin)' 2>/dev/null; then
-      continue   # Claude is busy
-    fi
-    if [ -n "$txt" ] && printf '%s' "$pane" | grep -qF -- "$txt" 2>/dev/null; then
-      continue   # message visible in pane — bridge worked
-    fi
-
-    if [ "$mid" = "$last_suspect_mid" ]; then
-      suspect_count=$((suspect_count + 1))
-    else
-      suspect_count=1
-      last_suspect_mid="$mid"
-    fi
-
-    if [ "$suspect_count" -ge 3 ]; then
-      log "bridge watchdog: msg_id=$mid age=${age}s text=\"${txt:0:60}\" not in pane and Claude idle — kicking"
-      tmux kill-session -t "$SESSION" 2>/dev/null || true
-      last_kick=$now
-      suspect_count=0
-      last_suspect_mid=""
-    fi
-  done
-}
-
-bridge_watchdog &
-log "bridge watchdog started (pid $!)"
+# NOTE: A bridge_watchdog auto-kicker was attempted here (commit 3c5465f /
+# fcb6744) but reverted. The detection heuristic (tmux pane scrape +
+# Telegram API peek) produced false positives that killed the session
+# every ~2 minutes during normal operation, with the kick log lines
+# silently lost from the backgrounded subshell's stderr — making the
+# behavior look like Claude was crashing on its own.
+#
+# For now the silent-stuck bridge case (bun alive, MCP notifications
+# dropped before reaching Claude) requires manual recovery:
+#
+#   docker exec -u agent <agent> heartbeatctl kick-channel
+#
+# channel_plugin_alive (above) still handles the case where bun
+# itself dies; that one is reliably detectable from outside.
 
 log "starting tmux session '$SESSION'"
 if ! start_session; then
