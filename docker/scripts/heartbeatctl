@@ -11,7 +11,13 @@ AGENT_YML="$WORKSPACE/agent.yml"
 CONF_FILE="$HEARTBEAT_DIR/heartbeat.conf"
 STATE_FILE="$HEARTBEAT_DIR/state.json"
 RUNS_FILE="$HEARTBEAT_DIR/logs/runs.jsonl"
-CRONTAB_FILE="${HEARTBEATCTL_CRONTAB_FILE:-/etc/crontabs/agent}"
+# Default: write the "desired" crontab to a workspace staging file.
+# entrypoint.sh runs a root-privileged sync loop that copies it to
+# /etc/crontabs/agent — busybox crond refuses to load crontabs not
+# owned by root, so agent cannot write /etc/crontabs/ directly.
+# Tests override HEARTBEATCTL_CRONTAB_FILE to a tmp path and inspect
+# it directly (no sync loop needed in test context).
+CRONTAB_FILE="${HEARTBEATCTL_CRONTAB_FILE:-$HEARTBEAT_DIR/.crontab.staging}"
 LIB_DIR="${HEARTBEATCTL_LIB_DIR:-/opt/agent-admin/scripts/lib}"
 
 # shellcheck source=/dev/null

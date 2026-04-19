@@ -29,38 +29,53 @@ if [ -d "$WORKSPACE/scripts/heartbeat" ]; then
 fi
 
 # 3. Render a safe-default crontab so crond has something to watch until
-#    heartbeatctl reload overwrites it. chown to agent so heartbeatctl
-#    (which runs as agent from start_services.sh) can rewrite it.
-#    Note: busybox crond identifies the target user by the filename
-#    (/etc/crontabs/<user>), NOT by file ownership, so making this file
-#    agent-owned does not change the user the cron jobs run as.
+#    heartbeatctl reload writes the real one.
+#
+#    Ownership note (important): busybox crond *silently skips* any file
+#    in /etc/crontabs/ that is not owned by root. The filename controls
+#    which user the job runs as; the ownership is a security check.
+#    So /etc/crontabs/agent stays root-owned 0644, and heartbeatctl
+#    (which runs as agent) cannot write there directly. Instead, it
+#    writes to a workspace staging path that the sync loop below
+#    copies into /etc/crontabs/ under root identity.
+STAGING_CRONTAB="$WORKSPACE/scripts/heartbeat/.crontab.staging"
 if [ -f /opt/agent-admin/crontab.tpl ]; then
   export HEARTBEAT_CRON="${HEARTBEAT_CRON:-*/30 * * * *}"
-  # rm before write: on a container restart, the existing file is owned
-  # by agent (chown'd below), and root without CAP_DAC_OVERRIDE cannot
-  # truncate a file it does not own. Removing via the parent dir (which
-  # root does own) then recreating is the only path that works under
-  # cap_drop: ALL + cap_add: CHOWN,SETUID,SETGID.
   rm -f "$CRONTAB_DST"
   envsubst < /opt/agent-admin/crontab.tpl > "$CRONTAB_DST"
-  # chmod while root owns the freshly-created file, then chown to agent.
-  # Doing chmod after chown would also fail without CAP_FOWNER.
   chmod 0644 "$CRONTAB_DST"
-  chown agent:agent "$CRONTAB_DST"
-  log "crontab rendered (default)"
+  # Stays root:root — required by busybox crond.
+  log "crontab rendered (default, root-owned)"
 fi
 
-# 4. Start crond as ROOT so it can setgid on job dispatch.
+# 4. Root-privileged sync loop: pick up heartbeatctl's staging writes.
+#    Runs in the background for the lifetime of the container; crond
+#    rescans mtimes every minute, so a mutation via `heartbeatctl
+#    set-interval 2m` takes effect within ~1 minute (sync tick + crond
+#    tick). No SIGHUP — busybox crond dies on SIGHUP.
+(
+  while true; do
+    sleep 15
+    if [ -f "$STAGING_CRONTAB" ] && \
+       [ "$STAGING_CRONTAB" -nt "$CRONTAB_DST" ]; then
+      cp "$STAGING_CRONTAB" "$CRONTAB_DST" 2>/dev/null && \
+        chmod 0644 "$CRONTAB_DST" 2>/dev/null
+    fi
+  done
+) &
+log "crontab-sync loop started (pid $!)"
+
+# 5. Start crond as ROOT so it can setgid on job dispatch.
 if ! pgrep -x crond >/dev/null 2>&1; then
   crond -b -L /workspace/claude.cron.log
   log "crond started (root)"
 fi
 
-# 5. Refresh CONTAINER.md
+# 6. Refresh CONTAINER.md
 if [ -x /opt/agent-admin/scripts/write_container_info.sh ]; then
   su-exec agent /opt/agent-admin/scripts/write_container_info.sh || log "WARN: container-info refresh failed (non-fatal)"
 fi
 
-# 6. Drop to agent and hand off to the supervisor.
+# 7. Drop to agent and hand off to the supervisor.
 log "starting services"
 exec su-exec agent /opt/agent-admin/scripts/start_services.sh
