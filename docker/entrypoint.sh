@@ -15,9 +15,16 @@ if [ "$(stat -c %U /home/agent)" = "root" ]; then
   chown -R agent:agent /home/agent
 fi
 
-# 2. Ensure workspace heartbeat dir is agent-owned (idempotent)
+# 2. Ensure workspace heartbeat dir is agent-owned (idempotent). Includes
+#    a pre-mkdir of logs/ so it exists at chown-time — on macOS Docker
+#    Desktop, dirs mkdir'd later via the bind-mount translation layer
+#    can end up visible as root:root inside the container even though
+#    the host stores 501:20. That discrepancy breaks cron redirects
+#    (`heartbeat.sh >> logs/cron.log` fails with EACCES). Creating +
+#    chowning in the root phase sidesteps the issue.
 if [ -d "$WORKSPACE/scripts/heartbeat" ]; then
   log "chowning $WORKSPACE/scripts/heartbeat to agent:agent"
+  mkdir -p "$WORKSPACE/scripts/heartbeat/logs"
   chown -R agent:agent "$WORKSPACE/scripts/heartbeat"
 fi
 
