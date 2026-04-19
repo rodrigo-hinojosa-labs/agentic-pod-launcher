@@ -124,6 +124,64 @@ docker exec -u agent {{AGENT_NAME}} heartbeatctl set-interval 5m   # change inte
 
 Full reference (all subcommands, validation rules, propagation timing): [docs/heartbeatctl.md](docs/heartbeatctl.md).
 
-### Other issues
+### Other common issues
 
-Plugin not connected on first boot, permission prompts, crond silent, UID mismatch, etc. live in [docs/getting-started.md](docs/getting-started.md).
+#### `docker exec ... tmux attach -t agent` says "no sessions"
+
+`docker exec` defaults to root, and tmux keeps its socket per-UID in `/tmp/tmux-<uid>/`. The session lives under the `agent` UID (501 by default), so root looks at `/tmp/tmux-0/` and correctly reports empty. Always pass `-u agent`:
+
+```bash
+docker exec -it -u agent {{AGENT_NAME}} tmux attach -t agent
+```
+
+#### `docker attach {{AGENT_NAME}}` hangs with no output
+
+`docker attach` connects to PID 1's stdio, which is `start_services.sh` running its watchdog silently. Use `tmux attach` via `docker exec` (above). If you accidentally ran `docker attach` and got stuck, detach with `Ctrl-p Ctrl-q` — NOT `Ctrl-c`, which kills the container.
+
+#### Telegram plugin not connected (`plugin:telegram:telegram · ✘ failed`)
+
+Two usual causes:
+
+1. **Plugin not installed yet** — on first boot claude launches with `--channels` but the plugin cache isn't populated. Run `docker compose restart` after `/login` so the watchdog installs the plugin and re-launches. Inside tmux, `/mcp` shows each server's status: look for `✔ connected`.
+2. **`bun` missing from the image** — the plugin MCP server runs on bun. The launcher's image installs it; if you built a custom image without bun, confirm:
+
+```bash
+docker exec {{AGENT_NAME}} bun --version
+```
+
+#### The token wizard re-fires on every restart
+
+Means `/workspace/.env` is missing or lacks `TELEGRAM_BOT_TOKEN=<non-empty>`. Check:
+
+```bash
+ls -la {{DEPLOYMENT_WORKSPACE}}/.env           # must be 0600
+grep "^TELEGRAM_BOT_TOKEN=" {{DEPLOYMENT_WORKSPACE}}/.env
+docker exec {{AGENT_NAME}} cat /workspace/.env | grep TELEGRAM
+```
+
+All three should agree. If the last one differs, the bind-mount is wrong.
+
+#### UID mismatch (permission errors on bind-mount files)
+
+Happens when `docker.uid` in `agent.yml` doesn't match your host UID:
+
+```bash
+id -u                                              # your UID
+grep "uid:" {{DEPLOYMENT_WORKSPACE}}/agent.yml     # should match
+```
+
+If they differ, edit `agent.yml`, then `./setup.sh --regenerate && docker compose build && docker compose up -d --force-recreate`.
+
+#### Container logs
+
+```bash
+docker logs {{AGENT_NAME}}                                    # supervisor (tail)
+docker logs -f {{AGENT_NAME}}                                 # follow live
+docker exec {{AGENT_NAME}} cat /workspace/claude.log          # tmux capture
+docker exec {{AGENT_NAME}} cat /workspace/claude.cron.log     # crond log
+docker exec -u agent {{AGENT_NAME}} heartbeatctl logs         # runs.jsonl
+```
+
+#### "N MCP servers failed" at launch
+
+Inside the agent run `/mcp` to see each server's state. Focus on the ones that matter: `plugin:telegram:telegram`, `atlassian-*`, `github`, `playwright`. Typical causes: missing env vars in `.env` (Atlassian tokens, GitHub PAT) or missing binaries (`bun`, `uvx`).
