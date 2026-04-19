@@ -6,12 +6,12 @@
 # heartbeatctl) compose them.
 
 # gen_run_id — YYYYMMDDHHMMSS-XXXX where XXXX is 4 random hex chars.
-# Collision probability within the same second: ~1/65536. Good enough for
-# a single-agent heartbeat that runs at most every minute.
+# bash $RANDOM is 15-bit (0..32767), so the suffix lives in 0x0000..0x7fff —
+# same-second collision probability is ~1/32768. Good enough for a single-
+# agent heartbeat that runs at most every minute.
 gen_run_id() {
   local ts suf
   ts=$(date -u +%Y%m%d%H%M%S)
-  # $RANDOM is 0..32767 (15-bit). Mask to 4 hex chars.
   suf=$(printf '%04x' $((RANDOM & 0xFFFF)))
   printf '%s-%s\n' "$ts" "$suf"
 }

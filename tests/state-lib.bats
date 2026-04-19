@@ -66,7 +66,7 @@ teardown() { teardown_tmp_dir; }
   # 1KB threshold, create 2KB file
   head -c 2048 /dev/urandom > "$f"
   rotate_runs_jsonl "$f" 1024
-  [ ! -f "$f" ] || [ ! -s "$f" ]   # primary gone or empty
+  [ ! -f "$f" ]   # primary moved to .1; must be gone, not just empty
   [ -f "${f}.1" ]
 }
 
