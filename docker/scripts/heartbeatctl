@@ -108,20 +108,27 @@ NOTIFY_CHAT_ID="\${NOTIFY_CHAT_ID:-}"
 CONF
   mv "$tmp_conf" "$CONF_FILE"
 
-  # Rewrite crontab (or comment out if disabled)
+  # Rewrite crontab (or comment out if disabled).
+  # We write directly to $CRONTAB_FILE instead of via tmp+mv because the
+  # dir containing it (e.g. /etc/crontabs/) is root-owned; agent can
+  # overwrite the file (which entrypoint chowned) but not rename into
+  # the directory. The redirect-write is effectively one write syscall
+  # for a file this small, so busybox crond's next mtime scan sees the
+  # new content whole.
   local line
   if [ "$enabled" = "true" ]; then
     line="$cron /workspace/scripts/heartbeat/heartbeat.sh >> /workspace/scripts/heartbeat/logs/cron.log 2>&1"
   else
     line="# paused: $cron /workspace/scripts/heartbeat/heartbeat.sh >> /workspace/scripts/heartbeat/logs/cron.log 2>&1"
   fi
-  mkdir -p "$(dirname "$CRONTAB_FILE")"
-  local tmp_ct; tmp_ct=$(mktemp)
-  cat > "$tmp_ct" <<CT
+  if ! cat > "$CRONTAB_FILE" <<CT
 # Cron for in-container agent heartbeat. Managed by heartbeatctl.
 $line
 CT
-  mv "$tmp_ct" "$CRONTAB_FILE"
+  then
+    echo "heartbeatctl: failed to write $CRONTAB_FILE" >&2
+    return 2
+  fi
 
   # SIGHUP crond if we can reach it (best-effort)
   if command -v pkill >/dev/null 2>&1; then

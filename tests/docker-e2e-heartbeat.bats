@@ -3,12 +3,24 @@
 # tick, asserts runs.jsonl shape.
 #
 # Skipped by default (slow + requires Docker). Enable with DOCKER_E2E=1.
+#
+# This exercises the production code path: entrypoint (root) → chown +
+# crond launch → su-exec agent → start_services.sh → heartbeatctl reload
+# → cron fires heartbeat.sh → runs.jsonl.
+#
+# To prevent the watchdog from crash-looping on a missing claude binary,
+# we install a `claude` stub on PATH inside the image via a bind-mounted
+# shim (there's no real claude in the test image).
 
 load helper
 
 setup() {
   if [ "${DOCKER_E2E:-0}" != "1" ]; then skip "set DOCKER_E2E=1 to run"; fi
-  setup_tmp_dir
+  # Force a predictable path under /tmp for the test workspace. Docker
+  # Desktop's File Sharing layer is most reliable with /tmp/* on macOS;
+  # bats' default TMPDIR (/var/folders/...) works too but has been
+  # observed to introduce bind-mount timing issues here.
+  TMPDIR=/tmp setup_tmp_dir
   export DEST="$TMP_TEST_DIR/agent-e2e"
   export AGENT_NAME="hb-e2e"
 }
@@ -46,55 +58,66 @@ YML
   touch "$DEST/.env"
   chmod 0600 "$DEST/.env"
 
-  # 3b) patch docker-compose.yml: override the entrypoint so the container
-  # stays alive without needing a real claude binary. The default
-  # start_services.sh crash-loops in <60s when claude is absent, which
-  # prevents the 1m cron from ever firing. Instead we inject an
-  # `entrypoint:` that: (a) chowns volumes as root, (b) writes the
-  # correct crontab as root (heartbeatctl reload must run as root to
-  # write /etc/crontabs/agent — the agent user is denied by cap_drop),
-  # (c) starts crond as root, (d) sleeps forever to keep the container
-  # alive through the first 60-second cron tick.
+  # 4) install a claude stub that heartbeat.sh will find on PATH.
+  # Writing HEARTBEAT_DONE immediately (what heartbeat.sh's tmux launcher
+  # expects on success) short-circuits the session wait.
+  mkdir -p "$DEST/bin"
+  cat > "$DEST/bin/claude" <<'CL'
+#!/bin/bash
+# e2e stub — echoes the prompt and exits 0 so heartbeat.sh records status=ok
+printf 'STUB_CLAUDE: %s\n' "$*"
+exit 0
+CL
+  chmod +x "$DEST/bin/claude"
+
+  # 5) patch docker-compose.yml so the stub is on PATH inside the
+  # container. We can't mount /usr/local/bin (busy at runtime) so we
+  # overlay via an env var read by start_services.sh / heartbeat.sh.
+  # The simplest mechanism: symlink the stub into /usr/local/bin at
+  # runtime via a drop-in; alpine keeps /usr/local/bin on PATH by default.
+  # We append a small bootstrap to the compose that adds:
+  #   volumes: ./bin/claude:/usr/local/bin/claude:ro
   python3 - "$DEST/docker-compose.yml" <<'PY'
-import sys, re
+import sys
 path = sys.argv[1]
 txt = open(path).read()
-# Inject an `entrypoint:` override before the `volumes:` block.
-# Running heartbeatctl as root so it can write /etc/crontabs/agent
-# (the agent user is blocked by cap_drop: ALL + no-new-privileges).
-override = (
-    '    entrypoint:\n'
-    '      - /bin/sh\n'
-    '      - -c\n'
-    '      - |\n'
-    '          chown -R agent:agent /home/agent 2>/dev/null || true\n'
-    '          [ -d /workspace/scripts/heartbeat ] && chown -R agent:agent /workspace/scripts/heartbeat 2>/dev/null || true\n'
-    '          heartbeatctl reload 2>&1 || true\n'
-    '          crond -b -L /workspace/scripts/heartbeat/logs/cron.log\n'
-    '          while true; do sleep 30; done\n'
-)
-txt = re.sub(r'(\n    volumes:)', r'\n' + override + r'\1', txt, count=1)
+# Append the bind-mount for the stub just inside the volumes list.
+# The existing list has two lines; insert before the named-volume line.
+needle = '      - ./:/workspace'
+inject = '      - ./bin/claude:/usr/local/bin/claude:ro'
+if inject not in txt:
+    txt = txt.replace(needle, needle + '\n' + inject, 1)
 open(path, 'w').write(txt)
 PY
 
-  # 4) build + up
+  # 6) build + up (full production entrypoint chain)
   (cd "$DEST" && docker compose build)
   (cd "$DEST" && docker compose up -d)
 
-  # 5) wait up to 90s for first tick
-  local deadline=$(( $(date +%s) + 90 ))
+  # 7) wait up to 150s for first tick. With a 1m cron schedule, the first
+  #    tick fires at the next minute boundary — can be up to 60s after
+  #    container boot, plus boot time (~15s) and heartbeat.sh runtime
+  #    (~5s). 150s gives enough margin for slow CI or macOS Docker Desktop.
+  local deadline=$(( $(date +%s) + 150 ))
   while [ "$(date +%s)" -lt "$deadline" ]; do
     if [ -f "$DEST/scripts/heartbeat/logs/runs.jsonl" ]; then break; fi
     sleep 5
   done
+  if [ ! -f "$DEST/scripts/heartbeat/logs/runs.jsonl" ]; then
+    # Dump logs to help diagnose the failure before teardown eats them.
+    echo "--- container logs ---" >&2
+    (cd "$DEST" && docker compose logs --tail=50 2>&1) >&2 || true
+    echo "--- crontab ---" >&2
+    (cd "$DEST" && docker compose exec -T "$AGENT_NAME" cat /etc/crontabs/agent 2>&1) >&2 || true
+  fi
   [ -f "$DEST/scripts/heartbeat/logs/runs.jsonl" ]
 
-  # 6) assert the line is valid JSON with the expected shape
+  # 8) assert the line has the expected shape. trigger must be "cron"
+  # (not "manual"), proving the cron → heartbeat.sh chain fired. status
+  # should be "ok" with the stub claude; accept "error" as fallback if
+  # the container hits an unrelated failure mode.
   run jq -e '.trigger == "cron"' "$DEST/scripts/heartbeat/logs/runs.jsonl"
   [ "$status" -eq 0 ]
-  # claude is not installed in the minimal test image, so status may be
-  # "error" (claude_exit_code=-2) — that's acceptable. The critical check
-  # is that the cron chain fired and produced a line at all.
   run jq -r '.status' "$DEST/scripts/heartbeat/logs/runs.jsonl"
   [ "$status" -eq 0 ]
   [[ "$output" == "ok" || "$output" == "error" ]]

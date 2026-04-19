@@ -22,11 +22,18 @@ if [ -d "$WORKSPACE/scripts/heartbeat" ]; then
 fi
 
 # 3. Render a safe-default crontab so crond has something to watch until
-#    heartbeatctl reload overwrites it.
+#    heartbeatctl reload overwrites it. chown to agent so heartbeatctl
+#    (which runs as agent from start_services.sh) can rewrite it.
+#    Note: busybox crond identifies the target user by the filename
+#    (/etc/crontabs/<user>), NOT by file ownership, so making this file
+#    agent-owned does not change the user the cron jobs run as.
 if [ -f /opt/agent-admin/crontab.tpl ]; then
   export HEARTBEAT_CRON="${HEARTBEAT_CRON:-*/30 * * * *}"
   envsubst < /opt/agent-admin/crontab.tpl > "$CRONTAB_DST"
+  # chmod BEFORE chown so root still owns the file — cap_drop: ALL leaves
+  # us without CAP_FOWNER, so chmod on a file we don't own fails.
   chmod 0644 "$CRONTAB_DST"
+  chown agent:agent "$CRONTAB_DST"
   log "crontab rendered (default)"
 fi
 
