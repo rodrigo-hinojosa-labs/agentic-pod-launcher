@@ -215,3 +215,13 @@ teardown() { teardown_tmp_dir; }
   [[ "$result" == *"stdin_open: true"* ]]
   [[ "$result" == *"tty: true"* ]]
 }
+
+@test "crontab.tpl renders without a user field (busybox user-crontab format)" {
+  export HEARTBEAT_CRON="*/2 * * * *"
+  local rendered
+  rendered=$(envsubst < "$REPO_ROOT/docker/crontab.tpl")
+  # Must NOT contain the token "agent " in the executable position.
+  # Valid format: "<5 time fields> /workspace/scripts/heartbeat/heartbeat.sh ..."
+  [[ "$rendered" == *"*/2 * * * * /workspace/scripts/heartbeat/heartbeat.sh"* ]]
+  [[ "$rendered" != *"* agent /workspace"* ]]
+}
