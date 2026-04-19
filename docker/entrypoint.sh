@@ -29,9 +29,15 @@ fi
 #    agent-owned does not change the user the cron jobs run as.
 if [ -f /opt/agent-admin/crontab.tpl ]; then
   export HEARTBEAT_CRON="${HEARTBEAT_CRON:-*/30 * * * *}"
+  # rm before write: on a container restart, the existing file is owned
+  # by agent (chown'd below), and root without CAP_DAC_OVERRIDE cannot
+  # truncate a file it does not own. Removing via the parent dir (which
+  # root does own) then recreating is the only path that works under
+  # cap_drop: ALL + cap_add: CHOWN,SETUID,SETGID.
+  rm -f "$CRONTAB_DST"
   envsubst < /opt/agent-admin/crontab.tpl > "$CRONTAB_DST"
-  # chmod BEFORE chown so root still owns the file — cap_drop: ALL leaves
-  # us without CAP_FOWNER, so chmod on a file we don't own fails.
+  # chmod while root owns the freshly-created file, then chown to agent.
+  # Doing chmod after chown would also fail without CAP_FOWNER.
   chmod 0644 "$CRONTAB_DST"
   chown agent:agent "$CRONTAB_DST"
   log "crontab rendered (default)"

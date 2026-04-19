@@ -130,10 +130,10 @@ CT
     return 2
   fi
 
-  # SIGHUP crond if we can reach it (best-effort)
-  if command -v pkill >/dev/null 2>&1; then
-    pkill -HUP -x crond 2>/dev/null || true
-  fi
+  # Do NOT SIGHUP busybox crond — unlike vixie/cronie, busybox crond
+  # terminates on SIGHUP instead of reloading. Its scheduler rechecks
+  # crontab mtimes on every minute tick and picks up changes on its own.
+  # Expected lag to first tick with the new schedule: up to 60 seconds.
 
   echo "heartbeatctl: reloaded (interval=$interval cron='$cron' enabled=$enabled channel=$channel)"
 }
