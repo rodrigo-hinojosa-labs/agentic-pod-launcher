@@ -43,7 +43,16 @@ while [ "$#" -gt 0 ]; do
 done
 
 iso8601() { date -u +%Y-%m-%dT%H:%M:%SZ; }
-now_ms() { date +%s%N 2>/dev/null | cut -c1-13 || echo $(( $(date +%s) * 1000 )); }
+
+# sh_sq — wrap a string in single-quotes safely for shell consumption by
+# replacing every embedded ' with '\''. The result is a single token that
+# any POSIX shell will pass verbatim to its argv. Verified with round-trip
+# eval against embedded single quotes, double quotes, backslashes, and $.
+sh_sq() {
+  printf "'"
+  printf '%s' "$1" | sed "s/'/'\\\\''/g"
+  printf "'"
+}
 
 is_prior_session_alive() {
   tmux list-sessions 2>/dev/null | grep -q "^${AGENT_NAME}-hb-"
@@ -52,7 +61,6 @@ is_prior_session_alive() {
 run_id=$(gen_run_id)
 session="${AGENT_NAME}-hb-${run_id}"
 ts=$(iso8601)
-started_ms=$(now_ms)
 
 notifier_json='{"channel":"none","ok":true,"latency_ms":0,"error":null}'
 
@@ -82,8 +90,15 @@ run_claude_session() {
     return 1
   fi
 
+  # Build the shell snippet with each variable that could contain prompt
+  # characters ("; `, etc.) single-quote-escaped. tmux will pass this to
+  # the default shell via `-c`, and without the escaping a prompt like
+  # `hi"; rm -rf /; echo "bye` would be interpreted as a command.
+  local prompt_sq log_sq
+  prompt_sq=$(sh_sq "$HEARTBEAT_PROMPT")
+  log_sq=$(sh_sq "$log_file")
   tmux new-session -d -s "$sess" -c "$WORKSPACE_DIR" \
-    "claude --print \"$HEARTBEAT_PROMPT\" > \"$log_file\" 2>&1; echo HEARTBEAT_DONE >> \"$log_file\""
+    "claude --print $prompt_sq > $log_sq 2>&1; echo HEARTBEAT_DONE >> $log_sq"
 
   local waited=0
   while [ "$waited" -lt "$HEARTBEAT_TIMEOUT" ]; do
