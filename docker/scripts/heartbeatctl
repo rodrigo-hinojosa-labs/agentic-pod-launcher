@@ -209,6 +209,51 @@ cmd_logs() {
   fi
 }
 
+cmd_pause() {
+  local prev; prev="$AGENT_YML.prev"
+  cp "$AGENT_YML" "$prev"
+  yq -i '.features.heartbeat.enabled = false' "$AGENT_YML" || {
+    cp "$prev" "$AGENT_YML"; rm -f "$prev"; echo "pause: yq failed" >&2; return 2
+  }
+  if ! cmd_reload; then
+    cp "$prev" "$AGENT_YML"; rm -f "$prev"
+    cmd_reload >/dev/null 2>&1 || true
+    return 2
+  fi
+  rm -f "$prev"
+  echo "heartbeatctl: paused"
+}
+
+cmd_resume() {
+  local prev; prev="$AGENT_YML.prev"
+  cp "$AGENT_YML" "$prev"
+  yq -i '.features.heartbeat.enabled = true' "$AGENT_YML" || {
+    cp "$prev" "$AGENT_YML"; rm -f "$prev"; echo "resume: yq failed" >&2; return 2
+  }
+  if ! cmd_reload; then
+    cp "$prev" "$AGENT_YML"; rm -f "$prev"
+    cmd_reload >/dev/null 2>&1 || true
+    return 2
+  fi
+  rm -f "$prev"
+  echo "heartbeatctl: resumed"
+}
+
+cmd_test() {
+  local prompt=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --prompt) prompt="$2"; shift 2 ;;
+      *) echo "test: unknown flag '$1'" >&2; return 1 ;;
+    esac
+  done
+  local runner="$HEARTBEAT_DIR/heartbeat.sh"
+  [ -x "$runner" ] || { echo "heartbeatctl: $runner missing or not executable" >&2; return 2; }
+  HEARTBEAT_TRIGGER=manual \
+  HEARTBEAT_STATE_LIB="${HEARTBEAT_STATE_LIB:-$LIB_DIR/state.sh}" \
+    bash "$runner" ${prompt:+--prompt "$prompt"}
+}
+
 main() {
   local sub="${1:-help}"; shift || true
   case "$sub" in
@@ -217,6 +262,9 @@ main() {
     reload) cmd_reload "$@" ;;
     status) cmd_status "$@" ;;
     logs)   cmd_logs   "$@" ;;
+    pause)  cmd_pause ;;
+    resume) cmd_resume ;;
+    test)   cmd_test "$@" ;;
     *) echo "heartbeatctl: unknown command '$sub' (see 'heartbeatctl help')" >&2; exit 1 ;;
   esac
 }

@@ -147,3 +147,48 @@ JS
   run jq -r '.status' <<<"$output"
   [ "$output" = "ok" ]
 }
+
+@test "pause comments crontab line and sets enabled=false in agent.yml" {
+  bash "$REPO_ROOT/docker/scripts/heartbeatctl" reload
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" pause
+  [ "$status" -eq 0 ]
+  grep -q '^# paused:' "$HEARTBEATCTL_CRONTAB_FILE"
+  run yq -r '.features.heartbeat.enabled' "$WORKSPACE/agent.yml"
+  [ "$output" = "false" ]
+}
+
+@test "resume reverses pause — crontab uncommented, enabled=true" {
+  bash "$REPO_ROOT/docker/scripts/heartbeatctl" reload
+  bash "$REPO_ROOT/docker/scripts/heartbeatctl" pause
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" resume
+  [ "$status" -eq 0 ]
+  grep -q '^\*/2 \* \* \* \*' "$HEARTBEATCTL_CRONTAB_FILE"
+  ! grep -q '^# paused:' "$HEARTBEATCTL_CRONTAB_FILE"
+  run yq -r '.features.heartbeat.enabled' "$WORKSPACE/agent.yml"
+  [ "$output" = "true" ]
+}
+
+@test "pause is idempotent" {
+  bash "$REPO_ROOT/docker/scripts/heartbeatctl" reload
+  bash "$REPO_ROOT/docker/scripts/heartbeatctl" pause
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" pause
+  [ "$status" -eq 0 ]
+  local n
+  n=$(grep -c '^# paused:' "$HEARTBEATCTL_CRONTAB_FILE")
+  [ "$n" = "1" ]
+}
+
+@test "test runs heartbeat.sh with trigger=manual and writes a run line" {
+  mkdir -p "$TMP_TEST_DIR/bin"
+  printf '#!/bin/bash\nexit 0\n' > "$TMP_TEST_DIR/bin/claude"
+  chmod +x "$TMP_TEST_DIR/bin/claude"
+  cp "$REPO_ROOT/scripts/heartbeat/heartbeat.sh" "$WORKSPACE/scripts/heartbeat/"
+  cp -R "$REPO_ROOT/scripts/heartbeat/notifiers" "$WORKSPACE/scripts/heartbeat/"
+  export PATH="$TMP_TEST_DIR/bin:$PATH"
+  export HEARTBEAT_STATE_LIB="$REPO_ROOT/docker/scripts/lib/state.sh"
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" test
+  [ "$status" -eq 0 ]
+  [ -f "$WORKSPACE/scripts/heartbeat/logs/runs.jsonl" ]
+  run jq -r '.trigger' "$WORKSPACE/scripts/heartbeat/logs/runs.jsonl"
+  [ "$output" = "manual" ]
+}
