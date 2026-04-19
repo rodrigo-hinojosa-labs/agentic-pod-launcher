@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# heartbeatctl — inspect, control, and mutate the heartbeat.
+# Image-baked, workspace-reading. Spec: docs/superpowers/specs/2026-04-19-*.md
+
+set -u
+
+# Overridable paths for tests.
+WORKSPACE="${HEARTBEATCTL_WORKSPACE:-/workspace}"
+HEARTBEAT_DIR="$WORKSPACE/scripts/heartbeat"
+AGENT_YML="$WORKSPACE/agent.yml"
+CONF_FILE="$HEARTBEAT_DIR/heartbeat.conf"
+STATE_FILE="$HEARTBEAT_DIR/state.json"
+RUNS_FILE="$HEARTBEAT_DIR/logs/runs.jsonl"
+CRONTAB_FILE="${HEARTBEATCTL_CRONTAB_FILE:-/etc/crontabs/agent}"
+LIB_DIR="${HEARTBEATCTL_LIB_DIR:-/opt/agent-admin/scripts/lib}"
+
+# shellcheck source=/dev/null
+[ -f "$LIB_DIR/interval.sh" ] && source "$LIB_DIR/interval.sh"
+# shellcheck source=/dev/null
+[ -f "$LIB_DIR/state.sh" ]    && source "$LIB_DIR/state.sh"
+
+cmd_help() {
+  cat <<EOF
+heartbeatctl — manage the agent heartbeat.
+
+Read:
+  status [--json]         Print human or machine-readable state.
+  logs   [-n N] [--json]  Tail logs/runs.jsonl. Default N=20.
+  show                    Dump heartbeat.conf + installed crontab + agent.yml section.
+
+Control:
+  test   [--prompt "..."] Run one heartbeat now (trigger=manual).
+  pause                   Comment crontab line, set enabled=false in agent.yml.
+  resume                  Inverse of pause.
+  reload                  Re-read agent.yml, regenerate conf + crontab, SIGHUP crond.
+
+Mutate (all atomic with rollback against agent.yml.prev):
+  set-interval  <Nm|Nh>
+  set-prompt    "<str>"     (or pipe via stdin with no arg)
+  set-notifier  <none|log|telegram>
+  set-timeout   <seconds>
+  set-retries   <0..5>
+
+Exit codes:
+  0  success
+  1  validation error
+  2  operational error (filesystem, yq, crond)
+
+Spec: docs/superpowers/specs/2026-04-19-heartbeat-observability-cli-design.md
+EOF
+}
+
+cmd_show() {
+  echo "=== heartbeat.conf ($CONF_FILE) ==="
+  if [ -f "$CONF_FILE" ]; then cat "$CONF_FILE"; else echo "(missing)"; fi
+  echo
+  echo "=== crontab ($CRONTAB_FILE) ==="
+  if [ -f "$CRONTAB_FILE" ]; then cat "$CRONTAB_FILE"; else echo "(missing)"; fi
+  echo
+  echo "=== agent.yml :: features.heartbeat + notifications ==="
+  if [ -f "$AGENT_YML" ]; then
+    yq '{"features": {"heartbeat": .features.heartbeat}, "notifications": .notifications}' "$AGENT_YML"
+  else
+    echo "(missing)"
+  fi
+}
+
+main() {
+  local sub="${1:-help}"; shift || true
+  case "$sub" in
+    help|-h|--help|"") cmd_help ;;
+    show) cmd_show ;;
+    *) echo "heartbeatctl: unknown command '$sub' (see 'heartbeatctl help')" >&2; exit 1 ;;
+  esac
+}
+
+main "$@"
