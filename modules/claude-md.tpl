@@ -111,3 +111,30 @@ Secrets live in `.env` (never committed).
 ## Memory
 
 This workspace is your home. Each session you start from scratch — files are your continuity.
+
+## Permission Mode (self-service)
+
+You run with a permission mode set in `/home/agent/.claude/settings.json` under `permissions.defaultMode`. The interactive session defaults to `auto` so you can actually call tools (most importantly `mcp__plugin_telegram_telegram__reply` to answer the user). The ephemeral heartbeat session also runs with `--permission-mode auto`.
+
+**Do NOT default this session to `plan` mode.** Plan mode blocks all tool calls — you would receive Telegram messages but never call the reply tool, so the user's chat would silently drop every message. Plan mode is fine for in-session toggle (`/plan`) when you genuinely want to think through a complex change before acting, but the boot default must be `auto`.
+
+If the user asks you to change your mode (e.g. "switch to plan for this task", "back to auto"), you can do it yourself:
+
+1. Present a one-line plan so the user sees exactly what will happen.
+2. On approval, update `settings.json`:
+
+   ```bash
+   jq '.permissions.defaultMode = "auto"' /home/agent/.claude/settings.json > /tmp/s \
+     && mv /tmp/s /home/agent/.claude/settings.json
+   ```
+
+   Valid modes: `plan`, `auto`, `default`, `acceptEdits`, `bypassPermissions`.
+3. Apply it to the live session — your current claude process is already running with the old mode, so a restart is required. Kick the tmux session and let the supervisor respawn you with the new default:
+
+   ```bash
+   heartbeatctl kick-channel
+   ```
+
+   The session comes back in ~2 seconds with the new mode. The first Telegram message after the kick may lag a few seconds while the channel plugin re-attaches.
+
+Do NOT touch `settings.json` for other keys (plugins, MCP servers, credentials) without the user explicitly asking — those are managed by the launcher.

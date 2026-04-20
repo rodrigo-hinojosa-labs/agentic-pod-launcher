@@ -17,9 +17,33 @@ set -euo pipefail
 # capture (e.g. build_claude_cmd via $(...)) aren't polluted.
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [start_services] $*" >&2; }
 
-# ── 1. crond ──────────────────────────────────────────────
-log "starting crond"
-crond -b -L /workspace/claude.cron.log
+# ── 1. Heartbeat schedule reload ──────────────────────────
+# Reload the heartbeat schedule from agent.yml. Tolerate reload failure —
+# the default crontab from entrypoint is still in place.
+if command -v heartbeatctl >/dev/null 2>&1; then
+  heartbeatctl reload || echo "WARN: heartbeatctl reload failed, using default crontab" >&2
+fi
+
+# ── 1b. Clear stale telegram pairing pending ──────────────
+# The claude-plugins-official/telegram plugin persists access state
+# (allowFrom + pending) across container restarts. If a `pending` code
+# from a previous session survives the restart, the plugin can reply
+# "Pairing required" to an already-paired sender before the in-memory
+# allowFrom check catches up — visible to users as a flaky first
+# message after restart. Clearing pending on each boot is safe: any
+# in-flight pairing is invalidated (user just retries), already-paired
+# allowFrom is preserved.
+telegram_access_json="/home/agent/.claude/channels/telegram/access.json"
+if [ -f "$telegram_access_json" ] && command -v jq >/dev/null 2>&1; then
+  tmp_access=$(mktemp)
+  if jq '.pending = {}' "$telegram_access_json" > "$tmp_access" 2>/dev/null; then
+    mv "$tmp_access" "$telegram_access_json"
+    chmod 0600 "$telegram_access_json"
+    log "cleared stale telegram pairing pending"
+  else
+    rm -f "$tmp_access"
+  fi
+fi
 
 # ── 2. Config ─────────────────────────────────────────────
 SESSION="agent"
@@ -104,21 +128,37 @@ has_telegram_token() {
   [ -n "$val" ]
 }
 
-# Pre-accept Claude Code's "bypass permissions" one-time warning by flipping
-# skipDangerousModePermissionPrompt=true in the user settings. Without this,
-# the first launch with --dangerously-skip-permissions hangs on an
-# interactive confirmation dialog — which breaks an automated flow where
-# the user interacts only via Telegram.
+# Pre-configure the user's Claude settings for headless operation:
+#   - skipDangerousModePermissionPrompt=true — dismiss the one-time
+#     `--dangerously-skip-permissions` warning dialog so the first launch
+#     doesn't hang waiting for a y/N the user can't press (they only
+#     interact via Telegram).
+#   - permissions.defaultMode=auto — start every session in auto mode.
+#     Critical: plan mode blocks ALL tool execution (Claude only proposes
+#     plans, never acts), which means it never calls the telegram reply
+#     MCP tool — so the agent looks like it ghosts every Telegram message.
+#     auto is the only sane default for a chat-driven agent. Users who
+#     want plan-style behavior for sensitive tasks can switch in-session
+#     with /plan; the next message reverts to auto on session restart.
+# Both heartbeat and interactive sessions read from the same settings.json
+# (heartbeat's isolated config dir symlinks this file), so setting these
+# once here covers both launch paths.
 pre_accept_bypass_permissions() {
   local settings="$HOME/.claude/settings.json"
   [ -f "$settings" ] || return 0
-  local current
-  current=$(jq -r '.skipDangerousModePermissionPrompt // false' "$settings" 2>/dev/null || echo "false")
-  [ "$current" = "true" ] && return 0
-  log "pre-accepting --dangerously-skip-permissions in $settings"
+  local need_skip need_mode
+  need_skip=$(jq -r '.skipDangerousModePermissionPrompt // false' "$settings" 2>/dev/null || echo "false")
+  need_mode=$(jq -r '.permissions.defaultMode // ""' "$settings" 2>/dev/null || echo "")
+  if [ "$need_skip" = "true" ] && [ "$need_mode" = "auto" ]; then
+    return 0
+  fi
+  log "pre-configuring headless settings (skip-perms prompt + defaultMode=auto) in $settings"
   local tmp
   tmp=$(mktemp)
-  if jq '. + {skipDangerousModePermissionPrompt: true}' "$settings" > "$tmp" 2>/dev/null; then
+  if jq '
+    .skipDangerousModePermissionPrompt = true
+    | .permissions = ((.permissions // {}) + {defaultMode: "auto"})
+  ' "$settings" > "$tmp" 2>/dev/null; then
     mv "$tmp" "$settings"
   else
     rm -f "$tmp"
@@ -212,6 +252,63 @@ session_alive() {
   tmux has-session -t "$SESSION" 2>/dev/null
 }
 
+# When the session was launched with --channels, the bun plugin server
+# should stay alive for the session's lifetime. If bun dies silently
+# (plugin crash, upstream stdin close, etc.), claude keeps running but
+# stops receiving Telegram messages — visible to the user as the agent
+# ghosting. Detect this and respawn the session so a fresh plugin
+# attaches.
+channel_plugin_alive() {
+  # Only enforce if the session was launched with --channels. We detect
+  # that by checking whether any current tmux pane's command contains
+  # --channels — cheaper than re-parsing the launch command.
+  if pgrep -f -- "--channels " >/dev/null 2>&1; then
+    pgrep -f "bun server.ts" >/dev/null 2>&1
+  else
+    return 0
+  fi
+}
+
+# Bridge watchdog: detects the silent-stuck case where bun is alive
+# and polling Telegram, but its MCP notifications aren't reaching
+# Claude's session (an upstream plugin bug). The channel_plugin_alive
+# check above only catches cases where bun itself died; this watchdog
+# covers the much more common "bun alive, bridge broken" state.
+#
+# Mechanic:
+#   - Peek the most recent Telegram message via getUpdates with a
+#     negative offset (safe, does NOT confirm/claim the message so
+#     bun's own polling is unaffected — documented in Telegram Bot
+#     API: "Negative values of offset retrieve the last updates not
+#     confirming any").
+#   - If the message is 20-300s old and its text does not appear
+#     anywhere in Claude's tmux pane AND Claude is not currently
+#     processing something (no spinner), count as suspicious.
+#   - After 3 consecutive suspicions (~15s of consistent stuck state)
+#     kick the session. The existing respawn logic brings up a fresh
+#     bun + claude and the bridge is restored.
+#   - 60s cooldown after each kick prevents a stuck loop from
+#     restarting too fast.
+#
+# Skipped whenever: Claude is busy (has a spinner in the pane), the
+# latest message is very fresh (<20s, bun may not have polled yet),
+# or the latest message is very old (>300s, already water under the
+# bridge).
+# NOTE: A bridge_watchdog auto-kicker was attempted here (commit 3c5465f /
+# fcb6744) but reverted. The detection heuristic (tmux pane scrape +
+# Telegram API peek) produced false positives that killed the session
+# every ~2 minutes during normal operation, with the kick log lines
+# silently lost from the backgrounded subshell's stderr — making the
+# behavior look like Claude was crashing on its own.
+#
+# For now the silent-stuck bridge case (bun alive, MCP notifications
+# dropped before reaching Claude) requires manual recovery:
+#
+#   docker exec -u agent <agent> heartbeatctl kick-channel
+#
+# channel_plugin_alive (above) still handles the case where bun
+# itself dies; that one is reliably detectable from outside.
+
 log "starting tmux session '$SESSION'"
 if ! start_session; then
   log "ERROR: initial tmux session failed to start"
@@ -224,8 +321,18 @@ fi
 # `tmux has-session`.
 while true; do
   sleep 2
-  if session_alive; then
+  if ! pgrep -x crond >/dev/null 2>&1; then
+    echo "CRITICAL: crond died — exiting container (docker restart policy will revive)"
+    exit 1
+  fi
+  if session_alive && channel_plugin_alive; then
     continue
+  fi
+
+  if session_alive && ! channel_plugin_alive; then
+    log "channel plugin (bun server.ts) died — killing tmux for respawn"
+    tmux kill-session -t "$SESSION" 2>/dev/null || true
+    sleep 1
   fi
 
   now=$(date +%s)

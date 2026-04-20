@@ -149,10 +149,14 @@ teardown() { teardown_tmp_dir; }
   [[ "$content" == *"pre_accept_bypass_permissions"$'\n'*"cmd=\$(next_tmux_cmd)"* ]]
 }
 
-@test "start_services.sh starts crond in background" {
+@test "start_services.sh monitors crond liveness and calls heartbeatctl reload" {
   content=$(< "$REPO_ROOT/docker/scripts/start_services.sh")
-  [[ "$content" == *"crond"* ]]
-  [[ "$content" == *"-b"* ]]
+  # crond is now started by entrypoint.sh (root); start_services.sh must NOT
+  # launch it itself but MUST check its liveness in the watchdog loop and
+  # call heartbeatctl reload before the main loop.
+  [[ "$content" != *"crond -b"* ]]
+  [[ "$content" == *"pgrep -x crond"* ]]
+  [[ "$content" == *"heartbeatctl reload"* ]]
 }
 
 @test "start_services.sh starts tmux session named 'agent'" {
@@ -214,4 +218,14 @@ teardown() { teardown_tmp_dir; }
   result=$(render_template "$REPO_ROOT/modules/docker-compose.yml.tpl")
   [[ "$result" == *"stdin_open: true"* ]]
   [[ "$result" == *"tty: true"* ]]
+}
+
+@test "crontab.tpl renders without a user field (busybox user-crontab format)" {
+  export HEARTBEAT_CRON="*/2 * * * *"
+  local rendered
+  rendered=$(envsubst < "$REPO_ROOT/docker/crontab.tpl")
+  # Must NOT contain the token "agent " in the executable position.
+  # Valid format: "<5 time fields> /workspace/scripts/heartbeat/heartbeat.sh ..."
+  [[ "$rendered" == *"*/2 * * * * /workspace/scripts/heartbeat/heartbeat.sh"* ]]
+  [[ "$rendered" != *"* agent /workspace"* ]]
 }

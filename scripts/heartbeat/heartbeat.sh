@@ -1,216 +1,324 @@
-#!/bin/bash
-# Heartbeat — Lanza una nueva sesión de claude para ejecutar un prompt
-# El nombre del agente se detecta automáticamente del workspace
-# Uso directo: ./heartbeat.sh [--prompt "override"]
+#!/usr/bin/env bash
+# heartbeat — one tick of the scheduled agent heartbeat.
+# Emits a line to logs/runs.jsonl and updates state.json atomically.
 
-set -euo pipefail
+set -u -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-CONF_FILE="$SCRIPT_DIR/heartbeat.conf"
-
-# Detectar nombre del agente desde el path del workspace
-# scripts/heartbeat/ está 2 niveles bajo el workspace del agente
 WORKSPACE_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 AGENT_NAME="$(basename "$WORKSPACE_DIR")"
-
-# Directorios de logs persistentes
+CONF_FILE="$SCRIPT_DIR/heartbeat.conf"
 LOG_DIR="$SCRIPT_DIR/logs"
-mkdir -p "$LOG_DIR"
-HISTORY_FILE="$LOG_DIR/heartbeat-history.log"
-RUN_COUNT_FILE="$LOG_DIR/.run-count"
+RUNS_FILE="$LOG_DIR/runs.jsonl"
+STATE_FILE="$SCRIPT_DIR/state.json"
+SESSION_LOG_DIR="$LOG_DIR/sessions"
+ROTATE_THRESHOLD_BYTES="${ROTATE_THRESHOLD_BYTES:-10485760}"
 
-# Cargar config
-if [ -f "$CONF_FILE" ]; then
-  source "$CONF_FILE"
-else
-  echo "ERROR: $CONF_FILE no encontrado"
+STATE_LIB="${HEARTBEAT_STATE_LIB:-/opt/agent-admin/scripts/lib/state.sh}"
+# shellcheck source=/dev/null
+source "$STATE_LIB"
+
+mkdir -p "$LOG_DIR" "$SESSION_LOG_DIR"
+
+if [ ! -f "$CONF_FILE" ]; then
+  echo "[heartbeat] ERROR: $CONF_FILE not found" >&2
   exit 1
 fi
+# shellcheck source=/dev/null
+source "$CONF_FILE"
 
-# Defaults para nuevas variables (backwards compatible)
 HEARTBEAT_TIMEOUT="${HEARTBEAT_TIMEOUT:-300}"
 HEARTBEAT_RETRIES="${HEARTBEAT_RETRIES:-1}"
-NOTIFY_SUCCESS_EVERY="${NOTIFY_SUCCESS_EVERY:-1}"
+HEARTBEAT_PROMPT="${HEARTBEAT_PROMPT:-Status check — return a short plain-text report (uptime, notable issues). No tool use; your stdout is forwarded verbatim to the notifier.}"
+NOTIFY_CHANNEL="${NOTIFY_CHANNEL:-none}"
+HEARTBEAT_CRON="${HEARTBEAT_CRON:-}"
+TRIGGER="${HEARTBEAT_TRIGGER:-cron}"
 
-# Override por CLI
-while [[ $# -gt 0 ]]; do
+while [ "$#" -gt 0 ]; do
   case "$1" in
     --prompt) HEARTBEAT_PROMPT="$2"; shift 2 ;;
-    *) echo "Uso: $0 [--prompt \"...\"]"; exit 1 ;;
+    --trigger) TRIGGER="$2"; shift 2 ;;
+    *) shift ;;
   esac
 done
 
-# Variables de entorno del agente — leídas de agent.yml (con fallback al
-# valor heredado para compatibilidad con agentes antiguos que no tienen la
-# sección claude.*).
-AGENT_YML="$WORKSPACE_DIR/agent.yml"
-if [ -f "$AGENT_YML" ] && command -v yq &>/dev/null; then
-  CLAUDE_CONFIG_DIR=$(yq '.claude.config_dir // ""' "$AGENT_YML")
-  [ "$CLAUDE_CONFIG_DIR" = "null" ] && CLAUDE_CONFIG_DIR=""
-fi
-CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude-personal}"
-CLAUDE_CONFIG_DIR=$(eval echo "$CLAUDE_CONFIG_DIR")
-TELEGRAM_STATE_DIR="$CLAUDE_CONFIG_DIR/channels/telegram-${AGENT_NAME}"
+iso8601() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
-log() {
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] [heartbeat:${AGENT_NAME}] $*"
+# sh_sq — wrap a string in single-quotes safely for shell consumption by
+# replacing every embedded ' with '\''. The result is a single token that
+# any POSIX shell will pass verbatim to its argv. Verified with round-trip
+# eval against embedded single quotes, double quotes, backslashes, and $.
+sh_sq() {
+  printf "'"
+  printf '%s' "$1" | sed "s/'/'\\\\''/g"
+  printf "'"
 }
 
-# ── Notifier dispatch ─────────────────────────────────────
-NOTIFY_CHANNEL="${NOTIFY_CHANNEL:-log}"
-NOTIFIER_FILE="$SCRIPT_DIR/notifiers/${NOTIFY_CHANNEL}.sh"
-if [ -f "$NOTIFIER_FILE" ]; then
-  source "$NOTIFIER_FILE"
-else
-  echo "WARN: notifier '$NOTIFY_CHANNEL' not found, falling back to log" >&2
-  NOTIFY_CHANNEL="log"
-  source "$SCRIPT_DIR/notifiers/log.sh"
-fi
-
-notify() {
-  local msg="$1"
-  "notify_${NOTIFY_CHANNEL}" "[Heartbeat:${AGENT_NAME}] $msg"
+is_prior_session_alive() {
+  tmux list-sessions 2>/dev/null | grep -q "^${AGENT_NAME}-hb-"
 }
 
-# Registrar ejecución en historial persistente
-record_history() {
-  local status="$1"    # ok, timeout, error, retry
-  local duration="$2"  # segundos
-  local attempt="$3"   # número de intento
-  local prompt_short="${HEARTBEAT_PROMPT:0:60}"
-  echo "$(date '+%Y-%m-%d %H:%M:%S')|${status}|${duration}s|attempt:${attempt}|${prompt_short}" >> "$HISTORY_FILE"
+run_id=$(gen_run_id)
+session="${AGENT_NAME}-hb-${run_id}"
+ts=$(iso8601)
+last_session_log=""
 
-  # Rotar historial si supera 500 líneas
-  if [ -f "$HISTORY_FILE" ]; then
-    local lines
-    lines=$(wc -l < "$HISTORY_FILE")
-    if [ "$lines" -gt 500 ]; then
-      tail -n 300 "$HISTORY_FILE" > "${HISTORY_FILE}.tmp"
-      mv "${HISTORY_FILE}.tmp" "$HISTORY_FILE"
-      log "Historial rotado (${lines} → 300 líneas)"
+notifier_json='{"channel":"none","ok":true,"latency_ms":0,"error":null}'
+
+# claude_output FILE → prints the model's response from a session log,
+# stripping the HEARTBEAT_DONE sentinel and capping length so it fits
+# typical notifier constraints (Telegram: 4096 chars, log file: any).
+# Falls back to a minimal OK line if the log is missing or empty.
+claude_output() {
+  local file="${1:-}"
+  local max_chars="${2:-3500}"
+  if [ -z "$file" ] || [ ! -f "$file" ]; then
+    printf 'Heartbeat OK (%s) — %dms (no output)\n' "$TRIGGER" "$duration_ms"
+    return
+  fi
+  # Drop the sentinel, drop any ANSI escapes that claude --print may emit
+  # under a tmux-allocated TTY, trim trailing whitespace, cap length.
+  local body
+  body=$(grep -v '^HEARTBEAT_DONE$' "$file" \
+    | sed $'s/\x1b\\[[0-9;?]*[a-zA-Z]//g' \
+    | awk 'NF || p {print; p=1}' \
+    | sed -e :a -e '/^[[:space:]]*$/{$d;N;ba' -e '}')
+  if [ -z "$body" ]; then
+    printf 'Heartbeat OK (%s) — %dms (empty output)\n' "$TRIGGER" "$duration_ms"
+    return
+  fi
+  if [ "${#body}" -gt "$max_chars" ]; then
+    body="${body:0:$max_chars}…"
+  fi
+  printf '%s\n' "$body"
+}
+
+invoke_notifier() {
+  local status="$1" msg="$2"
+  local path="$SCRIPT_DIR/notifiers/${NOTIFY_CHANNEL}.sh"
+  [ -x "$path" ] || path="$SCRIPT_DIR/notifiers/none.sh"
+  local out
+  out=$(printf '%s' "$msg" | bash "$path" "$run_id" "$status" 2>/dev/null) || out='{"channel":"error","ok":false,"latency_ms":0,"error":"notifier script failed"}'
+  if printf '%s' "$out" | jq empty >/dev/null 2>&1; then
+    notifier_json="$out"
+  else
+    notifier_json='{"channel":"error","ok":false,"latency_ms":0,"error":"notifier emitted non-JSON"}'
+  fi
+}
+
+# ensure_heartbeat_config_dir — prepare an isolated CLAUDE_CONFIG_DIR for
+# the ephemeral heartbeat session so it never touches the interactive
+# agent session (its channels/bot.pid, session history, MCP auth cache,
+# etc.). We symlink the files that must be shared (OAuth credentials,
+# user settings, plugin cache) and give the heartbeat its own empty
+# channels/sessions/cache dirs. Idempotent — re-running fixes missing
+# links but never clobbers existing real files.
+ensure_heartbeat_config_dir() {
+  local src="$HOME/.claude"
+  local dst="$HOME/.claude-heartbeat"
+  [ -d "$src" ] || return 1
+  mkdir -p "$dst"
+  # Share auth, config, user-level settings, plugin cache.
+  local f
+  for f in .credentials.json .claude.json settings.json plugins; do
+    if [ -e "$src/$f" ]; then
+      ln -sfn "$src/$f" "$dst/$f"
     fi
-  fi
+  done
+  # Isolate runtime state. An empty dir per-heartbeat ensures no cross-
+  # contamination with the interactive agent's live channels plugin
+  # (bot.pid, access.json).
+  mkdir -p "$dst/channels" "$dst/sessions" "$dst/cache"
+  printf '%s\n' "$dst"
 }
 
-# Rate limiting: decidir si notificar éxito
-should_notify_success() {
-  if [ "${NOTIFY_SUCCESS_EVERY}" = "0" ]; then
-    return 0  # siempre notificar
-  fi
-
-  local count=0
-  if [ -f "$RUN_COUNT_FILE" ]; then
-    count=$(cat "$RUN_COUNT_FILE" 2>/dev/null || echo 0)
-  fi
-  count=$((count + 1))
-  echo "$count" > "$RUN_COUNT_FILE"
-
-  if [ $((count % NOTIFY_SUCCESS_EVERY)) -eq 0 ]; then
-    return 0  # notificar
-  fi
-  return 1  # no notificar
-}
-
-# Ejecutar una sesión de claude. Retorna 0 si éxito, 1 si fallo.
 run_claude_session() {
   local attempt="$1"
-  local hb_session="${AGENT_NAME}-hb-$(date +%s)-a${attempt}"
-  local log_file="$LOG_DIR/${hb_session}.log"
-  local start_time
-  start_time=$(date +%s)
+  local sess="${session}-a${attempt}"
+  local log_file="$SESSION_LOG_DIR/${sess}.log"
+  # Track the last session's log path globally so the notifier can
+  # forward claude's actual response instead of a generic "OK".
+  last_session_log="$log_file"
+  local start=$(date +%s)
 
-  log "Intento ${attempt}: sesión $hb_session"
-
-  # Cleanup para esta sesión específica
-  session_cleanup() {
-    tmux kill-session -t "$hb_session" 2>/dev/null || true
-  }
-
-  # Verificar que claude esté disponible
-  if ! command -v claude &>/dev/null; then
-    log "ERROR: claude no encontrado en PATH"
-    local elapsed
-    elapsed=$(( $(date +%s) - start_time ))
-    record_history "error" "$elapsed" "$attempt"
+  if ! command -v claude >/dev/null 2>&1; then
+    echo "claude not found" > "$log_file"
+    claude_exit_code=-2
+    duration_ms=$(( ($(date +%s) - start) * 1000 ))
     return 1
   fi
 
-  # Crear sesión tmux y ejecutar claude con el prompt
-  tmux new-session -d -s "$hb_session" -c "$WORKSPACE_DIR" \
-    "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR TELEGRAM_STATE_DIR=$TELEGRAM_STATE_DIR claude --print \"$HEARTBEAT_PROMPT\" > \"$log_file\" 2>&1; echo HEARTBEAT_DONE >> \"$log_file\""
+  # Build the shell snippet with each variable that could contain prompt
+  # characters ("; `, etc.) single-quote-escaped. tmux will pass this to
+  # the default shell via `-c`, and without the escaping a prompt like
+  # `hi"; rm -rf /; echo "bye` would be interpreted as a command.
+  local prompt_sq log_sq cfg_sq
+  prompt_sq=$(sh_sq "$HEARTBEAT_PROMPT")
+  log_sq=$(sh_sq "$log_file")
+  # Prepare the isolated heartbeat config dir; fall back to the shared
+  # dir if the isolation step fails for any reason (prefer a working
+  # heartbeat over a pristine interactive-session config).
+  local cfg_dir
+  cfg_dir=$(ensure_heartbeat_config_dir 2>/dev/null || true)
+  [ -n "$cfg_dir" ] || cfg_dir="$HOME/.claude"
+  cfg_sq=$(sh_sq "$cfg_dir")
+  # The heartbeat launches an ephemeral, non-interactive claude, so we:
+  #   - --dangerously-skip-permissions: no human is there to approve
+  #     tool prompts. Safe because the config dir is isolated, the run
+  #     is short-lived, and stdout is forwarded to the notifier verbatim.
+  #   - --permission-mode auto: override the user-level
+  #     `permissions.defaultMode: plan` that start_services.sh sets for
+  #     the interactive agent session. Plan mode makes sense when a
+  #     human reviews proposed changes; for a cron tick with nobody
+  #     watching, auto just runs the prompt and exits.
+  tmux new-session -d -s "$sess" -c "$WORKSPACE_DIR" \
+    "CLAUDE_CONFIG_DIR=$cfg_sq claude --print --dangerously-skip-permissions --permission-mode auto $prompt_sq > $log_sq 2>&1; echo HEARTBEAT_DONE >> $log_sq"
 
-  log "Sesión $hb_session creada, esperando finalización (timeout: ${HEARTBEAT_TIMEOUT}s)..."
-
-  # Esperar a que claude termine
-  local elapsed_wait=0
-  while [ $elapsed_wait -lt "$HEARTBEAT_TIMEOUT" ]; do
-    if ! tmux has-session -t "$hb_session" 2>/dev/null; then
-      log "Sesión terminó"
-      break
-    fi
-
-    if [ -f "$log_file" ] && grep -q "HEARTBEAT_DONE" "$log_file" 2>/dev/null; then
-      log "Claude terminó exitosamente"
-      break
-    fi
-
-    sleep 5
-    elapsed_wait=$((elapsed_wait + 5))
+  local waited=0
+  while [ "$waited" -lt "$HEARTBEAT_TIMEOUT" ]; do
+    if ! tmux has-session -t "$sess" 2>/dev/null; then break; fi
+    if [ -f "$log_file" ] && grep -q HEARTBEAT_DONE "$log_file" 2>/dev/null; then break; fi
+    sleep 1; waited=$(( waited + 1 ))
   done
 
-  local total_elapsed=$(( $(date +%s) - start_time ))
+  duration_ms=$(( ($(date +%s) - start) * 1000 ))
 
-  if [ $elapsed_wait -ge "$HEARTBEAT_TIMEOUT" ]; then
-    log "WARN: timeout de ${HEARTBEAT_TIMEOUT}s alcanzado"
-    session_cleanup
-    record_history "timeout" "$total_elapsed" "$attempt"
-    return 1
+  if [ "$waited" -ge "$HEARTBEAT_TIMEOUT" ]; then
+    tmux kill-session -t "$sess" 2>/dev/null || true
+    claude_exit_code=-1
+    return 2
   fi
 
-  # Verificar que HEARTBEAT_DONE esté en el log (éxito real)
-  if [ -f "$log_file" ] && grep -q "HEARTBEAT_DONE" "$log_file" 2>/dev/null; then
-    session_cleanup
-    record_history "ok" "$total_elapsed" "$attempt"
+  if grep -q HEARTBEAT_DONE "$log_file" 2>/dev/null; then
+    tmux kill-session -t "$sess" 2>/dev/null || true
+    claude_exit_code=0
     return 0
   fi
 
-  # Sesión terminó pero sin HEARTBEAT_DONE → error
-  session_cleanup
-  record_history "error" "$total_elapsed" "$attempt"
+  tmux kill-session -t "$sess" 2>/dev/null || true
+  claude_exit_code=1
   return 1
 }
 
-# ── Main ──────────────────────────────────────────────────
+status="error"
+attempt=0
+duration_ms=0
+claude_exit_code=0
 
-log "Iniciando heartbeat para agente '${AGENT_NAME}'"
-log "Prompt: ${HEARTBEAT_PROMPT:0:80}..."
-log "Config: timeout=${HEARTBEAT_TIMEOUT}s, retries=${HEARTBEAT_RETRIES}"
-
-max_attempts=$((HEARTBEAT_RETRIES + 1))
-success=false
-
-for attempt in $(seq 1 "$max_attempts"); do
-  if run_claude_session "$attempt"; then
-    success=true
-    break
-  fi
-
-  if [ "$attempt" -lt "$max_attempts" ]; then
-    log "Reintentando en 10s... (intento $((attempt + 1))/${max_attempts})"
-    notify "Intento ${attempt} falló — reintentando..."
-    sleep 10
-  fi
-done
-
-if $success; then
-  log "Heartbeat ejecutado exitosamente"
-  if should_notify_success; then
-    notify "Heartbeat ejecutado para '${AGENT_NAME}'"
-  fi
+if is_prior_session_alive; then
+  status="skipped"
+  claude_exit_code=0
+  duration_ms=0
 else
-  log "ERROR: heartbeat falló después de ${max_attempts} intentos"
-  notify "FALLÓ después de ${max_attempts} intentos — revisar logs"
+  max_attempts=$(( HEARTBEAT_RETRIES + 1 ))
+  for attempt in $(seq 1 "$max_attempts"); do
+    rc=0
+    run_claude_session "$attempt" || rc=$?
+    if [ "$rc" -eq 0 ]; then status="ok"; break
+    elif [ "$rc" -eq 2 ]; then status="timeout"
+    else status="error"
+    fi
+    [ "$attempt" -lt "$max_attempts" ] && sleep 5
+  done
 fi
 
-# Limpiar logs de sesiones antiguas (mantener últimos 20)
-find "$LOG_DIR" -name "${AGENT_NAME}-hb-*.log" -type f | sort | head -n -20 | xargs rm -f 2>/dev/null || true
+case "$status" in
+  ok)
+    notify_this=true
+    if [ -f "$STATE_FILE" ] && [ "${NOTIFY_SUCCESS_EVERY:-1}" -gt 1 ]; then
+      prev_ok=$(jq -r '.counters.ok // 0' "$STATE_FILE" 2>/dev/null || echo 0)
+      [ $(( (prev_ok + 1) % NOTIFY_SUCCESS_EVERY )) -ne 0 ] && notify_this=false
+    fi
+    if [ "$notify_this" = true ]; then
+      # Forward claude's actual response instead of a canned OK — this is
+      # the point of a custom HEARTBEAT_PROMPT. The canned fallback fires
+      # only when the session log is missing or empty.
+      invoke_notifier "ok" "$(claude_output "$last_session_log")"
+    fi
+    ;;
+  timeout) invoke_notifier "timeout" "Heartbeat TIMEOUT (${duration_ms}ms) — check $session log" ;;
+  error)   invoke_notifier "error"   "Heartbeat ERROR (exit=$claude_exit_code)" ;;
+  skipped) : ;;
+esac
+
+prompt_json=$(printf '%s' "$HEARTBEAT_PROMPT" | jq -Rs .)
+line=$(jq -cn \
+  --arg ts "$ts" --arg run_id "$run_id" --arg trigger "$TRIGGER" \
+  --arg status "$status" --argjson attempt "$attempt" \
+  --argjson duration_ms "$duration_ms" \
+  --argjson cec "$claude_exit_code" \
+  --arg sess "$session" \
+  --argjson notifier "$notifier_json" \
+  '{ts:$ts, run_id:$run_id, trigger:$trigger, status:$status, attempt:$attempt,
+    duration_ms:$duration_ms, claude_exit_code:$cec,
+    prompt:'"$prompt_json"',
+    tmux_session:$sess, notifier:$notifier}')
+
+rotate_runs_jsonl "$RUNS_FILE" "$ROTATE_THRESHOLD_BYTES"
+append_run_line "$RUNS_FILE" "$line"
+
+prev_counters=$(jq -c '.counters // {total_runs:0,ok:0,timeout:0,error:0,consecutive_failures:0,success_rate_24h:null}' "$STATE_FILE" 2>/dev/null || echo '{"total_runs":0,"ok":0,"timeout":0,"error":0,"consecutive_failures":0,"success_rate_24h":null}')
+
+new_counters=$(jq -cn \
+  --argjson prev "$prev_counters" \
+  --arg status "$status" \
+  '{
+     total_runs: ($prev.total_runs + (if $status == "skipped" then 0 else 1 end)),
+     ok:        ($prev.ok + (if $status == "ok" then 1 else 0 end)),
+     timeout:   ($prev.timeout + (if $status == "timeout" then 1 else 0 end)),
+     error:     ($prev.error + (if $status == "error" then 1 else 0 end)),
+     consecutive_failures:
+       (if $status == "ok" or $status == "skipped" then 0
+        else ($prev.consecutive_failures + 1) end),
+     success_rate_24h: null
+   }')
+
+# success_rate_24h computation: tail runs.jsonl, filter last 24h, ratio of ok
+if [ -f "$RUNS_FILE" ]; then
+  cutoff=$(date -u -d '24 hours ago' +%s 2>/dev/null || date -v-24H -u +%s)
+  total24=$(awk -v c="$cutoff" 'BEGIN{n=0}
+    { if (match($0,/"ts":"[^"]+"/)) {
+        t=substr($0,RSTART+6,RLENGTH-7);
+        gsub(/[-:TZ]/," ",t);
+        cmd="date -u -d \""t"\" +%s 2>/dev/null || date -u -j -f \"%Y %m %d %H %M %S\" \""t"\" +%s 2>/dev/null";
+        cmd | getline epoch; close(cmd);
+        if (epoch+0 >= c) n++
+      }
+    } END{print n}' "$RUNS_FILE")
+  ok24=$(awk -v c="$cutoff" 'BEGIN{n=0}
+    /"status":"ok"/ { if (match($0,/"ts":"[^"]+"/)) {
+        t=substr($0,RSTART+6,RLENGTH-7);
+        gsub(/[-:TZ]/," ",t);
+        cmd="date -u -d \""t"\" +%s 2>/dev/null || date -u -j -f \"%Y %m %d %H %M %S\" \""t"\" +%s 2>/dev/null";
+        cmd | getline epoch; close(cmd);
+        if (epoch+0 >= c) n++
+      }
+    } END{print n}' "$RUNS_FILE")
+  if [ "$total24" -gt 0 ]; then
+    rate=$(LC_NUMERIC=C awk -v o="$ok24" -v t="$total24" 'BEGIN{printf "%.4f", o/t}')
+    new_counters=$(printf '%s' "$new_counters" | jq -c --argjson r "$rate" '.success_rate_24h=$r')
+  fi
+fi
+
+state=$(jq -cn \
+  --arg schema 1 \
+  --arg interval "${HEARTBEAT_INTERVAL:-}" \
+  --arg cron "$HEARTBEAT_CRON" \
+  --arg prompt "$HEARTBEAT_PROMPT" \
+  --arg channel "$NOTIFY_CHANNEL" \
+  --argjson last_run "$line" \
+  --argjson counters "$new_counters" \
+  --arg enabled "${HEARTBEAT_ENABLED:-true}" \
+  --arg updated_at "$(iso8601)" \
+  '{schema:1, enabled:($enabled=="true"), interval:$interval, cron:$cron,
+    prompt:$prompt, notifier_channel:$channel,
+    last_run:$last_run, counters:$counters,
+    next_run_estimate:null,
+    crond:{alive:null,pid:null},
+    updated_at:$updated_at}')
+
+write_state_json "$STATE_FILE" "$state"
+
+ls -1t "$SESSION_LOG_DIR"/*.log 2>/dev/null | tail -n +21 | xargs rm -f 2>/dev/null || true
+
+exit 0

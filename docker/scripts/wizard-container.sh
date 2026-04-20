@@ -41,6 +41,54 @@ update_env_var() {
   fi
 }
 
+# ── Enrich CLAUDE.md with live workspace info ──
+# Runs before the Telegram prompt so the agent's base memory file has an
+# up-to-date snapshot of commands/architecture before the first chat. Uses
+# `claude --print` (one-shot, non-interactive). Claude is already
+# authenticated at this point (wizard only fires after /login).
+# Failure is non-fatal — the template-rendered CLAUDE.md still works.
+CLAUDE_MD="/workspace/CLAUDE.md"
+if [ -f "$CLAUDE_MD" ] && command -v claude >/dev/null 2>&1; then
+  echo "▸ Refreshing agent memory (CLAUDE.md) — reading workspace..."
+  # The prompt lives in a temp file so we avoid escaping headaches in the
+  # bash-3 syntax checker when the content contains apostrophes.
+  update_prompt_file=$(mktemp)
+  cat > "$update_prompt_file" <<'PROMPT'
+Update /workspace/CLAUDE.md to reflect the current workspace.
+
+Preserve VERBATIM (do not edit or reorder) the Identity, User, Core
+Truths, Boundaries, and Execution Strategy sections. They come from
+agent.yml and carry the agent personality.
+
+Add or refresh, only if missing or stale, sections for:
+- Common commands the engineer actually runs (inspect setup.sh,
+  docker/scripts/heartbeatctl, scripts/heartbeat/, and tests/ for
+  real invocations — do not invent).
+- Architecture that requires reading multiple files to understand
+  (entrypoint → crond → start_services → tmux; the render engine; the
+  heartbeat observability pipeline runs.jsonl + state.json).
+- Test conventions (bats + fixtures, how to run one test file or one
+  test by name).
+
+Edit in place with the Edit tool, never Write. Do not touch files
+other than CLAUDE.md. If everything is already well-documented, make
+no edits and say so.
+PROMPT
+  # Timeout so a stuck claude does not block the first-run wizard forever.
+  update_prompt=$(cat "$update_prompt_file")
+  if command -v gum >/dev/null 2>&1; then
+    gum spin --title "Running claude --print to update CLAUDE.md..." -- \
+      timeout 90 claude --print "$update_prompt" >/tmp/claude-md-update.log 2>&1 || \
+      echo "  ⚠ CLAUDE.md update skipped (timeout or claude error — see /tmp/claude-md-update.log)"
+  else
+    timeout 90 claude --print "$update_prompt" >/tmp/claude-md-update.log 2>&1 || \
+      echo "  ⚠ CLAUDE.md update skipped (timeout or claude error — see /tmp/claude-md-update.log)"
+  fi
+  rm -f "$update_prompt_file"
+  echo "  ✓ CLAUDE.md refreshed"
+  echo ""
+fi
+
 # ── Telegram bot token (required for the channel plugin) ──
 BOT=$(gum input --password --prompt "Telegram bot token (from @BotFather): ")
 if [ -z "$BOT" ]; then
