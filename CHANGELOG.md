@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Changed
+- docker: agent state (login, Telegram pairing, sessions, plugin cache)
+  moved from a docker-managed named volume (`<agent>-state`, living in
+  `/var/lib/docker/volumes/`) to a bind-mount inside the workspace at
+  `<workspace>/.state/`. The workspace directory is now self-contained
+  — `rsync` / `cp -r` of the workspace is a full agent migration. Side
+  effects: `docker compose down -v` no longer wipes the agent's state;
+  `setup.sh --uninstall` no longer removes state either (use `--purge`
+  to remove `agent.yml` + `.env` + `.state/`, or `--nuke` to delete the
+  whole workspace). `.state/` is gitignored at the template level. For
+  existing agents, migrate with
+  `docker run --rm -v <agent>-state:/src -v $(pwd)/.state:/dst alpine
+  cp -a /src/. /dst/` before editing `docker-compose.yml` to reference
+  `./.state:/home/agent`.
+
 ### Fixed
 - heartbeat: `HEARTBEAT_INTERVAL` now propagates into the cron schedule
   via `heartbeatctl reload` (derives `*/N * * * *` from `agent.yml`).

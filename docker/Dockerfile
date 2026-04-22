@@ -4,6 +4,14 @@ FROM alpine:3.20
 ARG UID=1000
 ARG GID=1000
 
+# Disable Claude Code's built-in auto-updater. Claude runs as `agent` and
+# cannot rename /usr/local/lib/node_modules/@anthropic-ai/claude-code
+# (root-owned from the `npm install -g` below), so every auto-update
+# attempt floods claude.log with EACCES errors and correlates with
+# occasional bun plugin deaths. Version bumps should be intentional:
+# rebuild the image to pick up a newer claude-code.
+ENV DISABLE_AUTOUPDATER=1
+
 # Runtime packages. `tini` for PID 1, `bash` for scripts, `tmux` for the
 # persistent session, `nodejs`/`npm` for the claude CLI, `git` for repo ops,
 # `curl` for bootstrapping, `perl` for the template engine, `yq`/`jq` for

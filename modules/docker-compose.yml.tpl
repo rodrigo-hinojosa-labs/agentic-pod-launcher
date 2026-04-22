@@ -27,10 +27,10 @@ services:
     tty: true
     volumes:
       - ./:/workspace
-      - {{DOCKER_STATE_VOLUME}}:/home/agent
+      # State (login, pairing, sessions, plugin cache) lives inside the
+      # workspace so the directory IS the agent — portable via rsync/cp,
+      # immune to `docker compose down -v`, removed only with the
+      # workspace itself.
+      - ./.state:/home/agent
     env_file:
       - ./.env
-
-volumes:
-  {{DOCKER_STATE_VOLUME}}:
-    name: {{DOCKER_STATE_VOLUME}}

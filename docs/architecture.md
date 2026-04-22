@@ -1,12 +1,12 @@
 # Docker Architecture
 
-Docker mode runs each agent inside a container with a consolidated state volume and workspace bind-mount on the host. This section describes the layout, process tree, and lifecycle.
+Docker mode runs each agent inside a container with a self-contained workspace on the host: both the editable files and the agent's private state (login, pairing, sessions) live under the same directory, mounted into the container via two bind-mounts. This section describes the layout, process tree, and lifecycle.
 
 ## Host / Container / Volume Layout
 
 ```
 HOST (e.g. myhost)
-├── ~/agents/<name>/                    ← bind-mount (workspace)
+├── ~/agents/<name>/                    ← the workspace IS the agent
 │   ├── CLAUDE.md
 │   ├── .env                            ← 0600, secrets written by wizard
 │   ├── agent.yml
@@ -14,15 +14,11 @@ HOST (e.g. myhost)
 │   │   ├── heartbeat.sh
 │   │   ├── heartbeat.conf
 │   │   └── logs/
-│   ├── memory/, docs/
-│   └── .git/
-│
-├── docker volume: <name>-state         ← consolidated named volume
-│   mounted at /home/agent/ inside container:
-│     ├── .claude-personal/             ← sessions, history, plugins, file-history
-│     ├── .claude-mem/                  ← memory index, logs
-│     ├── .codex/
-│     └── .mcp-auth/
+│   ├── docs/
+│   ├── .git/
+│   └── .state/                         ← bind-mounted to /home/agent inside container
+│       └── .claude/                    ← OAuth login, sessions, plugin cache,
+│                                         channels/telegram/access.json (pairing)
 │
 ├── /etc/systemd/system/agent-<name>.service   ← host systemd unit
 │
@@ -41,7 +37,7 @@ CONTAINER (agent-admin:latest, one per agent)
 │   └── crontab.tpl
 │
 ├── /workspace/                         ← bind-mount (host's ~/agents/<name>)
-└── /home/agent/                        ← named volume (state)
+└── /home/agent/                        ← bind-mount (host's ~/agents/<name>/.state)
 ```
 
 ## Process Tree Inside Container
