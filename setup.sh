@@ -884,6 +884,12 @@ scaffold_destination() {
     find "$dest/docker" -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
   fi
 
+  # Pre-create .state/ — bind-mounted to /home/agent inside the container.
+  # Host-owner (current user) matches the agent user's UID/GID via the
+  # Dockerfile build args, so the bind-mount shows up agent-owned inside
+  # without any runtime chown dance.
+  mkdir -p "$dest/.state"
+
   # Move agent.yml + .env (transactional: copy, verify, delete source)
   cp "$agent_yml" "$dest/agent.yml" && [ -f "$dest/agent.yml" ] && rm "$agent_yml"
   if [ -f "$env_file" ]; then
@@ -1092,18 +1098,20 @@ uninstall() {
   echo "═══════════════════════════════════════════════════"
   echo ""
   echo "This will remove:"
-  echo "  - docker compose down -v (stops container, removes ${agent_name}-state volume)"
+  echo "  - docker compose down (stops container; state in .state/ preserved)"
   echo "  - /etc/systemd/system/agent-${agent_name}.service (if present)"
   echo "  - Generated repo files: CLAUDE.md, .mcp.json, .env.example,"
   echo "    scripts/heartbeat/heartbeat.conf, scripts/heartbeat/logs/"
   if [ "$UNINSTALL_PURGE" = true ]; then
     echo "  - agent.yml (source of truth)"
     echo "  - .env (secrets)"
+    echo "  - .state/ (login, pairing, sessions, plugin cache)"
   else
     echo ""
     echo "Preserved (pass --purge to also remove):"
     echo "  - agent.yml"
     echo "  - .env"
+    echo "  - .state/ (login, pairing, sessions)"
   fi
   if [ "$UNINSTALL_NUKE" = true ]; then
     echo "  - $SCRIPT_DIR (entire workspace directory)"
@@ -1122,10 +1130,13 @@ uninstall() {
   echo "▸ Stopping services"
 
   # --- Docker teardown ---
+  # State now lives at ${SCRIPT_DIR}/.state (bind-mount), so `down -v`
+  # has nothing to wipe — plain `down` is enough. State removal happens
+  # below via --purge or --nuke (workspace delete).
   if command -v docker &>/dev/null; then
-    (cd "$SCRIPT_DIR" && docker compose down -v 2>/dev/null) && \
-      echo "  ✓ docker compose down -v (container + state volume removed)" || \
-      echo "  ⚠ docker compose down -v failed or already down"
+    (cd "$SCRIPT_DIR" && docker compose down 2>/dev/null) && \
+      echo "  ✓ docker compose down (container stopped; state in .state/ preserved)" || \
+      echo "  ⚠ docker compose down failed or already down"
   else
     echo "  ⚠ docker not on PATH — skipping container teardown"
   fi
@@ -1180,9 +1191,10 @@ uninstall() {
 
   if [ "$UNINSTALL_PURGE" = true ]; then
     echo ""
-    echo "▸ Purging source of truth and secrets"
+    echo "▸ Purging source of truth, secrets, and state"
     rm -f "$agent_yml" && echo "  ✓ agent.yml" || true
     rm -f "$env_file" && echo "  ✓ .env" || true
+    rm -rf "$SCRIPT_DIR/.state" && echo "  ✓ .state/ (login, pairing, sessions, plugin cache)" || true
   fi
 
   # ── Nuke: remove the workspace itself (and walk up if empty) ─────
@@ -1211,8 +1223,9 @@ uninstall() {
 
   echo ""
   echo "✓ Uninstall complete."
-  if [ "$UNINSTALL_PURGE" != true ]; then
-    echo "  agent.yml and .env preserved — run ./setup.sh to reinstall from them."
+  if [ "$UNINSTALL_PURGE" != true ] && [ "$UNINSTALL_NUKE" != true ]; then
+    echo "  agent.yml, .env, and .state/ preserved — run ./setup.sh to"
+    echo "  reinstall; login + Telegram pairing will carry over."
   fi
 }
 

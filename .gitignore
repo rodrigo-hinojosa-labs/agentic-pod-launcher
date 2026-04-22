@@ -16,6 +16,11 @@
 # Auto-downloaded dependencies
 /scripts/vendor/bin/
 
+# Agent state (login, pairing, sessions, plugin cache) — bind-mounted to
+# /home/agent inside the container. Contains OAuth tokens and Telegram
+# credentials, must NEVER be committed.
+/.state/
+
 # Tooling
 node_modules/
 .DS_Store

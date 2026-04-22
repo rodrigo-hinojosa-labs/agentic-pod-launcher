@@ -221,10 +221,20 @@ next_tmux_cmd() {
   # the agent's only interactive driver in steady state is the remote
   # Telegram user (you), so an approval prompt would just stall every
   # reply. The container is the security boundary; tool calls inside it
-  # can't escape to the host beyond what the bind-mount + named volume
-  # already expose.
+  # can't escape to the host beyond what the bind-mount already exposes.
+  #
+  # --continue makes claude resume the most recent session in /workspace
+  # instead of starting a fresh conversation on every watchdog respawn.
+  # Guarded by a session-file check: --continue errors out when no prior
+  # session exists (first boot), which would trap the watchdog in a
+  # respawn loop.
   ensure_channel_env_synced "telegram" "TELEGRAM_BOT_TOKEN" || true
-  echo "$base --channels plugin:$REQUIRED_CHANNEL_PLUGIN --dangerously-skip-permissions"
+  local continue_flag=""
+  local project_dir="${CLAUDE_CONFIG_DIR_VAL}/projects/-workspace"
+  if ls "$project_dir"/*.jsonl >/dev/null 2>&1; then
+    continue_flag="--continue "
+  fi
+  echo "$base ${continue_flag}--channels plugin:$REQUIRED_CHANNEL_PLUGIN --dangerously-skip-permissions"
 }
 
 # ── 5. tmux session lifecycle ─────────────────────────────

@@ -54,7 +54,7 @@ Full step-by-step (including troubleshooting) is in [`docs/getting-started.md`](
 - **Pluggable notifier drivers** — `none`, `log`, `telegram`. Each driver follows a JSON-envelope contract and never crashes the heartbeat.
 - **Headless-friendly settings** — `permissions.defaultMode=auto` and `skipDangerousModePermissionPrompt=true` set at every boot so the chat-driven workflow doesn't stall on approval dialogs.
 - **UID/GID matched to host** at build time for bind-mount parity.
-- **Named volume for `/home/agent`** isolates the agent's `.claude` profile and plugin cache from the bind-mounted workspace.
+- **Self-contained workspace** — all agent state (login, Telegram pairing, session history, plugin cache) lives under `<workspace>/.state/` via bind-mount to `/home/agent` in the container. The workspace directory IS the agent: portable via `rsync` / `cp -r`, immune to `docker compose down -v`, removed only when the workspace is deleted. `.state/` is git-ignored; it contains OAuth tokens and secrets.
 
 ## `heartbeatctl` at a glance
 
