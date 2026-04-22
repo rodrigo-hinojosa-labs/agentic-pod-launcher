@@ -18,6 +18,19 @@
   can overwrite the file but not rename into `/etc/crontabs/`.
 
 ### Added
+- telegram plugin: post-install patch
+  (`docker/scripts/apply_telegram_typing_patch.py`) keeps the Telegram
+  "typing…" chat action refreshed every 4s while Claude is processing a
+  message. Upstream (`claude-plugins-official/telegram`) fires
+  `sendChatAction` once on inbound and Telegram auto-expires the action
+  at ~5s, so users saw "typing…" stop mid-processing on any reply that
+  needed an MCP call or more than a few seconds of thought. Patch adds
+  a refresh `setInterval` with a 120s hard cap + cleanup at the start of
+  the `reply` tool handler. Idempotent via marker comment; fail-silent if
+  any of the three anchor regexes miss (upstream drift) so the plugin
+  keeps its default behavior. Applied by
+  `start_services.sh:apply_plugin_patches` on every boot against the
+  plugin copy in the state volume.
 - heartbeat: structured `runs.jsonl` trace, one JSON object per run with
   `run_id` correlation, embedded notifier envelope, size-based gz
   rotation at 10MB keeping 3 generations.
