@@ -8,6 +8,10 @@ ARG GID=1000
 # persistent session, `nodejs`/`npm` for the claude CLI, `git` for repo ops,
 # `curl` for bootstrapping, `perl` for the template engine, `yq`/`jq` for
 # config, `busybox-extras` for `crond`, `gum` for the in-container wizard.
+# `python3` is required as the interpreter for `uvx`-spawned MCP servers
+# (mcp-server-fetch, mcp-server-time, mcp-atlassian); without it, uv errors
+# with "No interpreter found in managed installations or search path" and
+# every uvx-based MCP fails its handshake.
 RUN apk add --no-cache \
       bash \
       tini \
@@ -23,7 +27,8 @@ RUN apk add --no-cache \
       busybox-extras \
       shadow \
       su-exec \
-      ca-certificates
+      ca-certificates \
+      python3
 
 # Install gum from the charmbracelet tap alternative: use the static binary.
 ARG GUM_VERSION=0.14.5
@@ -58,6 +63,23 @@ RUN set -eux; \
     chmod +x /usr/local/bin/uv /usr/local/bin/uvx; \
     rm -rf /tmp/uv; \
     uv --version
+
+# Pre-install the Python-based MCPs the template wires via uvx (fetch, time,
+# atlassian). Without this, the first invocation of each triggers a PyPI
+# download inside Claude's MCP handshake window; the handshake times out and
+# the server is marked failed before the install finishes. Installing into
+# /opt/uv (outside /home/agent) keeps the warm cache safe from the named
+# state volume that mounts over /home/agent at runtime. The ENV vars are
+# inherited by every container process, so when the agent user runs
+# `uvx mcp-atlassian`, uv finds the pre-installed tool instead of
+# re-downloading.
+ENV UV_TOOL_DIR=/opt/uv/tools \
+    UV_CACHE_DIR=/opt/uv/cache
+RUN mkdir -p /opt/uv \
+ && uv tool install --python python3 mcp-atlassian \
+ && uv tool install --python python3 mcp-server-fetch \
+ && uv tool install --python python3 mcp-server-time \
+ && chown -R ${UID}:${GID} /opt/uv
 
 # Install bun (required by the official telegram plugin which ships a bun-
 # runtime MCP server, and useful for any other modern JS tooling).
@@ -105,10 +127,12 @@ COPY crontab.tpl /opt/agent-admin/crontab.tpl
 COPY scripts/start_services.sh /opt/agent-admin/scripts/start_services.sh
 COPY scripts/wizard-container.sh /opt/agent-admin/scripts/wizard-container.sh
 COPY scripts/write_container_info.sh /opt/agent-admin/scripts/write_container_info.sh
+COPY scripts/apply_telegram_typing_patch.py /opt/agent-admin/scripts/apply_telegram_typing_patch.py
 RUN chmod +x /opt/agent-admin/entrypoint.sh \
              /opt/agent-admin/scripts/start_services.sh \
              /opt/agent-admin/scripts/wizard-container.sh \
-             /opt/agent-admin/scripts/write_container_info.sh
+             /opt/agent-admin/scripts/write_container_info.sh \
+             /opt/agent-admin/scripts/apply_telegram_typing_patch.py
 
 # Heartbeat CLI and helper libs (image-baked, stable code).
 COPY scripts/heartbeatctl /opt/agent-admin/scripts/heartbeatctl

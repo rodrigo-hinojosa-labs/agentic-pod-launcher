@@ -75,15 +75,48 @@ ensure_plugin_installed() {
   local cache
   cache=$(plugin_cache_dir_for "$spec")
   if [ -d "$cache" ]; then
+    apply_plugin_patches "$spec" "$cache"
     return 0
   fi
   log "attempting to install plugin: $spec"
   if CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR_VAL" claude plugin install "$spec" >/dev/null 2>&1; then
     log "plugin installed: $spec"
+    apply_plugin_patches "$spec" "$cache"
     return 0
   fi
   log "plugin install skipped (not authenticated yet or install failed): $spec"
   return 1
+}
+
+# Post-install patches for plugins we ship in the template. Runs once per
+# plugin-version (idempotency is enforced by a marker comment inside the
+# patched file — the patcher is a no-op if the marker is already present).
+# Fail-silent: if upstream drifts and an anchor no longer matches, we log
+# a warn and move on with the plugin's default behavior.
+#
+# Currently patched:
+#   telegram@*  → refresh the Telegram "typing..." action every ~4s while
+#                 Claude is processing, instead of upstream's single-shot
+#                 sendChatAction that auto-expires at 5s (leaving the user
+#                 staring at silence until the reply arrives).
+apply_plugin_patches() {
+  local spec="$1"
+  local cache="$2"
+  case "$spec" in
+    telegram@*)
+      local patcher=/opt/agent-admin/scripts/apply_telegram_typing_patch.py
+      [ -f "$patcher" ] || { log "apply_plugin_patches: $patcher missing, skipping"; return 0; }
+      local server_ts
+      for server_ts in "$cache"/*/server.ts; do
+        [ -f "$server_ts" ] || continue
+        python3 "$patcher" "$server_ts" 2>&1 | while IFS= read -r line; do
+          log "$line"
+        done
+      done
+      ;;
+    *) ;;
+  esac
+  return 0
 }
 
 # Channel plugins (e.g. telegram) read their bot token from a channel-
