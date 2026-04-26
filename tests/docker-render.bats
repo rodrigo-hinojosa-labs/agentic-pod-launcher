@@ -180,6 +180,21 @@ teardown() { teardown_tmp_dir; }
   [[ "$content" == *"exit 1"* ]]
 }
 
+@test "start_services.sh sources plugin-catalog.sh and exposes catalog-driven helpers" {
+  content=$(< "$REPO_ROOT/docker/scripts/start_services.sh")
+  [[ "$content" == *"/opt/agent-admin/scripts/lib/plugin-catalog.sh"* ]]
+  [[ "$content" == *"ensure_all_plugins_installed"* ]]
+  [[ "$content" == *"pre_accept_extra_marketplaces"* ]]
+  [[ "$content" == *"apply_plugin_post_hooks"* ]]
+  [[ "$content" == *"_channel_plugin_ready"* ]]
+}
+
+@test "Dockerfile bakes plugin-catalog.sh and modules/plugins/" {
+  content=$(< "$REPO_ROOT/docker/Dockerfile")
+  [[ "$content" == *"COPY scripts/lib/plugin-catalog.sh"* ]]
+  [[ "$content" == *"COPY modules/plugins/"* ]]
+}
+
 @test "wizard-container.sh uses gum for prompts" {
   content=$(< "$REPO_ROOT/docker/scripts/wizard-container.sh")
   [[ "$content" == *"gum input"* ]]

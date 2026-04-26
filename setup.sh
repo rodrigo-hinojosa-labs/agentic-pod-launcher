@@ -6,6 +6,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/scripts/lib/yaml.sh"
 source "$SCRIPT_DIR/scripts/lib/render.sh"
+source "$SCRIPT_DIR/scripts/lib/plugin-catalog.sh"
 
 GUM=""  # populated by ensure_gum
 
@@ -499,11 +500,17 @@ $atlassian_entries"
     atlassian_yaml="  atlassian: []"
   fi
 
-  # Always suggest the Telegram plugin — it's the recommended path for
-  # bidirectional chat, independent of the heartbeat notifier choice.
-  plugins_yaml="plugins:
-  - telegram@claude-plugins-official
-  - claude-mem@thedotmack"
+  # Render the default plugin set from `modules/plugins/<id>.yml` descriptors.
+  # See `scripts/lib/plugin-catalog.sh`. Adding a new always-on plugin is now
+  # a one-file change (drop a YAML descriptor, no edits here).
+  plugins_yaml="plugins:"
+  local _id _spec
+  while IFS= read -r _id; do
+    [ -z "$_id" ] && continue
+    _spec=$(plugin_catalog_get "$_id" spec)
+    [ -n "$_spec" ] && plugins_yaml="${plugins_yaml}
+  - ${_spec}"
+  done < <(plugin_catalog_list default)
 
   # ── Write agent.yml ─────────────────────────────────
   cat > "$agent_yml" << EOF
@@ -827,6 +834,21 @@ scaffold_with_fork() {
   echo "  ✓ branch: $branch"
 }
 
+# Mirror plugin-catalog.sh and modules/plugins/ into docker/ so the
+# Dockerfile (build context ./docker/) can COPY them. Idempotent —
+# overwrites the docker/ copy on each call.
+mirror_catalog_to_docker() {
+  local dest="$1"
+  local src_lib="$dest/scripts/lib/plugin-catalog.sh"
+  local src_plugins="$dest/modules/plugins"
+  [ -f "$src_lib" ] || return 0
+  [ -d "$src_plugins" ] || return 0
+  mkdir -p "$dest/docker/scripts/lib" "$dest/docker/modules"
+  cp "$src_lib" "$dest/docker/scripts/lib/plugin-catalog.sh"
+  rm -rf "$dest/docker/modules/plugins"
+  cp -R "$src_plugins" "$dest/docker/modules/plugins"
+}
+
 # Copy system files to the destination, move agent.yml/.env, chdir, git init.
 # If IN_PLACE=true or destination == SCRIPT_DIR, skip (user chose in-place mode).
 scaffold_destination() {
@@ -882,6 +904,12 @@ scaffold_destination() {
   if [ -d "$dest/docker" ]; then
     find "$dest/docker" -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
   fi
+
+  # Mirror catalog files into docker/ build context. Source-of-truth lives
+  # at scripts/lib/plugin-catalog.sh + modules/plugins/. The Dockerfile's
+  # build context is ./docker/, so it cannot COPY from outside that tree
+  # — we duplicate inside it. Refreshed on every regenerate.
+  mirror_catalog_to_docker "$dest"
 
   # Pre-create .state/ — bind-mounted to /home/agent inside the container.
   # Host-owner (current user) matches the agent user's UID/GID via the
@@ -1002,6 +1030,12 @@ regenerate() {
   # Render docker-compose.yml
   render_to_file "$modules_dir/docker-compose.yml.tpl" "$SCRIPT_DIR/docker-compose.yml"
   echo "  ✓ docker-compose.yml"
+
+  # Mirror plugin catalog into docker/ build context. Picks up descriptor
+  # changes (modules/plugins/<id>.yml) on every regenerate so the next
+  # `docker compose build` bakes the latest set into the image.
+  mirror_catalog_to_docker "$SCRIPT_DIR"
+  echo "  ✓ docker/scripts/lib/plugin-catalog.sh + docker/modules/plugins/"
 
   # heartbeat.conf
   if [ "${FEATURES_HEARTBEAT_ENABLED:-false}" = "true" ]; then

@@ -95,3 +95,28 @@ EOF
   # Initial commit should exist
   [ -n "$(git -C "$dest" log --oneline)" ]
 }
+
+@test "scaffolded agent.yml includes the 5 default plugins from the catalog" {
+  local dest="$TMP_TEST_DIR/scaffold-plugins"
+  run run_wizard_with_dest "$dest"
+  [ "$status" -eq 0 ]
+  [ -f "$dest/agent.yml" ]
+  local plugin_count
+  plugin_count=$(yq '.plugins | length' "$dest/agent.yml")
+  [ "$plugin_count" -eq 5 ]
+  yq -r '.plugins[]' "$dest/agent.yml" | grep -q "^telegram@claude-plugins-official$"
+  yq -r '.plugins[]' "$dest/agent.yml" | grep -q "^claude-mem@thedotmack$"
+  yq -r '.plugins[]' "$dest/agent.yml" | grep -q "^context7@claude-plugins-official$"
+  yq -r '.plugins[]' "$dest/agent.yml" | grep -q "^claude-md-management@claude-plugins-official$"
+  yq -r '.plugins[]' "$dest/agent.yml" | grep -q "^security-guidance@claude-plugins-official$"
+}
+
+@test "scaffold mirrors plugin-catalog.sh + modules/plugins/ into docker/ build context" {
+  local dest="$TMP_TEST_DIR/scaffold-mirror"
+  run run_wizard_with_dest "$dest"
+  [ "$status" -eq 0 ]
+  [ -f "$dest/docker/scripts/lib/plugin-catalog.sh" ]
+  [ -d "$dest/docker/modules/plugins" ]
+  [ -f "$dest/docker/modules/plugins/telegram.yml" ]
+  [ -f "$dest/docker/modules/plugins/claude-mem.yml" ]
+}

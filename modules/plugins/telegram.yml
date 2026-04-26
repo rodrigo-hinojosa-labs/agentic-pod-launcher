@@ -1,0 +1,10 @@
+id: telegram
+spec: telegram@claude-plugins-official
+type: default
+description: "Bidirectional Telegram chat — the agent's primary user-facing interface in this template."
+impact: "Required for the chat-driven workflow. Spawns a bun-runtime MCP server (~50MB resident) that polls Telegram. The launcher's --channels flag depends on this plugin being installed."
+when_useful: "Always. The agent runs unattended and only reachable via Telegram by design."
+when_overhead: "Never (mandatory)."
+marketplace: null
+post_install_hook: telegram_typing_patch
+conflicts: []

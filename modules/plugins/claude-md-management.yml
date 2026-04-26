@@ -1,0 +1,10 @@
+id: claude-md-management
+spec: claude-md-management@claude-plugins-official
+type: default
+description: "Audita y mantiene CLAUDE.md actualizado: detecta drift entre código y docs, captura learnings de la sesión."
+impact: "Lightweight. Adds /revise-claude-md (captura learnings de la sesión actual) y la skill claude-md-improver (audita calidad). On-demand, sin proactive hooks."
+when_useful: "Agentes que mantienen su propio CLAUDE.md o el de proyectos que tocan."
+when_overhead: "Casi nunca — es lightweight, on-demand, sin overhead pasivo."
+marketplace: null
+post_install_hook: null
+conflicts: []

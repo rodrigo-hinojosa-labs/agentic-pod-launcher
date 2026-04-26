@@ -1,0 +1,12 @@
+id: claude-mem
+spec: claude-mem@thedotmack
+type: default
+description: "Persistent memory across sessions: searchable observations, knowledge graphs, project timelines, multi-step plan execution."
+impact: "Stores observations on disk under ~/.claude/plugins/cache/thedotmack/claude-mem/. No external API, no cloud sync. Adds /mem-search, /knowledge-agent, /pathfinder, /make-plan, /do, /timeline-report and more slash commands."
+when_useful: "Agentes que retoman tareas largas, construyen knowledge bases, o necesitan recordar decisiones previas entre sesiones."
+when_overhead: "Solo si el agente nunca encadena más de una sesión (raro para agentes unattended)."
+marketplace:
+  source: github
+  repo: thedotmack/claude-mem
+post_install_hook: null
+conflicts: []
