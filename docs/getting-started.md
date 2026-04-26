@@ -1,22 +1,23 @@
-# Docker Mode
+# Getting Started
 
-Docker mode encapsulates all per-agent state and runtime inside a container, ensuring that teardown is clean and reversible: `docker rm -v && rm -rf ~/agents/<name>` removes all traces of the agent from the host.
+Each agent runs inside its own Docker container with all state stored under the workspace directory (`<workspace>/.state/`, bind-mounted to `/home/agent`). Teardown is clean and reversible: `./setup.sh --uninstall --nuke` removes all traces of the agent from the host.
 
-Use `--docker` when you want isolated, portable agents with zero residue on teardown. See [Docker Architecture](architecture.md) for the technical design.
+See [Docker Architecture](architecture.md) for the technical design.
 
 ## Prerequisites
 
 - Docker v24+ (for `compose v2` integration)
 - Docker Compose v2 (bundled with Docker Desktop; available separately on Linux)
-- ~2GB disk for the image and state volume combined
+- ~2GB disk for the image and the workspace combined
 - Bash 4+ on the host (for the installer wizard)
 
 ## Scaffold
 
-Run the installer wizard with the `--docker` flag:
+Run the installer wizard:
 
 ```bash
-./setup.sh --docker
+./setup.sh                          # interactive — prompts for destination
+./setup.sh --destination ~/my-agent # skip the destination prompt
 ```
 
 The wizard is interactive and runs on the host:
@@ -57,7 +58,7 @@ Detach from tmux without killing the session with `Ctrl-b d` (standard tmux bind
 Inside the tmux session:
 
 1. Pick a theme (Enter accepts the default) and confirm trust on `/workspace`.
-2. `/login` → opens an OAuth URL → paste the returned code. Credentials persist on the named state volume (`<name>-state`).
+2. `/login` → opens an OAuth URL → paste the returned code. Credentials persist under `<workspace>/.state/` on the host (bind-mounted to `/home/agent` inside the container).
 3. `/exit` (or Ctrl-D). Claude shuts down; the watchdog detects the session ended and re-evaluates.
 4. **Wait ~2–3 seconds** before re-attaching. The supervisor polls every 2s; re-attaching immediately after `/exit` can show `no sessions` while the next session is still spinning up. Retry is harmless.
 
@@ -131,7 +132,7 @@ docker compose build
 docker compose up -d
 ```
 
-The workspace bind-mount and state volume persist across rebuilds, so all agent data and configuration survive the upgrade.
+The workspace (including `.state/`) is on the host as a bind-mount, so all agent data, login, and pairing survive the rebuild untouched.
 
 ## Rollback
 
@@ -169,18 +170,23 @@ cd ~/agents/<name>
 
 This:
 
-1. Stops the container.
-2. Runs `docker compose down -v` (removes container and state volume).
-3. Removes the host systemd unit.
-4. Keeps the workspace directory.
+1. Stops the container with `docker compose down` (state under `.state/` is preserved — `docker compose down -v` is no-op since state lives in the workspace, not a named volume).
+2. Removes the host systemd unit (Linux only).
+3. Keeps the workspace directory, including `agent.yml`, `.env`, and `.state/` so a re-install carries login + pairing.
 
-To also delete the workspace:
+To also delete agent.yml/.env/.state:
 
 ```bash
-./setup.sh --uninstall --yes --nuke
+./setup.sh --uninstall --purge --yes
 ```
 
-After teardown, no traces of the agent remain on the host (no dotfiles, no systemd units, no leftover state).
+To also delete the workspace directory itself:
+
+```bash
+./setup.sh --uninstall --nuke --yes
+```
+
+After `--nuke`, no traces of the agent remain on the host (no dotfiles, no systemd units, no leftover state).
 
 ## Troubleshooting
 
