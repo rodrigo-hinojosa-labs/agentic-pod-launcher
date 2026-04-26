@@ -68,6 +68,15 @@ teardown() { teardown_tmp_dir; }
   grep -q 'HEARTBEAT_INTERVAL="2m"' "$WORKSPACE/scripts/heartbeat/heartbeat.conf"
 }
 
+@test "reload writes crontab atomically (no .tmp lingers after success)" {
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" reload
+  [ "$status" -eq 0 ]
+  [ -f "$HEARTBEATCTL_CRONTAB_FILE" ]
+  [ ! -f "${HEARTBEATCTL_CRONTAB_FILE}.tmp" ]
+  # Same atomicity for heartbeat.conf — write_state_json-style mv.
+  [ ! -f "$WORKSPACE/scripts/heartbeat/heartbeat.conf.tmp" ]
+}
+
 @test "reload rewrites crontab with new schedule and no user field" {
   run bash "$REPO_ROOT/docker/scripts/heartbeatctl" reload
   [ "$status" -eq 0 ]

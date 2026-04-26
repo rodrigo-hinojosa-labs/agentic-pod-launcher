@@ -115,25 +115,31 @@ NOTIFY_CHAT_ID="\${NOTIFY_CHAT_ID:-}"
 CONF
   mv "$tmp_conf" "$CONF_FILE"
 
-  # Rewrite crontab (or comment out if disabled).
-  # We write directly to $CRONTAB_FILE instead of via tmp+mv because the
-  # dir containing it (e.g. /etc/crontabs/) is root-owned; agent can
-  # overwrite the file (which entrypoint chowned) but not rename into
-  # the directory. The redirect-write is effectively one write syscall
-  # for a file this small, so busybox crond's next mtime scan sees the
-  # new content whole.
+  # Rewrite crontab atomically via tmp+mv on the same directory.
+  # The default $CRONTAB_FILE is the workspace staging path
+  # (.crontab.staging), which is agent-owned, so a sibling tmp file
+  # is writable. The root-side sync loop in entrypoint.sh reads this
+  # via cmp -s — without tmp+mv, a concurrent reader could observe a
+  # partially-written file and copy garbage into /etc/crontabs/.
   local line
   if [ "$enabled" = "true" ]; then
     line="$cron /workspace/scripts/heartbeat/heartbeat.sh >> /workspace/scripts/heartbeat/logs/cron.log 2>&1"
   else
     line="# paused: $cron /workspace/scripts/heartbeat/heartbeat.sh >> /workspace/scripts/heartbeat/logs/cron.log 2>&1"
   fi
-  if ! cat > "$CRONTAB_FILE" <<CT
+  local tmp_crontab="${CRONTAB_FILE}.tmp"
+  if ! cat > "$tmp_crontab" <<CT
 # Cron for in-container agent heartbeat. Managed by heartbeatctl.
 $line
 CT
   then
-    echo "heartbeatctl: failed to write $CRONTAB_FILE" >&2
+    rm -f "$tmp_crontab"
+    echo "heartbeatctl: failed to write $tmp_crontab" >&2
+    return 2
+  fi
+  if ! mv -f "$tmp_crontab" "$CRONTAB_FILE"; then
+    rm -f "$tmp_crontab"
+    echo "heartbeatctl: failed to install $CRONTAB_FILE" >&2
     return 2
   fi
 

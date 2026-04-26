@@ -36,7 +36,8 @@ RUN apk add --no-cache \
       shadow \
       su-exec \
       ca-certificates \
-      python3
+      python3 \
+      flock
 
 # Install gum from the charmbracelet tap alternative: use the static binary.
 ARG GUM_VERSION=0.14.5

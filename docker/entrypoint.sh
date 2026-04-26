@@ -58,13 +58,22 @@ fi
 #    `-nt` rounds to whole seconds, and entrypoint + heartbeatctl
 #    reload can both write within the same second at container start,
 #    making mtime-based detection miss the update.
+#
+#    Install via tmp+mv on the same FS so a busybox crond tick that
+#    coincides with the copy can never observe a half-written
+#    /etc/crontabs/agent. mv on the same filesystem is atomic.
 (
   while true; do
     sleep 15
     if [ -f "$STAGING_CRONTAB" ] && \
        ! cmp -s "$STAGING_CRONTAB" "$CRONTAB_DST"; then
-      cp "$STAGING_CRONTAB" "$CRONTAB_DST" 2>/dev/null && \
-        chmod 0644 "$CRONTAB_DST" 2>/dev/null
+      if cp "$STAGING_CRONTAB" "${CRONTAB_DST}.tmp" 2>/dev/null && \
+         chmod 0644 "${CRONTAB_DST}.tmp" 2>/dev/null && \
+         mv -f "${CRONTAB_DST}.tmp" "$CRONTAB_DST" 2>/dev/null; then
+        :
+      else
+        rm -f "${CRONTAB_DST}.tmp" 2>/dev/null
+      fi
     fi
   done
 ) &
