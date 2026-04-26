@@ -119,4 +119,101 @@ EOF
   [ -d "$dest/docker/modules/plugins" ]
   [ -f "$dest/docker/modules/plugins/telegram.yml" ]
   [ -f "$dest/docker/modules/plugins/claude-mem.yml" ]
+  [ -f "$dest/docker/modules/plugins/superpowers.yml" ]
+  [ -f "$dest/docker/modules/plugins/caveman.yml" ]
+}
+
+@test "wizard opt-in for superpowers appends it to agent.yml plugins" {
+  local dest="$TMP_TEST_DIR/scaffold-optin-sp"
+  cd "$TMP_TEST_DIR/installer"
+  # Stream order, then 6 optional answers (alphabetical):
+  #   caveman=n, code-simplifier=n, commit-commands=n, github=n,
+  #   skill-creator=n, superpowers=y → finally `proceed` for the review.
+  ./setup.sh --destination "$dest" <<EOF
+opt-bot
+OptBot
+r
+v
+Alice
+Alice
+UTC
+a@b.com
+en
+host
+n
+n
+none
+n
+n
+y
+30m
+ok
+y
+n
+n
+n
+n
+n
+y
+proceed
+EOF
+  [ -f "$dest/agent.yml" ]
+  local plugin_count
+  plugin_count=$(yq '.plugins | length' "$dest/agent.yml")
+  [ "$plugin_count" -eq 6 ]
+  yq -r '.plugins[]' "$dest/agent.yml" | grep -q "^superpowers@claude-plugins-official$"
+}
+
+@test "wizard caveman opt-in requires explicit confirm and registers JuliusBrussee marketplace" {
+  local dest="$TMP_TEST_DIR/scaffold-optin-caveman"
+  cd "$TMP_TEST_DIR/installer"
+  # caveman=y triggers the confirm prompt; we say 'y' to confirm.
+  # Remaining opt-ins all 'n'.
+  ./setup.sh --destination "$dest" <<EOF
+cave-bot
+CaveBot
+r
+v
+Alice
+Alice
+UTC
+a@b.com
+en
+host
+n
+n
+none
+n
+n
+y
+30m
+ok
+y
+y
+y
+n
+n
+n
+n
+n
+proceed
+EOF
+  [ -f "$dest/agent.yml" ]
+  local plugin_count
+  plugin_count=$(yq '.plugins | length' "$dest/agent.yml")
+  [ "$plugin_count" -eq 6 ]
+  yq -r '.plugins[]' "$dest/agent.yml" | grep -q "^caveman@JuliusBrussee$"
+}
+
+@test "scaffolded NEXT_STEPS.md includes the Plugins block with descriptions" {
+  local dest="$TMP_TEST_DIR/scaffold-next-steps"
+  run run_wizard_with_dest "$dest"
+  [ "$status" -eq 0 ]
+  [ -f "$dest/NEXT_STEPS.md" ]
+  grep -q "## Installed plugins\|## Plugins instalados" "$dest/NEXT_STEPS.md"
+  grep -q "telegram@claude-plugins-official" "$dest/NEXT_STEPS.md"
+  grep -q "claude-mem@thedotmack" "$dest/NEXT_STEPS.md"
+  grep -q "security-guidance@claude-plugins-official" "$dest/NEXT_STEPS.md"
+  # Description text from a default descriptor must surface in the block.
+  grep -q "Persistent memory across sessions" "$dest/NEXT_STEPS.md"
 }
