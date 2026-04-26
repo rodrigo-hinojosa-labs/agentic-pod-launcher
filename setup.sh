@@ -491,7 +491,6 @@ ATLASSIAN_${upper}_TOKEN=${ws_token}
   local docker_yaml="  image_tag: \"agentic-pod:latest\"
   uid: $(id -u)
   gid: $(id -g)
-  state_volume: \"${agent_name}-state\"
   base_image: \"alpine:3.20\""
   if [ -n "$atlassian_entries" ]; then
     atlassian_yaml="  atlassian:

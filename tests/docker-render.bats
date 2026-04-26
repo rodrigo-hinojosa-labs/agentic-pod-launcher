@@ -24,10 +24,10 @@ teardown() { teardown_tmp_dir; }
   [[ "$result" == *'GID: "1000"'* ]]
 }
 
-@test "docker-compose.yml.tpl mounts workspace and named state volume" {
+@test "docker-compose.yml.tpl mounts workspace and bind-mount state directory" {
   result=$(render_template "$REPO_ROOT/modules/docker-compose.yml.tpl")
   [[ "$result" == *"./:/workspace"* ]]
-  [[ "$result" == *"dockbot-state:/home/agent"* ]]
+  [[ "$result" == *"./.state:/home/agent"* ]]
 }
 
 @test "docker-compose.yml.tpl drops all caps and re-adds only the three" {
