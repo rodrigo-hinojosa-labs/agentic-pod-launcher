@@ -54,80 +54,63 @@ PID 1: tini
         └── watchdog loop (respawns tmux/claude on death, backoff on repeated crashes)
 ```
 
-The watchdog detects tmux or claude crashes via `pgrep` and respawns the session with exponential backoff. After 5 crashes in 5 minutes, it exits (causing Docker to restart the container via the `unless-stopped` policy).
+The watchdog polls tmux every 2s (`tmux has-session` plus a channel-plugin liveness check) and respawns on death. After 5 crashes in 5 minutes the container exits and Docker's `unless-stopped` policy restarts it.
 
 ## Lifecycle Phases
 
 ### Phase 1: Scaffold (host)
 
 ```bash
-./setup.sh --docker
+./setup.sh                          # interactive wizard
+./setup.sh --destination ~/my-agent # skip the destination prompt
 ```
 
-Runs interactively on the host. Collects agent config (name, personality, MCPs, notifications) but **does not ask for secrets**. Renders:
+Runs interactively on the host. Collects agent config (name, personality, MCPs, notifications) but **does not ask for Telegram chat secrets** — those are deferred to the in-container wizard so they never sit on disk in plaintext outside the bind-mount. Renders:
 
-- `~/agents/<name>/` with CLAUDE.md, agent.yml, docker-compose.yml, scripts.
-- `/etc/systemd/system/agent-<name>.service` (wraps `docker compose up -d`).
+- `<destination>/` with `agent.yml`, `CLAUDE.md`, `docker-compose.yml`, `.mcp.json`, `scripts/`, `docker/`.
+- On Linux only, `/etc/systemd/system/agent-<name>.service` (wraps `docker compose up -d`).
 
-Detects the host user's UID and GID and writes them to `docker-compose.yml` as build args (`AGENT_UID`, `AGENT_GID`). This ensures files in the bind-mount are owned correctly.
+Detects the host user's UID and GID and writes them to `docker-compose.yml` as build args (`UID`, `GID`). The container's `agent` user is created with the same numeric ownership at image-build time so writes through the bind-mount land with the host user's identity.
 
-### Phase 2: First-run Wizard (container)
+### Phase 2: First-run wizard (container)
 
 ```bash
 cd ~/agents/<name> && docker compose up -d && docker attach <name>
 ```
 
-On container start, the entrypoint checks for `/workspace/.env`:
+The host-side wizard intentionally skips Telegram secrets. The first time the container boots:
 
-```sh
-if [ ! -f /workspace/.env ] || ! grep -q "TELEGRAM_BOT_TOKEN" /workspace/.env ]; then
-  exec /opt/agent-admin/scripts/wizard-container.sh --in-container
-fi
-exec /opt/agent-admin/scripts/start_services.sh
+1. `entrypoint.sh` runs as root, fixes ownership of `/home/agent` (the bind-mount target), renders a safe-default crontab to `/etc/crontabs/agent`, starts the root crontab-sync loop, starts `crond`, then `exec su-exec agent /opt/agent-admin/scripts/start_services.sh`.
+2. `start_services.sh::next_tmux_cmd` decides the launch:
+    - **Case A** — no Claude profile yet → `claude` (bare) so the user runs `/login` interactively.
+    - **Case B** — authenticated but `/workspace/.env` lacks `TELEGRAM_BOT_TOKEN` → `wizard-container.sh` (gum prompts for the token, writes `.env` with 0600). When the wizard exits, the watchdog respawns and re-decides.
+    - **Case C** — token present → `claude --channels plugin:telegram@claude-plugins-official --dangerously-skip-permissions [--continue]`.
+
+Each respawn re-evaluates these cases, so going from "no login" → "/login done" → "token saved" happens without manual restart.
+
+### Phase 3: Steady state
+
+`start_services.sh` runs an event loop on the `agent` user:
+
+```text
+loop every 2s:
+  if crond died             → exit 1   (Docker restarts the container)
+  if tmux session alive
+     and channel plugin OK  → continue
+  if tmux alive but bun     → kill tmux + respawn (forces fresh plugin attachment)
+     server.ts gone
+  otherwise (tmux gone)     → respawn via next_tmux_cmd
+
+crash budget: 5 crashes within a 300s window → exit 1
 ```
 
-The wizard fires interactively (via `gum` prompts inside the container):
+Real-world detail worth noting:
 
-1. Telegram bot token
-2. Telegram chat ID
-3. GitHub PAT (optional)
+- **No `pgrep claude`.** Earlier iterations grepped the process tree, which false-positived on every claude subprocess (heartbeat ticks, `claude plugin install`, etc.). The current check is purely on the tmux session.
+- **Channel plugin liveness** is checked separately because bun can die while tmux stays up (claude keeps running but stops receiving Telegram messages); kill+respawn re-attaches the plugin.
+- **No bridge watchdog.** A previous attempt to detect "bun alive but MCP notifications dropped" via tmux pane scraping was reverted (see commit `ebfe35f`) because the false-positive rate killed sessions every ~2 minutes during normal use. Manual recovery is `heartbeatctl kick-channel`.
 
-Writes `/workspace/.env` with 0600 permissions. On completion, the wizard exits. Docker's `unless-stopped` policy restarts the container. The entrypoint finds `.env` and proceeds to Phase 3.
-
-### Phase 3: Steady State
-
-The container runs:
-
-```bash
-# Setup crontab for heartbeat
-envsubst < /opt/agent-admin/crontab.tpl > /etc/crontabs/agent
-crond -b -L /var/log/crond.log
-
-# Start tmux with claude
-tmux new-session -d -s agent -c /workspace \
-  "CLAUDE_CONFIG_DIR=/home/agent/.claude-personal claude --channels plugin:telegram@claude-plugins-official"
-
-# Watchdog loop: monitor and respawn on crash
-CRASH_COUNT=0
-WINDOW_START=$(date +%s)
-MAX_CRASHES=5
-WINDOW=300
-while true; do
-  sleep 10
-  if ! tmux has-session -t agent 2>/dev/null || ! pgrep -f claude >/dev/null; then
-    now=$(date +%s)
-    [ $((now - WINDOW_START)) -gt $WINDOW ] && { CRASH_COUNT=0; WINDOW_START=$now; }
-    CRASH_COUNT=$((CRASH_COUNT + 1))
-    if [ $CRASH_COUNT -ge $MAX_CRASHES ]; then
-      echo "CRITICAL: $MAX_CRASHES crashes in ${WINDOW}s, exiting"
-      exit 1
-    fi
-    respawn_tmux_session
-  fi
-done
-```
-
-Every 5 minutes, cron runs the heartbeat script from the workspace, which probes the agent and reports status via Telegram.
+Every N minutes (configurable via `agent.yml`'s `features.heartbeat.interval`, default 30m), `crond` dispatches `/workspace/scripts/heartbeat/heartbeat.sh` as the `agent` user. The heartbeat probes the agent and writes a structured trace; the notifier (none / log / telegram, configurable) forwards a status line. See [Heartbeat Pipeline](#heartbeat-pipeline) below.
 
 ## Restart Layers
 
