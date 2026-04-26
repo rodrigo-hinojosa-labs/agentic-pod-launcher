@@ -1,0 +1,10 @@
+id: security-guidance
+spec: security-guidance@claude-plugins-official
+type: default
+description: "Pre-tool hook que detecta patrones inseguros (command injection, XSS, SQL injection, secrets en código) en cada Write/Edit/MultiEdit."
+impact: "Latencia per edit (~100-300ms hook overhead). Puede bloquear writes legítimos si el patrón matchea (raro). No tiene slash commands — corre 100% pasivo como pre-tool hook."
+when_useful: "Agentes que tocan código (su propio o de proyectos)."
+when_overhead: "Agentes puramente conversacionales sin code edits."
+marketplace: null
+post_install_hook: null
+conflicts: []

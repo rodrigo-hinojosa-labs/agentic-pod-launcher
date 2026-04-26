@@ -1,0 +1,10 @@
+id: context7
+spec: context7@claude-plugins-official
+type: default
+description: "Live, version-specific library documentation pulled from source repositories at query time."
+impact: "Adds an MCP server (no auth required for public docs). Network calls to Context7's catalog. Adds /resolve-library-id and /query-docs slash commands."
+when_useful: "Cualquier agente que toque código y necesite docs frescas (React, Next.js, Django, AWS SDK, etc.) — reduce alucinaciones de API."
+when_overhead: "Agentes puramente conversacionales que nunca consultan docs externas."
+marketplace: null
+post_install_hook: null
+conflicts: []

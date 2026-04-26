@@ -17,6 +17,12 @@ set -euo pipefail
 # capture (e.g. build_claude_cmd via $(...)) aren't polluted.
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [start_services] $*" >&2; }
 
+# Plugin descriptor catalog — drives ensure_all_plugins_installed and
+# pre_accept_extra_marketplaces. Image-baked at /opt/agent-admin/.
+# shellcheck source=/dev/null
+[ -f /opt/agent-admin/scripts/lib/plugin-catalog.sh ] \
+  && source /opt/agent-admin/scripts/lib/plugin-catalog.sh
+
 # Boot-time side effects (heartbeat schedule reload + stale telegram
 # pairing cleanup) live in this function so the script can be sourced
 # in tests without firing them. Called from the runtime block below.
@@ -84,16 +90,16 @@ plugin_cache_dir_for() {
   echo "$HOME/.claude/plugins/cache/$marketplace/$name"
 }
 
-ensure_plugin_installed() {
+ensure_plugin_installed_one() {
   local spec="$1"
   local cache
   cache=$(plugin_cache_dir_for "$spec")
   # Cache must be both present AND complete. `claude plugin install` can
   # leave a half-extracted dir (network blip, OOM, container kill mid-
   # install) — without the sentinel, every subsequent boot would re-run
-  # apply_plugin_patches on a broken cache and quietly fail-silent.
+  # post-install hooks on a broken cache and quietly fail-silent.
   if [ -d "$cache" ] && [ -f "$cache/.installed-ok" ]; then
-    apply_plugin_patches "$spec" "$cache"
+    apply_plugin_post_hooks "$spec" "$cache"
     return 0
   fi
   if [ -d "$cache" ]; then
@@ -104,42 +110,68 @@ ensure_plugin_installed() {
   if CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR_VAL" claude plugin install "$spec" >/dev/null 2>&1; then
     log "plugin installed: $spec"
     [ -d "$cache" ] && : > "$cache/.installed-ok"
-    apply_plugin_patches "$spec" "$cache"
+    apply_plugin_post_hooks "$spec" "$cache"
     return 0
   fi
   log "plugin install skipped (not authenticated yet or install failed): $spec"
   return 1
 }
 
-# Post-install patches for plugins we ship in the template. Runs once per
-# plugin-version (idempotency is enforced by a marker comment inside the
-# patched file — the patcher is a no-op if the marker is already present).
-# Fail-silent: if upstream drifts and an anchor no longer matches, we log
-# a warn and move on with the plugin's default behavior.
+# ensure_all_plugins_installed — install every plugin listed in
+# /workspace/agent.yml's plugins[]. Idempotent: each plugin guards its
+# cache with a .installed-ok sentinel. One plugin failing must not block
+# the rest (a third-party marketplace going 404 should not stop the
+# channel plugin from booting).
+ensure_all_plugins_installed() {
+  command -v plugin_catalog_specs >/dev/null 2>&1 || {
+    # Catalog lib not loaded (image-baked path missing in tests). Fall back
+    # to legacy single-plugin behavior so the channel keeps working.
+    ensure_plugin_installed_one "$REQUIRED_CHANNEL_PLUGIN" || true
+    return 0
+  }
+  local spec
+  while IFS= read -r spec; do
+    [ -z "$spec" ] && continue
+    ensure_plugin_installed_one "$spec" || true
+  done < <(plugin_catalog_specs /workspace/agent.yml)
+}
+
+# apply_plugin_post_hooks SPEC CACHE — run any per-plugin post-install hook
+# declared by the descriptor (modules/plugins/<id>.yml::post_install_hook).
+# Fail-silent: a missing descriptor or missing hook is a no-op. Hooks that
+# error must log a warning and return 0 so the plugin stays usable.
 #
-# Currently patched:
-#   telegram@*  → refresh the Telegram "typing..." action every ~4s while
-#                 Claude is processing, instead of upstream's single-shot
-#                 sendChatAction that auto-expires at 5s (leaving the user
-#                 staring at silence until the reply arrives).
-apply_plugin_patches() {
+# Hooks currently registered:
+#   telegram_typing_patch → refresh Telegram "typing..." action every ~4s
+#     while Claude processes, instead of upstream's single-shot
+#     sendChatAction that auto-expires at 5s.
+apply_plugin_post_hooks() {
   local spec="$1"
   local cache="$2"
-  case "$spec" in
-    telegram@*)
-      local patcher=/opt/agent-admin/scripts/apply_telegram_typing_patch.py
-      [ -f "$patcher" ] || { log "apply_plugin_patches: $patcher missing, skipping"; return 0; }
-      local server_ts
-      for server_ts in "$cache"/*/server.ts; do
-        [ -f "$server_ts" ] || continue
-        python3 "$patcher" "$server_ts" 2>&1 | while IFS= read -r line; do
-          log "$line"
-        done
-      done
-      ;;
-    *) ;;
+  command -v _plugin_catalog_id_for_spec >/dev/null 2>&1 || return 0
+  local id
+  id=$(_plugin_catalog_id_for_spec "$spec" 2>/dev/null) || return 0
+  local hook
+  hook=$(plugin_catalog_get "$id" post_install_hook 2>/dev/null)
+  [ -z "$hook" ] && return 0
+  case "$hook" in
+    telegram_typing_patch) _hook_telegram_typing_patch "$spec" "$cache" ;;
+    *) log "apply_plugin_post_hooks: unknown hook '$hook' declared by descriptor for '$spec'" ;;
   esac
   return 0
+}
+
+_hook_telegram_typing_patch() {
+  local spec="$1" cache="$2"
+  local patcher=/opt/agent-admin/scripts/apply_telegram_typing_patch.py
+  [ -f "$patcher" ] || { log "_hook_telegram_typing_patch: $patcher missing, skipping"; return 0; }
+  local server_ts
+  for server_ts in "$cache"/*/server.ts; do
+    [ -f "$server_ts" ] || continue
+    python3 "$patcher" "$server_ts" 2>&1 | while IFS= read -r line; do
+      log "$line"
+    done
+  done
 }
 
 # Channel plugins (e.g. telegram) read their bot token from a channel-
@@ -225,6 +257,39 @@ pre_accept_bypass_permissions() {
   fi
 }
 
+# pre_accept_extra_marketplaces — register every third-party marketplace
+# declared by a plugin descriptor into ~/.claude/settings.json's
+# extraKnownMarketplaces map. claude resolves @<marketplace> in plugin
+# specs against this map, so without the registration `claude plugin
+# install caveman@JuliusBrussee` errors with "unknown marketplace".
+#
+# Idempotent: existing entries are merged (right side wins for managed
+# keys, untouched for unrelated keys). Safe to re-run on every boot.
+pre_accept_extra_marketplaces() {
+  command -v plugin_catalog_specs >/dev/null 2>&1 || return 0
+  local settings="$HOME/.claude/settings.json"
+  [ -f "$settings" ] || return 0
+  local specs
+  specs=$(plugin_catalog_specs /workspace/agent.yml | tr '\n' ' ')
+  [ -z "${specs// /}" ] && return 0
+  local mkts_json
+  # shellcheck disable=SC2086
+  mkts_json=$(plugin_catalog_marketplaces_json $specs)
+  [ "$mkts_json" = "{}" ] && return 0
+  log "registering extra marketplaces: $(printf '%s' "$mkts_json" | jq -c .)"
+  local tmp
+  tmp=$(mktemp)
+  if jq --argjson m "$mkts_json" \
+    '.extraKnownMarketplaces = ((.extraKnownMarketplaces // {}) * $m)' \
+    "$settings" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$settings"
+    chmod 0644 "$settings"
+  else
+    rm -f "$tmp"
+    log "WARN: failed to merge extraKnownMarketplaces into $settings"
+  fi
+}
+
 # Build the next tmux command based on current state. Three cases:
 #   A. Not authenticated → bare `claude` so the user can `/login`.
 #   B. Authenticated, no Telegram bot token yet → interactive wizard to
@@ -233,8 +298,17 @@ pre_accept_bypass_permissions() {
 #      the channel-scoped .env synced beforehand.
 next_tmux_cmd() {
   local base="CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR_VAL claude"
-  if ! ensure_plugin_installed "$REQUIRED_CHANNEL_PLUGIN"; then
-    # Case A: still not authenticated (or install genuinely failed).
+
+  # Best-effort: register third-party marketplaces and install all plugins
+  # declared in agent.yml. Pre-/login this is mostly a no-op (plugin
+  # install needs auth), but on subsequent respawns it picks up the
+  # full catalog (5 defaults + any opt-ins the user selected at scaffold).
+  pre_accept_extra_marketplaces
+  ensure_all_plugins_installed
+
+  if ! _channel_plugin_ready; then
+    # Case A: channel plugin not yet usable (no /login, or install failed).
+    # Fall back to bare claude so the user can authenticate.
     echo "$base"
     return
   fi
@@ -262,6 +336,17 @@ next_tmux_cmd() {
     continue_flag="--continue "
   fi
   echo "$base ${continue_flag}--channels plugin:$REQUIRED_CHANNEL_PLUGIN --dangerously-skip-permissions"
+}
+
+# _channel_plugin_ready — true if the channel plugin's cache exists and
+# has the .installed-ok sentinel. Used by next_tmux_cmd to gate the
+# Case A → Case B/C transition; replaces the old approach of using
+# ensure_plugin_installed's exit code as the readiness signal (which
+# coupled "did the install run" with "is the plugin usable").
+_channel_plugin_ready() {
+  local cache
+  cache=$(plugin_cache_dir_for "$REQUIRED_CHANNEL_PLUGIN")
+  [ -d "$cache" ] && [ -f "$cache/.installed-ok" ]
 }
 
 # ── 5. tmux session lifecycle ─────────────────────────────

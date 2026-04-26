@@ -153,6 +153,13 @@ COPY scripts/lib/state.sh    /opt/agent-admin/scripts/lib/state.sh
 RUN chmod +x /opt/agent-admin/scripts/heartbeatctl \
   && ln -s /opt/agent-admin/scripts/heartbeatctl /usr/local/bin/heartbeatctl
 
+# Plugin catalog. plugin-catalog.sh is shared between host-side scaffold
+# and container runtime. Build context is ./docker/, so setup.sh mirrors
+# scripts/lib/plugin-catalog.sh and modules/plugins/ into docker/ before
+# `docker compose build`. See `setup.sh::mirror_catalog_to_docker`.
+COPY scripts/lib/plugin-catalog.sh /opt/agent-admin/scripts/lib/plugin-catalog.sh
+COPY modules/plugins/ /opt/agent-admin/modules/plugins/
+
 # Workspace is bind-mounted at runtime; /home/agent is a named volume.
 WORKDIR /workspace
 
