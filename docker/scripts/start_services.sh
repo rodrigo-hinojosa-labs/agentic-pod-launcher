@@ -17,33 +17,37 @@ set -euo pipefail
 # capture (e.g. build_claude_cmd via $(...)) aren't polluted.
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [start_services] $*" >&2; }
 
-# ── 1. Heartbeat schedule reload ──────────────────────────
-# Reload the heartbeat schedule from agent.yml. Tolerate reload failure —
-# the default crontab from entrypoint is still in place.
-if command -v heartbeatctl >/dev/null 2>&1; then
-  heartbeatctl reload || echo "WARN: heartbeatctl reload failed, using default crontab" >&2
-fi
-
-# ── 1b. Clear stale telegram pairing pending ──────────────
-# The claude-plugins-official/telegram plugin persists access state
-# (allowFrom + pending) across container restarts. If a `pending` code
-# from a previous session survives the restart, the plugin can reply
-# "Pairing required" to an already-paired sender before the in-memory
-# allowFrom check catches up — visible to users as a flaky first
-# message after restart. Clearing pending on each boot is safe: any
-# in-flight pairing is invalidated (user just retries), already-paired
-# allowFrom is preserved.
-telegram_access_json="/home/agent/.claude/channels/telegram/access.json"
-if [ -f "$telegram_access_json" ] && command -v jq >/dev/null 2>&1; then
-  tmp_access=$(mktemp)
-  if jq '.pending = {}' "$telegram_access_json" > "$tmp_access" 2>/dev/null; then
-    mv "$tmp_access" "$telegram_access_json"
-    chmod 0600 "$telegram_access_json"
-    log "cleared stale telegram pairing pending"
-  else
-    rm -f "$tmp_access"
+# Boot-time side effects (heartbeat schedule reload + stale telegram
+# pairing cleanup) live in this function so the script can be sourced
+# in tests without firing them. Called from the runtime block below.
+boot_side_effects() {
+  # Reload the heartbeat schedule from agent.yml. Tolerate reload failure —
+  # the default crontab from entrypoint is still in place.
+  if command -v heartbeatctl >/dev/null 2>&1; then
+    heartbeatctl reload || echo "WARN: heartbeatctl reload failed, using default crontab" >&2
   fi
-fi
+
+  # The claude-plugins-official/telegram plugin persists access state
+  # (allowFrom + pending) across container restarts. If a `pending` code
+  # from a previous session survives the restart, the plugin can reply
+  # "Pairing required" to an already-paired sender before the in-memory
+  # allowFrom check catches up — visible to users as a flaky first
+  # message after restart. Clearing pending on each boot is safe: any
+  # in-flight pairing is invalidated (user just retries), already-paired
+  # allowFrom is preserved.
+  local telegram_access_json="/home/agent/.claude/channels/telegram/access.json"
+  if [ -f "$telegram_access_json" ] && command -v jq >/dev/null 2>&1; then
+    local tmp_access
+    tmp_access=$(mktemp)
+    if jq '.pending = {}' "$telegram_access_json" > "$tmp_access" 2>/dev/null; then
+      mv "$tmp_access" "$telegram_access_json"
+      chmod 0600 "$telegram_access_json"
+      log "cleared stale telegram pairing pending"
+    else
+      rm -f "$tmp_access"
+    fi
+  fi
+}
 
 # ── 2. Config ─────────────────────────────────────────────
 SESSION="agent"
@@ -51,10 +55,20 @@ WORKDIR="/workspace"
 CLAUDE_CONFIG_DIR_VAL="/home/agent/.claude"
 REQUIRED_CHANNEL_PLUGIN="telegram@claude-plugins-official"
 
+# Watchdog runtime state — lives on tmpfs (/tmp) so it resets every
+# container start. CHANNEL_MARKER is touched by start_session after a
+# successful --channels launch and read by channel_plugin_alive; this
+# replaces the previous `pgrep -f -- "--channels "` heuristic which
+# false-positived on any process whose argv contained the substring.
+WATCHDOG_RUNTIME_DIR="/tmp/agent-watchdog"
+CHANNEL_MARKER="$WATCHDOG_RUNTIME_DIR/session.channels-mode"
+
 MAX_CRASHES=5
 WINDOW=300
-CRASH_COUNT=0
-WINDOW_START=$(date +%s)
+# Crash budget is a sliding 300s window: each entry is a unix timestamp.
+# crash_budget_check (defined below) drops entries older than now-WINDOW
+# and exits the watchdog when MAX_CRASHES still fit in the trailing window.
+CRASH_TIMES=""
 
 # ── 3. Plugin auto-install ────────────────────────────────
 # `claude plugin install` requires an authenticated profile. On first boot
@@ -74,13 +88,22 @@ ensure_plugin_installed() {
   local spec="$1"
   local cache
   cache=$(plugin_cache_dir_for "$spec")
-  if [ -d "$cache" ]; then
+  # Cache must be both present AND complete. `claude plugin install` can
+  # leave a half-extracted dir (network blip, OOM, container kill mid-
+  # install) — without the sentinel, every subsequent boot would re-run
+  # apply_plugin_patches on a broken cache and quietly fail-silent.
+  if [ -d "$cache" ] && [ -f "$cache/.installed-ok" ]; then
     apply_plugin_patches "$spec" "$cache"
     return 0
+  fi
+  if [ -d "$cache" ]; then
+    log "plugin cache for $spec is missing .installed-ok sentinel — clearing for re-install"
+    rm -rf "$cache"
   fi
   log "attempting to install plugin: $spec"
   if CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR_VAL" claude plugin install "$spec" >/dev/null 2>&1; then
     log "plugin installed: $spec"
+    [ -d "$cache" ] && : > "$cache/.installed-ok"
     apply_plugin_patches "$spec" "$cache"
     return 0
   fi
@@ -269,6 +292,13 @@ start_session() {
   local cmd
   cmd=$(next_tmux_cmd)
   log "launching: $cmd"
+
+  # Reset the channel marker — a fresh launch may or may not be a
+  # --channels session, depending on which case next_tmux_cmd picked.
+  # Marker is set only after verify_channel_healthy succeeds below.
+  mkdir -p "$WATCHDOG_RUNTIME_DIR" 2>/dev/null || true
+  rm -f "$CHANNEL_MARKER"
+
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   sleep 1
   tmux new-session -d -s "$SESSION" -c "$WORKDIR" "$cmd"
@@ -283,6 +313,7 @@ start_session() {
       return 1
     fi
     log "channel plugin healthy — bun server.ts running"
+    : > "$CHANNEL_MARKER"
   fi
   return 0
 }
@@ -302,14 +333,37 @@ session_alive() {
 # ghosting. Detect this and respawn the session so a fresh plugin
 # attaches.
 channel_plugin_alive() {
-  # Only enforce if the session was launched with --channels. We detect
-  # that by checking whether any current tmux pane's command contains
-  # --channels — cheaper than re-parsing the launch command.
-  if pgrep -f -- "--channels " >/dev/null 2>&1; then
+  # Marker file is touched by start_session only after a successful
+  # --channels launch (verify_channel_healthy passed). This replaces
+  # the old `pgrep -f -- "--channels "` heuristic, which matched any
+  # process with `--channels ` in argv (including the watchdog itself
+  # if it spawned subshells with that substring).
+  if [ -f "$CHANNEL_MARKER" ]; then
     pgrep -f "bun server.ts" >/dev/null 2>&1
   else
     return 0
   fi
+}
+
+# crash_budget_check NOW CURRENT_TIMES → prints surviving timestamps and
+# returns 0 if the budget still has room (count < MAX_CRASHES), else 1.
+# Sliding window: drops entries older than NOW-WINDOW. Pure: caller
+# captures stdout, checks exit code, decides whether to exit.
+crash_budget_check() {
+  local now="$1"
+  local current="$2"
+  local cutoff=$(( now - WINDOW ))
+  local kept=""
+  local count=0
+  local t
+  for t in $current; do
+    if [ "$t" -gt "$cutoff" ]; then
+      kept="$kept $t"
+      count=$(( count + 1 ))
+    fi
+  done
+  printf '%s' "$kept"
+  [ "$count" -lt "$MAX_CRASHES" ]
 }
 
 # Bridge watchdog: detects the silent-stuck case where bun is alive
@@ -352,6 +406,15 @@ channel_plugin_alive() {
 # channel_plugin_alive (above) still handles the case where bun
 # itself dies; that one is reliably detectable from outside.
 
+# Tests source this script with START_SERVICES_NO_RUN=1 set so they can
+# call functions (notably crash_budget_check) in isolation without
+# triggering the runtime watchdog loop.
+if [ "${START_SERVICES_NO_RUN:-0}" = "1" ]; then
+  return 0 2>/dev/null || exit 0
+fi
+
+boot_side_effects
+
 log "starting tmux session '$SESSION'"
 if ! start_session; then
   log "ERROR: initial tmux session failed to start"
@@ -379,17 +442,14 @@ while true; do
   fi
 
   now=$(date +%s)
-  if [ $(( now - WINDOW_START )) -gt $WINDOW ]; then
-    CRASH_COUNT=0
-    WINDOW_START=$now
-  fi
-  CRASH_COUNT=$(( CRASH_COUNT + 1 ))
-
-  if [ $CRASH_COUNT -ge $MAX_CRASHES ]; then
+  CRASH_TIMES="$(crash_budget_check "$now" "$CRASH_TIMES $now")" || {
     log "CRITICAL: $MAX_CRASHES crashes in ${WINDOW}s — exiting for Docker to restart"
     exit 1
-  fi
+  }
 
-  log "tmux session ended (crash $CRASH_COUNT/${MAX_CRASHES} in window) — respawning"
+  # Recount for the log line — cheap, runs at most every 2s.
+  CRASH_COUNT=0
+  for _t in $CRASH_TIMES; do CRASH_COUNT=$(( CRASH_COUNT + 1 )); done
+  log "tmux session ended (crash $CRASH_COUNT/${MAX_CRASHES} in trailing ${WINDOW}s) — respawning"
   start_session || log "WARN: respawn failed, watchdog will retry in 2s"
 done

@@ -44,6 +44,14 @@ def log(msg: str) -> None:
     print(f"[apply_telegram_typing_patch] {msg}", flush=True)
 
 
+def warn(msg: str) -> None:
+    # Anchor drift is operationally significant: the plugin keeps its
+    # default behavior (typing indicator drops after 5s, looks like the
+    # agent ghosts). Emit on stderr so log scrapers can flag it
+    # distinctly from the success path on stdout.
+    print(f"[apply_telegram_typing_patch] WARN: {msg}", file=sys.stderr, flush=True)
+
+
 def main(argv: list[str]) -> int:
     if len(argv) != 2:
         log("usage: apply_telegram_typing_patch.py <server.ts>")
@@ -70,7 +78,7 @@ def main(argv: list[str]) -> int:
         count=1,
     )
     if n1 != 1:
-        log("WARN: hunk1 anchor (let botUsername) not found — skipping patch")
+        warn("hunk1 anchor (let botUsername) not found — skipping patch (plugin keeps default typing behavior)")
         return 0
 
     # Hunk 2: replace the single sendChatAction call with _typingKeepAlive.
@@ -88,7 +96,7 @@ def main(argv: list[str]) -> int:
         count=1,
     )
     if n2 != 1:
-        log("WARN: hunk2 anchor (sendChatAction call) not found — skipping patch")
+        warn("hunk2 anchor (sendChatAction call) not found — skipping patch (plugin keeps default typing behavior)")
         return 0
 
     # Hunk 3: inside the `reply` tool handler, stop the typing refresh as
@@ -103,7 +111,7 @@ def main(argv: list[str]) -> int:
         count=1,
     )
     if n3 != 1:
-        log("WARN: hunk3 anchor (reply case chat_id) not found — skipping patch")
+        warn("hunk3 anchor (reply case chat_id) not found — skipping patch (plugin keeps default typing behavior)")
         return 0
 
     # Atomic write: temp file in same dir, then rename.
