@@ -2,6 +2,38 @@
 
 ## [Unreleased]
 
+### Added
+- telegram: persist Telegram `update_id` offset to disk on every processed
+  message (`/home/agent/.claude/channels/telegram/last-offset.json`) and
+  replay from disk on plugin startup via a synchronous
+  `bot.api.getUpdates({ offset })` call before `bot.start()`. Makes
+  message loss impossible across `bun server.ts` crashes — Telegram
+  re-delivers any updates with id ≥ persisted offset that are still in
+  its 24h buffer. Patch is independently idempotent (own marker:
+  `agentic-pod-launcher: offset persistence patch v1`) and fail-silent
+  on anchor drift in upstream `server.ts`.
+- telegram: tee `process.stderr` to
+  `/workspace/scripts/heartbeat/logs/telegram-mcp-stderr.log` plus
+  register `process.on('uncaughtException')` and
+  `process.on('unhandledRejection')` handlers that append the trace
+  there. Without this, bun crashes left no forensic evidence (the MCP
+  transport drops the existing handlers' stderr writes). Marker:
+  `agentic-pod-launcher: stderr-capture patch v1`.
+- heartbeatctl: new `drop-plugin <spec>` subcommand. Atomic
+  `yq -i '.plugins -= [strenv(V)]'` mutation against `agent.yml` with
+  backup/restore on failure. Idempotent. Useful for evicting a
+  known-broken plugin without manual `yq` invocations.
+
+### Removed
+- catalog: `caveman@JuliusBrussee` opt-in plugin removed from the
+  default catalog. The repo `JuliusBrussee/caveman` ships a single
+  Claude Code skill, not a plugin marketplace (no `marketplace.json`
+  at root) — `claude plugin install caveman@JuliusBrussee` failed on
+  every container respawn, leaving "1 MCP server failed" in the
+  status panel and ~1s of churn per crash cycle. Existing agents:
+  `docker exec -u agent <name> heartbeatctl drop-plugin
+  caveman@JuliusBrussee` then `kick-channel` to apply.
+
 ### Changed
 - docker: agent state (login, Telegram pairing, sessions, plugin cache)
   moved from a docker-managed named volume (`<agent>-state`, living in

@@ -120,15 +120,16 @@ EOF
   [ -f "$dest/docker/modules/plugins/telegram.yml" ]
   [ -f "$dest/docker/modules/plugins/claude-mem.yml" ]
   [ -f "$dest/docker/modules/plugins/superpowers.yml" ]
-  [ -f "$dest/docker/modules/plugins/caveman.yml" ]
+  # caveman.yml dropped — single-skill repo, not a CC marketplace.
+  [ ! -f "$dest/docker/modules/plugins/caveman.yml" ]
 }
 
 @test "wizard opt-in for superpowers appends it to agent.yml plugins" {
   local dest="$TMP_TEST_DIR/scaffold-optin-sp"
   cd "$TMP_TEST_DIR/installer"
-  # Stream order, then 6 optional answers (alphabetical):
-  #   caveman=n, code-simplifier=n, commit-commands=n, github=n,
-  #   skill-creator=n, superpowers=y → finally `proceed` for the review.
+  # Stream order, then 5 optional answers (alphabetical):
+  #   code-simplifier=n, commit-commands=n, github=n, skill-creator=n,
+  #   superpowers=y → finally `proceed` for the review.
   ./setup.sh --destination "$dest" <<EOF
 opt-bot
 OptBot
@@ -153,7 +154,6 @@ n
 n
 n
 n
-n
 y
 proceed
 EOF
@@ -162,47 +162,6 @@ EOF
   plugin_count=$(yq '.plugins | length' "$dest/agent.yml")
   [ "$plugin_count" -eq 6 ]
   yq -r '.plugins[]' "$dest/agent.yml" | grep -q "^superpowers@claude-plugins-official$"
-}
-
-@test "wizard caveman opt-in requires explicit confirm and registers JuliusBrussee marketplace" {
-  local dest="$TMP_TEST_DIR/scaffold-optin-caveman"
-  cd "$TMP_TEST_DIR/installer"
-  # caveman=y triggers the confirm prompt; we say 'y' to confirm.
-  # Remaining opt-ins all 'n'.
-  ./setup.sh --destination "$dest" <<EOF
-cave-bot
-CaveBot
-r
-v
-Alice
-Alice
-UTC
-a@b.com
-en
-host
-n
-n
-none
-n
-n
-y
-30m
-ok
-y
-y
-y
-n
-n
-n
-n
-n
-proceed
-EOF
-  [ -f "$dest/agent.yml" ]
-  local plugin_count
-  plugin_count=$(yq '.plugins | length' "$dest/agent.yml")
-  [ "$plugin_count" -eq 6 ]
-  yq -r '.plugins[]' "$dest/agent.yml" | grep -q "^caveman@JuliusBrussee$"
 }
 
 @test "scaffolded NEXT_STEPS.md includes the Plugins block with descriptions" {

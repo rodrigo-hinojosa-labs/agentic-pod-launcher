@@ -40,6 +40,8 @@ Control:
   resume                  Inverse of pause.
   reload                  Re-read agent.yml, regenerate conf + crontab, SIGHUP crond.
   kick-channel            Force-respawn the tmux session when Telegram chat ghosts.
+  drop-plugin   <spec>    Remove a plugin spec from agent.yml.plugins[]
+                          (e.g. caveman@JuliusBrussee). Then kick-channel to apply.
 
 Mutate (all atomic with rollback against agent.yml.prev):
   set-interval  <Nm|Nh>
@@ -353,6 +355,39 @@ cmd_kick_channel() {
   echo "heartbeatctl: killed tmux session 'agent' — watchdog will respawn in ~2s"
 }
 
+# drop-plugin <spec> — remove a plugin spec from agent.yml.plugins[].
+# Idempotent (no-op if spec not in list). Atomic with backup/restore on
+# yq failure (matches cmd_pause/cmd_resume pattern). Does NOT auto-kick
+# the channel — the caller decides when to recycle the session, since
+# the new plugins[] is consumed by ensure_all_plugins_installed on the
+# next watchdog respawn either way.
+cmd_drop_plugin() {
+  local spec="${1:-}"
+  if [ -z "$spec" ]; then
+    echo "drop-plugin: missing <spec> (e.g. caveman@JuliusBrussee)" >&2
+    return 1
+  fi
+  [ -f "$AGENT_YML" ] || { echo "drop-plugin: $AGENT_YML missing" >&2; return 2; }
+  # yq (go-yq, mikefarah) doesn't have jq's `index()`; use `contains`
+  # against a single-element array. `.plugins // []` makes the path safe
+  # when the field is absent. Prints "true" or "false".
+  local present
+  present=$(V="$spec" yq '(.plugins // []) | contains([strenv(V)])' "$AGENT_YML" 2>/dev/null)
+  if [ "$present" != "true" ]; then
+    echo "heartbeatctl: $spec not in agent.yml.plugins — nothing to drop"
+    return 0
+  fi
+  local prev="$AGENT_YML.prev"
+  cp "$AGENT_YML" "$prev"
+  if ! V="$spec" yq -i '.plugins -= [strenv(V)]' "$AGENT_YML"; then
+    cp "$prev" "$AGENT_YML"; rm -f "$prev"
+    echo "drop-plugin: yq mutation failed; agent.yml restored from backup" >&2
+    return 2
+  fi
+  rm -f "$prev"
+  echo "heartbeatctl: dropped $spec from agent.yml — run 'heartbeatctl kick-channel' to apply"
+}
+
 main() {
   local sub="${1:-help}"; shift || true
   case "$sub" in
@@ -365,6 +400,7 @@ main() {
     resume) cmd_resume ;;
     test)   cmd_test "$@" ;;
     kick-channel) cmd_kick_channel ;;
+    drop-plugin)  cmd_drop_plugin  "${1:-}" ;;
     set-interval) cmd_set_interval "${1:-}" ;;
     set-prompt)   cmd_set_prompt   "${1:-}" ;;
     set-notifier) cmd_set_notifier "${1:-}" ;;

@@ -261,7 +261,7 @@ pre_accept_bypass_permissions() {
 # declared by a plugin descriptor into ~/.claude/settings.json's
 # extraKnownMarketplaces map. claude resolves @<marketplace> in plugin
 # specs against this map, so without the registration `claude plugin
-# install caveman@JuliusBrussee` errors with "unknown marketplace".
+# install claude-mem@thedotmack` errors with "unknown marketplace".
 #
 # Idempotent: existing entries are merged (right side wins for managed
 # keys, untouched for unrelated keys). Safe to re-run on every boot.
