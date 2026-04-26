@@ -1,0 +1,11 @@
+id: code-simplifier
+spec: code-simplifier@claude-plugins-official
+type: optional
+description: "Agente autónomo que refactoriza código modificado recientemente: reduce nesting, mejora naming, elimina redundancia, sigue ES/React best practices."
+impact: "Se activa proactivamente sobre cambios recientes — puede churnear código sin que se lo pidas. Puede entrar en conflicto con intent del usuario si quería un cambio mínimo."
+when_useful: "Agentes que tocan código frecuentemente y donde la calidad consistente importa más que cambios mínimos."
+when_overhead: "Cuando querés que el agente haga cambios quirúrgicos sin tocar código adyacente."
+marketplace: null
+post_install_hook: null
+conflicts: []
+requires_explicit_confirm: false

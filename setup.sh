@@ -409,6 +409,57 @@ ATLASSIAN_${upper}_TOKEN=${ws_token}
   use_defaults=$(ask_yn "Use default opinionated agent principles? (recommended)" "y")
   echo ""
 
+  # ── 8. Optional plugins ─────────────────────────────
+  # Iterate the optional descriptors and let the user opt in. Defaults
+  # (telegram, claude-mem, context7, claude-md-management, security-guidance)
+  # are always installed and not asked about here.
+  echo "▸ Optional plugins"
+  echo "  Pre-configurados always-on (5): telegram, claude-mem, context7,"
+  echo "  claude-md-management, security-guidance. NEXT_STEPS.md detalla impacto."
+  echo ""
+  echo "  Los siguientes son opcionales — Enter para 'no':"
+  echo ""
+  local opt_plugins=()
+  # Pre-collect IDs into an array. We CANNOT iterate via
+  # `while ... done < <(plugin_catalog_list optional)` because that
+  # redirects the loop's stdin to the IDs stream — and ask_yn inside
+  # the loop body would then read its y/n answers from the IDs list
+  # instead of the user's stdin. Reading IDs first into a plain array
+  # leaves stdin pointing at the user.
+  local _opt_ids=()
+  local _opt_id _opt_desc _opt_useful _opt_overhead _opt_confirm _opt_spec _opt_conflicts
+  while IFS= read -r _opt_id; do
+    [ -z "$_opt_id" ] && continue
+    _opt_ids+=("$_opt_id")
+  done < <(plugin_catalog_list optional)
+  if [ "${#_opt_ids[@]}" -gt 0 ]; then
+    for _opt_id in "${_opt_ids[@]}"; do
+      _opt_desc=$(plugin_catalog_get "$_opt_id" description)
+      _opt_useful=$(plugin_catalog_get "$_opt_id" when_useful)
+      _opt_overhead=$(plugin_catalog_get "$_opt_id" when_overhead)
+      echo "  · ${_opt_id}"
+      echo "    ${_opt_desc}"
+      echo "    Útil: ${_opt_useful}"
+      echo "    Overhead: ${_opt_overhead}"
+      if [ "$(ask_yn "    Install ${_opt_id}?" "n")" = "true" ]; then
+        _opt_confirm=$(plugin_catalog_get "$_opt_id" requires_explicit_confirm)
+        _opt_spec=$(plugin_catalog_get "$_opt_id" spec)
+        if [ "$_opt_confirm" = "true" ]; then
+          _opt_conflicts=$(yq -r '.conflicts[]?' "$SCRIPT_DIR/modules/plugins/${_opt_id}.yml" 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+          echo "    ⚠  ${_opt_id} entra en conflicto con: ${_opt_conflicts:-(none)}"
+          if [ "$(ask_yn "    Confirm installing ${_opt_id} (overrides those fields)?" "n")" = "true" ]; then
+            opt_plugins+=("$_opt_spec")
+          else
+            echo "    skipped: ${_opt_id}"
+          fi
+        else
+          opt_plugins+=("$_opt_spec")
+        fi
+      fi
+      echo ""
+    done
+  fi
+
   # ── Review loop ──────────────────────────────────────
   while true; do
     echo ""
@@ -500,9 +551,10 @@ $atlassian_entries"
     atlassian_yaml="  atlassian: []"
   fi
 
-  # Render the default plugin set from `modules/plugins/<id>.yml` descriptors.
-  # See `scripts/lib/plugin-catalog.sh`. Adding a new always-on plugin is now
-  # a one-file change (drop a YAML descriptor, no edits here).
+  # Render the plugins list: 5 always-on defaults from the catalog + any
+  # opt-in descriptors the user selected in the "Optional plugins" wizard
+  # section above. Adding a new default is a one-file change (drop a YAML
+  # descriptor); adding a new opt-in is the same plus the user gets to pick.
   plugins_yaml="plugins:"
   local _id _spec
   while IFS= read -r _id; do
@@ -511,6 +563,13 @@ $atlassian_entries"
     [ -n "$_spec" ] && plugins_yaml="${plugins_yaml}
   - ${_spec}"
   done < <(plugin_catalog_list default)
+  if [ "${#opt_plugins[@]}" -gt 0 ]; then
+    local _o
+    for _o in "${opt_plugins[@]}"; do
+      plugins_yaml="${plugins_yaml}
+  - ${_o}"
+    done
+  fi
 
   # ── Write agent.yml ─────────────────────────────────
   cat > "$agent_yml" << EOF
@@ -696,6 +755,41 @@ sync_template() {
   echo "  Push when ready:  git push --force-with-lease origin $live_branch"
 }
 
+# Build the markdown block listing every installed plugin with description
+# + impact, localized to es | en. Used by render_next_steps to inject
+# {{PLUGINS_BLOCK}} into the NEXT_STEPS.md template. Reads agent.yml's
+# plugins[] and looks up each spec in the catalog.
+build_plugins_block() {
+  local agent_yml="$1"
+  local lang="${2:-en}"
+  local heading intro footer
+  case "$lang" in
+    es|mixed)
+      heading="## Plugins instalados"
+      intro="Los siguientes plugins se instalan automáticamente cuando completes \`/login\` dentro del tmux. Cada uno aporta capacidades distintas — el campo \`agent.yml.plugins[]\` es la fuente de verdad y podés editarlo a mano si querés agregar/quitar (luego \`./setup.sh --regenerate\`)."
+      footer="Para desinstalar uno desde una sesión: \`claude plugin uninstall <spec>\`."
+      ;;
+    *)
+      heading="## Installed plugins"
+      intro="The following plugins auto-install on the agent's first \`/login\` inside tmux. Each adds distinct capabilities — \`agent.yml.plugins[]\` is the source of truth and you can edit it by hand to add/remove (then \`./setup.sh --regenerate\`)."
+      footer="To uninstall one from a session: \`claude plugin uninstall <spec>\`."
+      ;;
+  esac
+  local block="${heading}"$'\n\n'"${intro}"$'\n\n'
+  local spec id desc impact
+  while IFS= read -r spec; do
+    [ -z "$spec" ] && continue
+    id=$(_plugin_catalog_id_for_spec "$spec" 2>/dev/null) || continue
+    desc=$(plugin_catalog_get "$id" description)
+    impact=$(plugin_catalog_get "$id" impact)
+    block+="- **${id}** — \`${spec}\`"$'\n'
+    block+="    - ${desc}"$'\n'
+    block+="    - Impact: ${impact}"$'\n\n'
+  done < <(plugin_catalog_specs "$agent_yml")
+  block+="${footer}"$'\n'
+  printf '%s' "$block"
+}
+
 # Render NEXT_STEPS.md from the i18n template matching user.language and
 # print it to stdout. Templates live at modules/next-steps.{es,en}.tpl.
 render_next_steps() {
@@ -723,6 +817,13 @@ render_next_steps() {
     export CLAUDE_CONFIG_DIR=$(eval echo "$CLAUDE_CONFIG_DIR")
   fi
   export CLAUDE_PROFILE_NEW="${CLAUDE_PROFILE_NEW:-false}"
+  # Pre-render the plugins block from the catalog (descriptors give us
+  # localized description + impact per plugin). The template engine's
+  # {{#each}} works on flat scalar arrays; descriptors are nested objects,
+  # so we build the markdown here in bash and inject as a {{PLUGINS_BLOCK}}
+  # placeholder. Keeps the template engine simple.
+  export PLUGINS_BLOCK
+  PLUGINS_BLOCK=$(build_plugins_block "$dest/agent.yml" "$lang")
   render_to_file "$template" "$dest/NEXT_STEPS.md"
 
   echo ""

@@ -1,0 +1,11 @@
+id: commit-commands
+spec: commit-commands@claude-plugins-official
+type: optional
+description: "Slash commands para flujo git: /commit, /commit-push-pr (commit + push + abrir PR), /clean_gone (limpia ramas locales con upstream borrado)."
+impact: "Lightweight. Comandos son shortcuts sobre git/gh CLI — no agregan dependencias nuevas (ambas ya instaladas en la imagen)."
+when_useful: "Si usas Telegram para pedirle al agente acciones de git ('commitea esto', 'abre un PR'), los slash commands son más predecibles que pedirlo en lenguaje natural."
+when_overhead: "Si el agente nunca hace git, son innecesarios."
+marketplace: null
+post_install_hook: null
+conflicts: []
+requires_explicit_confirm: false

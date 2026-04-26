@@ -23,7 +23,7 @@ Detach without killing the container: `Ctrl-b d` (standard tmux binding).
 Inside the tmux session:
 
 1. Pick a theme (Enter accepts the default) and confirm trust on `/workspace`.
-2. Run `/login`, open the URL in your browser, authorize, paste the code back. Credentials land on the named state volume (`{{AGENT_NAME}}-state`) and survive rebuilds.
+2. Run `/login`, open the URL in your browser, authorize, paste the code back. Credentials land in `{{DEPLOYMENT_WORKSPACE}}/.state/` (bind-mounted to the container's `/home/agent`) and survive rebuilds.
 3. Type `/exit` (or Ctrl-D). Claude closes; the watchdog notices and re-evaluates what to launch next.
 4. **Wait ~2–3 seconds** for the supervisor to detect the exit and spin up the next tmux session (the Telegram wizard). If you re-attach too fast, you'll see `no sessions` — just retry.
 
@@ -78,11 +78,14 @@ git pull                                 # if your workspace is a fork
 docker compose build && docker compose up -d
 ```
 
+{{PLUGINS_BLOCK}}
+
 ## Teardown
 
 ```bash
-./setup.sh --uninstall --yes             # stops container, removes named volume + host unit
-./setup.sh --uninstall --nuke --yes      # also deletes this workspace directory
+./setup.sh --uninstall --yes             # stops container, removes host unit (state under .state/ is preserved)
+./setup.sh --uninstall --purge --yes     # also deletes agent.yml/.env/.state/
+./setup.sh --uninstall --nuke --yes      # also deletes this entire workspace directory
 ```
 
 ## Troubleshooting

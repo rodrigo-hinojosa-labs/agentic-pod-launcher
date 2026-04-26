@@ -1,0 +1,11 @@
+id: superpowers
+spec: superpowers@claude-plugins-official
+type: optional
+description: "Workflow process plugin: enforces TDD, systematic debugging, brainstorming-before-implementation, plan-before-code patterns via slash commands and skill gating."
+impact: "Heavy skill system (~470k installs upstream). Each user prompt passes through skill gating before action — adds 2-5s of latency per turn. Useful for big tasks; overhead on chat."
+when_useful: "Agentes que ejecutan tareas grandes de código (features completos, debugging complejo, refactors). Disciplina forzada vale la latencia."
+when_overhead: "Agentes principalmente conversacionales por Telegram — responder preguntas simples se vuelve lento."
+marketplace: null
+post_install_hook: null
+conflicts: []
+requires_explicit_confirm: false

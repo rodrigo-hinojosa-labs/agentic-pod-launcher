@@ -28,10 +28,32 @@ teardown() { teardown_tmp_dir; }
   [[ "$output" == *"security-guidance"* ]]
 }
 
-@test "plugin_catalog_list optional emits 0 (PR1 has no opt-in yet)" {
+@test "plugin_catalog_list optional emits the 6 opt-in ids" {
   run plugin_catalog_list optional
   [ "$status" -eq 0 ]
-  [ -z "$(printf '%s' "$output" | tr -d '[:space:]')" ]
+  local n
+  n=$(printf '%s\n' "$output" | grep -c .)
+  [ "$n" -eq 6 ]
+  [[ "$output" == *"caveman"* ]]
+  [[ "$output" == *"code-simplifier"* ]]
+  [[ "$output" == *"commit-commands"* ]]
+  [[ "$output" == *"github"* ]]
+  [[ "$output" == *"skill-creator"* ]]
+  [[ "$output" == *"superpowers"* ]]
+}
+
+@test "caveman descriptor declares requires_explicit_confirm and conflicts" {
+  run plugin_catalog_get caveman requires_explicit_confirm
+  [ "$output" = "true" ]
+  run plugin_catalog_get caveman .marketplace.repo
+  [ "$output" = "JuliusBrussee/caveman" ]
+  [ "$(yq -r '.conflicts[0]' "$REPO_ROOT/modules/plugins/caveman.yml")" = "agent.vibe" ]
+}
+
+@test "plugin_catalog_marketplaces_json includes JuliusBrussee for caveman" {
+  local json
+  json=$(plugin_catalog_marketplaces_json caveman@JuliusBrussee)
+  [ "$(jq -r '.JuliusBrussee.source.repo' <<< "$json")" = "JuliusBrussee/caveman" ]
 }
 
 @test "plugin_catalog_get reads top-level field by name" {

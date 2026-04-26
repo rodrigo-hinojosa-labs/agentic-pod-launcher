@@ -23,7 +23,7 @@ Para salir sin matar el contenedor: `Ctrl-b d` (atajo estándar de tmux).
 Dentro de la sesión tmux:
 
 1. Elige un tema (Enter acepta el default) y confirma trust en `/workspace`.
-2. Corre `/login`, abre la URL en el navegador, autoriza, pega el código de vuelta. Las credenciales viven en el named volume (`{{AGENT_NAME}}-state`) y sobreviven rebuilds.
+2. Corre `/login`, abre la URL en el navegador, autoriza, pega el código de vuelta. Las credenciales viven en `{{DEPLOYMENT_WORKSPACE}}/.state/` (bind-mounted al `/home/agent` del contenedor) y sobreviven rebuilds.
 3. Escribe `/exit` (o Ctrl-D). Claude cierra; el watchdog se entera y re-evalúa qué lanzar.
 4. **Espera ~2–3 segundos** para que el supervisor detecte el cierre y arranque la siguiente sesión tmux (el wizard de Telegram). Si haces re-attach demasiado rápido, verás `no sessions` — vuelve a intentarlo.
 
@@ -78,11 +78,14 @@ git pull                                 # si tu workspace es un fork
 docker compose build && docker compose up -d
 ```
 
+{{PLUGINS_BLOCK}}
+
 ## Desmantelamiento
 
 ```bash
-./setup.sh --uninstall --yes             # detiene contenedor, remueve named volume + unit de host
-./setup.sh --uninstall --nuke --yes      # también borra este directorio de workspace
+./setup.sh --uninstall --yes             # detiene contenedor, remueve unit de host (estado en .state/ se preserva)
+./setup.sh --uninstall --purge --yes     # también borra agent.yml/.env/.state/
+./setup.sh --uninstall --nuke --yes      # también borra este directorio de workspace entero
 ```
 
 ## Troubleshooting
