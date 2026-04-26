@@ -24,6 +24,11 @@ deployment:
   host: "h"
   workspace: "/tmp/uninst-bot"
   install_service: false
+docker:
+  image_tag: "agent-admin:latest"
+  uid: 1000
+  gid: 1000
+  base_image: "alpine:3.20"
 notifications:
   channel: none
 features:

@@ -24,11 +24,20 @@ deployment:
   host: "h"
   workspace: "/tmp/nuke-bot"
   install_service: false
+docker:
+  image_tag: "agent-admin:latest"
+  uid: 1000
+  gid: 1000
+  base_image: "alpine:3.20"
 notifications:
   channel: none
 features:
   heartbeat:
-    enabled: false
+    enabled: true
+    interval: "30m"
+    timeout: 300
+    retries: 1
+    default_prompt: "ok"
 mcps:
   atlassian: []
   github:
