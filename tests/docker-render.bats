@@ -195,6 +195,17 @@ teardown() { teardown_tmp_dir; }
   [[ "$content" == *"COPY modules/plugins/"* ]]
 }
 
+@test "apply_telegram_typing_patch.py declares all 3 marker constants" {
+  content=$(< "$REPO_ROOT/docker/scripts/apply_telegram_typing_patch.py")
+  [[ "$content" == *"agentic-pod-launcher: typing refresh patch v1"* ]]
+  [[ "$content" == *"agentic-pod-launcher: offset persistence patch v1"* ]]
+  [[ "$content" == *"agentic-pod-launcher: stderr-capture patch v1"* ]]
+  # The dispatch in main() must call all 3 apply_* helpers.
+  [[ "$content" == *"apply_typing("* ]]
+  [[ "$content" == *"apply_offset("* ]]
+  [[ "$content" == *"apply_stderr("* ]]
+}
+
 @test "wizard-container.sh uses gum for prompts" {
   content=$(< "$REPO_ROOT/docker/scripts/wizard-container.sh")
   [[ "$content" == *"gum input"* ]]

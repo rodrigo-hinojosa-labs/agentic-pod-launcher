@@ -258,3 +258,35 @@ JS
   run bash "$REPO_ROOT/docker/scripts/heartbeatctl" set-retries -1
   [ "$status" -ne 0 ]
 }
+
+@test "drop-plugin without spec arg fails with exit 1" {
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" drop-plugin
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"missing <spec>"* ]]
+}
+
+@test "drop-plugin removes a present spec from agent.yml.plugins[]" {
+  yq -i '.plugins = ["telegram@claude-plugins-official", "caveman@JuliusBrussee", "claude-mem@thedotmack"]' "$WORKSPACE/agent.yml"
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" drop-plugin caveman@JuliusBrussee
+  [ "$status" -eq 0 ]
+  run yq -r '.plugins | length' "$WORKSPACE/agent.yml"
+  [ "$output" = "2" ]
+  ! yq -r '.plugins[]' "$WORKSPACE/agent.yml" | grep -q "caveman"
+  yq -r '.plugins[]' "$WORKSPACE/agent.yml" | grep -q "telegram@claude-plugins-official"
+  yq -r '.plugins[]' "$WORKSPACE/agent.yml" | grep -q "claude-mem@thedotmack"
+}
+
+@test "drop-plugin is idempotent — no-op when spec absent" {
+  yq -i '.plugins = ["telegram@claude-plugins-official"]' "$WORKSPACE/agent.yml"
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" drop-plugin caveman@JuliusBrussee
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"nothing to drop"* ]]
+  run yq -r '.plugins | length' "$WORKSPACE/agent.yml"
+  [ "$output" = "1" ]
+}
+
+@test "drop-plugin help lists drop-plugin in Control section" {
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"drop-plugin"* ]]
+}
