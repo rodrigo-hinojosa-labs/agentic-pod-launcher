@@ -66,7 +66,6 @@ run_docker_wizard() {
   [ -f "$dest/agent.yml" ]
   [ "$(yq '.docker.uid' "$dest/agent.yml")" = "$(id -u)" ]
   [ "$(yq '.docker.gid' "$dest/agent.yml")" = "$(id -g)" ]
-  [ "$(yq '.docker.state_volume' "$dest/agent.yml")" = "dockbot-state" ]
 }
 
 @test "--docker scaffold copies docker/ directory into destination" {
@@ -88,7 +87,7 @@ run_docker_wizard() {
   [ "$status" -eq 0 ]
   [ -f "$dest/docker-compose.yml" ]
   grep -q "dockbot:" "$dest/docker-compose.yml"
-  grep -q "dockbot-state:" "$dest/docker-compose.yml"
+  grep -q "./.state:/home/agent" "$dest/docker-compose.yml"
 }
 
 @test "--docker scaffold does NOT render agent-script-*.sh on host" {
@@ -102,7 +101,7 @@ run_docker_wizard() {
   [ ! -f "$HOME/.local/bin/dockbot.sh" ]
 }
 
-@test "--uninstall in docker-mode workspace runs docker compose down -v (dry)" {
+@test "--uninstall in docker-mode workspace runs docker compose down (preserving .state)" {
   mkdir -p "$TMP_TEST_DIR/installer"
   local dest="$TMP_TEST_DIR/docker-uninstall"
   run run_docker_wizard "$dest"
@@ -121,7 +120,10 @@ STUB
   cd "$dest"
   run ./setup.sh --uninstall --yes
   [ "$status" -eq 0 ]
-  grep -q "compose down -v" "$TMP_TEST_DIR/docker-calls.log"
+  # State now lives in workspace .state/ (bind-mount, not a named volume),
+  # so plain `compose down` is sufficient — `-v` would be a no-op.
+  grep -q "compose down" "$TMP_TEST_DIR/docker-calls.log"
+  ! grep -q "compose down -v" "$TMP_TEST_DIR/docker-calls.log"
 }
 
 @test "--regenerate in docker-mode workspace re-renders docker-compose.yml" {
