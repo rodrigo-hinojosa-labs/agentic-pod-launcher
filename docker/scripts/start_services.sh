@@ -139,9 +139,13 @@ ensure_channel_env_synced() {
   mkdir -p "$(dirname "$channel_env")"
   umask 077
   if [ -f "$channel_env" ]; then
-    # Preserve other lines, replace/add the target key.
+    # Preserve other lines, replace/add the target key. Use \x01 (SOH)
+    # as the sed delimiter — control char that no plausible env value
+    # (token, URL, file path) can contain, so future channels with
+    # `|`/`/`/`#` in their values won't break this sync.
     if grep -q "^${workspace_key}=" "$channel_env"; then
-      sed -i "s|^${workspace_key}=.*|${workspace_key}=${token}|" "$channel_env"
+      local SEP=$'\x01'
+      sed -i "s${SEP}^${workspace_key}=.*${SEP}${workspace_key}=${token}${SEP}" "$channel_env"
     else
       echo "${workspace_key}=${token}" >> "$channel_env"
     fi

@@ -68,16 +68,18 @@ _render_each() {
       expanded+="$row_expanded"
     done
 
-    # Replace full_match with expanded using perl to handle multi-line safely
-    content=$(perl -0777 -e '
-      my ($full, $repl, $text);
-      $full = $ARGV[0];
-      $repl = $ARGV[1];
-      $text = do { local $/; <STDIN> };
+    # Replace full_match with expanded. The replacement is fetched via
+    # ENV{REPL} inside an /e (eval) substitution rather than passed as
+    # a literal replacement string — this prevents perl from
+    # interpolating $1, $2, \1, \2 inside the field value (e.g. a yaml
+    # value containing "$1bn revenue" or "C:\path" used to corrupt).
+    content=$(REPL="$expanded" perl -0777 -e '
+      my $full = $ARGV[0];
+      my $text = do { local $/; <STDIN> };
       $full = quotemeta($full);
-      $text =~ s/$full/$repl/;
+      $text =~ s/$full/$ENV{REPL}/e;
       print $text;
-    ' "$full_match" "$expanded" <<< "$content")
+    ' "$full_match" <<< "$content")
   done
 
   printf '%s' "$content"

@@ -44,3 +44,30 @@ setup() {
   [[ "$result" == *"- personal at https://personal.atlassian.net (alice@personal.com)"* ]]
   [[ "$result" == *"Done."* ]]
 }
+
+@test "render_template preserves literal \$1 and \\1 in field values" {
+  # Regression: perl's s/.../$repl/ used to interpolate $1, $2 (capture
+  # refs) and \1, \2 (backrefs) inside the replacement string, so a
+  # field value containing those would be silently corrupted. The
+  # current engine routes the replacement through ENV{REPL} with /e
+  # so the value is treated as literal data.
+  local tmp_yml="$BATS_TEST_TMPDIR/yml.yml"
+  local tmp_tpl="$BATS_TEST_TMPDIR/tpl.tpl"
+  cat > "$tmp_yml" <<'YML'
+version: 1
+mcps:
+  atlassian:
+    - name: q1
+      url: 'https://q1.example/path?ref=$1&v=\1'
+      email: '$2-test@example.com'
+YML
+  cat > "$tmp_tpl" <<'TPL'
+{{#each MCPS_ATLASSIAN}}
+- {{name}}: {{url}} ({{email}})
+{{/each}}
+TPL
+  render_load_context "$tmp_yml"
+  result=$(render_template "$tmp_tpl")
+  [[ "$result" == *'https://q1.example/path?ref=$1&v=\1'* ]]
+  [[ "$result" == *'$2-test@example.com'* ]]
+}

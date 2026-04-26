@@ -111,8 +111,11 @@ RUN set -eux; \
     bun --version
 
 # Install Claude Code CLI globally so both root (for first-run chown) and
-# the `agent` user can invoke it.
-RUN npm install -g @anthropic-ai/claude-code
+# the `agent` user can invoke it. Pinned via build arg so rebuilds are
+# reproducible — override with `docker build --build-arg CLAUDE_CODE_VERSION=...`
+# or pass through compose's `build.args` to track upstream releases.
+ARG CLAUDE_CODE_VERSION=2.1.119
+RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 
 # Create the non-root agent user matching host UID/GID.
 # Release pre-existing groups/users that already hold the target GID/UID

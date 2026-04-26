@@ -1044,6 +1044,45 @@ install_service() {
   fi
 }
 
+# Validate that agent.yml has all the fields the rest of setup.sh +
+# heartbeatctl + the docker-compose template expect to read. Fails
+# fast with a punch-list rather than producing half-rendered files
+# downstream. Used by --non-interactive and --regenerate so an
+# accidentally-truncated agent.yml never silently produces a broken
+# scaffold.
+validate_agent_yml_required() {
+  local yml="$1"
+  local required=(
+    ".agent.name"
+    ".deployment.workspace"
+    ".features.heartbeat.interval"
+    ".features.heartbeat.timeout"
+    ".features.heartbeat.retries"
+    ".features.heartbeat.default_prompt"
+    ".notifications.channel"
+    ".docker.uid"
+    ".docker.gid"
+    ".docker.image_tag"
+    ".docker.base_image"
+  )
+  local missing=()
+  local key val
+  for key in "${required[@]}"; do
+    val=$(yq "$key" "$yml" 2>/dev/null)
+    if [ -z "$val" ] || [ "$val" = "null" ]; then
+      missing+=("$key")
+    fi
+  done
+  if [ ${#missing[@]} -gt 0 ]; then
+    echo "ERROR: agent.yml is missing required field(s):" >&2
+    printf '  - %s\n' "${missing[@]}" >&2
+    echo "" >&2
+    echo "Run ./setup.sh --reset to re-collect, or edit agent.yml by hand." >&2
+    return 1
+  fi
+  return 0
+}
+
 # Print (do not execute) suggested plugin install commands so the user can run
 # them on their own terms.
 maybe_print_plugin_hints() {
@@ -1247,6 +1286,7 @@ main() {
         echo "ERROR: agent.yml not found; cannot run in --non-interactive mode" >&2
         exit 1
       fi
+      validate_agent_yml_required "$agent_yml" || exit 1
       regenerate
       ;;
     regenerate)
@@ -1254,6 +1294,7 @@ main() {
         echo "ERROR: agent.yml not found; run wizard first" >&2
         exit 1
       fi
+      validate_agent_yml_required "$agent_yml" || exit 1
       regenerate
       ;;
     uninstall)
