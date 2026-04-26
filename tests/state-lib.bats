@@ -84,3 +84,34 @@ teardown() { teardown_tmp_dir; }
   # .4 must NOT exist
   [ ! -f "${f}.4.gz" ]
 }
+
+@test "append_run_line serializes 20 concurrent writers without torn lines" {
+  command -v flock >/dev/null 2>&1 || skip "flock not available on host"
+  local f="$HEARTBEAT_DIR/logs/runs.jsonl"
+  local i
+  for i in $(seq 1 20); do
+    (append_run_line "$f" "$(printf '{"i":%d}' "$i")") &
+  done
+  wait
+  [ "$(wc -l < "$f" | tr -d ' ')" = "20" ]
+  # Every line must parse as JSON — torn writes would yield `{"i":3{"i":4}` etc.
+  while IFS= read -r line; do
+    printf '%s' "$line" | jq empty
+  done < "$f"
+}
+
+@test "rotate_runs_jsonl is idempotent under 5 concurrent calls" {
+  command -v flock >/dev/null 2>&1 || skip "flock not available on host"
+  local f="$HEARTBEAT_DIR/logs/runs.jsonl"
+  head -c 2048 /dev/urandom > "$f"
+  local i
+  for i in 1 2 3 4 5; do
+    (rotate_runs_jsonl "$f" 1024) &
+  done
+  wait
+  # First rotate moves FILE → .1 and the rest see size==0 → no-op.
+  # No orphan .1.gz (which would indicate two rotates each gzipping .1).
+  [ -f "${f}.1" ]
+  [ ! -f "${f}.1.gz" ]
+  [ ! -f "${f}.4.gz" ]
+}
