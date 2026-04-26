@@ -3,15 +3,44 @@
 ## [Unreleased]
 
 ### Added
-- telegram: persist Telegram `update_id` offset to disk on every processed
-  message (`/home/agent/.claude/channels/telegram/last-offset.json`) and
+- telegram: persist Telegram `update_id` offset to disk on each successful
+  reply (`/home/agent/.claude/channels/telegram/last-offset.json`) and
   replay from disk on plugin startup via a synchronous
-  `bot.api.getUpdates({ offset })` call before `bot.start()`. Makes
-  message loss impossible across `bun server.ts` crashes — Telegram
-  re-delivers any updates with id ≥ persisted offset that are still in
-  its 24h buffer. Patch is independently idempotent (own marker:
-  `agentic-pod-launcher: offset persistence patch v1`) and fail-silent
-  on anchor drift in upstream `server.ts`.
+  `bot.api.getUpdates({ offset })` call before `bot.start()`. Ack-on-reply
+  semantics: a `_pendingUpdates` Map is populated in `handleInbound`
+  (right after `chat_id` is bound) and drained in the `case 'reply'` MCP
+  tool dispatcher only after `bot.api.sendMessage` returns successfully.
+  Net effect: if bun dies between an inbound being forwarded to claude
+  via MCP and claude calling the `reply` tool back, the offset stays
+  put — Telegram re-delivers the update on the next `bot.start()`. This
+  fixes the silent "message acknowledged but never replied" failure
+  mode that the prior pre-handler middleware shipped on the abandoned
+  `feat/telegram-reliability` branch had. Four hunks: helpers (B1),
+  replay-before-bot.start (B2), mark-pending in handleInbound (B3),
+  ack-pending in case 'reply' (B4). Marker:
+  `agentic-pod-launcher: offset persistence patch v1`.
+- telegram: primary-secondary lock to prevent sub-claude bun spawns from
+  killing the live primary. Upstream's stale-poller block sends `SIGTERM`
+  to whatever PID is in `bot.pid` whenever a new bun starts — designed
+  to clean up a crashed predecessor. But every claude session that loads
+  the telegram plugin (heartbeat-driven `claude --print`, claude-mem's
+  observer worker, Task subagents...) spawns its own `bun server.ts` that
+  hits the same code path and SIGTERMs the interactive session's bun
+  mid-turn. The primary-lock patch (a) refreshes `bot.pid`'s mtime every
+  5s via `setInterval`, and (b) makes the stale-poller exit cleanly
+  (`process.exit(0)`) when it sees a recent (`< 30s`) mtime — any new
+  instance that finds a fresh primary gives up instead of taking over.
+  Marker: `agentic-pod-launcher: primary lock patch v1`.
+- heartbeat: `ensure_heartbeat_config_dir` no longer symlinks
+  `settings.json` or `plugins/` into `~/.claude-heartbeat`. Instead it
+  writes a real `settings.json` with `enabledPlugins: {}` and
+  `extraKnownMarketplaces: {}` (preserving auth-mode + skip-perms-prompt
+  from the source) and creates an empty `plugins/` directory. Without
+  this, the heartbeat's `claude --print` inherited the agent's
+  `enabledPlugins.telegram@... = true` and spawned a sub-bun on every
+  cron tick (i.e. every 30 minutes) that took over the bot poller and
+  killed the interactive session's bun. With the primary-lock patch
+  above as belt-and-suspenders, but this one prevents the spawn at all.
 - telegram: tee `process.stderr` to
   `/workspace/scripts/heartbeat/logs/telegram-mcp-stderr.log` plus
   register `process.on('uncaughtException')` and

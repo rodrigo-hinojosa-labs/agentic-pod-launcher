@@ -109,22 +109,56 @@ invoke_notifier() {
 # ensure_heartbeat_config_dir — prepare an isolated CLAUDE_CONFIG_DIR for
 # the ephemeral heartbeat session so it never touches the interactive
 # agent session (its channels/bot.pid, session history, MCP auth cache,
-# etc.). We symlink the files that must be shared (OAuth credentials,
-# user settings, plugin cache) and give the heartbeat its own empty
-# channels/sessions/cache dirs. Idempotent — re-running fixes missing
-# links but never clobbers existing real files.
+# etc.). Auth + .claude.json must be shared (same OAuth tokens, same
+# global config); settings.json is REWRITTEN with all plugins disabled
+# and plugins/ is left as an empty dir. Idempotent — re-running rewrites
+# settings.json from src and clears stale symlinks.
+#
+# Why settings.json + plugins/ are NOT symlinked anymore: the shared
+# settings.json carries enabledPlugins.telegram@... = true (plus any
+# other plugins the user opted into). With those enabled and the
+# plugins/ cache reachable, claude --print spawns the channel plugin's
+# MCP server (bun server.ts). The new bun's stale-poller block
+# (server.ts:90-96) sends SIGTERM to the agent session's bun by PID,
+# killing it mid-turn and dropping any reply in flight. The heartbeat
+# only needs a plain claude session for its status-check prompt — no
+# plugins required.
 ensure_heartbeat_config_dir() {
   local src="$HOME/.claude"
   local dst="$HOME/.claude-heartbeat"
   [ -d "$src" ] || return 1
   mkdir -p "$dst"
-  # Share auth, config, user-level settings, plugin cache.
+  # Auth + .claude.json: shared via symlink (single source of truth).
   local f
-  for f in .credentials.json .claude.json settings.json plugins; do
+  for f in .credentials.json .claude.json; do
     if [ -e "$src/$f" ]; then
       ln -sfn "$src/$f" "$dst/$f"
     fi
   done
+  # settings.json: real file (not a symlink) with plugins disabled.
+  # Clear any stale symlink from a previous version of this function.
+  if [ -L "$dst/settings.json" ]; then
+    rm -f "$dst/settings.json"
+  fi
+  if [ -f "$src/settings.json" ] && command -v jq >/dev/null 2>&1; then
+    local tmp_settings
+    tmp_settings=$(mktemp 2>/dev/null) || tmp_settings="$dst/.settings.json.tmp"
+    if jq '.enabledPlugins = {} | .extraKnownMarketplaces = {}' \
+        "$src/settings.json" > "$tmp_settings" 2>/dev/null; then
+      mv "$tmp_settings" "$dst/settings.json"
+      chmod 0644 "$dst/settings.json" 2>/dev/null || true
+    else
+      rm -f "$tmp_settings"
+      printf '{"enabledPlugins":{},"extraKnownMarketplaces":{}}\n' > "$dst/settings.json"
+    fi
+  elif [ ! -f "$dst/settings.json" ]; then
+    printf '{"enabledPlugins":{},"extraKnownMarketplaces":{}}\n' > "$dst/settings.json"
+  fi
+  # plugins/: empty dir (not a symlink). Clear any stale symlink.
+  if [ -L "$dst/plugins" ]; then
+    rm -f "$dst/plugins"
+  fi
+  mkdir -p "$dst/plugins"
   # Isolate runtime state. An empty dir per-heartbeat ensures no cross-
   # contamination with the interactive agent's live channels plugin
   # (bot.pid, access.json).
