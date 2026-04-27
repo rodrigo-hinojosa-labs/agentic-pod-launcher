@@ -409,6 +409,21 @@ ATLASSIAN_${upper}_TOKEN=${ws_token}
   use_defaults=$(ask_yn "Use default opinionated agent principles? (recommended)" "y")
   echo ""
 
+  # ── 7.5 Knowledge vault (Karpathy LLM Wiki) ────────
+  echo "▸ Knowledge vault"
+  echo "  Per-agent Obsidian-style vault at .state/.vault/. Three-layer Karpathy"
+  echo "  pattern (raw_sources / wiki / schema). Coexists with claude-mem."
+  echo ""
+  local vault_enabled vault_seed vault_mcp_enabled
+  vault_enabled=$(ask_yn "Enable knowledge vault?" "y")
+  vault_seed=false
+  vault_mcp_enabled=false
+  if [ "$vault_enabled" = "true" ]; then
+    vault_seed=$(ask_yn "  Seed initial vault structure (templates, schema, log)?" "y")
+    vault_mcp_enabled=$(ask_yn "  Register MCPVault server (@bitbonsai/mcpvault)?" "y")
+  fi
+  echo ""
+
   # ── 8. Optional plugins ─────────────────────────────
   # Iterate the optional descriptors and let the user opt in. Defaults
   # (telegram, claude-mem, context7, claude-md-management, security-guidance)
@@ -484,6 +499,9 @@ ATLASSIAN_${upper}_TOKEN=${ws_token}
     [ "$hb_enabled" = "true" ] && echo " 15) Heartbeat interval: $hb_interval"
     [ "$hb_enabled" = "true" ] && echo " 16) Heartbeat prompt:   $hb_prompt"
     echo " 17) Default princ:     $use_defaults"
+    echo "     Vault enabled:    $vault_enabled"
+    [ "$vault_enabled" = "true" ] && echo "     Vault seed:       $vault_seed"
+    [ "$vault_enabled" = "true" ] && echo "     Vault MCP:        $vault_mcp_enabled"
     echo " 18) GitHub fork:       $fork_enabled"
     if [ "$fork_enabled" = "true" ]; then
       echo " 19) Fork owner:        $fork_owner"
@@ -634,6 +652,18 @@ $atlassian_yaml
   github:
     enabled: $github_enabled
     email: "$github_email"
+
+vault:
+  enabled: $vault_enabled
+  path: .state/.vault
+  seed_skeleton: $vault_seed
+  initial_sources: []
+  mcp:
+    enabled: $vault_mcp_enabled
+    server: vault
+  schema:
+    frontmatter_required: true
+    log_format: "## [{date}] {op} | {title}"
 
 $plugins_yaml
 EOF
@@ -935,19 +965,28 @@ scaffold_with_fork() {
   echo "  ✓ branch: $branch"
 }
 
-# Mirror plugin-catalog.sh and modules/plugins/ into docker/ so the
-# Dockerfile (build context ./docker/) can COPY them. Idempotent —
-# overwrites the docker/ copy on each call.
+# Mirror plugin-catalog.sh, modules/plugins/, vault.sh and modules/vault-skeleton/
+# into docker/ so the Dockerfile (build context ./docker/) can COPY them.
+# Idempotent — overwrites the docker/ copy on each call.
 mirror_catalog_to_docker() {
   local dest="$1"
   local src_lib="$dest/scripts/lib/plugin-catalog.sh"
   local src_plugins="$dest/modules/plugins"
+  local src_vault_lib="$dest/scripts/lib/vault.sh"
+  local src_vault_skel="$dest/modules/vault-skeleton"
   [ -f "$src_lib" ] || return 0
   [ -d "$src_plugins" ] || return 0
   mkdir -p "$dest/docker/scripts/lib" "$dest/docker/modules"
   cp "$src_lib" "$dest/docker/scripts/lib/plugin-catalog.sh"
   rm -rf "$dest/docker/modules/plugins"
   cp -R "$src_plugins" "$dest/docker/modules/plugins"
+  if [ -f "$src_vault_lib" ]; then
+    cp "$src_vault_lib" "$dest/docker/scripts/lib/vault.sh"
+  fi
+  if [ -d "$src_vault_skel" ]; then
+    rm -rf "$dest/docker/modules/vault-skeleton"
+    cp -R "$src_vault_skel" "$dest/docker/modules/vault-skeleton"
+  fi
 }
 
 # Copy system files to the destination, move agent.yml/.env, chdir, git init.

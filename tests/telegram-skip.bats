@@ -42,6 +42,7 @@ y
 30m
 ok
 y
+n
 proceed
 EOF
   [ "$status" -eq 0 ]

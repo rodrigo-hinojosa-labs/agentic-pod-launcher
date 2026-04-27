@@ -160,6 +160,13 @@ RUN chmod +x /opt/agent-admin/scripts/heartbeatctl \
 COPY scripts/lib/plugin-catalog.sh /opt/agent-admin/scripts/lib/plugin-catalog.sh
 COPY modules/plugins/ /opt/agent-admin/modules/plugins/
 
+# Vault assets. Same mirroring scheme as plugin-catalog.sh. The skeleton is
+# the source of truth for the per-agent vault, copied into <vault_path> at
+# first boot if vault.enabled and vault.seed_skeleton are true (and the dir
+# is empty). vault.sh is sourced by start_services.sh for boot-time seed.
+COPY scripts/lib/vault.sh /opt/agent-admin/scripts/lib/vault.sh
+COPY modules/vault-skeleton/ /opt/agent-admin/modules/vault-skeleton/
+
 # Workspace is bind-mounted at runtime; /home/agent is a named volume.
 WORKDIR /workspace
 

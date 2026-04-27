@@ -42,6 +42,13 @@ mcps:
   atlassian: []
   github:
     enabled: false
+vault:
+  enabled: true
+  path: .state/.vault
+  seed_skeleton: true
+  mcp:
+    enabled: true
+    server: vault
 plugins:
   - claude-mem@thedotmack
 EOF
@@ -77,6 +84,17 @@ teardown() { teardown_tmp_dir; }
   cp .mcp.json .mcp.json.first
   echo 'n' | ./setup.sh --regenerate
   diff .mcp.json .mcp.json.first
+}
+
+@test "--regenerate emits vault MCP and Vault row in CLAUDE.md when vault.enabled" {
+  cd "$TMP_TEST_DIR"
+  echo 'n' | ./setup.sh --regenerate
+  [ -f .mcp.json ]
+  [ -f CLAUDE.md ]
+  jq -e '.mcpServers.vault' .mcp.json > /dev/null
+  [ "$(jq -r '.mcpServers.vault.args[1]' .mcp.json)" = "@bitbonsai/mcpvault@latest" ]
+  grep -q "Vault" CLAUDE.md
+  grep -q "Karpathy" CLAUDE.md
 }
 
 @test "--non-interactive regenerate skips plugin prompt" {

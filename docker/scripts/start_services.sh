@@ -23,9 +23,55 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [start_services] $*" >&2; }
 [ -f /opt/agent-admin/scripts/lib/plugin-catalog.sh ] \
   && source /opt/agent-admin/scripts/lib/plugin-catalog.sh
 
+# Vault helpers (image-baked). Provides vault_ensure_paths,
+# vault_seed_if_empty, vault_log_append. Sourced no-op if missing.
+# shellcheck source=/dev/null
+[ -f /opt/agent-admin/scripts/lib/vault.sh ] \
+  && source /opt/agent-admin/scripts/lib/vault.sh
+
+# seed_vault_if_needed — at first boot, copy the skeleton into the per-agent
+# vault dir if vault.enabled + vault.seed_skeleton and the target is empty.
+# Always (re)create the convenience symlink /home/agent/vault → real path.
+seed_vault_if_needed() {
+  local agent_yml="/workspace/agent.yml"
+  [ -f "$agent_yml" ] || return 0
+  local vault_enabled vault_path vault_seed
+  vault_enabled=$(yq -r '.vault.enabled // false' "$agent_yml")
+  [ "$vault_enabled" = "true" ] || return 0
+
+  vault_path=$(yq -r '.vault.path // ".state/.vault"' "$agent_yml")
+  vault_seed=$(yq -r '.vault.seed_skeleton // false' "$agent_yml")
+
+  # The bind-mount maps <workspace>/.state/ → /home/agent/, so .state/.vault
+  # lives at /home/agent/.vault inside the container. For non-default paths,
+  # strip the .state/ prefix and rebase under /home/agent/.
+  local vault_root="/home/agent/.vault"
+  if [ "$vault_path" != ".state/.vault" ]; then
+    vault_root="/home/agent/${vault_path#.state/}"
+  fi
+
+  if command -v vault_ensure_paths >/dev/null 2>&1; then
+    vault_ensure_paths "$vault_root" || log "WARN: vault_ensure_paths failed"
+  else
+    mkdir -p "$vault_root"
+  fi
+
+  if [ "$vault_seed" = "true" ] && [ -d /opt/agent-admin/modules/vault-skeleton ]; then
+    if command -v vault_seed_if_empty >/dev/null 2>&1; then
+      vault_seed_if_empty "$vault_root" /opt/agent-admin/modules/vault-skeleton \
+        && log "vault: skeleton ready at $vault_root"
+    fi
+  fi
+
+  if [ -d "$vault_root" ] && [ ! -e /home/agent/vault ]; then
+    ln -s "$vault_root" /home/agent/vault \
+      && log "vault: symlink /home/agent/vault → $vault_root"
+  fi
+}
+
 # Boot-time side effects (heartbeat schedule reload + stale telegram
-# pairing cleanup) live in this function so the script can be sourced
-# in tests without firing them. Called from the runtime block below.
+# pairing cleanup + vault seed) live in this function so the script can be
+# sourced in tests without firing them. Called from the runtime block below.
 boot_side_effects() {
   # Reload the heartbeat schedule from agent.yml. Tolerate reload failure —
   # the default crontab from entrypoint is still in place.
@@ -53,6 +99,9 @@ boot_side_effects() {
       rm -f "$tmp_access"
     fi
   fi
+
+  # Seed the per-agent vault if configured. Idempotent — no-op once seeded.
+  seed_vault_if_needed || log "WARN: seed_vault_if_needed failed (non-fatal)"
 }
 
 # ── 2. Config ─────────────────────────────────────────────
