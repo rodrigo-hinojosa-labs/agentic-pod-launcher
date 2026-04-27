@@ -110,7 +110,21 @@ Secrets live in `.env` (never committed).
 
 ## Memory
 
-This workspace is your home. Each session you start from scratch — files are your continuity.
+This workspace is your home. Each session you start from scratch — files are your continuity. Three layers persist across restarts; pick the right one for what you're saving:
+
+| Layer | Path | Use it for |
+|---|---|---|
+| **Auto-memoria** | `~/.claude/projects/-workspace/memory/` | Atomic facts about the user, preferences, project state. Indexed by `MEMORY.md` (loaded into every session). Write tipped memories: `user_*`, `feedback_*`, `project_*`, `reference_*`. |
+| **`claude-mem`** | `~/.claude-mem/*.db` | Auto-captured observations from your transcripts (passive). You don't write here; the worker daemon does. Query via `mem-search`, `smart_search`, `timeline`. |{{#if VAULT_ENABLED}}
+| **Vault** | `~/.vault/` (alias `~/vault`) | Curated, synthetic, compounding knowledge derived from external sources. Karpathy's three-layer LLM Wiki pattern. Pages you'll revisit, refine, link, and lint. See `~/.vault/CLAUDE.md` for the full schema and the ingest/query/lint protocols. |{{/if}}
+
+Heuristic:
+
+- "Save this fact about the user / project" → auto-memoria.
+- "What did we do last week?" → `claude-mem` (transcript-derived).{{#if VAULT_ENABLED}}
+- "Build a knowledge base on X / ingest this article / synthesize across sources" → vault.{{/if}}
+
+If unsure, ask. Don't double-write across layers.{{#if VAULT_ENABLED}} The vault has its own `CLAUDE.md` at `~/.vault/CLAUDE.md` that is authoritative for vault conventions (frontmatter spec, page types, wikilink format) — read it before writing wiki pages.{{/if}}
 
 ## Permission Mode (self-service)
 

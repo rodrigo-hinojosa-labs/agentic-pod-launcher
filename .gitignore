@@ -29,3 +29,9 @@ node_modules/
 
 # Git worktrees
 /.worktrees/
+
+# Personal scratch directories that the user keeps inside this repo
+# folder but are not part of the launcher source. Defensive — never
+# commit these by accident.
+/obsidean-feature/
+/Agentic Pod Lanuncher/

@@ -36,6 +36,7 @@ y
 15m
 Check status
 y
+n
 proceed
 EOF
   [ "$status" -eq 0 ]

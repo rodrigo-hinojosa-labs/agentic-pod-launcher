@@ -37,6 +37,7 @@ y
 30m
 ok
 y
+n
 proceed
 EOF
 }
@@ -78,6 +79,7 @@ y
 30m
 ok
 y
+n
 proceed
 EOF
   [ "$status" -eq 0 ]
@@ -154,6 +156,7 @@ n
 n
 n
 n
+n
 y
 proceed
 EOF
@@ -175,4 +178,71 @@ EOF
   grep -q "security-guidance@claude-plugins-official" "$dest/NEXT_STEPS.md"
   # Description text from a default descriptor must surface in the block.
   grep -q "Persistent memory across sessions" "$dest/NEXT_STEPS.md"
+}
+
+@test "wizard with vault disabled writes vault.enabled=false and omits vault MCP" {
+  local dest="$TMP_TEST_DIR/scaffold-no-vault"
+  run run_wizard_with_dest "$dest"
+  [ "$status" -eq 0 ]
+  [ "$(yq -r '.vault.enabled' "$dest/agent.yml")" = "false" ]
+  [ "$(yq -r '.vault.mcp.enabled' "$dest/agent.yml")" = "false" ]
+  [ "$(jq -r '.mcpServers.vault // "absent"' "$dest/.mcp.json")" = "absent" ]
+}
+
+@test "wizard with vault enabled writes vault block + emits vault MCP + memory section" {
+  local dest="$TMP_TEST_DIR/scaffold-vault-on"
+  cd "$TMP_TEST_DIR/installer"
+  ./setup.sh --destination "$dest" <<EOF
+vault-bot
+VaultBot
+r
+v
+Alice
+Alice
+UTC
+a@b.com
+en
+host
+n
+n
+none
+n
+n
+y
+30m
+ok
+y
+y
+y
+y
+n
+n
+n
+n
+n
+proceed
+EOF
+  [ -f "$dest/agent.yml" ]
+  [ "$(yq -r '.vault.enabled' "$dest/agent.yml")" = "true" ]
+  [ "$(yq -r '.vault.seed_skeleton' "$dest/agent.yml")" = "true" ]
+  [ "$(yq -r '.vault.mcp.enabled' "$dest/agent.yml")" = "true" ]
+  [ "$(yq -r '.vault.mcp.server' "$dest/agent.yml")" = "vault" ]
+  [ "$(yq -r '.vault.path' "$dest/agent.yml")" = ".state/.vault" ]
+  [ "$(jq -r '.mcpServers.vault.command' "$dest/.mcp.json")" = "npx" ]
+  [ "$(jq -r '.mcpServers.vault.args[1]' "$dest/.mcp.json")" = "@bitbonsai/mcpvault@latest" ]
+  [ "$(jq -r '.mcpServers.vault.args[2]' "$dest/.mcp.json")" = "/home/agent/.vault" ]
+  grep -q "Vault" "$dest/CLAUDE.md"
+  grep -q "~/.vault/" "$dest/CLAUDE.md"
+}
+
+@test "scaffold mirrors vault.sh + modules/vault-skeleton/ into docker/ build context" {
+  local dest="$TMP_TEST_DIR/scaffold-vault-mirror"
+  run run_wizard_with_dest "$dest"
+  [ "$status" -eq 0 ]
+  [ -f "$dest/docker/scripts/lib/vault.sh" ]
+  [ -d "$dest/docker/modules/vault-skeleton" ]
+  [ -f "$dest/docker/modules/vault-skeleton/CLAUDE.md" ]
+  [ -d "$dest/docker/modules/vault-skeleton/raw_sources" ]
+  [ -d "$dest/docker/modules/vault-skeleton/wiki/concepts" ]
+  [ -f "$dest/docker/modules/vault-skeleton/_templates/summary.md" ]
 }
