@@ -34,6 +34,11 @@
       "env": {
         "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PAT}"
       }
+    }{{/if}}{{#if VAULT_MCP_ENABLED}},
+    "vault": {
+      "command": "npx",
+      "args": ["-y", "@bitbonsai/mcpvault@latest", "/home/agent/.vault"],
+      "env": {}
     }{{/if}}
   }
 }
