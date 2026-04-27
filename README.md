@@ -114,12 +114,13 @@ The supervisor's `ensure_all_plugins_installed` runs `claude plugin install <spe
 
 ### Memory persistence
 
-The agent has two independent memory layers, both surviving container restarts because they live under the bind-mounted workspace:
+The agent has up to three independent memory layers, all surviving container restarts because they live under the bind-mounted workspace:
 
 - **Auto-memory** (`<workspace>/.state/.claude/projects/-workspace/memory/`) — Claude's first-party file-based memory. The agent writes typed memories (user, feedback, project, reference) and an index file `MEMORY.md` that gets loaded into context on every session start. `claude --continue` resumes the most recent session and the memory dir is the same on either side of a restart.
 - **claude-mem** (`<workspace>/.state/.claude-mem/claude-mem.db`) — the `claude-mem@thedotmack` plugin's SQLite-backed observation store with WAL-mode durability. Provides `mem-search`, `smart_search`, `timeline`, and corpus tools that surface earlier sessions' content.
+- **Knowledge vault** (`<workspace>/.state/.vault/`, opt-in at scaffold) — a per-agent Obsidian-style wiki following Andrej Karpathy's [LLM Wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f): immutable `raw_sources/`, LLM-owned `wiki/` with the six page types from the gist (summaries, entities, concepts, comparisons, overviews, synthesis), and a `CLAUDE.md` schema. When `vault.mcp.enabled` is true, the `vault` MCP server (package `@bitbonsai/mcpvault`) exposes structured note operations on top of native file access. Full reference: [`docs/vault.md`](docs/vault.md).
 
-Both layers stay populated across `docker compose restart`, image rebuilds, and `setup.sh --uninstall` (the no-flag form preserves state). They're cleared only by `setup.sh --uninstall --purge` (which also removes `agent.yml` + `.env`) or `--nuke` (which deletes the whole workspace).
+All layers stay populated across `docker compose restart`, image rebuilds, and `setup.sh --uninstall` (the no-flag form preserves state). They're cleared only by `setup.sh --uninstall --purge` (which also removes `agent.yml` + `.env`) or `--nuke` (which deletes the whole workspace).
 
 [`docs/state-layout.md`](docs/state-layout.md) maps every persistent file to its concrete host and container path, including OAuth credentials, plugin cache, Telegram channel state, session JSONL logs, and the heartbeat's isolated config dir.
 
@@ -146,7 +147,8 @@ HOST ~/agents/<name>/                     ← workspace IS the agent
   └── .state/                             ← bind-mounted to /home/agent
        ├── .claude/                       ← OAuth, sessions, plugin cache, channels
        ├── .claude-mem/                   ← claude-mem SQLite + WAL
-       └── .claude-heartbeat/             ← heartbeat's isolated CLAUDE_CONFIG_DIR
+       ├── .claude-heartbeat/             ← heartbeat's isolated CLAUDE_CONFIG_DIR
+       └── .vault/                        ← knowledge vault (opt-in, Karpathy LLM Wiki)
 
 CONTAINER (alpine 3.20, agentic-pod:latest)
   ├── tini (PID 1)

@@ -18,7 +18,7 @@ Anything under `<workspace>/.state/` on the host is the same bytes as `/home/age
 
 `.state/` is gitignored. It contains OAuth credentials and Telegram tokens — never commit it.
 
-## Memory — two independent layers
+## Memory — three independent layers
 
 ### Layer A — first-party auto-memory (Markdown files)
 
@@ -69,6 +69,57 @@ Layout:
 ```
 
 Tools that consult this layer: `mem-search`, `smart_search`, `smart_outline`, `smart_unfold`, `query_corpus`, `timeline`, `get_observations`. The worker daemon (`bun .../worker-service.cjs --daemon`) processes Claude transcripts in the background and appends observations to the `.db`.
+
+### Layer C — knowledge vault (Karpathy LLM Wiki, opt-in)
+
+| Host | Container |
+|---|---|
+| `<workspace>/.state/.vault/` | `/home/agent/.vault/` (real path); `/home/agent/vault/` → symlink |
+
+Per-agent file-based wiki following Karpathy's three-layer pattern (raw sources / wiki / schema). Opt-in via the wizard's "▸ Knowledge vault" prompts; controlled by `agent.yml.vault.enabled`. Coexists with auto-memoria (Layer A) and claude-mem (Layer B): used for **curated, synthetic, compounding knowledge derived from external sources**, not atomic facts (auto-memoria) or passive transcript observations (claude-mem).
+
+Layout (when seeded):
+
+```
+.vault/
+├── raw_sources/             ← Layer 1 — immutable source documents (LLM reads, never edits)
+│   └── README.md
+├── wiki/                    ← Layer 2 — LLM-owned. Six type subdirs verbatim from Karpathy:
+│   ├── summaries/           ← one per ingested raw source
+│   ├── entities/            ← concrete things (people, products, tools, projects, places)
+│   ├── concepts/            ← abstract ideas (frameworks, principles, definitions)
+│   ├── comparisons/         ← X vs Y
+│   ├── overviews/           ← high-level synthesis of a domain
+│   └── synthesis/           ← cross-cutting integration; meta-pages
+├── _templates/              ← operational boilerplate the LLM reads when creating pages
+├── index.md                 ← catalog by type (LLM updates on every ingest/query)
+├── log.md                   ← chronological append-only — `## [YYYY-MM-DD] {op} | <title>`
+├── CLAUDE.md                ← Layer 3 schema — frontmatter spec, ingest/query/lint protocols
+└── .obsidian/               ← optional Obsidian config (user-owned, empty at scaffold)
+```
+
+Frontmatter on Layer 2 pages is unified:
+
+```yaml
+---
+title: ""
+type: summary | entity | concept | comparison | overview | synthesis
+sources: []          # paths under raw_sources/
+related: []          # wikilinks like [[concepts/foo]]
+created: YYYY-MM-DD
+updated: YYYY-MM-DD
+status: draft | active | stale | superseded
+tags: []
+---
+```
+
+Wikilinks use `[[<type>/<title>]]` form (slugified title). The LLM maintains them; backlinks are not auto-generated.
+
+When `agent.yml.vault.mcp.enabled` is true, `.mcp.json` exposes the vault as the `vault` MCP server (package `@bitbonsai/mcpvault` — zero dependencies, no Obsidian app required). Tools: `read_note`, `write_note`, `patch_note`, `delete_note`, `move_note`, `move_file`, `list_directory`, `read_multiple_notes`, `search_notes`, `get_frontmatter`, `update_frontmatter`, `get_notes_info`, `get_vault_stats`, `manage_tags`.
+
+The seed comes from `modules/vault-skeleton/` in this repo, COPYd into the image at `/opt/agent-admin/modules/vault-skeleton/` and rsynced into `/home/agent/.vault/` on first container boot if `vault.seed_skeleton` is true and the vault dir is empty (idempotent — no-op once populated). The convenience symlink `/home/agent/vault → /home/agent/.vault` is created on every boot.
+
+Full feature documentation: [`docs/vault.md`](vault.md).
 
 ## Conversation history — JSONL session logs
 
@@ -272,3 +323,4 @@ If the host's UID/GID differs from the source, edit `docker-compose.yml`'s build
 - [`docs/architecture.md`](architecture.md) — full container architecture, render engine, lifecycle phases.
 - [`docs/heartbeatctl.md`](heartbeatctl.md) — every `heartbeatctl` subcommand, their effect on `agent.yml` and derived files.
 - [`docs/getting-started.md`](getting-started.md) — first-boot walkthrough.
+- [`docs/vault.md`](vault.md) — knowledge vault feature reference (Karpathy LLM Wiki).
