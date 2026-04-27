@@ -1,0 +1,63 @@
+version: 1
+agent:
+  name: dockbot
+  display_name: "DockBot 🐳"
+  role: "test agent for docker mode"
+  vibe: "terse"
+  use_default_principles: true
+user:
+  name: "Alice Example"
+  nickname: "Alice"
+  timezone: "UTC"
+  email: "alice@example.com"
+  language: "en"
+deployment:
+  host: "testhost"
+  workspace: "/home/test/agents/dockbot"
+  install_service: true
+  claude_cli: "claude"
+docker:
+  image_tag: "agent-admin:latest"
+  uid: 1000
+  gid: 1000
+  state_volume: "dockbot-state"
+  base_image: "alpine:3.20"
+claude:
+  config_dir: "/home/agent/.claude"
+  profile_new: true
+notifications:
+  channel: telegram
+features:
+  heartbeat:
+    enabled: true
+    interval: "30m"
+    timeout: 300
+    retries: 1
+    default_prompt: "Status check — return a short plain-text report (uptime, notable issues). No tool use; your stdout is forwarded verbatim to the notifier."
+mcps:
+  defaults:
+    - fetch
+    - time
+  atlassian:
+    - name: work
+      url: "https://work.atlassian.net"
+      email: "alice@work.com"
+    - name: personal
+      url: "https://personal.atlassian.net"
+      email: "alice@personal.com"
+  github:
+    enabled: false
+    email: ""
+plugins:
+  - telegram@claude-plugins-official
+vault:
+  enabled: true
+  path: .state/.vault
+  seed_skeleton: true
+  initial_sources: []
+  mcp:
+    enabled: true
+    server: vault
+  schema:
+    frontmatter_required: true
+    log_format: "## [{date}] {op} | {title}"
