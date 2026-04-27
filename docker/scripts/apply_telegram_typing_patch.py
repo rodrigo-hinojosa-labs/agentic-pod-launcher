@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Patch the upstream claude-plugins-official/telegram `server.ts` with three
+Patch the upstream claude-plugins-official/telegram `server.ts` with four
 independent fixes that improve Telegram chat reliability + observability:
 
 1. Typing refresh patch (v1) — refreshes the "typing..." action every 4s
@@ -8,11 +8,14 @@ independent fixes that improve Telegram chat reliability + observability:
    sendChatAction that auto-expires after ~5s.
 
 2. Offset persistence patch (v1) — persists the Telegram update_id offset
-   to ~/.claude/channels/telegram/last-offset.json after every processed
-   message and replays from disk on startup. Makes message loss impossible
-   regardless of how often `bun server.ts` crashes: the next getUpdates
-   call uses the persisted offset, so any updates Telegram still has in
-   its 24h buffer are re-delivered.
+   to ~/.claude/channels/telegram/last-offset.json on each successful
+   reply (ack-on-reply, not ack-on-inbound) and replays from disk on
+   startup. Makes message loss impossible regardless of how often
+   `bun server.ts` crashes: the next getUpdates call uses the persisted
+   offset, so any updates Telegram still has in its 24h buffer that
+   weren't yet replied are re-delivered. Four hunks: helpers (B1),
+   replay-before-bot.start (B2), mark-pending in handleInbound (B3),
+   ack-pending in case 'reply' (B4).
 
 3. Stderr-capture patch (v1) — tees process.stderr to
    /workspace/scripts/heartbeat/logs/telegram-mcp-stderr.log AND wires
@@ -20,11 +23,23 @@ independent fixes that improve Telegram chat reliability + observability:
    bun crashes leave no forensic evidence (the stderr the existing
    handlers write to is consumed by claude's MCP transport and dropped).
 
+4. Primary lock patch (v1) — turns upstream's "any new instance kills any
+   stale PID" into "primary-secondary with mtime heartbeat". Without this,
+   any time claude spawns a sub-claude that loads the telegram plugin
+   (claude-mem worker, Task subagent, etc.), the sub-claude's bun runs
+   the stale-poller block at startup, sees the live primary's PID,
+   SIGTERMs it, takes over polling for a few seconds, then dies when the
+   sub-claude exits — leaving the main session's MCP transport pointing
+   at a dead bun and Telegram messages effectively undeliverable until
+   the watchdog respawn cycle catches up. Two hunks: a guard before the
+   SIGTERM that exits cleanly if PID_FILE was modified within 30s (live
+   primary), and a setInterval that refreshes PID_FILE every 5s so
+   secondaries see a recent mtime.
+
 Each patch is independently idempotent (own marker comment) and fail-silent
 on anchor drift (logs WARN to stderr, skips THAT patch only, leaves the
-other two free to apply). A single run applies whichever patches haven't
-yet been applied; repeated runs are no-ops if all three markers are
-present.
+others free to apply). A single run applies whichever patches haven't yet
+been applied; repeated runs are no-ops if all four markers are present.
 
 Usage:
     apply_telegram_typing_patch.py /path/to/server.ts
@@ -38,6 +53,7 @@ from pathlib import Path
 MARKER_TYPING = "agentic-pod-launcher: typing refresh patch v1"
 MARKER_OFFSET = "agentic-pod-launcher: offset persistence patch v1"
 MARKER_STDERR = "agentic-pod-launcher: stderr-capture patch v1"
+MARKER_PRIMARY = "agentic-pod-launcher: primary lock patch v1"
 
 TYPING_HELPERS = (
     "\n// " + MARKER_TYPING + "\n"
@@ -62,6 +78,7 @@ TYPING_HELPERS = (
 OFFSET_HELPERS = (
     "\n// " + MARKER_OFFSET + "\n"
     "const _OFFSET_FILE = '/home/agent/.claude/channels/telegram/last-offset.json'\n"
+    "const _pendingUpdates = new Map<string | number, number>()\n"
     "function _loadOffset(): number {\n"
     "  try {\n"
     "    const fs = require('node:fs')\n"
@@ -78,14 +95,19 @@ OFFSET_HELPERS = (
     "    fs.writeFileSync(_OFFSET_FILE, JSON.stringify({ offset: updateId + 1, ts: Date.now() }))\n"
     "  } catch {}\n"
     "}\n"
-)
-
-OFFSET_MIDDLEWARE = (
-    "\n// " + MARKER_OFFSET + " — post-handler middleware\n"
-    "bot.use(async (ctx, next) => {\n"
-    "  await next()\n"
-    "  if (typeof ctx.update?.update_id === 'number') _saveOffset(ctx.update.update_id)\n"
-    "})\n"
+    "function _markPending(chatId: string | number, updateId: number): void {\n"
+    "  // Latest-wins per chat. Bursts of msgs collapse to the newest update_id;\n"
+    "  // ack-on-reply then advances offset past the burst, which is correct as long as\n"
+    "  // claude has consumed all of them via the MCP notifications already dispatched.\n"
+    "  _pendingUpdates.set(chatId, updateId)\n"
+    "}\n"
+    "function _ackPending(chatId: string | number): void {\n"
+    "  const updateId = _pendingUpdates.get(chatId)\n"
+    "  if (typeof updateId === 'number') {\n"
+    "    _saveOffset(updateId)\n"
+    "    _pendingUpdates.delete(chatId)\n"
+    "  }\n"
+    "}\n"
 )
 
 OFFSET_REPLAY = (
@@ -96,6 +118,34 @@ OFFSET_REPLAY = (
     "          try { await bot.api.getUpdates({ offset: _resume, limit: 1, timeout: 0 }) } catch {}\n"
     "        }\n"
     "      }\n"
+)
+
+OFFSET_MARK = (
+    "  // " + MARKER_OFFSET + " — mark pending update for ack-on-reply\n"
+    "  if (typeof ctx.update?.update_id === 'number') _markPending(chat_id, ctx.update.update_id)\n"
+)
+
+OFFSET_ACK = (
+    "        // " + MARKER_OFFSET + " — ack pending update; advances disk offset only after a successful reply\n"
+    "        _ackPending(chat_id)\n"
+)
+
+PRIMARY_GUARD = (
+    "    // " + MARKER_PRIMARY + " — exit cleanly if PID_FILE mtime is fresh (live primary)\n"
+    "    try {\n"
+    "      const _ageMs = Date.now() - statSync(PID_FILE).mtimeMs\n"
+    "      if (_ageMs < 30000) {\n"
+    "        process.stderr.write(`telegram channel: primary pid=${stale} active (heartbeat ${Math.round(_ageMs/1000)}s ago); exiting as secondary\\n`)\n"
+    "        process.exit(0)\n"
+    "      }\n"
+    "    } catch {}\n"
+)
+
+PRIMARY_HEARTBEAT = (
+    "// " + MARKER_PRIMARY + " — refresh PID_FILE mtime so secondary instances detect us\n"
+    "setInterval(() => {\n"
+    "  try { writeFileSync(PID_FILE, String(process.pid)) } catch {}\n"
+    "}, 5000).unref()\n"
 )
 
 STDERR_HOOK = (
@@ -180,11 +230,30 @@ def apply_typing(src: str) -> tuple[str, bool]:
 
 
 def apply_offset(src: str) -> tuple[str, bool]:
-    """Persist Telegram update_id offset to disk + replay on startup. Returns (new_src, applied)."""
+    """Persist Telegram update_id offset to disk + replay on startup, ack-on-reply.
+
+    Four hunks, all gated by MARKER_OFFSET:
+      B1 — helpers + pendingUpdates Map (top-level declarations).
+      B2 — pre-poll getUpdates with persisted offset before bot.start.
+      B3 — _markPending in handleInbound right after chat_id is bound.
+      B4 — _ackPending in case 'reply' right before the reply tool returns
+            success, gated on the chunk loop having completed without throw.
+
+    Why ack-on-reply (not on inbound delivery): an earlier middleware-based
+    save advanced the offset as soon as bun forwarded the inbound to claude
+    via MCP. If bun then died before claude could call the `reply` MCP tool
+    (heartbeat-driven SIGTERM, MCP idle close, watchdog respawn, ...), the
+    on-disk offset said "processed" so Telegram never redelivered, and the
+    user got no answer. Acking only on a successful reply means Telegram
+    redelivers anything claude didn't manage to reply to — at-least-once
+    end-to-end instead of just at-least-once on inbound.
+
+    Returns (new_src, applied).
+    """
     if MARKER_OFFSET in src:
         return src, False
-    # Hunk B1: offset helpers — anchor on `let botUsername = ''`. If the
-    # typing patch already inserted there, this lands BETWEEN the original
+    # Hunk B1: helpers — anchor on `let botUsername = ''`. If the typing
+    # patch already inserted after that line, this lands BETWEEN the original
     # line and the typing block. Order doesn't matter (both are top-level
     # declarations referencing `bot` which is created earlier on line 86).
     new_src, n1 = re.subn(
@@ -196,33 +265,49 @@ def apply_offset(src: str) -> tuple[str, bool]:
     if n1 != 1:
         warn("offset hunk1 anchor (let botUsername) not found — skipping offset patch (message loss across crashes will continue)")
         return src, False
-    # Hunk B2: post-handler middleware. Anchor on `const bot = new Bot(TOKEN)`,
-    # insert AFTER. `await next()` first guarantees the handler completed
-    # (message delivered to claude via MCP) before we save the offset, which
-    # makes resume strictly at-least-once even on hard kill.
-    new_src, n2 = re.subn(
-        r"(const bot = new Bot\(TOKEN\)\n)",
-        r"\1" + OFFSET_MIDDLEWARE,
-        new_src,
-        count=1,
-    )
-    if n2 != 1:
-        warn("offset hunk2 anchor (const bot = new Bot) not found — skipping offset patch (message loss across crashes will continue)")
-        return src, False
-    # Hunk B3: pre-position Telegram cursor server-side BEFORE bot.start.
+    # Hunk B2: pre-position Telegram cursor server-side BEFORE bot.start.
     # Grammy's bot.start does not accept an offset option (PollingOptions
     # only exposes limit/timeout/allowed_updates/drop_pending_updates/onStart),
     # so we fire one synchronous getUpdates with the persisted offset right
     # before bot.start to confirm everything < offset and have Telegram
     # return updates >= offset on the next poll.
-    new_src, n3 = re.subn(
+    new_src, n2 = re.subn(
         r"(      await bot\.start\(\{\n)",
         OFFSET_REPLAY + r"\1",
         new_src,
         count=1,
     )
+    if n2 != 1:
+        warn("offset hunk2 anchor (await bot.start) not found — skipping offset patch (message loss across crashes will continue)")
+        return src, False
+    # Hunk B3: mark the inbound as pending in handleInbound, right after
+    # chat_id is bound. Every inbound (text/photo/document/voice/...) flows
+    # through handleInbound, so this single injection covers all of them.
+    # `ctx.update.update_id` is always populated for bot updates.
+    new_src, n3 = re.subn(
+        r"(  const chat_id = String\(ctx\.chat!\.id\)\n)",
+        r"\1" + OFFSET_MARK,
+        new_src,
+        count=1,
+    )
     if n3 != 1:
-        warn("offset hunk3 anchor (await bot.start) not found — skipping offset patch (message loss across crashes will continue)")
+        warn("offset hunk3 anchor (handleInbound chat_id) not found — skipping offset patch (message loss across crashes will continue)")
+        return src, False
+    # Hunk B4: ack the pending update in case 'reply', gated on the chunk
+    # loop having completed without throw (anchor right before `const result`,
+    # which only runs after the for-loop's catch block didn't re-throw and
+    # any file attachments were sent). On reply error, the catch re-throws
+    # before we get here — offset stays unadvanced, Telegram redelivers next
+    # time bun reattaches. The `chat_id` in scope here is the reply tool's
+    # `args.chat_id as string`, the same key shape used by _markPending.
+    new_src, n4 = re.subn(
+        r"(        const result =\n          sentIds\.length === 1\n)",
+        OFFSET_ACK + r"\1",
+        new_src,
+        count=1,
+    )
+    if n4 != 1:
+        warn("offset hunk4 anchor (case 'reply' result) not found — skipping offset patch (message loss across crashes will continue)")
         return src, False
     return new_src, True
 
@@ -247,6 +332,57 @@ def apply_stderr(src: str) -> tuple[str, bool]:
     return new_src, True
 
 
+def apply_primary(src: str) -> tuple[str, bool]:
+    """Turn the upstream stale-poller block into a primary-secondary lock.
+
+    Two hunks, both gated by MARKER_PRIMARY:
+      C1 — guard before `process.kill(stale, 'SIGTERM')`. Reads
+            statSync(PID_FILE).mtimeMs; if the file was modified within
+            the last 30s, the existing PID is a live primary refreshing
+            its heartbeat (see C2) and we are a secondary instance —
+            spawned by a sub-claude (claude-mem worker, Task subagent),
+            a heartbeat session, or any other claude process that loaded
+            the telegram plugin. Exit cleanly without taking over.
+      C2 — append a setInterval that re-writes PID_FILE every 5s so
+            the file's mtime stays fresh while we run.
+
+    Without this, every sub-claude spawn results in: new bun → SIGTERM
+    primary → primary dies mid-turn → user gets no reply. The watchdog
+    eventually catches the dead bun and respawns, but the active turn's
+    reply is gone.
+
+    Returns (new_src, applied).
+    """
+    if MARKER_PRIMARY in src:
+        return src, False
+    # Hunk C1: insert mtime guard between the kill(stale, 0) liveness probe
+    # and the SIGTERM. The probe throws when the PID is dead — if we reach
+    # past it, stale is alive AND we either need to take over (mtime stale)
+    # OR step aside (mtime fresh).
+    new_src, n1 = re.subn(
+        r"(    process\.kill\(stale, 0\)\n)",
+        r"\1" + PRIMARY_GUARD,
+        src,
+        count=1,
+    )
+    if n1 != 1:
+        warn("primary hunk1 anchor (process.kill(stale, 0)) not found — skipping primary-lock patch (sub-claude bun spawns will continue to kill primary)")
+        return src, False
+    # Hunk C2: append the heartbeat setInterval after the initial PID_FILE
+    # write. A blank line separates it from the surrounding upstream code
+    # for readability.
+    new_src, n2 = re.subn(
+        r"(writeFileSync\(PID_FILE, String\(process\.pid\)\)\n)",
+        r"\1" + "\n" + PRIMARY_HEARTBEAT,
+        new_src,
+        count=1,
+    )
+    if n2 != 1:
+        warn("primary hunk2 anchor (writeFileSync PID_FILE) not found — skipping primary-lock patch (sub-claude bun spawns will continue to kill primary)")
+        return src, False
+    return new_src, True
+
+
 def main(argv: list[str]) -> int:
     if len(argv) != 2:
         log("usage: apply_telegram_typing_patch.py <server.ts>")
@@ -263,8 +399,9 @@ def main(argv: list[str]) -> int:
     new_src, t = apply_typing(new_src)
     new_src, o = apply_offset(new_src)
     new_src, s = apply_stderr(new_src)
+    new_src, p = apply_primary(new_src)
 
-    if not (t or o or s):
+    if not (t or o or s or p):
         # Either everything is already patched, or every set of anchors missed.
         return 0
 
@@ -279,6 +416,8 @@ def main(argv: list[str]) -> int:
         parts.append("offset")
     if s:
         parts.append("stderr")
+    if p:
+        parts.append("primary")
     log(f"applied {'+'.join(parts)} patch(es) to {path}")
     return 0
 
