@@ -227,9 +227,47 @@ Data files (all under `/workspace/scripts/heartbeat/`):
 - `logs/cron.log` — crond stderr for schedule-dispatch debugging.
 - `logs/sessions/` — per-run tmux session logs (last 20 kept).
 
+## Vault layer (Karpathy LLM Wiki, opt-in)
+
+Each agent can carry a per-agent file-based knowledge base structured around Andrej Karpathy's "LLM Wiki" pattern (https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f). The vault is the third memory layer next to auto-memoria and claude-mem; it serves curated, synthetic, compounding knowledge derived from external sources.
+
+Three layers (verbatim from Karpathy's gist):
+- `raw_sources/` — immutable source documents (LLM reads, never edits).
+- `wiki/` — LLM-owned generated pages, six type subdirectories: `summaries/`, `entities/`, `concepts/`, `comparisons/`, `overviews/`, `synthesis/`.
+- `CLAUDE.md` (vault-local) — the schema document defining frontmatter spec, wikilink format, and ingest/query/lint protocols.
+
+Plus two root files: `index.md` (content-oriented catalog) and `log.md` (chronological append-only).
+
+Storage and lifecycle:
+
+```
+HOST: <workspace>/.state/.vault/  ─ bind-mount ─→  CONTAINER: /home/agent/.vault/
+                                                              /home/agent/vault/ (symlink)
+```
+
+The vault inherits the existing `.state/` bind-mount. No new Docker volume. Persists across `docker compose restart` and `setup.sh --uninstall --yes`. Removed only by `--purge` or `--nuke`.
+
+Boot sequence (image-baked, runs as `agent` user during `boot_side_effects` in `start_services.sh`):
+
+```text
+seed_vault_if_needed()
+  ├─ read agent.yml.vault.{enabled, path, seed_skeleton}
+  ├─ resolve in-container path under /home/agent/
+  ├─ vault_ensure_paths       (mkdir -p, idempotent)
+  ├─ vault_seed_if_empty      (rsync skeleton + sed SCAFFOLD_DATE; no-op if dir non-empty)
+  └─ ln -sfn /home/agent/.vault /home/agent/vault   (convenience alias)
+```
+
+When `agent.yml.vault.mcp.enabled` is true, the `mcp-json.tpl` renderer adds a `vault` MCP server entry pointing to `npx @bitbonsai/mcpvault@latest /home/agent/.vault`. MCPVault is zero-dependency, accesses files directly (no Obsidian app required), and exposes 14 tools for note read/write/search/move/frontmatter operations.
+
+Coexistence rule: auto-memoria for atomic facts about the user/project; claude-mem for passive transcript observations; vault for curated synthetic knowledge from external sources. Don't double-write across layers.
+
+Full feature documentation: [`docs/vault.md`](vault.md). Authoritative schema for vault conventions: `modules/vault-skeleton/CLAUDE.md` in this repo (copied into each agent's vault at first boot).
+
 ## See Also
 
 - [Docker Mode User Guide](getting-started.md) — how to scaffold, boot, upgrade, and troubleshoot.
 - [State Layout](state-layout.md) — every persistent file mapped to its host and container path (memory, OAuth, plugin cache, Telegram channel state, heartbeat artifacts).
+- [Vault feature reference](vault.md) — Karpathy LLM Wiki pattern, lifecycle, operations, troubleshooting.
 - [Adding an MCP (Docker)](adding-an-mcp.md) — extending the agent with custom MCPs in Docker mode.
 - [Design Specification](../superpowers/specs/2026-04-18-agent-admin-docker-mode-design.md) — full technical spec with error handling and testing strategy.
