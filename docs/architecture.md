@@ -230,5 +230,6 @@ Data files (all under `/workspace/scripts/heartbeat/`):
 ## See Also
 
 - [Docker Mode User Guide](getting-started.md) — how to scaffold, boot, upgrade, and troubleshoot.
+- [State Layout](state-layout.md) — every persistent file mapped to its host and container path (memory, OAuth, plugin cache, Telegram channel state, heartbeat artifacts).
 - [Adding an MCP (Docker)](adding-an-mcp.md) — extending the agent with custom MCPs in Docker mode.
 - [Design Specification](../superpowers/specs/2026-04-18-agent-admin-docker-mode-design.md) — full technical spec with error handling and testing strategy.
