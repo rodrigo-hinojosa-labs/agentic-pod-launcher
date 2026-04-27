@@ -52,3 +52,96 @@ EOF
   echo "$result" | jq . > /dev/null
   [ "$(echo "$result" | jq -r '.mcpServers.github.command')" = "npx" ]
 }
+
+@test ".mcp.json has vault MCP when vault.mcp.enabled is true" {
+  cat > "$TMP_TEST_DIR/agent.yml" << 'EOF'
+version: 1
+user:
+  timezone: "UTC"
+mcps:
+  atlassian: []
+  github:
+    enabled: false
+vault:
+  enabled: true
+  mcp:
+    enabled: true
+EOF
+  render_load_context "$TMP_TEST_DIR/agent.yml"
+  result=$(render_template "$REPO_ROOT/modules/mcp-json.tpl")
+  echo "$result" | jq . > /dev/null
+  [ "$(echo "$result" | jq -r '.mcpServers.vault.command')" = "npx" ]
+  [ "$(echo "$result" | jq -r '.mcpServers.vault.args[0]')" = "-y" ]
+  [ "$(echo "$result" | jq -r '.mcpServers.vault.args[1]')" = "@bitbonsai/mcpvault@latest" ]
+  [ "$(echo "$result" | jq -r '.mcpServers.vault.args[2]')" = "/home/agent/.vault" ]
+  [ "$(echo "$result" | jq -r '.mcpServers.vault.env')" = "{}" ]
+}
+
+@test ".mcp.json omits vault MCP when vault.mcp.enabled is false" {
+  cat > "$TMP_TEST_DIR/agent.yml" << 'EOF'
+version: 1
+user:
+  timezone: "UTC"
+mcps:
+  atlassian: []
+  github:
+    enabled: false
+vault:
+  enabled: true
+  mcp:
+    enabled: false
+EOF
+  render_load_context "$TMP_TEST_DIR/agent.yml"
+  result=$(render_template "$REPO_ROOT/modules/mcp-json.tpl")
+  echo "$result" | jq . > /dev/null
+  [ "$(echo "$result" | jq -r '.mcpServers.vault // "absent"')" = "absent" ]
+}
+
+@test ".mcp.json omits vault MCP when vault block is absent entirely" {
+  cat > "$TMP_TEST_DIR/agent.yml" << 'EOF'
+version: 1
+user:
+  timezone: "UTC"
+mcps:
+  atlassian: []
+  github:
+    enabled: false
+EOF
+  render_load_context "$TMP_TEST_DIR/agent.yml"
+  result=$(render_template "$REPO_ROOT/modules/mcp-json.tpl")
+  echo "$result" | jq . > /dev/null
+  [ "$(echo "$result" | jq -r '.mcpServers.vault // "absent"')" = "absent" ]
+}
+
+@test ".mcp.json renders valid JSON with atlassian + github + vault all enabled" {
+  cat > "$TMP_TEST_DIR/agent.yml" << 'EOF'
+version: 1
+user:
+  timezone: "UTC"
+mcps:
+  atlassian:
+    - name: work
+      url: "https://work.atlassian.net"
+      email: "x@y.com"
+  github:
+    enabled: true
+vault:
+  enabled: true
+  mcp:
+    enabled: true
+EOF
+  render_load_context "$TMP_TEST_DIR/agent.yml"
+  result=$(render_template "$REPO_ROOT/modules/mcp-json.tpl")
+  echo "$result" | jq . > /dev/null
+  [ "$(echo "$result" | jq -r '.mcpServers["atlassian-work"].command')" = "uvx" ]
+  [ "$(echo "$result" | jq -r '.mcpServers.github.command')" = "npx" ]
+  [ "$(echo "$result" | jq -r '.mcpServers.vault.command')" = "npx" ]
+}
+
+@test ".mcp.json renders valid JSON with the sample-agent-with-vault fixture" {
+  cp "$REPO_ROOT/tests/fixtures/sample-agent-with-vault.yml" "$TMP_TEST_DIR/agent.yml"
+  render_load_context "$TMP_TEST_DIR/agent.yml"
+  result=$(render_template "$REPO_ROOT/modules/mcp-json.tpl")
+  echo "$result" | jq . > /dev/null
+  [ "$(echo "$result" | jq -r '.mcpServers.vault.command')" = "npx" ]
+}
