@@ -23,6 +23,13 @@ vault_ensure_paths() {
 # No-op if TARGET_DIR already has content (idempotent at boot).
 # Replaces SCAFFOLD_DATE in seeded log.md with TODAY (defaults to current date,
 # overrideable for tests).
+#
+# Uses `cp -R` rather than `rsync` or `cp -a`: rsync is not installed in the
+# Alpine runtime image, and `cp -a` (which implies `-p` preserve attributes)
+# fails under `cap_drop: ALL` because the non-root agent user can't chown.
+# Plain `cp -R "$skeleton"/. "$target"/` copies recursively (including
+# dotfiles via the trailing `/.`) and lets new files inherit the running
+# user's ownership — exactly what we want here.
 vault_seed_if_empty() {
   local target="$1" skeleton="$2" today="${3:-$(date +%Y-%m-%d)}"
   [ -n "$target" ] || { echo "vault_seed_if_empty: missing target" >&2; return 1; }
@@ -33,12 +40,12 @@ vault_seed_if_empty() {
     return 0
   fi
 
-  mkdir -p "$target"
-  rsync -a "$skeleton"/ "$target"/
+  mkdir -p "$target" || return 1
+  cp -R "$skeleton"/. "$target"/ || { echo "vault_seed_if_empty: cp failed: $skeleton -> $target" >&2; return 1; }
 
   if [ -f "$target/log.md" ]; then
-    sed "s/SCAFFOLD_DATE/${today}/g" "$target/log.md" > "$target/log.md.tmp"
-    mv "$target/log.md.tmp" "$target/log.md"
+    sed "s/SCAFFOLD_DATE/${today}/g" "$target/log.md" > "$target/log.md.tmp" || return 1
+    mv "$target/log.md.tmp" "$target/log.md" || return 1
   fi
 }
 
