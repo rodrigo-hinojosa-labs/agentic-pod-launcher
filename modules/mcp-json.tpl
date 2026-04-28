@@ -39,6 +39,11 @@
       "command": "npx",
       "args": ["-y", "@bitbonsai/mcpvault@latest", "/home/agent/.vault"],
       "env": {}
+    }{{/if}}{{#if VAULT_QMD_ENABLED}},
+    "qmd": {
+      "command": "bunx",
+      "args": ["@tobilu/qmd@latest", "mcp"],
+      "env": {}
     }{{/if}}
   }
 }

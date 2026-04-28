@@ -414,13 +414,15 @@ ATLASSIAN_${upper}_TOKEN=${ws_token}
   echo "  Per-agent Obsidian-style vault at .state/.vault/. Three-layer Karpathy"
   echo "  pattern (raw_sources / wiki / schema). Coexists with claude-mem."
   echo ""
-  local vault_enabled vault_seed vault_mcp_enabled
+  local vault_enabled vault_seed vault_mcp_enabled vault_qmd_enabled
   vault_enabled=$(ask_yn "Enable knowledge vault?" "y")
   vault_seed=false
   vault_mcp_enabled=false
+  vault_qmd_enabled=false
   if [ "$vault_enabled" = "true" ]; then
     vault_seed=$(ask_yn "  Seed initial vault structure (templates, schema, log)?" "y")
     vault_mcp_enabled=$(ask_yn "  Register MCPVault server (@bitbonsai/mcpvault)?" "y")
+    vault_qmd_enabled=$(ask_yn "  Enable QMD hybrid search (BM25+vector+rerank, ~300MB embedding model on first use)?" "n")
   fi
   echo ""
 
@@ -502,6 +504,7 @@ ATLASSIAN_${upper}_TOKEN=${ws_token}
     echo "     Vault enabled:    $vault_enabled"
     [ "$vault_enabled" = "true" ] && echo "     Vault seed:       $vault_seed"
     [ "$vault_enabled" = "true" ] && echo "     Vault MCP:        $vault_mcp_enabled"
+    [ "$vault_enabled" = "true" ] && echo "     Vault QMD:        $vault_qmd_enabled"
     echo " 18) GitHub fork:       $fork_enabled"
     if [ "$fork_enabled" = "true" ]; then
       echo " 19) Fork owner:        $fork_owner"
@@ -661,6 +664,8 @@ vault:
   mcp:
     enabled: $vault_mcp_enabled
     server: vault
+  qmd:
+    enabled: $vault_qmd_enabled
   schema:
     frontmatter_required: true
     log_format: "## [{date}] {op} | {title}"

@@ -220,6 +220,7 @@ n
 n
 n
 n
+n
 proceed
 EOF
   [ -f "$dest/agent.yml" ]
@@ -227,12 +228,56 @@ EOF
   [ "$(yq -r '.vault.seed_skeleton' "$dest/agent.yml")" = "true" ]
   [ "$(yq -r '.vault.mcp.enabled' "$dest/agent.yml")" = "true" ]
   [ "$(yq -r '.vault.mcp.server' "$dest/agent.yml")" = "vault" ]
+  [ "$(yq -r '.vault.qmd.enabled' "$dest/agent.yml")" = "false" ]
   [ "$(yq -r '.vault.path' "$dest/agent.yml")" = ".state/.vault" ]
   [ "$(jq -r '.mcpServers.vault.command' "$dest/.mcp.json")" = "npx" ]
   [ "$(jq -r '.mcpServers.vault.args[1]' "$dest/.mcp.json")" = "@bitbonsai/mcpvault@latest" ]
   [ "$(jq -r '.mcpServers.vault.args[2]' "$dest/.mcp.json")" = "/home/agent/.vault" ]
+  [ "$(jq -r '.mcpServers.qmd // "absent"' "$dest/.mcp.json")" = "absent" ]
   grep -q "Vault" "$dest/CLAUDE.md"
   grep -q "~/.vault/" "$dest/CLAUDE.md"
+}
+
+@test "wizard with vault + QMD enabled writes vault.qmd.enabled=true and emits qmd MCP" {
+  local dest="$TMP_TEST_DIR/scaffold-vault-qmd-on"
+  cd "$TMP_TEST_DIR/installer"
+  ./setup.sh --destination "$dest" <<EOF
+qmd-bot
+QmdBot
+r
+v
+Alice
+Alice
+UTC
+a@b.com
+en
+host
+n
+n
+none
+n
+n
+y
+30m
+ok
+y
+y
+y
+y
+y
+n
+n
+n
+n
+n
+proceed
+EOF
+  [ -f "$dest/agent.yml" ]
+  [ "$(yq -r '.vault.enabled' "$dest/agent.yml")" = "true" ]
+  [ "$(yq -r '.vault.qmd.enabled' "$dest/agent.yml")" = "true" ]
+  [ "$(jq -r '.mcpServers.qmd.command' "$dest/.mcp.json")" = "bunx" ]
+  [ "$(jq -r '.mcpServers.qmd.args[0]' "$dest/.mcp.json")" = "@tobilu/qmd@latest" ]
+  [ "$(jq -r '.mcpServers.qmd.args[1]' "$dest/.mcp.json")" = "mcp" ]
 }
 
 @test "scaffold mirrors vault.sh + modules/vault-skeleton/ into docker/ build context" {
