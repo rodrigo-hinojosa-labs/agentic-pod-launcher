@@ -58,6 +58,8 @@ vault:
   mcp:
     enabled: true
     server: vault
+  qmd:
+    enabled: false
   schema:
     frontmatter_required: true
     log_format: "## [{date}] {op} | {title}"

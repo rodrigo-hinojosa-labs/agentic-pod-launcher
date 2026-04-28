@@ -244,6 +244,121 @@ You can still use the vault without the MCP — the agent has native `Read`, `Wr
 frontmatter-aware operations and structured search; for simple reads and writes, native
 tools work just as well.
 
+## Hybrid search via QMD (advanced, opt-in)
+
+For vaults with hundreds of pages or when keyword search ceases to be enough, you can layer
+QMD (https://github.com/tobi/qmd, package `@tobilu/qmd`) on top. QMD is a local search
+engine for Markdown with **BM25 + vector + LLM-rerank** combined via Reciprocal Rank Fusion.
+It runs entirely on-device and exposes an MCP server so Claude can use it as a tool alongside
+MCPVault.
+
+**Enable it** at scaffold time when the wizard prompts:
+
+```
+▸ Knowledge vault
+  Enable QMD hybrid search (BM25+vector+rerank, ~300MB embedding model on first use)?
+```
+
+Or by editing `agent.yml`:
+
+```yaml
+vault:
+  enabled: true
+  ...
+  qmd:
+    enabled: true
+```
+
+Then regenerate and restart:
+
+```bash
+./setup.sh --regenerate
+docker compose restart
+```
+
+When QMD is enabled, `.mcp.json` carries an additional `qmd` server entry:
+
+```json
+"qmd": {
+  "command": "bunx",
+  "args": ["@tobilu/qmd@latest", "mcp"],
+  "env": {}
+}
+```
+
+**Why bunx and not npx**: QMD requires Node.js ≥22 or Bun ≥1.0. The Alpine 3.20 base image
+ships Node 20, which is below the QMD floor. Bun 1.1.38 is already installed for the Telegram
+plugin server, so we route QMD through `bunx` to avoid bumping the Node toolchain.
+
+### One-time setup inside the container
+
+QMD is **not auto-configured at boot**. The first time you want to use it, run these commands
+inside the container (one-time per agent):
+
+```bash
+# 1. Add the vault as a QMD collection (idempotent — safe to re-run).
+docker exec -u agent <agent-name> bunx @tobilu/qmd@latest collection add /home/agent/.vault --name vault
+
+# 2. Index the vault content (BM25 / FTS5 only, fast).
+docker exec -u agent <agent-name> bunx @tobilu/qmd@latest update
+
+# 3. Generate vector embeddings (slow first time — downloads the embedding model).
+docker exec -u agent <agent-name> bunx @tobilu/qmd@latest embed
+```
+
+After step 3 the agent can use the `qmd` MCP server's tools (`query`, `get`, `multi_get`,
+`status`) with full hybrid retrieval.
+
+### Storage and cost
+
+| Path (in container) | Host equivalent | What |
+|---|---|---|
+| `~/.cache/qmd/index.sqlite` | `<workspace>/.state/.cache/qmd/index.sqlite` | FTS5 + vector index. Grows with vault content. |
+| `~/.cache/qmd/models/` | `<workspace>/.state/.cache/qmd/models/` | Downloaded embedding models. ~300 MB for the default `embeddinggemma-300M-Q8_0`. |
+
+Both live under `~/.cache/`, which is bind-mounted via `.state/.cache/` — so they persist
+across container restarts and migrate with the agent via `rsync`.
+
+The model download happens on first `embed` invocation and is one-time per agent. Subsequent
+embeddings reuse the cached model.
+
+### Re-indexing
+
+QMD does **not** watch the vault. When you ingest new sources or edit pages, run:
+
+```bash
+docker exec -u agent <agent-name> bunx @tobilu/qmd@latest update
+docker exec -u agent <agent-name> bunx @tobilu/qmd@latest embed
+```
+
+If you'd rather automate this, add a heartbeat post-hook or a separate cron entry that calls
+those two commands periodically (e.g. every hour). Out of scope for the launcher proper —
+agents that need it can wire it themselves.
+
+### When to enable QMD
+
+- Vault grew past ~100 sources and `Glob`/`Grep` over `wiki/` is hitting friction.
+- You want semantic queries ("find pages about distributed consensus") over keyword search.
+- You want LLM-reranked results (more relevant, less noisy) for ambiguous queries.
+
+When **not** to enable:
+
+- Small vaults (<50 sources) — keyword search via MCPVault `search_notes` is faster and
+  doesn't carry the 300 MB model overhead.
+- Air-gapped environments where the HuggingFace download isn't possible.
+- Agents that mostly write to the vault and rarely query it.
+
+### MCP tools that QMD exposes
+
+- `query` — Search with typed sub-queries (lex/vec/hyde), combined via RRF + reranking.
+- `get` — Retrieve a document by path or docid (with fuzzy matching suggestions).
+- `multi_get` — Batch retrieve by glob pattern, comma-separated list, or docids.
+- `status` — Index health and collection info.
+
+QMD and MCPVault are complementary: MCPVault is for read/write/list operations on individual
+notes, QMD is for retrieval-style search across the corpus. Both registered together is the
+common case for a mature vault.
+
 ## Browsing the vault from your computer
 
 The vault is a normal Obsidian vault on disk, plus a `_templates/` directory that Obsidian

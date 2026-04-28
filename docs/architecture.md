@@ -260,6 +260,8 @@ seed_vault_if_needed()
 
 When `agent.yml.vault.mcp.enabled` is true, the `mcp-json.tpl` renderer adds a `vault` MCP server entry pointing to `npx @bitbonsai/mcpvault@latest /home/agent/.vault`. MCPVault is zero-dependency, accesses files directly (no Obsidian app required), and exposes 14 tools for note read/write/search/move/frontmatter operations.
 
+For larger vaults, an optional second MCP server can be enabled via `agent.yml.vault.qmd.enabled` — this registers QMD (`@tobilu/qmd`, invoked via `bunx`), a local hybrid-search engine with BM25 + vector + LLM-rerank combined via Reciprocal Rank Fusion. QMD requires a one-time setup (`collection add` + `update` + `embed`) and downloads a ~300 MB embedding model on first use, so it is off by default. Both servers can run concurrently and are complementary: MCPVault for read/write/list operations on individual notes, QMD for retrieval-style search across the corpus.
+
 Coexistence rule: auto-memoria for atomic facts about the user/project; claude-mem for passive transcript observations; vault for curated synthetic knowledge from external sources. Don't double-write across layers.
 
 Full feature documentation: [`docs/vault.md`](vault.md). Authoritative schema for vault conventions: `modules/vault-skeleton/CLAUDE.md` in this repo (copied into each agent's vault at first boot).

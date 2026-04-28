@@ -145,3 +145,79 @@ EOF
   echo "$result" | jq . > /dev/null
   [ "$(echo "$result" | jq -r '.mcpServers.vault.command')" = "npx" ]
 }
+
+@test ".mcp.json has QMD server when vault.qmd.enabled is true" {
+  cat > "$TMP_TEST_DIR/agent.yml" << 'EOF'
+version: 1
+user:
+  timezone: "UTC"
+mcps:
+  atlassian: []
+  github:
+    enabled: false
+vault:
+  enabled: true
+  mcp:
+    enabled: true
+  qmd:
+    enabled: true
+EOF
+  render_load_context "$TMP_TEST_DIR/agent.yml"
+  result=$(render_template "$REPO_ROOT/modules/mcp-json.tpl")
+  echo "$result" | jq . > /dev/null
+  [ "$(echo "$result" | jq -r '.mcpServers.qmd.command')" = "bunx" ]
+  [ "$(echo "$result" | jq -r '.mcpServers.qmd.args[0]')" = "@tobilu/qmd@latest" ]
+  [ "$(echo "$result" | jq -r '.mcpServers.qmd.args[1]')" = "mcp" ]
+  [ "$(echo "$result" | jq -r '.mcpServers.qmd.env')" = "{}" ]
+}
+
+@test ".mcp.json omits QMD server when vault.qmd.enabled is false" {
+  cat > "$TMP_TEST_DIR/agent.yml" << 'EOF'
+version: 1
+user:
+  timezone: "UTC"
+mcps:
+  atlassian: []
+  github:
+    enabled: false
+vault:
+  enabled: true
+  mcp:
+    enabled: true
+  qmd:
+    enabled: false
+EOF
+  render_load_context "$TMP_TEST_DIR/agent.yml"
+  result=$(render_template "$REPO_ROOT/modules/mcp-json.tpl")
+  echo "$result" | jq . > /dev/null
+  [ "$(echo "$result" | jq -r '.mcpServers.qmd // "absent"')" = "absent" ]
+  [ "$(echo "$result" | jq -r '.mcpServers.vault.command')" = "npx" ]
+}
+
+@test ".mcp.json renders valid JSON with vault MCP + QMD both enabled" {
+  cat > "$TMP_TEST_DIR/agent.yml" << 'EOF'
+version: 1
+user:
+  timezone: "UTC"
+mcps:
+  atlassian:
+    - name: work
+      url: "https://work.atlassian.net"
+      email: "x@y.com"
+  github:
+    enabled: true
+vault:
+  enabled: true
+  mcp:
+    enabled: true
+  qmd:
+    enabled: true
+EOF
+  render_load_context "$TMP_TEST_DIR/agent.yml"
+  result=$(render_template "$REPO_ROOT/modules/mcp-json.tpl")
+  echo "$result" | jq . > /dev/null
+  [ "$(echo "$result" | jq -r '.mcpServers["atlassian-work"].command')" = "uvx" ]
+  [ "$(echo "$result" | jq -r '.mcpServers.github.command')" = "npx" ]
+  [ "$(echo "$result" | jq -r '.mcpServers.vault.command')" = "npx" ]
+  [ "$(echo "$result" | jq -r '.mcpServers.qmd.command')" = "bunx" ]
+}
