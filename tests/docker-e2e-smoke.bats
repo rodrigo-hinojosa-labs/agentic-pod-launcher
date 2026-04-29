@@ -28,26 +28,7 @@ teardown() {
   export E2E_AGENT_DIR
 
   cd "$TMP_TEST_DIR/installer"
-  ./setup.sh --destination "$E2E_AGENT_DIR" <<EOF
-e2ebot
-E2EBot
-r
-v
-Alice
-Alice
-UTC
-a@b.com
-en
-n
-none
-y
-30m
-ok
-y
-n
-n
-proceed
-EOF
+  wizard_answers name=e2ebot display=E2EBot | ./setup.sh --destination "$E2E_AGENT_DIR"
 
   [ -f "$E2E_AGENT_DIR/docker-compose.yml" ]
 

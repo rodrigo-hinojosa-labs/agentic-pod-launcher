@@ -17,29 +17,7 @@ teardown() { teardown_tmp_dir; }
 run_wizard_with_dest() {
   local dest="$1"
   cd "$TMP_TEST_DIR/installer"
-  ./setup.sh --destination "$dest" <<EOF
-test-bot
-TestBot
-r
-v
-Alice
-Alice
-UTC
-a@b.com
-en
-host
-n
-n
-none
-n
-n
-y
-30m
-ok
-y
-n
-proceed
-EOF
+  wizard_answers | ./setup.sh --destination "$dest"
 }
 
 @test "scaffold fails when destination already exists" {
@@ -129,37 +107,8 @@ EOF
 @test "wizard opt-in for superpowers appends it to agent.yml plugins" {
   local dest="$TMP_TEST_DIR/scaffold-optin-sp"
   cd "$TMP_TEST_DIR/installer"
-  # Stream order, then 5 optional answers (alphabetical):
-  #   code-simplifier=n, commit-commands=n, github=n, skill-creator=n,
-  #   superpowers=y → finally `proceed` for the review.
-  ./setup.sh --destination "$dest" <<EOF
-opt-bot
-OptBot
-r
-v
-Alice
-Alice
-UTC
-a@b.com
-en
-host
-n
-n
-none
-n
-n
-y
-30m
-ok
-y
-n
-n
-n
-n
-n
-y
-proceed
-EOF
+  wizard_answers name=opt-bot display=OptBot superpowers=on \
+    | ./setup.sh --destination "$dest"
   [ -f "$dest/agent.yml" ]
   local plugin_count
   plugin_count=$(yq '.plugins | length' "$dest/agent.yml")
@@ -192,37 +141,8 @@ EOF
 @test "wizard with vault enabled writes vault block + emits vault MCP + memory section" {
   local dest="$TMP_TEST_DIR/scaffold-vault-on"
   cd "$TMP_TEST_DIR/installer"
-  ./setup.sh --destination "$dest" <<EOF
-vault-bot
-VaultBot
-r
-v
-Alice
-Alice
-UTC
-a@b.com
-en
-host
-n
-n
-none
-n
-n
-y
-30m
-ok
-y
-y
-y
-y
-n
-n
-n
-n
-n
-n
-proceed
-EOF
+  wizard_answers name=vault-bot display=VaultBot vault=on \
+    | ./setup.sh --destination "$dest"
   [ -f "$dest/agent.yml" ]
   [ "$(yq -r '.vault.enabled' "$dest/agent.yml")" = "true" ]
   [ "$(yq -r '.vault.seed_skeleton' "$dest/agent.yml")" = "true" ]
@@ -241,37 +161,8 @@ EOF
 @test "wizard with vault + QMD enabled writes vault.qmd.enabled=true and emits qmd MCP" {
   local dest="$TMP_TEST_DIR/scaffold-vault-qmd-on"
   cd "$TMP_TEST_DIR/installer"
-  ./setup.sh --destination "$dest" <<EOF
-qmd-bot
-QmdBot
-r
-v
-Alice
-Alice
-UTC
-a@b.com
-en
-host
-n
-n
-none
-n
-n
-y
-30m
-ok
-y
-y
-y
-y
-y
-n
-n
-n
-n
-n
-proceed
-EOF
+  wizard_answers name=qmd-bot display=QmdBot qmd=on \
+    | ./setup.sh --destination "$dest"
   [ -f "$dest/agent.yml" ]
   [ "$(yq -r '.vault.enabled' "$dest/agent.yml")" = "true" ]
   [ "$(yq -r '.vault.qmd.enabled' "$dest/agent.yml")" = "true" ]
