@@ -167,6 +167,16 @@ COPY modules/plugins/ /opt/agent-admin/modules/plugins/
 COPY scripts/lib/vault.sh /opt/agent-admin/scripts/lib/vault.sh
 COPY modules/vault-skeleton/ /opt/agent-admin/modules/vault-skeleton/
 
+# Sanity check: the COPYs above succeed even if the source dirs are
+# present-but-empty (e.g. a future bug in mirror_catalog_to_docker that
+# creates the dir but skips the contents). Catch that here so the agent
+# doesn't boot with a half-baked image and silently fail at first run —
+# which is exactly the kind of bug the rsync→cp -R fix in PR #17 surfaced.
+RUN test -f /opt/agent-admin/modules/vault-skeleton/CLAUDE.md \
+ && test -d /opt/agent-admin/modules/vault-skeleton/wiki \
+ && test "$(ls -A /opt/agent-admin/modules/plugins/*.yml 2>/dev/null | wc -l)" -gt 0 \
+ || (echo "ERROR: image build is missing mirrored assets. Run './setup.sh --regenerate' from the workspace root before 'docker compose build'." >&2; exit 1)
+
 # Workspace is bind-mounted at runtime; /home/agent is a named volume.
 WORKDIR /workspace
 
