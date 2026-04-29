@@ -240,7 +240,8 @@ ensure_channel_env_synced() {
   token=$(grep "^${workspace_key}=" /workspace/.env 2>/dev/null | head -1 | cut -d= -f2-)
   [ -z "$token" ] && return 1
 
-  mkdir -p "$(dirname "$channel_env")"
+  mkdir -p "$(dirname "$channel_env")" \
+    || { log "ensure_channel_env_synced: mkdir failed for $(dirname "$channel_env")"; return 1; }
   umask 077
   if [ -f "$channel_env" ]; then
     # Preserve other lines, replace/add the target key. Use \x01 (SOH)
@@ -249,14 +250,18 @@ ensure_channel_env_synced() {
     # `|`/`/`/`#` in their values won't break this sync.
     if grep -q "^${workspace_key}=" "$channel_env"; then
       local SEP=$'\x01'
-      sed -i "s${SEP}^${workspace_key}=.*${SEP}${workspace_key}=${token}${SEP}" "$channel_env"
+      sed -i "s${SEP}^${workspace_key}=.*${SEP}${workspace_key}=${token}${SEP}" "$channel_env" \
+        || { log "ensure_channel_env_synced: sed failed on $channel_env"; return 1; }
     else
-      echo "${workspace_key}=${token}" >> "$channel_env"
+      echo "${workspace_key}=${token}" >> "$channel_env" \
+        || { log "ensure_channel_env_synced: append failed on $channel_env"; return 1; }
     fi
   else
-    echo "${workspace_key}=${token}" > "$channel_env"
+    echo "${workspace_key}=${token}" > "$channel_env" \
+      || { log "ensure_channel_env_synced: write failed on $channel_env"; return 1; }
   fi
-  chmod 0600 "$channel_env"
+  chmod 0600 "$channel_env" \
+    || { log "ensure_channel_env_synced: chmod failed on $channel_env"; return 1; }
   log "synced ${workspace_key} from /workspace/.env → ${channel_env}"
 }
 

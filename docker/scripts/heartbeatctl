@@ -74,8 +74,22 @@ cmd_show() {
   fi
 }
 
-# Read a key from agent.yml, returning empty string on missing.
-_yq() { yq "${1}" "$AGENT_YML" 2>/dev/null | sed 's/^null$//'; }
+# Read a key from agent.yml, returning empty string on missing/null.
+# Distinguishes "yq parsed OK but path is missing/null" (silent — caller
+# falls back to its `// "default"`) from "yq itself errored" (loud — the
+# yml is malformed and the user needs to know).
+_yq() {
+  local out err_log
+  err_log=$(mktemp)
+  if ! out=$(yq "${1}" "$AGENT_YML" 2>"$err_log"); then
+    echo "heartbeatctl: yq failed reading '${1}' from $AGENT_YML:" >&2
+    cat "$err_log" >&2
+    rm -f "$err_log"
+    return 1
+  fi
+  rm -f "$err_log"
+  printf '%s' "$out" | sed 's/^null$//'
+}
 
 cmd_reload() {
   [ -f "$AGENT_YML" ] || { echo "heartbeatctl: $AGENT_YML missing" >&2; return 2; }
@@ -115,7 +129,11 @@ NOTIFY_CHANNEL="$channel"
 NOTIFY_BOT_TOKEN="\${NOTIFY_BOT_TOKEN:-}"
 NOTIFY_CHAT_ID="\${NOTIFY_CHAT_ID:-}"
 CONF
-  mv "$tmp_conf" "$CONF_FILE"
+  if ! mv -f "$tmp_conf" "$CONF_FILE"; then
+    rm -f "$tmp_conf"
+    echo "heartbeatctl: failed to install $CONF_FILE" >&2
+    return 2
+  fi
 
   # Rewrite crontab atomically via tmp+mv on the same directory.
   # The default $CRONTAB_FILE is the workspace staging path

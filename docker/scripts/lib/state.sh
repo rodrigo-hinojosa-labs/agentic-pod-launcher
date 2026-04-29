@@ -108,11 +108,17 @@ rotate_runs_jsonl() {
     [ "$size2" -lt "$threshold" ] && exit 0
 
     [ -f "${file}.3.gz" ] && rm -f "${file}.3.gz"
-    [ -f "${file}.2.gz" ] && mv "${file}.2.gz" "${file}.3.gz"
-    if [ -f "${file}.1" ]; then
-      gzip -f "${file}.1"
-      mv "${file}.1.gz" "${file}.2.gz"
+    if [ -f "${file}.2.gz" ]; then
+      mv "${file}.2.gz" "${file}.3.gz" \
+        || { echo "rotate_runs_jsonl: failed to rotate ${file}.2.gz → .3.gz" >&2; exit 1; }
     fi
-    mv "$file" "${file}.1"
+    if [ -f "${file}.1" ]; then
+      gzip -f "${file}.1" \
+        || { echo "rotate_runs_jsonl: gzip failed on ${file}.1" >&2; exit 1; }
+      mv "${file}.1.gz" "${file}.2.gz" \
+        || { echo "rotate_runs_jsonl: failed to rotate ${file}.1.gz → .2.gz" >&2; exit 1; }
+    fi
+    mv "$file" "${file}.1" \
+      || { echo "rotate_runs_jsonl: failed to rotate $file → .1" >&2; exit 1; }
   ) 9>"$lock"
 }

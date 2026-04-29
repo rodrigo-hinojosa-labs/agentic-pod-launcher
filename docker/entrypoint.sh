@@ -63,6 +63,9 @@ fi
 #    coincides with the copy can never observe a half-written
 #    /etc/crontabs/agent. mv on the same filesystem is atomic.
 (
+  # Throttle logging: only log on state transition (error→ok or ok→error).
+  # Without this, a persistent failure would spam the log every 15s.
+  last_sync_state="ok"
   while true; do
     sleep 15
     if [ -f "$STAGING_CRONTAB" ] && \
@@ -70,9 +73,16 @@ fi
       if cp "$STAGING_CRONTAB" "${CRONTAB_DST}.tmp" 2>/dev/null && \
          chmod 0644 "${CRONTAB_DST}.tmp" 2>/dev/null && \
          mv -f "${CRONTAB_DST}.tmp" "$CRONTAB_DST" 2>/dev/null; then
-        :
+        if [ "$last_sync_state" = "error" ]; then
+          log "crontab-sync recovered after prior failure"
+          last_sync_state="ok"
+        fi
       else
         rm -f "${CRONTAB_DST}.tmp" 2>/dev/null
+        if [ "$last_sync_state" = "ok" ]; then
+          log "WARN crontab-sync failed (cp/chmod/mv on $CRONTAB_DST); will keep retrying"
+          last_sync_state="error"
+        fi
       fi
     fi
   done
