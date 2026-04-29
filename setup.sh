@@ -660,6 +660,7 @@ vault:
   enabled: $vault_enabled
   path: .state/.vault
   seed_skeleton: $vault_seed
+  force_reseed: false
   initial_sources: []
   mcp:
     enabled: $vault_mcp_enabled

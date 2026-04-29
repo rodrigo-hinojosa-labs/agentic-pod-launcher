@@ -31,16 +31,20 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [start_services] $*" >&2; }
 
 # seed_vault_if_needed — at first boot, copy the skeleton into the per-agent
 # vault dir if vault.enabled + vault.seed_skeleton and the target is empty.
+# Honors vault.force_reseed: when true, the existing vault is moved aside to
+# `<vault_root>.backup-<timestamp>` and re-seeded; the flag is then auto-reset
+# to false in agent.yml so the next boot is a no-op.
 # Always (re)create the convenience symlink /home/agent/vault → real path.
 seed_vault_if_needed() {
   local agent_yml="/workspace/agent.yml"
   [ -f "$agent_yml" ] || return 0
-  local vault_enabled vault_path vault_seed
+  local vault_enabled vault_path vault_seed vault_force_reseed
   vault_enabled=$(yq -r '.vault.enabled // false' "$agent_yml")
   [ "$vault_enabled" = "true" ] || return 0
 
   vault_path=$(yq -r '.vault.path // ".state/.vault"' "$agent_yml")
   vault_seed=$(yq -r '.vault.seed_skeleton // false' "$agent_yml")
+  vault_force_reseed=$(yq -r '.vault.force_reseed // false' "$agent_yml")
 
   # The bind-mount maps <workspace>/.state/ → /home/agent/, so .state/.vault
   # lives at /home/agent/.vault inside the container. For non-default paths,
@@ -57,7 +61,22 @@ seed_vault_if_needed() {
   fi
 
   if [ "$vault_seed" = "true" ] && [ -d /opt/agent-admin/modules/vault-skeleton ]; then
-    if command -v vault_seed_if_empty >/dev/null 2>&1; then
+    if [ "$vault_force_reseed" = "true" ] \
+        && command -v vault_backup_and_reseed >/dev/null 2>&1; then
+      log "vault: force_reseed=true; backing up existing vault and re-seeding"
+      if vault_backup_and_reseed "$vault_root" /opt/agent-admin/modules/vault-skeleton; then
+        log "vault: re-seed complete; backup at ${vault_root}.backup-*"
+        # Auto-reset the flag so we don't re-seed every boot. Matches the
+        # heartbeatctl pattern of in-place agent.yml mutations via yq -i.
+        if yq -i '.vault.force_reseed = false' "$agent_yml" 2>/dev/null; then
+          log "vault: reset .vault.force_reseed to false in agent.yml"
+        else
+          log "WARN vault: failed to reset .vault.force_reseed — set it manually"
+        fi
+      else
+        log "WARN vault: vault_backup_and_reseed failed; skipping flag reset"
+      fi
+    elif command -v vault_seed_if_empty >/dev/null 2>&1; then
       vault_seed_if_empty "$vault_root" /opt/agent-admin/modules/vault-skeleton \
         && log "vault: skeleton ready at $vault_root"
     fi

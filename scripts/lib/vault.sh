@@ -49,6 +49,35 @@ vault_seed_if_empty() {
   fi
 }
 
+# vault_backup_and_reseed TARGET_DIR SKELETON_DIR [TODAY] [TIMESTAMP]
+# Move TARGET_DIR (with its contents) to TARGET_DIR.backup-<TIMESTAMP> and
+# re-seed from SKELETON_DIR. Used when agent.yml.vault.force_reseed=true to
+# upgrade an existing agent to a newer skeleton without losing user content.
+#
+# TIMESTAMP defaults to now (YYYY-MM-DD-HHMMSS) but can be overridden for
+# tests. TODAY is forwarded to vault_seed_if_empty for the SCAFFOLD_DATE
+# replacement.
+#
+# If TARGET_DIR is missing or empty, this function is equivalent to
+# vault_seed_if_empty (no backup needed). On success, a fresh skeleton is
+# at TARGET_DIR; the prior content lives at TARGET_DIR.backup-<TIMESTAMP>.
+vault_backup_and_reseed() {
+  local target="$1" skeleton="$2"
+  local today="${3:-$(date +%Y-%m-%d)}"
+  local ts="${4:-$(date +%Y-%m-%d-%H%M%S)}"
+  [ -n "$target" ] || { echo "vault_backup_and_reseed: missing target" >&2; return 1; }
+  [ -n "$skeleton" ] || { echo "vault_backup_and_reseed: missing skeleton" >&2; return 1; }
+  [ -d "$skeleton" ] || { echo "vault_backup_and_reseed: skeleton not found: $skeleton" >&2; return 1; }
+
+  if [ -d "$target" ] && [ -n "$(ls -A "$target" 2>/dev/null)" ]; then
+    local backup="${target}.backup-${ts}"
+    mv "$target" "$backup" \
+      || { echo "vault_backup_and_reseed: backup mv failed: $target -> $backup" >&2; return 1; }
+  fi
+
+  vault_seed_if_empty "$target" "$skeleton" "$today"
+}
+
 # vault_log_append VAULT_DIR OP TITLE [TODAY]
 # Append a chronological entry to <VAULT_DIR>/log.md following the format:
 #   ## [YYYY-MM-DD] <op> | <title>
