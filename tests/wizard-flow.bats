@@ -15,30 +15,9 @@ teardown() { teardown_tmp_dir; }
 @test "wizard scaffolds destination with all files" {
   cd "$TMP_TEST_DIR"
   local dest="$TMP_TEST_DIR/my-test-agent"
-  # --destination skips the deployment prompt, so one fewer answer needed
-  run ./setup.sh --destination "$dest" <<EOF
-my-test
-TestAgent 🤖
-Test role
-Direct
-Alice Example
-Alice
-UTC
-alice@example.com
-en
-testhost
-n
-n
-none
-n
-n
-y
-15m
-Check status
-y
-n
-proceed
-EOF
+  local answers
+  answers=$(wizard_answers name=my-test display="TestAgent 🤖" role="Test role" vibe=Direct)
+  run ./setup.sh --destination "$dest" <<<"$answers"
   [ "$status" -eq 0 ]
   [ ! -f agent.yml ]  # should be MOVED to destination
   [ -f "$dest/agent.yml" ]

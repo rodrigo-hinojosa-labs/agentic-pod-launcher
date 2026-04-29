@@ -12,39 +12,13 @@ teardown() { teardown_tmp_dir; }
 
 # Helper: run wizard piping answers through stdin.
 # The host-name is auto-detected from hostname (no prompt).
-# The install_service prompt fires only on Linux.
+# Uses the shared wizard_answers helper from tests/helper.bash.
 run_docker_wizard() {
   local dest="$1"
   cp -r "$REPO_ROOT/scripts" "$REPO_ROOT/modules" "$REPO_ROOT/docker" "$TMP_TEST_DIR/installer/"
   cp "$REPO_ROOT/setup.sh" "$TMP_TEST_DIR/installer/"
   cd "$TMP_TEST_DIR/installer"
-
-  local answers=(
-    dockbot
-    DockBot
-    r
-    v
-    Alice
-    Alice
-    UTC
-    a@b.com
-    en
-  )
-  # install_service prompt fires only on Linux.
-  [ "$(uname -s)" = "Linux" ] && answers+=(n)
-  answers+=(
-    n        # fork enabled
-    none     # notifications channel
-    y        # heartbeat enabled
-    30m      # heartbeat interval
-    ok       # heartbeat prompt
-    y        # use default principles
-    n        # atlassian
-    n        # github mcp
-    proceed
-  )
-
-  printf '%s\n' "${answers[@]}" | ./setup.sh --destination "$dest"
+  wizard_answers name=dockbot display=DockBot | ./setup.sh --destination "$dest"
 }
 
 @test "--docker wizard does not prompt for Telegram secrets" {
