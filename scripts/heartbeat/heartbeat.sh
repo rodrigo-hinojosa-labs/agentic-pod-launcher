@@ -288,7 +288,11 @@ line=$(jq -cn \
     prompt:'"$prompt_json"',
     tmux_session:$sess, notifier:$notifier}')
 
-rotate_runs_jsonl "$RUNS_FILE" "$ROTATE_THRESHOLD_BYTES"
+# Rotation is best-effort (the next tick will retry), but log persistent
+# failures so the operator notices runs.jsonl growing unbounded instead
+# of finding out via a disk-full alert.
+rotate_runs_jsonl "$RUNS_FILE" "$ROTATE_THRESHOLD_BYTES" \
+  || echo "[$(date '+%Y-%m-%d %H:%M:%S')] heartbeat: WARN rotate_runs_jsonl failed for $RUNS_FILE" >&2
 append_run_line "$RUNS_FILE" "$line"
 
 prev_counters=$(jq -c '.counters // {total_runs:0,ok:0,timeout:0,error:0,consecutive_failures:0,success_rate_24h:null}' "$STATE_FILE" 2>/dev/null || echo '{"total_runs":0,"ok":0,"timeout":0,"error":0,"consecutive_failures":0,"success_rate_24h":null}')

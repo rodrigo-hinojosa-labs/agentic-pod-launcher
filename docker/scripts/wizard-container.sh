@@ -75,17 +75,24 @@ other than CLAUDE.md. If everything is already well-documented, make
 no edits and say so.
 PROMPT
   # Timeout so a stuck claude does not block the first-run wizard forever.
+  # Track success so we don't print the green "✓ refreshed" right after a
+  # warning that it was skipped (confusing UX prior to this fix).
   update_prompt=$(cat "$update_prompt_file")
+  refresh_ok=true
   if command -v gum >/dev/null 2>&1; then
     gum spin --title "Running claude --print to update CLAUDE.md..." -- \
-      timeout 90 claude --print "$update_prompt" >/tmp/claude-md-update.log 2>&1 || \
-      echo "  ⚠ CLAUDE.md update skipped (timeout or claude error — see /tmp/claude-md-update.log)"
+      timeout 90 claude --print "$update_prompt" >/tmp/claude-md-update.log 2>&1 \
+      || refresh_ok=false
   else
-    timeout 90 claude --print "$update_prompt" >/tmp/claude-md-update.log 2>&1 || \
-      echo "  ⚠ CLAUDE.md update skipped (timeout or claude error — see /tmp/claude-md-update.log)"
+    timeout 90 claude --print "$update_prompt" >/tmp/claude-md-update.log 2>&1 \
+      || refresh_ok=false
   fi
   rm -f "$update_prompt_file"
-  echo "  ✓ CLAUDE.md refreshed"
+  if [ "$refresh_ok" = true ]; then
+    echo "  ✓ CLAUDE.md refreshed"
+  else
+    echo "  ⚠ CLAUDE.md update skipped (timeout or claude error — see /tmp/claude-md-update.log)"
+  fi
   echo ""
 fi
 
