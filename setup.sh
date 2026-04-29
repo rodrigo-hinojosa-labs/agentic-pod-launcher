@@ -973,6 +973,11 @@ scaffold_with_fork() {
 # Mirror plugin-catalog.sh, modules/plugins/, vault.sh and modules/vault-skeleton/
 # into docker/ so the Dockerfile (build context ./docker/) can COPY them.
 # Idempotent — overwrites the docker/ copy on each call.
+#
+# Validates that everything ended up where the Dockerfile expects. If the
+# function silently broke (typo, permission, or future refactor), the user
+# sees a clear error here instead of a cryptic "COPY failed: file not found"
+# during `docker compose build`.
 mirror_catalog_to_docker() {
   local dest="$1"
   local src_lib="$dest/scripts/lib/plugin-catalog.sh"
@@ -991,6 +996,30 @@ mirror_catalog_to_docker() {
   if [ -d "$src_vault_skel" ]; then
     rm -rf "$dest/docker/modules/vault-skeleton"
     cp -R "$src_vault_skel" "$dest/docker/modules/vault-skeleton"
+  fi
+
+  # Post-mirror validation. Each entry below is required by the Dockerfile;
+  # missing any of them means the build will fail later with a less-clear
+  # error. Surface it here, with paths.
+  local missing=""
+  [ -f "$dest/docker/scripts/lib/plugin-catalog.sh" ] \
+    || missing="${missing}\n  - docker/scripts/lib/plugin-catalog.sh"
+  [ -f "$dest/docker/scripts/lib/vault.sh" ] \
+    || missing="${missing}\n  - docker/scripts/lib/vault.sh"
+  if [ ! -d "$dest/docker/modules/plugins" ] \
+    || [ -z "$(ls -A "$dest/docker/modules/plugins" 2>/dev/null)" ]; then
+    missing="${missing}\n  - docker/modules/plugins/ (empty or missing)"
+  fi
+  [ -f "$dest/docker/modules/vault-skeleton/CLAUDE.md" ] \
+    || missing="${missing}\n  - docker/modules/vault-skeleton/CLAUDE.md"
+  if [ -n "$missing" ]; then
+    echo "ERROR: mirror_catalog_to_docker did not populate everything required by the Dockerfile:" >&2
+    printf '%b\n' "$missing" >&2
+    echo "" >&2
+    echo "If this is a fresh clone of the launcher, run from the launcher root:" >&2
+    echo "  ./setup.sh --regenerate" >&2
+    echo "Otherwise, check that scripts/lib/{plugin-catalog,vault}.sh and modules/{plugins,vault-skeleton}/ exist." >&2
+    return 1
   fi
 }
 
