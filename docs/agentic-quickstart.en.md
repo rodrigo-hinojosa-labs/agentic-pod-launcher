@@ -8,9 +8,15 @@ Instead of answering the interactive wizard, you clone the repo, open a Claude C
 - You want to reproduce the same agent across multiple hosts with identical configuration.
 - You prefer reviewing the configuration block in one place before running.
 
+## Shortcut: the `/quickstart` slash command
+
+If you don't want to paste two blocks, open `claude` inside the repo and type `/quickstart`. The command loads this doc + `tests/helper.bash::wizard_answers()` as reference, asks you for the minimum required values in a single message (`AGENT_NAME`, `USER_NAME`, `EMAIL`, `DESTINATION`, optionally `FORK_*` and `VAULT_*`), applies sensible defaults to the rest, and runs the wizard. It's the shortest path from a Claude Code session to a scaffolded agent.
+
+The rest of this document is still useful: it covers the inputs in detail (helpful for auditing, or when you want a single copy-paste block instead of using the slash).
+
 ## Prerequisites
 
-- `git`, `yq`, `gh`, and `claude` installed.
+- `git`, `yq` v4+, `gh`, and `claude` installed.
 - A GitHub Personal Access Token with `repo` scope (and `delete_repo` if you plan to use `--delete-fork` later).
 - Push access to the fork owner (your personal account or an org you belong to).
 
@@ -18,8 +24,8 @@ Instead of answering the interactive wizard, you clone the repo, open a Claude C
 
 1. Clone the repo and enter it:
    ```bash
-   git clone https://github.com/rodrigo-hinojosa-labs/agent-admin-template.git
-   cd agent-admin-template
+   git clone https://github.com/rodrigo-hinojosa-labs/agentic-pod-launcher.git
+   cd agentic-pod-launcher
    ```
 2. Open Claude Code:
    ```bash
@@ -33,80 +39,144 @@ Instead of answering the interactive wizard, you clone the repo, open a Claude C
 
 ## Block 1 — Configuration (fill in before pasting)
 
-```
-AGENT_NAME="linus"
-DISPLAY_NAME="Linus 🐧"
+```bash
+# ── Agent identity ────────────────────────────────────
+AGENT_NAME="linus"                     # lowercase, no spaces (normalized anyway)
+DISPLAY_NAME="Linus 🐧"                 # emoji optional
 ROLE="Admin assistant for my ecosystem"
 VIBE="Direct, useful, no drama"
 
-USER_NAME="Your Full Name"       # used in CLAUDE.md and agent.yml
-NICKNAME="You"                   # how the agent should address you
-TIMEZONE="America/Santiago"      # IANA timezone — adjust to your own
+# ── About you ─────────────────────────────────────────
+USER_NAME="Your Full Name"             # used in CLAUDE.md and agent.yml
+NICKNAME=""                            # empty = first word of USER_NAME
+TIMEZONE=""                            # empty = auto (timedatectl/readlink) → "America/Santiago"
 EMAIL="you@example.com"
-LANGUAGE="en"                    # es | en | mixed
+LANGUAGE="en"                          # es | en | mixed
 
-HOST=""                          # empty = hostname -s of the current host
-DESTINATION="$HOME/Claude/Agents/linus"
-INSTALL_SERVICE="y"              # y | n
+# ── Deployment ────────────────────────────────────────
+DESTINATION="$HOME/Claude/Agents/linus"     # must NOT exist yet
+INSTALL_SERVICE="y"                    # Linux only — wizard skips this prompt on macOS
 
-# Claude profile: left empty, the wizard auto-inherits $CLAUDE_CONFIG_DIR
-# from the current session. Override only if you want a specific existing
-# profile or a new isolated one (the wizard's multi-candidate prompt accepts
-# a number; set this to that number, e.g. "1" for first candidate).
-CLAUDE_PROFILE_CHOICE=""         # empty = auto, "1"..."N" = pick candidate
-
-FORK_ENABLED="y"                 # y | n — if n, all FORK_* are ignored
+# ── GitHub fork (template sync) ───────────────────────
+FORK_ENABLED="y"                       # y | n — if n, all FORK_* are ignored
 FORK_OWNER="your-github-user-or-org"   # user or organization
-FORK_NAME=""                     # empty = <agent>-agent (shared across hosts; branches carry the host)
+FORK_NAME=""                           # empty = <agent>-agent (shared cross-host; branches carry the host)
 FORK_PRIVATE="y"
-TEMPLATE_URL="https://github.com/rodrigo-hinojosa-labs/agent-admin-template"
-FORK_PAT=""                      # ghp_... with repo scope
+TEMPLATE_URL="https://github.com/rodrigo-hinojosa-labs/agentic-pod-launcher"
+FORK_PAT=""                            # ghp_... with repo scope (NEVER make this up)
 
-HEARTBEAT_NOTIF="none"           # none | log | telegram
-ATLASSIAN_ENABLED="n"
-GITHUB_MCP_ENABLED="n"
-GITHUB_MCP_EMAIL=""              # if ENABLED=y
-GITHUB_MCP_PAT=""                # if ENABLED=y — may reuse FORK_PAT
+# ── Heartbeat — notifications ─────────────────────────
+NOTIFY_CHANNEL="none"                  # none | log | telegram
+NOTIFY_BOT_TOKEN=""                    # only if NOTIFY_CHANNEL=telegram
+NOTIFY_CHAT_ID=""                      # only if NOTIFY_CHANNEL=telegram
 
-HEARTBEAT_ENABLED="n"
-HEARTBEAT_INTERVAL="30m"
-HEARTBEAT_PROMPT="Check status and report"
-USE_DEFAULT_PRINCIPLES="y"
+# ── MCPs ──────────────────────────────────────────────
+ATLASSIAN_ENABLED="n"                  # if y → loop of workspaces (see format below)
+# Format: each workspace is "name|url|email|token", space-separated.
+# Empty email = falls back to $EMAIL. Empty token = filled in .env later.
+# Example: ATLASSIAN_WORKSPACES="work|https://acme.atlassian.net|me@acme.com|atl_xxx personal|https://me.atlassian.net||"
+ATLASSIAN_WORKSPACES=""
+
+GITHUB_MCP_ENABLED="n"                 # GitHub MCP (≠ from fork; separate PAT)
+GITHUB_MCP_EMAIL=""                    # empty = $EMAIL when ENABLED=y
+GITHUB_MCP_PAT=""                      # ghp_... — may reuse FORK_PAT if you want
+
+# ── Heartbeat — schedule + prompt ─────────────────────
+HEARTBEAT_ENABLED="y"                  # y = wizard asks the next two; n = skip
+HEARTBEAT_INTERVAL="30m"               # 5m, 30m, 1h, 6h, 1d, etc.
+HEARTBEAT_PROMPT="Status check — return a short plain-text report (uptime, notable issues). No tool use; your stdout is forwarded verbatim to the notifier."
+
+# ── Principles ────────────────────────────────────────
+USE_DEFAULT_PRINCIPLES="y"             # y = paste opinionated defaults; n = start blank
+
+# ── Knowledge vault (Karpathy LLM Wiki) ───────────────
+VAULT_ENABLED="y"                      # Obsidian-style vault at .state/.vault/
+VAULT_SEED_SKELETON="y"                # 3-layer skeleton (raw_sources/wiki/schema)
+VAULT_MCP_ENABLED="y"                  # register MCPVault (@bitbonsai/mcpvault)
+VAULT_QMD_ENABLED="n"                  # hybrid search BM25+vector — downloads ~300MB on first use
+
+# ── Optional plugins (5; alphabetical wizard order) ───
+PLUGIN_CODE_SIMPLIFIER="n"
+PLUGIN_COMMIT_COMMANDS="n"
+PLUGIN_GITHUB="n"
+PLUGIN_SKILL_CREATOR="n"
+PLUGIN_SUPERPOWERS="n"
 ```
 
 ## Block 2 — Instructions (paste as-is after block 1)
 
 ```
-Run the agent-admin-template wizard using the values above.
+Run the agentic-pod-launcher wizard using the values above.
 
-Before running:
-1. Confirm `yq`, `git`, and `gh` are on PATH.
-2. If FORK_ENABLED="y", export GH_TOKEN=$FORK_PAT and verify `gh api user` returns a valid login.
-3. Verify $DESTINATION does not already exist.
-4. If any required value is empty (AGENT_NAME, USER_NAME, EMAIL, or — when FORK_ENABLED=y — FORK_OWNER and FORK_PAT), stop and ask me for the missing values before continuing.
+PRE-FLIGHT — before touching setup.sh:
+1. Confirm `yq` (v4+), `git`, and `gh` are on PATH.
+2. If FORK_ENABLED="y", export GH_TOKEN=$FORK_PAT and verify `gh api user`
+   returns a valid login. If it fails, stop and show me the error.
+3. Verify $DESTINATION does not exist (`[ ! -e $DESTINATION ]`). If it does, stop.
+4. If any required value is empty, stop and ask me for the missing ones:
+   - AGENT_NAME, USER_NAME, EMAIL — always required
+   - FORK_OWNER, FORK_PAT — only if FORK_ENABLED="y"
+   - NOTIFY_BOT_TOKEN, NOTIFY_CHAT_ID — only if NOTIFY_CHANNEL="telegram"
+   - GITHUB_MCP_PAT — only if GITHUB_MCP_ENABLED="y"
 
-Then:
-5. Build the wizard stdin with `printf`, honoring the exact prompt order:
-   - Agent identity: AGENT_NAME, DISPLAY_NAME, ROLE, VIBE
-   - About you: USER_NAME, NICKNAME, TIMEZONE, EMAIL, LANGUAGE
-   - Deployment: HOST, DESTINATION, INSTALL_SERVICE
-   - Claude profile: only prompted when multiple ~/.claude* dirs exist AND $CLAUDE_CONFIG_DIR is unset. If prompted, pass CLAUDE_PROFILE_CHOICE (default "1" = first existing profile)
-   - Fork: FORK_ENABLED [if y: FORK_OWNER, FORK_NAME, FORK_PRIVATE, TEMPLATE_URL, FORK_PAT]
-   - Heartbeat notifications: HEARTBEAT_NOTIF
-   - MCPs: ATLASSIAN_ENABLED [if y: atlassian loop], GITHUB_MCP_ENABLED [if y: email + PAT]
-   - Features: HEARTBEAT_ENABLED [if y: INTERVAL, PROMPT]
-   - Principles: USE_DEFAULT_PRINCIPLES
-   - Action: "" (proceed)
+RULE — NEVER fabricate secrets (PATs, bot tokens, chat IDs, Atlassian API
+tokens). If one is missing and the feature requires it, offer me two options:
+(a) I provide it and we retry, (b) we disable that feature (e.g. set
+NOTIFY_CHANNEL=none) and configure it later via heartbeatctl or a wizard re-run.
 
-6. Pipe that stdin to `./setup.sh` and capture stdout+stderr.
-7. If any scaffold step fails (fork creation, fetch, rebase), show me the full error and stop — do not silently "fix" by mutating agent.yml without asking.
-8. On success, print the `NEXT_STEPS.md` rendered into $DESTINATION and summarize:
-   - The live branch created (e.g. `<host>-<agent>-v1/live`)
-   - The fork URL
-   - What's still pending (initial push, SSH/MCP validation, plugin install)
+STDIN BUILD — use `printf` and respect this EXACT order (mirror of
+`tests/helper.bash::wizard_answers()`, which is the canonical source of
+truth, kept in sync by every PR):
 
-Don't ask for confirmation between steps — proceed unless a required value is missing or a validation fails.
+  1. Identity (4 lines):            AGENT_NAME, DISPLAY_NAME, ROLE, VIBE
+  2. About you (5 lines):           USER_NAME, NICKNAME (empty→first name),
+                                    TIMEZONE (empty→auto), EMAIL, LANGUAGE
+  3. install_service (Linux only):  INSTALL_SERVICE   ← skip if `uname -s` ≠ Linux
+  4. Fork (1 + sub if y):           FORK_ENABLED [if y: FORK_OWNER, FORK_NAME
+                                    (empty→<agent>-agent), FORK_PRIVATE,
+                                    TEMPLATE_URL, FORK_PAT]
+  5. Heartbeat notif (1 + sub):     NOTIFY_CHANNEL [if telegram: NOTIFY_BOT_TOKEN
+                                    + auto-discover prompt = "n" + NOTIFY_CHAT_ID]
+  6. Atlassian MCP (1 + loop if y): ATLASSIAN_ENABLED [if y: per workspace
+                                    name|url|email|token + "n" to end loop]
+  7. GitHub MCP (1 + sub if y):     GITHUB_MCP_ENABLED [if y: GITHUB_MCP_EMAIL,
+                                    GITHUB_MCP_PAT]
+  8. Heartbeat schedule (1 + sub):  HEARTBEAT_ENABLED [if y: HEARTBEAT_INTERVAL,
+                                    HEARTBEAT_PROMPT]
+  9. Principles (1):                USE_DEFAULT_PRINCIPLES
+ 10. Vault (1 + 3 sub if y):        VAULT_ENABLED [if y: VAULT_SEED_SKELETON,
+                                    VAULT_MCP_ENABLED, VAULT_QMD_ENABLED]
+ 11. Optional plugins (5, alpha):   PLUGIN_CODE_SIMPLIFIER, PLUGIN_COMMIT_COMMANDS,
+                                    PLUGIN_GITHUB, PLUGIN_SKILL_CREATOR,
+                                    PLUGIN_SUPERPOWERS
+ 12. Review action (1):             "proceed"   ← literal, no quotes in the printf
+
+EXECUTION:
+13. Pipe that stdin to `./setup.sh --destination $DESTINATION` and capture
+    stdout+stderr. DO NOT use --non-interactive (that requires a pre-existing
+    agent.yml — different flow).
+14. If ANY scaffold step fails (clone, fork creation, fetch, rebase,
+    docker-compose render), show me the full error and stop. Don't try to
+    "fix" it by silently mutating agent.yml.
+15. On success:
+    - Print the `NEXT_STEPS.md` rendered into $DESTINATION.
+    - Summarize: live branch created, fork URL (if applicable), pending
+      commands (initial push, /login, Telegram pairing, MCP validation).
+
+Don't ask for confirmation between pre-flight and stdin-build steps —
+proceed unless a required value is missing or a validation fails.
 ```
+
+---
+
+## Field reference — required vs default vs never-fabricate
+
+| Category | Fields | Notes |
+|---|---|---|
+| **Required** (no safe default) | `AGENT_NAME`, `USER_NAME`, `EMAIL`, `DESTINATION` | Wizard rejects empty input here. |
+| **Conditionally required** | `FORK_OWNER` + `FORK_PAT` (if fork=y), `NOTIFY_BOT_TOKEN` + `NOTIFY_CHAT_ID` (if telegram), `GITHUB_MCP_PAT` (if GitHub MCP) | Only when you enable the feature. |
+| **Safe default** | `VIBE`, `NICKNAME` (auto from first name), `TIMEZONE` (auto), `LANGUAGE` (`en`), `INSTALL_SERVICE` (Linux=`y`), `FORK_NAME` (`<agent>-agent`), `FORK_PRIVATE` (`y`), `NOTIFY_CHANNEL` (`none`), `HEARTBEAT_*` (30m, default prompt), `USE_DEFAULT_PRINCIPLES` (`y`), `VAULT_*` (all `y` except QMD=`n`) | Accept the default if you have no explicit preference. |
+| **NEVER fabricate** | `FORK_PAT`, `NOTIFY_BOT_TOKEN`, `NOTIFY_CHAT_ID`, `GITHUB_MCP_PAT`, every `ATLASSIAN_*` token | User secrets. If missing and the feature requires them, disable the feature or stop and ask. |
 
 ---
 
@@ -116,7 +186,7 @@ Don't ask for confirmation between steps — proceed unless a required value is 
 
 ## Alternative: interactive wizard
 
-If you prefer the traditional terminal-prompt flow, run `./setup.sh` and answer each question by hand — see the [Quick start](../README.md#quick-start) section of the README.
+If you prefer the traditional terminal-prompt flow, run `./setup.sh` and answer each question by hand — see the [Quickstart](../README.md#quickstart) section of the README.
 
 ---
 
