@@ -443,6 +443,42 @@ restart the container. To create manually inside the container:
 docker exec -u agent <name> sh -c 'ln -sfn /home/agent/.vault /home/agent/vault'
 ```
 
+### Upgrading the skeleton (`force_reseed`)
+
+`modules/vault-skeleton/` evolves over time — new templates, new schema rules in `CLAUDE.md`, new sections in `index.md`. By default, `vault_seed_if_empty` is idempotent: once an agent's `.vault/` is populated, future container boots are no-ops, so existing agents keep their original skeleton. That's the safe default — the agent's wiki content is the user's, and we don't overwrite it.
+
+When you do want to upgrade, set the flag in `agent.yml`:
+
+```yaml
+vault:
+  ...
+  force_reseed: true
+```
+
+Then restart the container. On the next boot, the agent does this:
+
+1. Moves the entire `~/.vault/` to `~/.vault.backup-YYYY-MM-DD-HHMMSS/`.
+2. Re-seeds `~/.vault/` from the bundled skeleton (image-baked at `/opt/agent-admin/modules/vault-skeleton/`).
+3. **Resets `vault.force_reseed` to `false` in `agent.yml`** so the next boot is a no-op (no recurring re-seed on every restart).
+
+The backup is preserved indefinitely so you can recover anything from the old vault. Common workflow:
+
+```bash
+# Inside the container, copy a specific page back from the backup
+docker exec -u agent <agent-name> sh -c '
+  cp ~/.vault.backup-2026-04-29-153000/wiki/concepts/my-page.md \
+     ~/.vault/wiki/concepts/
+'
+```
+
+Or pull whole subdirectories with `cp -R`. When you're satisfied that nothing was lost, the backup can be deleted.
+
+**Caveats:**
+
+- The agent (which runs as `agent` user inside the container) writes to `agent.yml` via `yq -i` to reset the flag. This matches the pattern `heartbeatctl set-*` already uses for in-place mutations.
+- If the `yq -i` reset fails (extremely rare), a `WARN` line lands in the container log and the user must reset the flag manually. The vault re-seed itself completes either way.
+- `raw_sources/` is part of the seed; it gets backed up too. If you've ingested many sources you don't want to re-seed onto a fresh `raw_sources/`, copy them out of the backup before deleting it.
+
 ### Removing the vault
 
 ```bash

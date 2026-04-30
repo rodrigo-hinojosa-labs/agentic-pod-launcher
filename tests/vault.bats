@@ -139,3 +139,49 @@ teardown() {
   run vault_log_append "$TMP_TEST_DIR" "" ""
   [ "$status" -ne 0 ]
 }
+
+# --- vault_backup_and_reseed -----------------------------------------------
+
+@test "vault_backup_and_reseed: equivalent to seed when target is empty/missing" {
+  local target="$TMP_TEST_DIR/empty-target"
+  run vault_backup_and_reseed "$target" "$SKELETON" "2026-04-29" "2026-04-29-120000"
+  [ "$status" -eq 0 ]
+  [ -f "$target/CLAUDE.md" ]
+  [ -d "$target/wiki/concepts" ]
+  # No backup created since there was nothing to back up
+  [ ! -d "$target.backup-2026-04-29-120000" ]
+}
+
+@test "vault_backup_and_reseed: backs up existing content and re-seeds" {
+  local target="$TMP_TEST_DIR/existing-vault"
+  mkdir -p "$target/wiki/concepts"
+  echo "user-content" > "$target/wiki/concepts/my-note.md"
+  echo "old log" > "$target/log.md"
+
+  run vault_backup_and_reseed "$target" "$SKELETON" "2026-04-29" "2026-04-29-120000"
+  [ "$status" -eq 0 ]
+
+  # Backup preserved with the expected timestamped path
+  [ -d "$target.backup-2026-04-29-120000" ]
+  [ -f "$target.backup-2026-04-29-120000/wiki/concepts/my-note.md" ]
+  grep -q "user-content" "$target.backup-2026-04-29-120000/wiki/concepts/my-note.md"
+
+  # Fresh skeleton at the original path
+  [ -f "$target/CLAUDE.md" ]
+  grep -q "Karpathy" "$target/CLAUDE.md"
+  [ -d "$target/wiki/concepts" ]
+  [ ! -f "$target/wiki/concepts/my-note.md" ]
+  grep -qE '## \[2026-04-29\] init' "$target/log.md"
+}
+
+@test "vault_backup_and_reseed: errors on missing args" {
+  run vault_backup_and_reseed
+  [ "$status" -ne 0 ]
+  run vault_backup_and_reseed "$TMP_TEST_DIR/x"
+  [ "$status" -ne 0 ]
+}
+
+@test "vault_backup_and_reseed: errors on missing skeleton" {
+  run vault_backup_and_reseed "$TMP_TEST_DIR/y" "$TMP_TEST_DIR/nonexistent-skeleton"
+  [ "$status" -ne 0 ]
+}

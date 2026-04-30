@@ -40,7 +40,7 @@ teardown() { teardown_tmp_dir; }
   local actual expected
   actual=$(yq '.vault | keys | .[]' "$fixture" | sort)
   expected=$(printf '%s\n' \
-    enabled initial_sources mcp path qmd schema seed_skeleton \
+    enabled force_reseed initial_sources mcp path qmd schema seed_skeleton \
     | sort)
   if [ "$actual" != "$expected" ]; then
     echo "schema drift in vault block:" >&2

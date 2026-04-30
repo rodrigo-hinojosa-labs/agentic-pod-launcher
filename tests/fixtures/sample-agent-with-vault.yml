@@ -54,6 +54,7 @@ vault:
   enabled: true
   path: .state/.vault
   seed_skeleton: true
+  force_reseed: false
   initial_sources: []
   mcp:
     enabled: true
