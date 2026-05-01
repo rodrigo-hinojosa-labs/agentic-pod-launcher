@@ -13,6 +13,15 @@ docker compose up -d
 El contenedor arranca y el supervisor lanza Claude Code dentro de una sesión tmux detached. Conéctate con (NO uses `docker attach` — ese muestra los logs del supervisor; la sesión interactiva vive en tmux):
 
 ```bash
+# Retry-loop: el supervisor poll cada 2s y respawnea la sesión tmux después
+# de /login, /exit, o restart de canal. Si haces attach durante esa ventana
+# verás "no sessions". Este loop reintenta hasta conectar (15s máx).
+for i in $(seq 15); do docker exec -it -u agent {{AGENT_NAME}} tmux attach -t agent && break; sleep 1; done
+```
+
+Si preferís el comando simple (asumiendo que el supervisor ya respawneó):
+
+```bash
 docker exec -it -u agent {{AGENT_NAME}} tmux attach -t agent
 ```
 
@@ -131,11 +140,21 @@ Referencia completa (todos los subcomandos + reglas de validación + timing de p
 
 #### `docker exec ... tmux attach -t agent` dice "no sessions"
 
-`docker exec` por defecto entra como root, y tmux guarda el socket por UID en `/tmp/tmux-<uid>/`. La sesión vive en el UID de `agent` (501 por default), así que root mira `/tmp/tmux-0/` y reporta vacío. Siempre pasa `-u agent`:
+Dos causas distintas:
 
-```bash
-docker exec -it -u agent {{AGENT_NAME}} tmux attach -t agent
-```
+1. **Falta `-u agent`**: `docker exec` por defecto entra como root, y tmux guarda el socket por UID en `/tmp/tmux-<uid>/`. La sesión vive en el UID de `agent` (501 por default), así que root mira `/tmp/tmux-0/` y reporta vacío. Siempre pasa `-u agent`:
+
+   ```bash
+   docker exec -it -u agent {{AGENT_NAME}} tmux attach -t agent
+   ```
+
+2. **Timing del watchdog**: el supervisor poll cada 2s y respawnea la sesión tmux después de `/login`, `/exit`, restart del canal Telegram, o crash de algún proceso. Entre el "muere" y el "respawn completo" hay una ventana de 5–15 segundos donde no hay session `agent`. Reattach inmediato cae en esa ventana → "no sessions". Solución: retry-loop hasta que el watchdog complete el respawn:
+
+   ```bash
+   for i in $(seq 15); do docker exec -it -u agent {{AGENT_NAME}} tmux attach -t agent && break; sleep 1; done
+   ```
+
+   El loop intenta cada segundo hasta 15 veces. Apenas hay session, conecta y termina. Si pasaron 15s sin éxito, hay un problema más profundo (revisá `docker logs {{AGENT_NAME}}` y `docker exec -u agent {{AGENT_NAME}} tail -50 /workspace/claude.log`).
 
 #### `docker attach {{AGENT_NAME}}` cuelga sin output
 
