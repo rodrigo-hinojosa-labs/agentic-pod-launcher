@@ -1264,8 +1264,8 @@ regenerate() {
   # mcp-json.tpl `{{#if}}` blocks fire correctly under `--regenerate` (which
   # arrives here without the wizard's exports). Always-on MCPs (fetch, git,
   # filesystem) are hardcoded in the template — these env vars only gate
-  # the optional ones (playwright, time, sequential-thinking, firecrawl,
-  # google-calendar, aws, tree-sitter).
+  # the optional ones (playwright, time, firecrawl, google-calendar, aws,
+  # tree-sitter).
   local _regen_mcp_id _regen_envvar
   while IFS= read -r _regen_mcp_id; do
     [ -z "$_regen_mcp_id" ] && continue

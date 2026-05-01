@@ -105,7 +105,7 @@ teardown() { teardown_tmp_dir; }
   # agent.yml.mcps.defaults[]. The fixture above doesn't list any optional
   # MCPs (only fetch/git/filesystem always-on), so none of these env vars
   # are produced by render_load_context — they're rightfully external.
-  known_external="${known_external} MCPS_PLAYWRIGHT_ENABLED MCPS_TIME_ENABLED MCPS_SEQUENTIAL_THINKING_ENABLED"
+  known_external="${known_external} MCPS_PLAYWRIGHT_ENABLED MCPS_TIME_ENABLED"
   known_external="${known_external} MCPS_FIRECRAWL_ENABLED MCPS_GOOGLE_CALENDAR_ENABLED MCPS_AWS_ENABLED"
   known_external="${known_external} MCPS_TREE_SITTER_ENABLED "
 

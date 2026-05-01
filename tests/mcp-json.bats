@@ -39,7 +39,6 @@ EOF
   # Optional (env-gated) defaults are absent when no MCPS_*_ENABLED is set.
   [ "$(echo "$result" | jq -r '.mcpServers.playwright // "absent"')" = "absent" ]
   [ "$(echo "$result" | jq -r '.mcpServers.time // "absent"')" = "absent" ]
-  [ "$(echo "$result" | jq -r '.mcpServers["sequential-thinking"] // "absent"')" = "absent" ]
   # Atlassian workspace iterated from agent.yml.
   [ "$(echo "$result" | jq -r '.mcpServers["atlassian-personal"].env.CONFLUENCE_URL')" = '${ATLASSIAN_PERSONAL_CONFLUENCE_URL}' ]
   [ "$(echo "$result" | jq -r '.mcpServers["atlassian-personal"].env.CONFLUENCE_USERNAME')" = '${ATLASSIAN_PERSONAL_CONFLUENCE_USERNAME}' ]

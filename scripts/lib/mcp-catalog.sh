@@ -70,7 +70,7 @@ mcp_catalog_get() {
 # render template to gate the `{{#if MCPS_<ID>_ENABLED}}` block.
 # Examples:
 #   fetch              → MCPS_FETCH_ENABLED
-#   sequential-thinking → MCPS_SEQUENTIAL_THINKING_ENABLED
+#   tree-sitter        → MCPS_TREE_SITTER_ENABLED
 #   google-calendar    → MCPS_GOOGLE_CALENDAR_ENABLED
 mcp_catalog_id_to_envvar() {
   local id="$1"
