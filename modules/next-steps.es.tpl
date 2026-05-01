@@ -7,23 +7,16 @@ Tu agente está scaffoldeado como contenedor Docker en `{{DEPLOYMENT_WORKSPACE}}
 ```bash
 cd {{DEPLOYMENT_WORKSPACE}}
 docker compose build
-docker compose up -d
+./scripts/agentctl up                    # docker compose up -d
 ```
 
-El contenedor arranca y el supervisor lanza Claude Code dentro de una sesión tmux detached. Conéctate con (NO uses `docker attach` — ese muestra los logs del supervisor; la sesión interactiva vive en tmux):
+El contenedor arranca y el supervisor lanza Claude Code dentro de una sesión tmux detached. Conéctate con `agentctl attach` — el wrapper hace retry-loop interno (15s máx) hasta que el supervisor termine de respawnear la sesión:
 
 ```bash
-# Retry-loop: el supervisor poll cada 2s y respawnea la sesión tmux después
-# de /login, /exit, o restart de canal. Si haces attach durante esa ventana
-# verás "no sessions". Este loop reintenta hasta conectar (15s máx).
-for i in $(seq 15); do docker exec -it -u agent {{AGENT_NAME}} tmux attach -t agent && break; sleep 1; done
+./scripts/agentctl attach
 ```
 
-Si prefieres el comando simple (asumiendo que el supervisor ya respawneó):
-
-```bash
-docker exec -it -u agent {{AGENT_NAME}} tmux attach -t agent
-```
+> **Nota**: `agentctl` es un wrapper host-side de `docker exec -u agent {{AGENT_NAME}} ...`. Resuelve el nombre del container desde `agent.yml` (cwd) o de la flag `-a NAME`. Subcomandos: `attach`, `logs [-f]`, `status`, `heartbeat <sub>`, `mcp [list]`, `shell [--root]`, `up`, `stop`, `restart`, `ps`, `run <cmd…>`. Equivalente raw (si prefieres tipearlo): `docker exec -it -u agent {{AGENT_NAME}} tmux attach -t agent`.
 
 Para salir sin matar el contenedor: `Ctrl-b d` (atajo estándar de tmux).
 
@@ -34,14 +27,14 @@ Dentro de la sesión tmux:
 1. Elige un tema (Enter acepta el default) y confirma trust en `/workspace`.
 2. Corre `/login`, abre la URL en el navegador, autoriza, pega el código de vuelta. Las credenciales viven en `{{DEPLOYMENT_WORKSPACE}}/.state/` (bind-mounted al `/home/agent` del contenedor) y sobreviven rebuilds.
 3. Escribe `/exit` (o Ctrl-D). Claude cierra; el watchdog se entera y re-evalúa qué lanzar.
-4. **Espera ~2–3 segundos** para que el supervisor detecte el cierre y arranque la siguiente sesión tmux (el wizard de Telegram). Si haces re-attach demasiado rápido, verás `no sessions` — vuelve a intentarlo.
+4. Re-conecta con `./scripts/agentctl attach` — el retry-loop interno espera al supervisor.
 
 ## 3. Ingresa el token del bot de Telegram
 
 Reconéctate a la sesión tmux:
 
 ```bash
-docker exec -it -u agent {{AGENT_NAME}} tmux attach -t agent
+./scripts/agentctl attach
 ```
 
 El supervisor ahora detecta el perfil autenticado y lanza el wizard in-container:
@@ -52,14 +45,12 @@ El supervisor ahora detecta el perfil autenticado y lanza el wizard in-container
 
 El wizard escribe `/workspace/.env` (0600) y sale. El watchdog ve que la sesión murió, re-decide, y esta vez arranca Claude con `--channels plugin:telegram@claude-plugins-official`. El MCP server del plugin (`bun server.ts`) arranca solo y empieza a polear Telegram.
 
-**Espera ~2–3 segundos** otra vez antes de re-attach — mismo gap que después de `/exit`.
-
 ## 4. Emparejar tu cuenta de Telegram
 
 Re-attach una vez más:
 
 ```bash
-docker exec -it -u agent {{AGENT_NAME}} tmux attach -t agent
+./scripts/agentctl attach
 ```
 
 Luego:
@@ -75,16 +66,22 @@ Para salir sin matar la sesión: `Ctrl-b d`.
 
 ```bash
 # Reconectar a la sesión
-docker exec -it -u agent {{AGENT_NAME}} tmux attach -t agent
+./scripts/agentctl attach
+
+# Ver estado del heartbeat
+./scripts/agentctl status
+
+# Tail del log de Claude
+./scripts/agentctl logs -f
 
 # Rotar un secreto
 $EDITOR {{DEPLOYMENT_WORKSPACE}}/.env
-docker compose restart
+./scripts/agentctl restart
 
 # Actualizar a una versión nueva del template
 cd {{DEPLOYMENT_WORKSPACE}}
 git pull                                 # si tu workspace es un fork
-docker compose build && docker compose up -d
+docker compose build && ./scripts/agentctl restart
 ```
 
 {{PLUGINS_BLOCK}}
@@ -106,7 +103,7 @@ Síntoma: mandas mensajes por Telegram al bot de chat, el agente responde una ve
 **Recuperación:**
 
 ```bash
-docker exec -u agent {{AGENT_NAME}} heartbeatctl kick-channel
+./scripts/agentctl heartbeat kick-channel
 ```
 
 Mata la sesión tmux `agent`; el watchdog de `start_services.sh` la respawna en ~2 segundos con el plugin re-conectado fresco. Tu siguiente mensaje debería llegar.
@@ -117,7 +114,7 @@ El watchdog también detecta automáticamente si `bun server.ts` muere (otro mod
 
 ```bash
 # Desde tu terminal, cuando el agente no contesta:
-docker exec -u agent {{AGENT_NAME}} heartbeatctl kick-channel
+./scripts/agentctl heartbeat kick-channel
 # heartbeatctl: killed tmux session 'agent' — watchdog will respawn in ~2s
 
 # Mandas "hola" por Telegram. El agente responde.
@@ -126,12 +123,12 @@ docker exec -u agent {{AGENT_NAME}} heartbeatctl kick-channel
 ### Otros comandos útiles (`heartbeatctl`)
 
 ```bash
-docker exec -u agent {{AGENT_NAME}} heartbeatctl status   # estado + último run
-docker exec -u agent {{AGENT_NAME}} heartbeatctl logs     # últimos 20 runs
-docker exec -u agent {{AGENT_NAME}} heartbeatctl test     # un tick manual
-docker exec -u agent {{AGENT_NAME}} heartbeatctl pause    # pausar heartbeat
-docker exec -u agent {{AGENT_NAME}} heartbeatctl resume   # reanudar
-docker exec -u agent {{AGENT_NAME}} heartbeatctl set-interval 5m   # cambiar intervalo
+./scripts/agentctl status                        # estado + último run
+./scripts/agentctl heartbeat logs                # últimos 20 runs
+./scripts/agentctl heartbeat test                # un tick manual
+./scripts/agentctl heartbeat pause               # pausar heartbeat
+./scripts/agentctl heartbeat resume              # reanudar
+./scripts/agentctl heartbeat set-interval 5m     # cambiar intervalo
 ```
 
 Referencia completa (todos los subcomandos + reglas de validación + timing de propagación): [docs/heartbeatctl.md](docs/heartbeatctl.md).
@@ -140,21 +137,18 @@ Referencia completa (todos los subcomandos + reglas de validación + timing de p
 
 #### `docker exec ... tmux attach -t agent` dice "no sessions"
 
-Dos causas distintas:
+Dos causas distintas, ambas resueltas usando `agentctl attach` en lugar del comando raw:
 
-1. **Falta `-u agent`**: `docker exec` por defecto entra como root, y tmux guarda el socket por UID en `/tmp/tmux-<uid>/`. La sesión vive en el UID de `agent` (501 por default), así que root mira `/tmp/tmux-0/` y reporta vacío. Siempre pasa `-u agent`:
+1. **Falta `-u agent`**: `docker exec` por defecto entra como root, y tmux guarda el socket por UID en `/tmp/tmux-<uid>/`. La sesión vive en el UID de `agent` (501 por default), así que root mira `/tmp/tmux-0/` y reporta vacío. `agentctl attach` siempre pasa `-u agent`. Equivalente raw: `docker exec -it -u agent {{AGENT_NAME}} tmux attach -t agent`.
 
-   ```bash
-   docker exec -it -u agent {{AGENT_NAME}} tmux attach -t agent
-   ```
+2. **Timing del watchdog**: el supervisor poll cada 2s y respawnea la sesión tmux después de `/login`, `/exit`, restart del canal Telegram, o crash de algún proceso. Entre el "muere" y el "respawn completo" hay una ventana de 5–15 segundos donde no hay session `agent`. Reattach inmediato cae en esa ventana → "no sessions". `agentctl attach` poll cada segundo hasta 15s y conecta apenas el supervisor termina el respawn.
 
-2. **Timing del watchdog**: el supervisor poll cada 2s y respawnea la sesión tmux después de `/login`, `/exit`, restart del canal Telegram, o crash de algún proceso. Entre el "muere" y el "respawn completo" hay una ventana de 5–15 segundos donde no hay session `agent`. Reattach inmediato cae en esa ventana → "no sessions". Solución: retry-loop hasta que el watchdog complete el respawn:
+   Si después de 15s sigue sin conectar, hay un problema más profundo:
 
    ```bash
-   for i in $(seq 15); do docker exec -it -u agent {{AGENT_NAME}} tmux attach -t agent && break; sleep 1; done
+   ./scripts/agentctl logs -n 100             # tail del claude.log
+   docker logs {{AGENT_NAME}} | tail -50      # logs del supervisor
    ```
-
-   El loop intenta cada segundo hasta 15 veces. Apenas hay session, conecta y termina. Si pasaron 15s sin éxito, hay un problema más profundo (revisa `docker logs {{AGENT_NAME}}` y `docker exec -u agent {{AGENT_NAME}} tail -50 /workspace/claude.log`).
 
 #### `docker attach {{AGENT_NAME}}` cuelga sin output
 

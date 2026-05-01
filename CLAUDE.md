@@ -29,8 +29,13 @@ DOCKER_E2E=1 bats tests/docker-e2e-heartbeat.bats   # opt-in: builds image + boo
 ./setup.sh --help                        # all flags
 
 # Inside a scaffolded workspace (NOT this repo)
-docker compose build && docker compose up -d
-docker exec -u agent <agent-name> heartbeatctl status        # always pass -u agent
+docker compose build && ./scripts/agentctl up   # agentctl up == docker compose up -d
+./scripts/agentctl attach                # tmux attach with retry-loop
+./scripts/agentctl status                # heartbeatctl status (proxy through agentctl)
+./scripts/agentctl heartbeat <sub>       # any heartbeatctl subcommand
+./scripts/agentctl logs -f               # tail /workspace/claude.log
+./scripts/agentctl logs --stderr         # forensic tail of telegram-mcp-stderr.log
+./scripts/agentctl --help                # full subcommand list
 ./setup.sh --regenerate                  # re-render derived files from agent.yml
 ./setup.sh --uninstall --yes             # remove generated files (keeps agent.yml/.env/.state)
 ./setup.sh --uninstall --purge --yes     # also removes agent.yml/.env/.state/
@@ -92,7 +97,12 @@ After PR #3 (2026-04-22) all agent state (OAuth login, Telegram pairing, session
 
 `docker/scripts/apply_telegram_typing_patch.py` is re-applied on every boot by `start_services.sh::apply_plugin_patches` against the plugin copy in `~/.claude/plugins/cache/claude-plugins-official/telegram/*/server.ts`. Idempotent via marker comments (one per patch group: typing, offset, stderr, primary), fail-silent if any of the anchor regexes drift. Don't move the patch invocation out of the boot path — the plugin cache lives under `.state/` which means a workspace clone receives an unpatched plugin until the next boot.
 
-The typing patch is currently at **v2** (no time cap on the typing-action refresh; the indicator persists until `case 'reply'` fires or the bun process exits). When you upgrade an agent that was previously patched at v1, the next boot detects the v1 marker and runs `upgrade_typing_v1_to_v2` — a surgical regex remove of the `_TYPING_MAX_MS` constant + the `setTimeout(cap)` block, marker bumped, inline comment refreshed. The upgrade is fail-silent if the v1 helpers were edited out-of-band (logs WARN; leaves v1 in place).
+The typing patch is currently at **v3** — same runtime contract as v2 (no time cap; the indicator persists until `case 'reply'` fires or the bun process exits) plus observability:
+
+- The setInterval logs `telegram channel: typing tick N for chat <id>` to stderr every 5 invocations (~20s). The stderr-capture patch tees this to `/workspace/scripts/heartbeat/logs/telegram-mcp-stderr.log`, so a quiet log during a long Claude turn is direct evidence of a runtime issue.
+- `bot.api.sendChatAction(...).catch(() => {})` was the v1/v2 anti-pattern that silently swallowed every Telegram error (rate limit, network, expired token). v3 routes the error through `process.stderr.write(...)` so it's visible in the same log.
+
+The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3`. Already-patched agents at any version ratchet up transparently — `upgrade_typing_v1_to_v2` strips the cap and bumps the marker; `upgrade_typing_v2_to_v3` rewrites the helper block with instrumentation. Both upgraders are fail-silent if helpers were edited out-of-band (logs WARN; leaves the file at the highest matching version).
 
 ## Common gotchas
 

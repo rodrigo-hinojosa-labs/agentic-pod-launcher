@@ -104,7 +104,7 @@ teardown() { teardown_tmp_dir; }
 @test "patcher applies all 4 markers on a fresh fixture" {
   run python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
   [ "$status" -eq 0 ]
-  grep -q "agentic-pod-launcher: typing refresh patch v2" "$TMP_TEST_DIR/server.ts"
+  grep -q "agentic-pod-launcher: typing refresh patch v3" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: offset persistence patch v1" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: stderr-capture patch v1" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: primary lock patch v1" "$TMP_TEST_DIR/server.ts"
@@ -195,7 +195,7 @@ teardown() { teardown_tmp_dir; }
   rm -f "$TMP_TEST_DIR/server.ts.bak"
   run python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
   [ "$status" -eq 0 ]
-  ! grep -q "agentic-pod-launcher: typing refresh patch v2" "$TMP_TEST_DIR/server.ts"
+  ! grep -q "agentic-pod-launcher: typing refresh patch v3" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: offset persistence patch v1" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: stderr-capture patch v1" "$TMP_TEST_DIR/server.ts"
 }
@@ -206,7 +206,7 @@ teardown() { teardown_tmp_dir; }
   rm -f "$TMP_TEST_DIR/server.ts.bak"
   run python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
   [ "$status" -eq 0 ]
-  grep -q "agentic-pod-launcher: typing refresh patch v2" "$TMP_TEST_DIR/server.ts"
+  grep -q "agentic-pod-launcher: typing refresh patch v3" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: offset persistence patch v1" "$TMP_TEST_DIR/server.ts"
   ! grep -q "agentic-pod-launcher: stderr-capture patch v1" "$TMP_TEST_DIR/server.ts"
 }
@@ -221,7 +221,7 @@ teardown() { teardown_tmp_dir; }
   [ "$status" -eq 0 ]
   ! grep -q "agentic-pod-launcher: offset persistence patch v1" "$TMP_TEST_DIR/server.ts"
   ! grep -q "_pendingUpdates" "$TMP_TEST_DIR/server.ts"
-  grep -q "agentic-pod-launcher: typing refresh patch v2" "$TMP_TEST_DIR/server.ts"
+  grep -q "agentic-pod-launcher: typing refresh patch v3" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: stderr-capture patch v1" "$TMP_TEST_DIR/server.ts"
 }
 
@@ -284,28 +284,47 @@ teardown() { teardown_tmp_dir; }
   ! grep -q "_ageMs" "$TMP_TEST_DIR/server.ts"
   # Other patches still apply (independent groups).
   grep -q "agentic-pod-launcher: offset persistence patch v1" "$TMP_TEST_DIR/server.ts"
-  grep -q "agentic-pod-launcher: typing refresh patch v2" "$TMP_TEST_DIR/server.ts"
+  grep -q "agentic-pod-launcher: typing refresh patch v3" "$TMP_TEST_DIR/server.ts"
 }
 
-# ─── typing v2: cap removal ───────────────────────────────────────────────────
+# ─── typing v3: cap removal + observability ──────────────────────────────────
 # v1 had `_TYPING_MAX_MS = 120000` + a setTimeout that called _typingStop after
-# the cap. v2 removes both — typing keeps running until `case 'reply'` fires
-# _typingStop or the bun process dies. These three tests pin the new behavior
-# and protect the v1→v2 in-place upgrade path on already-patched server.ts.
+# the cap. v2 removed both — typing keeps running until `case 'reply'` fires
+# _typingStop or the bun process dies. v3 adds observability: each tick logs
+# to stderr every 5 invocations, sendChatAction errors are surfaced instead
+# of swallowed by `.catch(() => {})`. These tests pin the v3 behavior and
+# protect the v1→v2→v3 in-place upgrade path on already-patched server.ts.
 
-@test "typing v2: helpers contain no _TYPING_MAX_MS constant" {
+@test "typing v3: helpers contain no _TYPING_MAX_MS constant" {
   run python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
   [ "$status" -eq 0 ]
   ! grep -q "_TYPING_MAX_MS" "$TMP_TEST_DIR/server.ts"
 }
 
-@test "typing v2: helpers contain no setTimeout cap on the typing interval" {
+@test "typing v3: helpers contain no setTimeout cap on the typing interval" {
   run python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
   [ "$status" -eq 0 ]
   ! grep -qE "setTimeout\(\(\) => _typingStop" "$TMP_TEST_DIR/server.ts"
 }
 
-@test "typing v1→v2 upgrade: rewrites already-patched server.ts in place" {
+@test "typing v3: helpers log a tick to stderr every 5 calls" {
+  run python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  [ "$status" -eq 0 ]
+  grep -q "typing tick" "$TMP_TEST_DIR/server.ts"
+  grep -q "_typingTickCounts" "$TMP_TEST_DIR/server.ts"
+}
+
+@test "typing v3: helpers surface sendChatAction errors instead of swallowing them" {
+  run python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  [ "$status" -eq 0 ]
+  grep -q "sendChatAction failed" "$TMP_TEST_DIR/server.ts"
+  # The v1/v2 anti-pattern was `bot.api.sendChatAction(...).catch(() => {})`.
+  # v3 must not have that exact form (other .catch(() => {}) calls in the
+  # upstream code are unrelated, so we anchor on sendChatAction).
+  ! grep -qE "sendChatAction\([^)]+\)\.catch\(\(\) => \{\}\)" "$TMP_TEST_DIR/server.ts"
+}
+
+@test "typing v1→v2→v3 upgrade: rewrites already-patched server.ts in place" {
   # Synthesize a v1-patched server.ts inline (the v2 patcher can't emit v1,
   # so we can't roundtrip through the script). The helper strings below
   # mirror what the v1 patch would have produced verbatim — v1 and v2 differ
@@ -348,15 +367,74 @@ TS
   grep -q "typing refresh patch v1" "$TMP_TEST_DIR/server.v1.ts"
   grep -q "_TYPING_MAX_MS" "$TMP_TEST_DIR/server.v1.ts"
 
-  # Run the v2 patcher: it should detect v1 and upgrade in place.
+  # Run the v3 patcher: it should detect v1 and cascade v1→v2→v3 in place.
   run python3 "$PATCHER" "$TMP_TEST_DIR/server.v1.ts"
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "typing-upgrade-v1"
+  echo "$output" | grep -q "typing-upgrade-v2"
 
-  # Post-upgrade: marker bumped, cap stripped, comment refreshed.
+  # Post-upgrade: marker bumped, cap stripped, comment refreshed,
+  # v3 instrumentation in place.
   ! grep -q "typing refresh patch v1" "$TMP_TEST_DIR/server.v1.ts"
-  grep -q "typing refresh patch v2" "$TMP_TEST_DIR/server.v1.ts"
+  ! grep -q "typing refresh patch v2" "$TMP_TEST_DIR/server.v1.ts"
+  grep -q "typing refresh patch v3" "$TMP_TEST_DIR/server.v1.ts"
   ! grep -q "_TYPING_MAX_MS" "$TMP_TEST_DIR/server.v1.ts"
   ! grep -qE "setTimeout\(\(\) => _typingStop" "$TMP_TEST_DIR/server.v1.ts"
   grep -q "no cap; stops on reply or process exit" "$TMP_TEST_DIR/server.v1.ts"
+  grep -q "typing tick" "$TMP_TEST_DIR/server.v1.ts"
+  grep -q "sendChatAction failed" "$TMP_TEST_DIR/server.v1.ts"
+}
+
+@test "typing v2→v3 upgrade: rewrites a v2-patched server.ts in place" {
+  # Synthesize a v2-patched fixture (v2 = v1 with the cap removed). Same
+  # shape the v1→v2 upgrade would have produced, but starting from v2 so
+  # only the v2→v3 step needs to run.
+  cat > "$TMP_TEST_DIR/server.v2.ts" <<'TS'
+#!/usr/bin/env bun
+import { Bot } from 'grammy'
+
+const TOKEN = process.env.TELEGRAM_BOT_TOKEN
+const bot = new Bot(TOKEN!)
+let botUsername = ''
+
+// agentic-pod-launcher: typing refresh patch v2
+const _typingIntervals = new Map<string | number, ReturnType<typeof setInterval>>()
+const _TYPING_REFRESH_MS = 4000
+function _typingKeepAlive(chat_id: string | number): void {
+  _typingStop(chat_id)
+  const send = () => { void bot.api.sendChatAction(chat_id, 'typing').catch(() => {}) }
+  send()
+  const timer = setInterval(send, _TYPING_REFRESH_MS)
+  _typingIntervals.set(chat_id, timer)
+}
+function _typingStop(chat_id: string | number): void {
+  const t = _typingIntervals.get(chat_id)
+  if (t) { clearInterval(t); _typingIntervals.delete(chat_id) }
+}
+
+async function handleInbound(ctx: any) {
+  const chat_id = String(ctx.chat!.id)
+  // Typing indicator — refreshed every 4s until reply fires (no cap; stops on reply or process exit).
+  // Patched by agentic-pod-launcher (telegram-typing v2).
+  _typingKeepAlive(chat_id)
+}
+TS
+
+  # Sanity: it really is v2.
+  grep -q "typing refresh patch v2" "$TMP_TEST_DIR/server.v2.ts"
+  ! grep -q "typing tick" "$TMP_TEST_DIR/server.v2.ts"
+
+  # Run the v3 patcher: should detect v2 and run only the v2→v3 step.
+  run python3 "$PATCHER" "$TMP_TEST_DIR/server.v2.ts"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "typing-upgrade-v2"
+  ! echo "$output" | grep -q "typing-upgrade-v1"
+
+  # Post-upgrade: v3 marker, instrumentation in place, cap still absent,
+  # call-site comment refreshed.
+  ! grep -q "typing refresh patch v2" "$TMP_TEST_DIR/server.v2.ts"
+  grep -q "typing refresh patch v3" "$TMP_TEST_DIR/server.v2.ts"
+  grep -q "typing tick" "$TMP_TEST_DIR/server.v2.ts"
+  grep -q "sendChatAction failed" "$TMP_TEST_DIR/server.v2.ts"
+  grep -q "telegram-typing v3" "$TMP_TEST_DIR/server.v2.ts"
 }
