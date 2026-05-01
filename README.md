@@ -23,20 +23,22 @@ cd agentic-pod-launcher
 cd ~/agents/my-agent
 
 docker compose build
-docker compose up -d
+./scripts/agentctl up        # docker compose up -d
 
-# Attach to the agent's tmux session inside the container.
-docker exec -it -u agent my-agent tmux attach -t agent
+# Attach to the agent's tmux session (retries while the supervisor respawns).
+./scripts/agentctl attach
 #  a. Pick a theme, accept trust on /workspace.
 #  b. /login → paste OAuth code → /exit.
-#  c. Wait ~3 seconds, re-attach. The supervisor relaunches claude into the
-#     in-container wizard for the Telegram bot token (only on first boot).
+#  c. Re-run `./scripts/agentctl attach`. The supervisor relaunches claude
+#     into the in-container wizard for the Telegram bot token (only on first boot).
 #  d. Paste the token. The wizard regenerates CLAUDE.md with live workspace
 #     info and exits.
-#  e. Re-attach. DM your bot, then run `/telegram:access pair <code>` to
-#     authorize your chat.
+#  e. Re-attach again. DM your bot, then run `/telegram:access pair <code>`
+#     to authorize your chat.
 #  f. Detach with Ctrl-b d.
 ```
+
+`agentctl` is a thin host wrapper for the most common `docker exec -u agent NAME ...` patterns. It resolves the container name from `agent.yml`, applies `-u agent` automatically, and includes a retry-loop in `attach` for the post-`/login` window. Subcommands: `attach`, `logs [-f]`, `status`, `heartbeat <sub>`, `mcp [list]`, `shell [--root]`, `up`, `stop`, `restart`, `ps`, `run <cmd…>`. Run `./scripts/agentctl --help` for the full list.
 
 The full step-by-step (with troubleshooting) lives in [`docs/getting-started.md`](docs/getting-started.md). Each scaffolded agent also gets a `NEXT_STEPS.md` with concrete commands using the agent's name and paths.
 
@@ -85,25 +87,27 @@ For the silent-stuck case where the bun process is alive but its MCP notificatio
 
 ### `heartbeatctl` — runtime CLI
 
-```bash
-docker exec -u agent <agent-name> heartbeatctl status         # pretty dashboard, also --json
-docker exec -u agent <agent-name> heartbeatctl logs           # tail runs.jsonl
-docker exec -u agent <agent-name> heartbeatctl show           # active config
-docker exec -u agent <agent-name> heartbeatctl test           # one tick now (--trigger=manual)
-docker exec -u agent <agent-name> heartbeatctl pause          # comment crontab + enabled=false
-docker exec -u agent <agent-name> heartbeatctl resume         # inverse
-docker exec -u agent <agent-name> heartbeatctl reload         # re-derive crontab + heartbeat.conf from agent.yml
-docker exec -u agent <agent-name> heartbeatctl kick-channel   # respawn the chat session
+`agentctl heartbeat <sub>` proxies to the in-container `heartbeatctl`:
 
-docker exec -u agent <agent-name> heartbeatctl set-interval 5m
-docker exec -u agent <agent-name> heartbeatctl set-prompt "Report status as plain text"
-docker exec -u agent <agent-name> heartbeatctl set-notifier telegram
-docker exec -u agent <agent-name> heartbeatctl set-timeout 180
-docker exec -u agent <agent-name> heartbeatctl set-retries 2
-docker exec -u agent <agent-name> heartbeatctl drop-plugin <spec>   # evict a plugin from agent.yml
+```bash
+./scripts/agentctl status                          # pretty dashboard, also --json
+./scripts/agentctl heartbeat logs                  # tail runs.jsonl
+./scripts/agentctl heartbeat show                  # active config
+./scripts/agentctl heartbeat test                  # one tick now (--trigger=manual)
+./scripts/agentctl heartbeat pause                 # comment crontab + enabled=false
+./scripts/agentctl heartbeat resume                # inverse
+./scripts/agentctl heartbeat reload                # re-derive crontab + heartbeat.conf from agent.yml
+./scripts/agentctl heartbeat kick-channel          # respawn the chat session
+
+./scripts/agentctl heartbeat set-interval 5m
+./scripts/agentctl heartbeat set-prompt "Report status as plain text"
+./scripts/agentctl heartbeat set-notifier telegram
+./scripts/agentctl heartbeat set-timeout 180
+./scripts/agentctl heartbeat set-retries 2
+./scripts/agentctl heartbeat drop-plugin <spec>    # evict a plugin from agent.yml
 ```
 
-Always pass `-u agent`. `cap_drop: ALL` means root inside the container can't write agent-owned files. Mutations write to `agent.yml` first (with atomic `agent.yml.prev` backup and rollback on failure), then regenerate derived files. Full reference: [`docs/heartbeatctl.md`](docs/heartbeatctl.md).
+`agentctl` always passes `-u agent` (raw `docker exec` defaults to root, which `cap_drop: ALL` blocks from writing agent-owned files). Mutations write to `agent.yml` first (with atomic `agent.yml.prev` backup and rollback on failure), then regenerate derived files. Full reference: [`docs/heartbeatctl.md`](docs/heartbeatctl.md).
 
 ### Plugin catalog
 
