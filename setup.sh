@@ -544,6 +544,11 @@ ATLASSIAN_${upper}_TOKEN=${ws_token}
   fi
 
   # ── Review loop ──────────────────────────────────────
+  # Helper for the summary block: ofusca un secret si está seteado, marca
+  # "(unset)" si está vacío. Local al while loop para no contaminar el shell.
+  _mask() {
+    if [ -n "$1" ]; then echo "********"; else echo "(unset)"; fi
+  }
   while true; do
     echo ""
     echo "═══════════════════════════════════════════════════"
@@ -563,6 +568,10 @@ ATLASSIAN_${upper}_TOKEN=${ws_token}
     echo " 12) Install service:   $deploy_svc"
     echo "     Claude profile:   $claude_config_dir$([ "$claude_profile_new" = true ] && echo " (new — /login required)")"
     echo " 13) Heartbeat notif:   $notify_channel"
+    if [ "$notify_channel" = "telegram" ]; then
+      echo "     Bot token:        $(_mask "$notify_bot_token")"
+      echo "     Chat id:          ${notify_chat_id:-(unset)}"
+    fi
     echo " 14) Heartbeat enabled: $hb_enabled"
     [ "$hb_enabled" = "true" ] && echo " 15) Heartbeat interval: $hb_interval"
     [ "$hb_enabled" = "true" ] && echo " 16) Heartbeat prompt:   $hb_prompt"
@@ -577,11 +586,73 @@ ATLASSIAN_${upper}_TOKEN=${ws_token}
       echo " 20) Fork name:         $fork_name"
       echo " 21) Fork private:      $fork_private"
       echo " 22) Template URL:      $template_url"
-      echo " 23) Fork PAT:          $([ -n "$fork_token" ] && echo "********" || echo "(unset)")"
+      echo " 23) Fork PAT:          $(_mask "$fork_token")"
     fi
     echo ""
-    echo "  Atlassian:       $([ -n "$atlassian_entries" ] && echo "configured" || echo "disabled")"
-    echo "  GitHub MCP:      $github_enabled"
+    # Atlassian — full detail per workspace (URL, email, masked token).
+    if [ -n "$atlassian_entries" ]; then
+      echo "  Atlassian:"
+      local _line _key _upper _ws_lower _ws_url _ws_email _ws_tok
+      while IFS= read -r _line; do
+        case "$_line" in
+          ATLASSIAN_*_TOKEN=*)
+            _key="${_line%%=*}"
+            _ws_tok="${_line#*=}"
+            _upper="${_key#ATLASSIAN_}"
+            _upper="${_upper%_TOKEN}"
+            _ws_lower=$(echo "$_upper" | tr '[:upper:]' '[:lower:]')
+            _ws_url=$(printf '%s\n' "$atlassian_env_vars" | sed -n "s|^ATLASSIAN_${_upper}_JIRA_URL=||p")
+            _ws_email=$(printf '%s\n' "$atlassian_env_vars" | sed -n "s|^ATLASSIAN_${_upper}_JIRA_USERNAME=||p")
+            echo "     · $_ws_lower"
+            echo "       URL:    $_ws_url"
+            echo "       Email:  $_ws_email"
+            echo "       Token:  $(_mask "$_ws_tok")"
+            ;;
+        esac
+      done <<< "$atlassian_env_vars"
+    else
+      echo "  Atlassian:       disabled"
+    fi
+    # GitHub MCP — email + masked PAT when enabled.
+    if [ "$github_enabled" = "true" ]; then
+      echo "  GitHub MCP:"
+      echo "     Email:            $github_email"
+      echo "     PAT:              $(_mask "$github_pat")"
+    else
+      echo "  GitHub MCP:      disabled"
+    fi
+    # MCP servers — always-on defaults from catalog + opt-in selections.
+    echo "  MCP servers:"
+    local _mcp_default_csv
+    _mcp_default_csv=$(mcp_catalog_list default | paste -sd, - | sed 's/,/, /g')
+    echo "     Always-on:        $_mcp_default_csv"
+    if [ "${#active_optional_mcps[@]}" -gt 0 ]; then
+      local _csv_active
+      _csv_active=$(printf '%s,' "${active_optional_mcps[@]}" | sed 's/,$//' | sed 's/,/, /g')
+      echo "     Opt-in:           $_csv_active"
+      # Show secret env vars captured for those MCPs (each masked).
+      local _secret_line _secret_key _secret_val
+      while IFS= read -r _secret_line; do
+        [ -z "$_secret_line" ] && continue
+        _secret_key="${_secret_line%%=*}"
+        _secret_val="${_secret_line#*=}"
+        echo "       $_secret_key:        $(_mask "$_secret_val")"
+      done <<< "$mcp_secret_env_lines"
+    else
+      echo "     Opt-in:           (none)"
+    fi
+    # Plugins — always-on catalog defaults + opt-in selections.
+    echo "  Plugins:"
+    local _plug_default_csv
+    _plug_default_csv=$(plugin_catalog_list default | paste -sd, - | sed 's/,/, /g')
+    echo "     Always-on:        $_plug_default_csv"
+    if [ "${#opt_plugins[@]}" -gt 0 ]; then
+      local _csv_optp
+      _csv_optp=$(printf '%s,' "${opt_plugins[@]}" | sed 's/,$//' | sed 's/,/, /g')
+      echo "     Opt-in:           $_csv_optp"
+    else
+      echo "     Opt-in:           (none)"
+    fi
     echo ""
 
     local action
