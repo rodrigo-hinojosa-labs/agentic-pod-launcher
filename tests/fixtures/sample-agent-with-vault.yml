@@ -37,7 +37,8 @@ features:
 mcps:
   defaults:
     - fetch
-    - time
+    - git
+    - filesystem
   atlassian:
     - name: work
       url: "https://work.atlassian.net"
