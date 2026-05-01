@@ -39,26 +39,25 @@ teardown() { teardown_tmp_dir; }
   # 10  deploy_svc          → n  (Linux only; macOS skips this prompt)
   # 11  fork_enabled        → n
   # 12  notify_channel      → none
-  # 13-19  optional MCPs (alphabetical): aws, firecrawl, google-calendar,
-  #                                       playwright, sequential-thinking,
-  #                                       time, tree-sitter — all 'n'
-  # 20  atlassian?          → n
-  # 21  github?             → n
-  # 22  hb_enabled          → y
-  # 23  hb_interval         → 30m
-  # 24  hb_prompt           → Test prompt
-  # 25  use_defaults        → y
-  # 26  review              → proceed
+  # 13-18  optional MCPs (alphabetical): aws, firecrawl, google-calendar,
+  #                                       playwright, time, tree-sitter — all 'n'
+  # 19  atlassian?          → n
+  # 20  github?             → n
+  # 21  hb_enabled          → y
+  # 22  hb_interval         → 30m
+  # 23  hb_prompt           → Test prompt
+  # 24  use_defaults        → y
+  # 25  review              → proceed
   local answers
   answers=(
     "e2e-bot" "E2EBot 🤖" "Test role" "Test vibe"
     "Test User" "Test" "UTC" "test@example.com" "en"
   )
   [ "$(uname -s)" = "Linux" ] && answers+=("n")
-  # 7 optional MCPs ('n' each) between notify_channel and atlassian.
+  # 6 optional MCPs ('n' each) between notify_channel and atlassian.
   answers+=(
     "n" "none"
-    "n" "n" "n" "n" "n" "n" "n"
+    "n" "n" "n" "n" "n" "n"
     "n" "n" "y" "30m" "Test prompt" "y" "proceed"
   )
   run bash -c "printf '%s\n' \"\${@}\" | ./setup.sh --destination \"${dest}\"" -- "${answers[@]}"

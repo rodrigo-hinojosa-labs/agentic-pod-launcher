@@ -19,10 +19,6 @@
     "time": {
       "command": "uvx",
       "args": ["mcp-server-time", "--local-timezone={{USER_TIMEZONE}}"]
-    }{{/if}}{{#if MCPS_SEQUENTIAL_THINKING_ENABLED}},
-    "sequential-thinking": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
     }{{/if}}{{#if MCPS_FIRECRAWL_ENABLED}},
     "firecrawl": {
       "command": "npx",

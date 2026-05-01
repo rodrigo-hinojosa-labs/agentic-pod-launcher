@@ -19,9 +19,9 @@ teardown() { teardown_tmp_dir; }
   # Always-on triplet — these are the low-overhead, no-auth MCPs that
   # almost every agent benefits from.
   [ "$defaults" = "fetch filesystem git " ]
-  # 7 opt-in MCPs covering web/scheduling/cloud/code intelligence/etc.
+  # 6 opt-in MCPs covering web/scheduling/cloud/code intelligence/etc.
   # Order is alphabetical (sort), not curated importance.
-  [ "$optional" = "aws firecrawl google-calendar playwright sequential-thinking time tree-sitter " ]
+  [ "$optional" = "aws firecrawl google-calendar playwright time tree-sitter " ]
 }
 
 @test "mcp-catalog: every descriptor has the required schema keys" {
@@ -59,7 +59,6 @@ teardown() { teardown_tmp_dir; }
 @test "mcp-catalog: id_to_envvar produces the canonical MCPS_<ID>_ENABLED form" {
   [ "$(mcp_catalog_id_to_envvar fetch)" = "MCPS_FETCH_ENABLED" ]
   [ "$(mcp_catalog_id_to_envvar git)" = "MCPS_GIT_ENABLED" ]
-  [ "$(mcp_catalog_id_to_envvar sequential-thinking)" = "MCPS_SEQUENTIAL_THINKING_ENABLED" ]
   [ "$(mcp_catalog_id_to_envvar google-calendar)" = "MCPS_GOOGLE_CALENDAR_ENABLED" ]
   [ "$(mcp_catalog_id_to_envvar tree-sitter)" = "MCPS_TREE_SITTER_ENABLED" ]
 }
