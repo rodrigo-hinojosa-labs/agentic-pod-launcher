@@ -40,6 +40,10 @@ docker exec -it -u agent my-agent tmux attach -t agent
 
 The full step-by-step (with troubleshooting) lives in [`docs/getting-started.md`](docs/getting-started.md). Each scaffolded agent also gets a `NEXT_STEPS.md` with concrete commands using the agent's name and paths.
 
+### Agentic mode (one-prompt setup)
+
+If you'd rather drive the wizard from a Claude Code session than answer 30+ prompts in your shell, open `claude` inside the repo and run `/quickstart`. The slash command reads `tests/helper.bash::wizard_answers()` (the canonical prompt order) and `docs/agentic-quickstart.es.md` (field semantics + safe defaults), asks you for the minimum required values in a single message, and runs `./setup.sh` with the answers piped in. Full details (and a copy-paste alternative for non-Claude environments) in [`docs/agentic-quickstart.es.md`](docs/agentic-quickstart.es.md) — English version at [`docs/agentic-quickstart.en.md`](docs/agentic-quickstart.en.md).
+
 ## What's in the box
 
 ### Scaffolding from `agent.yml`
