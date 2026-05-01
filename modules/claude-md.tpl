@@ -93,6 +93,16 @@ To inspect or change the heartbeat behavior, edit `scripts/heartbeat/heartbeat.c
 To send the user a notification via Telegram:
 - Bot token in `.env` as `NOTIFY_BOT_TOKEN`
 - Chat ID in `.env` as `NOTIFY_CHAT_ID`
+
+### Long-running operations — ack first, signal progress
+
+When the user asks for something that will take more than ~30 seconds (vault `ingest` or `lint`, multi-step research, heavy refactors), don't go silent:
+
+- **Send a brief acknowledgement before starting.** 1-2 lines, with a realistic time estimate. Example: `Ingest en curso de Memex (Wikipedia), ~5–10 min. Te aviso al terminar.`
+- **For operations crossing 2+ minutes, send one mid-progress reply when you cross a clear phase boundary** — e.g. `Source clipeada → escribiendo concepts ahora.` Use this sparingly: 1 update per phase change, not per file. Three messages total (ack → mid-progress → final reply) is the sweet spot for a typical ingest.
+- **The final reply summarizes what changed** (pages touched, new wikilinks, etc.).
+
+The "typing…" indicator stays on while the session is processing, but Telegram itself may hide it under network conditions. Explicit acks land the request in the user's mind, set expectation, and prove the session is alive — silence between events stops being ambiguous.
 {{/if}}
 
 ## Setup

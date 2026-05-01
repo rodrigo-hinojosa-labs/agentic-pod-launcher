@@ -79,6 +79,7 @@ reverse in B's `related:` array if it's load-bearing.
 
 When the human says "ingest <url|file|note>" or attaches a new source:
 
+0. **If you're handling a chat-driven request (Telegram, etc.), ack first.** Send a one-line preview with a realistic estimate — e.g. `Ingest en curso de <fuente>, ~5–10 min. Te aviso al terminar.` — then proceed with the steps below. A typical ingest touches 5–15 pages over several minutes; without an ack the user has no signal that the request landed. Optionally send one mid-progress reply when you cross a clear phase boundary (e.g. after step 1, "Source clipeada → escribiendo concepts ahora"). Don't spam: max 1 mid-progress per ingest.
 1. **Clip the source.** Save it under `raw_sources/` with a slugified filename. If the source
    has a natural type (article, paper, transcript, gist), use a subdirectory. Add minimal
    frontmatter (see `_templates/source.md`). **Never modify the source content again.**
@@ -114,7 +115,11 @@ When the human asks a question:
 
 ## Operation: maintaining the wiki (lint)
 
-Run periodically (and before any "wiki health" check from the human). Detect:
+Run periodically (and before any "wiki health" check from the human).
+
+0. **If chat-driven, ack first.** Send `Lint del vault en curso, ~2–5 min según tamaño. Te paso el reporte al terminar.` then proceed.
+
+Detect:
 
 - **Contradictions** — two pages making incompatible claims about the same thing. Surface to
   the human; resolution is usually a curation choice.

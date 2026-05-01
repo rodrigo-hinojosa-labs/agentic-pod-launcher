@@ -90,7 +90,9 @@ After PR #3 (2026-04-22) all agent state (OAuth login, Telegram pairing, session
 
 ### Telegram plugin patch
 
-`docker/scripts/apply_telegram_typing_patch.py` is re-applied on every boot by `start_services.sh::apply_plugin_patches` against the plugin copy in `~/.claude/plugins/cache/claude-plugins-official/telegram/*/server.ts`. Idempotent via marker comment, fail-silent if any of the three anchor regexes drift. Don't move the patch invocation out of the boot path — the plugin cache lives under `.state/` which means a workspace clone receives an unpatched plugin until the next boot.
+`docker/scripts/apply_telegram_typing_patch.py` is re-applied on every boot by `start_services.sh::apply_plugin_patches` against the plugin copy in `~/.claude/plugins/cache/claude-plugins-official/telegram/*/server.ts`. Idempotent via marker comments (one per patch group: typing, offset, stderr, primary), fail-silent if any of the anchor regexes drift. Don't move the patch invocation out of the boot path — the plugin cache lives under `.state/` which means a workspace clone receives an unpatched plugin until the next boot.
+
+The typing patch is currently at **v2** (no time cap on the typing-action refresh; the indicator persists until `case 'reply'` fires or the bun process exits). When you upgrade an agent that was previously patched at v1, the next boot detects the v1 marker and runs `upgrade_typing_v1_to_v2` — a surgical regex remove of the `_TYPING_MAX_MS` constant + the `setTimeout(cap)` block, marker bumped, inline comment refreshed. The upgrade is fail-silent if the v1 helpers were edited out-of-band (logs WARN; leaves v1 in place).
 
 ## Common gotchas
 
