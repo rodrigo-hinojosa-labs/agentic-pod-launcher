@@ -1,0 +1,216 @@
+#!/usr/bin/env bash
+# agentctl — host-side CLI wrapper for the most common docker exec commands
+# against a scaffolded agent container. Replaces the long `docker exec -it
+# -u agent NAME ...` invocations littered across NEXT_STEPS and docs with
+# short subcommands.
+#
+# Resolves the container name from (in order):
+#   1. -a NAME  flag
+#   2. AGENT_NAME env var
+#   3. yq '.agent.name' agent.yml  (in $PWD, falls back to script dir)
+#
+# Example: ./scripts/agentctl attach        # tmux attach with retry-loop
+#          ./scripts/agentctl status        # heartbeatctl status proxy
+#          ./scripts/agentctl logs -f       # tail -f /workspace/claude.log
+#
+# Style and exit codes mirror docker/scripts/heartbeatctl: 0=ok,
+# 1=validation/usage, 2=operational error.
+
+set -u -o pipefail
+
+AGENTCTL_NAME_OVERRIDE=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -a|--agent)
+      AGENTCTL_NAME_OVERRIDE="${2:-}"
+      [ -z "$AGENTCTL_NAME_OVERRIDE" ] && {
+        echo "agentctl: -a/--agent requires a NAME argument" >&2
+        exit 1
+      }
+      shift 2
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+resolve_agent_name() {
+  if [ -n "$AGENTCTL_NAME_OVERRIDE" ]; then
+    printf '%s\n' "$AGENTCTL_NAME_OVERRIDE"
+    return 0
+  fi
+  if [ -n "${AGENT_NAME:-}" ]; then
+    printf '%s\n' "$AGENT_NAME"
+    return 0
+  fi
+  local probe
+  for probe in "./agent.yml" "$(dirname "$0")/../agent.yml"; do
+    if [ -f "$probe" ]; then
+      local val
+      val=$(yq -r '.agent.name' "$probe" 2>/dev/null)
+      if [ -n "$val" ] && [ "$val" != "null" ]; then
+        printf '%s\n' "$val"
+        return 0
+      fi
+    fi
+  done
+  echo "agentctl: cannot resolve agent name." >&2
+  echo "  Pass -a NAME, set AGENT_NAME, or run from a workspace with agent.yml." >&2
+  exit 1
+}
+
+cmd_help() {
+  cat <<'HELP_EOF'
+agentctl — wrapper for the most common ops against a scaffolded agent.
+
+Usage: agentctl [-a NAME] <subcommand> [args]
+
+Container/lifecycle:
+  up                       docker compose up -d
+  start                    alias of `up`
+  stop                     docker compose down
+  restart                  docker compose restart
+  ps                       docker compose ps
+
+Interactive:
+  attach [--no-retry]      tmux attach -t agent (retry-loop by default)
+  shell [--root]           bash inside the container (as agent, or root)
+  run <cmd...>             arbitrary command via docker exec -u agent NAME
+
+Observability:
+  logs [-f] [-n N]         tail [-f] [-n N] /workspace/claude.log
+  logs --stderr            tail of telegram-mcp-stderr.log (forensic)
+  status                   heartbeatctl status (pretty)
+  mcp [list]               claude mcp list
+
+Heartbeat (proxy to in-container heartbeatctl):
+  heartbeat <sub> [args]   passes through; e.g. `heartbeat pause`, `heartbeat set-interval 5m`
+
+Misc:
+  -a NAME / --agent NAME   override resolved agent name (otherwise: AGENT_NAME env, or yq agent.yml)
+  --help                   this help
+
+Examples:
+  agentctl attach                  # connects via retry-loop
+  agentctl logs -f                 # follow claude.log
+  agentctl heartbeat status        # delegated to heartbeatctl
+  agentctl run ls /workspace       # ad-hoc command
+HELP_EOF
+}
+
+cmd_attach() {
+  local agent retry=true
+  agent=$(resolve_agent_name) || exit $?
+  case "${1:-}" in
+    --no-retry) retry=false ;;
+  esac
+  if [ "$retry" = "true" ]; then
+    local i
+    for i in $(seq 15); do
+      docker exec -it -u agent "$agent" tmux attach -t agent && return 0
+      sleep 1
+    done
+    echo "agentctl: tmux 'agent' session never appeared after 15s." >&2
+    echo "  Check: agentctl logs -n 100 ; docker logs $agent" >&2
+    exit 2
+  else
+    exec docker exec -it -u agent "$agent" tmux attach -t agent
+  fi
+}
+
+cmd_shell() {
+  local agent root=false
+  agent=$(resolve_agent_name) || exit $?
+  case "${1:-}" in
+    --root) root=true ;;
+  esac
+  if [ "$root" = "true" ]; then
+    exec docker exec -it "$agent" bash
+  else
+    exec docker exec -it -u agent "$agent" bash
+  fi
+}
+
+cmd_run() {
+  local agent
+  agent=$(resolve_agent_name) || exit $?
+  if [ $# -eq 0 ]; then
+    echo "agentctl run: missing command" >&2
+    exit 1
+  fi
+  exec docker exec -u agent "$agent" "$@"
+}
+
+cmd_logs() {
+  local agent
+  agent=$(resolve_agent_name) || exit $?
+  case "${1:-}" in
+    --stderr)
+      shift
+      exec docker exec -u agent "$agent" tail "$@" /workspace/scripts/heartbeat/logs/telegram-mcp-stderr.log
+      ;;
+    *)
+      exec docker exec -u agent "$agent" tail "$@" /workspace/claude.log
+      ;;
+  esac
+}
+
+cmd_status() {
+  local agent
+  agent=$(resolve_agent_name) || exit $?
+  exec docker exec -u agent "$agent" heartbeatctl status
+}
+
+cmd_heartbeat() {
+  local agent
+  agent=$(resolve_agent_name) || exit $?
+  if [ $# -eq 0 ]; then
+    echo "agentctl heartbeat: missing subcommand (try 'agentctl heartbeat help')" >&2
+    exit 1
+  fi
+  exec docker exec -u agent "$agent" heartbeatctl "$@"
+}
+
+cmd_mcp() {
+  local agent
+  agent=$(resolve_agent_name) || exit $?
+  exec docker exec -u agent "$agent" claude mcp "${@:-list}"
+}
+
+cmd_compose() {
+  exec docker compose "$@"
+}
+
+cmd_up() { cmd_compose up -d; }
+cmd_start() { cmd_up; }
+cmd_stop() { cmd_compose down; }
+cmd_restart() { cmd_compose restart; }
+cmd_ps() { cmd_compose ps; }
+
+main() {
+  local sub="${1:-help}"
+  shift || true
+  case "$sub" in
+    help|--help|-h) cmd_help ;;
+    attach) cmd_attach "$@" ;;
+    shell) cmd_shell "$@" ;;
+    run) cmd_run "$@" ;;
+    logs) cmd_logs "$@" ;;
+    status) cmd_status "$@" ;;
+    heartbeat) cmd_heartbeat "$@" ;;
+    mcp) cmd_mcp "$@" ;;
+    up) cmd_up ;;
+    start) cmd_start ;;
+    stop) cmd_stop ;;
+    restart) cmd_restart ;;
+    ps) cmd_ps ;;
+    *)
+      echo "agentctl: unknown subcommand '$sub'. Try 'agentctl help'." >&2
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"

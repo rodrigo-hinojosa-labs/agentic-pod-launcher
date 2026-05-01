@@ -1246,6 +1246,11 @@ scaffold_destination() {
   # Ensure setup.sh is executable
   chmod +x "$dest/setup.sh"
   find "$dest/scripts" -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
+  # Host-side CLIs without a .sh suffix that ship in scripts/ — agentctl is
+  # the wrapper for `docker exec -u agent NAME ...` patterns. Keep this list
+  # explicit (one chmod per binary-style script) so a missed git filemode
+  # doesn't leave the workspace with a non-executable wrapper.
+  [ -f "$dest/scripts/agentctl" ] && chmod +x "$dest/scripts/agentctl"
   if [ -d "$dest/docker" ]; then
     find "$dest/docker" -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
   fi
