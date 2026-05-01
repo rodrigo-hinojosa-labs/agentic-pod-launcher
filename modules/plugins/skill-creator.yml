@@ -3,7 +3,7 @@ spec: skill-creator@claude-plugins-official
 type: optional
 description: "Toolkit para crear, evaluar, mejorar y benchmarkear skills de Claude Code: Create, Eval, Improve, Benchmark modes."
 impact: "Útil solo si autoreas skills propios para el agente. Para un agente que solo CONSUME skills (telegram, claude-mem, etc.), no agrega valor."
-when_useful: "Cuando querés que el agente desarrolle/optimice sus propios skills, p.ej. medir performance comparada de prompts, benchmarks estadísticos."
+when_useful: "Cuando quieres que el agente desarrolle/optimice sus propios skills, p.ej. medir performance comparada de prompts, benchmarks estadísticos."
 when_overhead: "Casi siempre — la mayoría de los agentes solo usan skills, no los crean."
 marketplace: null
 post_install_hook: null

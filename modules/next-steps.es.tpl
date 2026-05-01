@@ -19,7 +19,7 @@ El contenedor arranca y el supervisor lanza Claude Code dentro de una sesión tm
 for i in $(seq 15); do docker exec -it -u agent {{AGENT_NAME}} tmux attach -t agent && break; sleep 1; done
 ```
 
-Si preferís el comando simple (asumiendo que el supervisor ya respawneó):
+Si prefieres el comando simple (asumiendo que el supervisor ya respawneó):
 
 ```bash
 docker exec -it -u agent {{AGENT_NAME}} tmux attach -t agent
@@ -154,7 +154,7 @@ Dos causas distintas:
    for i in $(seq 15); do docker exec -it -u agent {{AGENT_NAME}} tmux attach -t agent && break; sleep 1; done
    ```
 
-   El loop intenta cada segundo hasta 15 veces. Apenas hay session, conecta y termina. Si pasaron 15s sin éxito, hay un problema más profundo (revisá `docker logs {{AGENT_NAME}}` y `docker exec -u agent {{AGENT_NAME}} tail -50 /workspace/claude.log`).
+   El loop intenta cada segundo hasta 15 veces. Apenas hay session, conecta y termina. Si pasaron 15s sin éxito, hay un problema más profundo (revisa `docker logs {{AGENT_NAME}}` y `docker exec -u agent {{AGENT_NAME}} tail -50 /workspace/claude.log`).
 
 #### `docker attach {{AGENT_NAME}}` cuelga sin output
 

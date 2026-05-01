@@ -8,4 +8,4 @@ when_overhead: "~Python via uv + tree-sitter parsers downloaded on demand. Solo 
 requires_secret: false
 secret_env_var: null
 secret_doc_url: null
-post_install_note: "Experimental — single-maintainer community package. Si dependés crítico de esto, mirá el repo upstream para ver actividad reciente: https://github.com/wrale/mcp-server-tree-sitter"
+post_install_note: "Experimental — single-maintainer community package. Si dependes críticamente de esto, mira el repo upstream para ver actividad reciente: https://github.com/wrale/mcp-server-tree-sitter"

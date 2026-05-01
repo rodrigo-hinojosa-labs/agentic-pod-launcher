@@ -3,7 +3,7 @@ spec: github@claude-plugins-official
 type: optional
 description: "Slash commands para GitHub: issues, PRs, reviews, releases. Usa el GitHub API vía gh CLI."
 impact: "Solapa con el gh CLI ya instalado en la imagen. Beneficio: comandos más predecibles que pedirle al agente que use gh por lenguaje natural. Requiere PAT con scope repo (lo lee del shell env GITHUB_TOKEN/GH_TOKEN)."
-when_useful: "Si interactúas seguido con GitHub via Telegram y querés UX uniforme para issues/PRs."
+when_useful: "Si interactúas seguido con GitHub via Telegram y quieres UX uniforme para issues/PRs."
 when_overhead: "Si el agente raramente toca GitHub o ya manejas todo via gh CLI."
 marketplace: null
 post_install_hook: null
