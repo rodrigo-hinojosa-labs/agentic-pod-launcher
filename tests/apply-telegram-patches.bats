@@ -104,7 +104,7 @@ teardown() { teardown_tmp_dir; }
 @test "patcher applies all 4 markers on a fresh fixture" {
   run python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
   [ "$status" -eq 0 ]
-  grep -q "agentic-pod-launcher: typing refresh patch v1" "$TMP_TEST_DIR/server.ts"
+  grep -q "agentic-pod-launcher: typing refresh patch v2" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: offset persistence patch v1" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: stderr-capture patch v1" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: primary lock patch v1" "$TMP_TEST_DIR/server.ts"
@@ -195,7 +195,7 @@ teardown() { teardown_tmp_dir; }
   rm -f "$TMP_TEST_DIR/server.ts.bak"
   run python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
   [ "$status" -eq 0 ]
-  ! grep -q "agentic-pod-launcher: typing refresh patch v1" "$TMP_TEST_DIR/server.ts"
+  ! grep -q "agentic-pod-launcher: typing refresh patch v2" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: offset persistence patch v1" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: stderr-capture patch v1" "$TMP_TEST_DIR/server.ts"
 }
@@ -206,7 +206,7 @@ teardown() { teardown_tmp_dir; }
   rm -f "$TMP_TEST_DIR/server.ts.bak"
   run python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
   [ "$status" -eq 0 ]
-  grep -q "agentic-pod-launcher: typing refresh patch v1" "$TMP_TEST_DIR/server.ts"
+  grep -q "agentic-pod-launcher: typing refresh patch v2" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: offset persistence patch v1" "$TMP_TEST_DIR/server.ts"
   ! grep -q "agentic-pod-launcher: stderr-capture patch v1" "$TMP_TEST_DIR/server.ts"
 }
@@ -221,7 +221,7 @@ teardown() { teardown_tmp_dir; }
   [ "$status" -eq 0 ]
   ! grep -q "agentic-pod-launcher: offset persistence patch v1" "$TMP_TEST_DIR/server.ts"
   ! grep -q "_pendingUpdates" "$TMP_TEST_DIR/server.ts"
-  grep -q "agentic-pod-launcher: typing refresh patch v1" "$TMP_TEST_DIR/server.ts"
+  grep -q "agentic-pod-launcher: typing refresh patch v2" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: stderr-capture patch v1" "$TMP_TEST_DIR/server.ts"
 }
 
@@ -284,5 +284,5 @@ teardown() { teardown_tmp_dir; }
   ! grep -q "_ageMs" "$TMP_TEST_DIR/server.ts"
   # Other patches still apply (independent groups).
   grep -q "agentic-pod-launcher: offset persistence patch v1" "$TMP_TEST_DIR/server.ts"
-  grep -q "agentic-pod-launcher: typing refresh patch v1" "$TMP_TEST_DIR/server.ts"
+  grep -q "agentic-pod-launcher: typing refresh patch v2" "$TMP_TEST_DIR/server.ts"
 }
