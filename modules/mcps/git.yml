@@ -1,0 +1,11 @@
+id: git
+spec: mcp-server-git
+type: default
+runtime: uvx
+description: "Git ops estructuradas sobre el workspace (diff, log, blame, status, show)."
+when_useful: "Cualquier agente que toque código. Output parseable estructurado, mejor que `git` via Bash — menos hallucination y más fiable para el agente que lee."
+when_overhead: "Agentes puramente conversacionales que nunca ven un repo. Bajo costo igual (Python via uv)."
+requires_secret: false
+secret_env_var: null
+secret_doc_url: null
+post_install_note: null

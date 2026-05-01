@@ -1,0 +1,11 @@
+id: tree-sitter
+spec: mcp-server-tree-sitter
+type: optional
+runtime: uvx
+description: "AST search structural — busca patrones por sintaxis (no regex), parsing 40+ lenguajes."
+when_useful: "Refactors grandes (renombrar función con todos sus call sites correctos), análisis de código por estructura, inspección de imports/exports."
+when_overhead: "~Python via uv + tree-sitter parsers downloaded on demand. Solo maintainer — área menos madura del ecosystem MCP. Marcado experimental."
+requires_secret: false
+secret_env_var: null
+secret_doc_url: null
+post_install_note: "Experimental — single-maintainer community package. Si dependés crítico de esto, mirá el repo upstream para ver actividad reciente: https://github.com/wrale/mcp-server-tree-sitter"

@@ -96,7 +96,18 @@ teardown() { teardown_tmp_dir; }
   load_lib render
   cp "$REPO_ROOT/tests/fixtures/sample-agent-with-vault.yml" "$TMP_TEST_DIR/agent.yml"
 
-  local known_external=" NOTIFICATIONS_CHANNEL_IS_TELEGRAM "
+  # Predicates set externally by setup.sh (wizard) or by the regenerate path —
+  # not derived from agent.yml scalars by render_load_context. Adding to this
+  # list is a deliberate choice: the var must be set elsewhere.
+  local known_external=" NOTIFICATIONS_CHANNEL_IS_TELEGRAM"
+  # Optional MCP toggles — exported by setup.sh during the wizard (one per
+  # opt-in MCP the user enabled) and re-derived under --regenerate from
+  # agent.yml.mcps.defaults[]. The fixture above doesn't list any optional
+  # MCPs (only fetch/git/filesystem always-on), so none of these env vars
+  # are produced by render_load_context — they're rightfully external.
+  known_external="${known_external} MCPS_PLAYWRIGHT_ENABLED MCPS_TIME_ENABLED MCPS_SEQUENTIAL_THINKING_ENABLED"
+  known_external="${known_external} MCPS_FIRECRAWL_ENABLED MCPS_GOOGLE_CALENDAR_ENABLED MCPS_AWS_ENABLED"
+  known_external="${known_external} MCPS_TREE_SITTER_ENABLED "
 
   local before_env after_env produced
   before_env=$(env | grep -E "^[A-Z][A-Z0-9_]*=" | cut -d= -f1 | sort -u)

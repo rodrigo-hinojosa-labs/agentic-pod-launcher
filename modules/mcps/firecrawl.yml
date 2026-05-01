@@ -1,0 +1,11 @@
+id: firecrawl
+spec: firecrawl-mcp
+type: optional
+runtime: npx
+description: "Web scraping/crawling premium — convierte URLs en markdown limpio, navega multi-page sites, extrae datos estructurados."
+when_useful: "Vault `ingest` de fuentes web complejas (Wikipedia, blogs, papers HTML, doc sites). Reemplaza el `curl + clean manual` con resultados mucho más precisos."
+when_overhead: "Free tier 500 calls/mes; planes pagos para volumen serio. Sin red de pago si auto-host con Docker."
+requires_secret: true
+secret_env_var: FIRECRAWL_API_KEY
+secret_doc_url: "https://www.firecrawl.dev/app/api-keys"
+post_install_note: "Generá tu API key en https://www.firecrawl.dev/app/api-keys y completala en .env como FIRECRAWL_API_KEY=fc-..."

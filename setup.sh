@@ -7,6 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/scripts/lib/yaml.sh"
 source "$SCRIPT_DIR/scripts/lib/render.sh"
 source "$SCRIPT_DIR/scripts/lib/plugin-catalog.sh"
+source "$SCRIPT_DIR/scripts/lib/mcp-catalog.sh"
 
 GUM=""  # populated by ensure_gum
 
@@ -342,8 +343,73 @@ run_wizard() {
 
   # ── 5. MCPs ─────────────────────────────────────────
   echo "▸ MCP servers"
-  echo "  Pre-configured (zero config): playwright, fetch, time, sequential-thinking"
+  # Always-on (zero config, low overhead): driven by the catalog at
+  # modules/mcps/*.yml where type=default. Listed once for the user's awareness.
+  local _default_ids _default_csv
+  _default_ids=$(mcp_catalog_list default | tr '\n' ',' | sed 's/,$//' | tr ',' ' ')
+  _default_csv=$(echo "$_default_ids" | tr ' ' ',' | sed 's/,/, /g')
+  echo "  Always on (low overhead): $_default_csv"
   echo ""
+  echo "  The following are opt-in — Enter to skip:"
+  echo ""
+
+  # Iterate optional MCPs from the catalog. Same pattern as the optional
+  # plugins block: pre-collect IDs into a plain array first so ask_yn inside
+  # the loop reads its y/n answers from the user's stdin (not from the IDs
+  # stream that `done < <(...)` would redirect into the loop body).
+  local _opt_mcp_ids=()
+  local _opt_mcp_id _mcp_desc _mcp_useful _mcp_overhead _mcp_secret_env _mcp_secret_url
+  while IFS= read -r _opt_mcp_id; do
+    [ -z "$_opt_mcp_id" ] && continue
+    _opt_mcp_ids+=("$_opt_mcp_id")
+  done < <(mcp_catalog_list optional)
+  # Track which optional MCPs the user enabled. We export the canonical
+  # MCPS_<ID>_ENABLED env var for each so the renderer (mcp-json.tpl) can
+  # gate its `{{#if}}` block, and we collect them into an array used by the
+  # agent.yml heredoc to persist mcps.defaults.
+  local active_optional_mcps=()
+  local mcp_secret_env_lines=""
+  for _opt_mcp_id in "${_opt_mcp_ids[@]}"; do
+    _mcp_desc=$(mcp_catalog_get "$_opt_mcp_id" description)
+    _mcp_useful=$(mcp_catalog_get "$_opt_mcp_id" when_useful)
+    _mcp_overhead=$(mcp_catalog_get "$_opt_mcp_id" when_overhead)
+    _mcp_secret_env=$(mcp_catalog_get "$_opt_mcp_id" secret_env_var)
+    _mcp_secret_url=$(mcp_catalog_get "$_opt_mcp_id" secret_doc_url)
+    echo "  · ${_opt_mcp_id}"
+    echo "    ${_mcp_desc}"
+    echo "    Útil: ${_mcp_useful}"
+    echo "    Overhead: ${_mcp_overhead}"
+    local _envvar
+    _envvar=$(mcp_catalog_id_to_envvar "$_opt_mcp_id")
+    if [ "$(ask_yn "    Install ${_opt_mcp_id}?" "n")" = "true" ]; then
+      eval "export ${_envvar}=true"
+      active_optional_mcps+=("$_opt_mcp_id")
+      # If the MCP needs a secret in .env, prompt for it now (mirrors the
+      # Telegram/Atlassian pattern: empty input is OK — leaves the user to
+      # fill it later in .env).
+      if [ -n "$_mcp_secret_env" ]; then
+        if [ -n "$_mcp_secret_url" ]; then
+          echo "    Secret: ${_mcp_secret_env} — generate at ${_mcp_secret_url}"
+        else
+          echo "    Secret: ${_mcp_secret_env}"
+        fi
+        echo "    (Press Enter to skip — fill ${_mcp_secret_env} in .env later.)"
+        local _secret_val
+        _secret_val=$(ask_secret "    ${_mcp_secret_env} (or skip)")
+        if [ -n "$_secret_val" ]; then
+          mcp_secret_env_lines="${mcp_secret_env_lines}${_mcp_secret_env}=${_secret_val}
+"
+        else
+          mcp_secret_env_lines="${mcp_secret_env_lines}${_mcp_secret_env}=
+"
+        fi
+      fi
+    else
+      eval "export ${_envvar}=false"
+    fi
+    echo ""
+  done
+
   local atlassian_entries=""
   local atlassian_env_vars=""
   if [ "$(ask_yn 'Enable Atlassian MCP?' 'n')" = "true" ]; then
@@ -572,6 +638,25 @@ $atlassian_entries"
     atlassian_yaml="  atlassian: []"
   fi
 
+  # Render mcps.defaults: catalog defaults always-on (fetch, git, filesystem)
+  # + any optional MCPs the user enabled in the wizard. The list is what
+  # the renderer reads to gate the .mcp.json blocks; persisting it in
+  # agent.yml keeps `--regenerate` deterministic (same selections, same render).
+  local mcps_defaults_yaml=""
+  local _mcp_id
+  while IFS= read -r _mcp_id; do
+    [ -z "$_mcp_id" ] && continue
+    mcps_defaults_yaml="${mcps_defaults_yaml}    - ${_mcp_id}
+"
+  done < <(mcp_catalog_list default)
+  # Guard against `set -u` when the user picked no optional MCPs (empty array).
+  if [ "${#active_optional_mcps[@]}" -gt 0 ]; then
+    for _mcp_id in "${active_optional_mcps[@]}"; do
+      mcps_defaults_yaml="${mcps_defaults_yaml}    - ${_mcp_id}
+"
+    done
+  fi
+
   # Render the plugins list: 5 always-on defaults from the catalog + any
   # opt-in descriptors the user selected in the "Optional plugins" wizard
   # section above. Adding a new default is a one-file change (drop a YAML
@@ -647,11 +732,7 @@ features:
 
 mcps:
   defaults:
-    - playwright
-    - fetch
-    - time
-    - sequential-thinking
-$atlassian_yaml
+$mcps_defaults_yaml$atlassian_yaml
   github:
     enabled: $github_enabled
     email: "$github_email"
@@ -689,6 +770,9 @@ EOF
   [ -n "$atlassian_env_vars" ] && echo "$atlassian_env_vars" >> "$env_file"
   [ "$github_enabled" = "true" ] && echo "GITHUB_PAT=$github_pat" >> "$env_file"
   [ "$fork_enabled" = "true" ] && [ -n "$fork_token" ] && echo "GITHUB_FORK_PAT=$fork_token" >> "$env_file"
+  # Optional-MCP secrets collected during the wizard. Emit even when empty
+  # so the variable name is visible in .env and the user can fill it later.
+  [ -n "$mcp_secret_env_lines" ] && echo "$mcp_secret_env_lines" >> "$env_file"
   chmod 0600 "$env_file"
 
   echo ""
@@ -985,6 +1069,8 @@ mirror_catalog_to_docker() {
   local src_plugins="$dest/modules/plugins"
   local src_vault_lib="$dest/scripts/lib/vault.sh"
   local src_vault_skel="$dest/modules/vault-skeleton"
+  local src_mcp_lib="$dest/scripts/lib/mcp-catalog.sh"
+  local src_mcps="$dest/modules/mcps"
   [ -f "$src_lib" ] || return 0
   [ -d "$src_plugins" ] || return 0
   mkdir -p "$dest/docker/scripts/lib" "$dest/docker/modules"
@@ -998,6 +1084,13 @@ mirror_catalog_to_docker() {
     rm -rf "$dest/docker/modules/vault-skeleton"
     cp -R "$src_vault_skel" "$dest/docker/modules/vault-skeleton"
   fi
+  if [ -f "$src_mcp_lib" ]; then
+    cp "$src_mcp_lib" "$dest/docker/scripts/lib/mcp-catalog.sh"
+  fi
+  if [ -d "$src_mcps" ]; then
+    rm -rf "$dest/docker/modules/mcps"
+    cp -R "$src_mcps" "$dest/docker/modules/mcps"
+  fi
 
   # Post-mirror validation. Each entry below is required by the Dockerfile;
   # missing any of them means the build will fail later with a less-clear
@@ -1007,9 +1100,15 @@ mirror_catalog_to_docker() {
     || missing="${missing}\n  - docker/scripts/lib/plugin-catalog.sh"
   [ -f "$dest/docker/scripts/lib/vault.sh" ] \
     || missing="${missing}\n  - docker/scripts/lib/vault.sh"
+  [ -f "$dest/docker/scripts/lib/mcp-catalog.sh" ] \
+    || missing="${missing}\n  - docker/scripts/lib/mcp-catalog.sh"
   if [ ! -d "$dest/docker/modules/plugins" ] \
     || [ -z "$(ls -A "$dest/docker/modules/plugins" 2>/dev/null)" ]; then
     missing="${missing}\n  - docker/modules/plugins/ (empty or missing)"
+  fi
+  if [ ! -d "$dest/docker/modules/mcps" ] \
+    || [ -z "$(ls -A "$dest/docker/modules/mcps" 2>/dev/null)" ]; then
+    missing="${missing}\n  - docker/modules/mcps/ (empty or missing)"
   fi
   [ -f "$dest/docker/modules/vault-skeleton/CLAUDE.md" ] \
     || missing="${missing}\n  - docker/modules/vault-skeleton/CLAUDE.md"
@@ -1019,7 +1118,7 @@ mirror_catalog_to_docker() {
     echo "" >&2
     echo "If this is a fresh clone of the launcher, run from the launcher root:" >&2
     echo "  ./setup.sh --regenerate" >&2
-    echo "Otherwise, check that scripts/lib/{plugin-catalog,vault}.sh and modules/{plugins,vault-skeleton}/ exist." >&2
+    echo "Otherwise, check that scripts/lib/{plugin-catalog,vault,mcp-catalog}.sh and modules/{plugins,mcps,vault-skeleton}/ exist." >&2
     return 1
   fi
 }
@@ -1160,6 +1259,19 @@ regenerate() {
   else
     export NOTIFICATIONS_CHANNEL_IS_TELEGRAM=false
   fi
+
+  # Derive MCPS_<ID>_ENABLED env vars from agent.yml.mcps.defaults so the
+  # mcp-json.tpl `{{#if}}` blocks fire correctly under `--regenerate` (which
+  # arrives here without the wizard's exports). Always-on MCPs (fetch, git,
+  # filesystem) are hardcoded in the template — these env vars only gate
+  # the optional ones (playwright, time, sequential-thinking, firecrawl,
+  # google-calendar, aws, tree-sitter).
+  local _regen_mcp_id _regen_envvar
+  while IFS= read -r _regen_mcp_id; do
+    [ -z "$_regen_mcp_id" ] && continue
+    _regen_envvar=$(mcp_catalog_id_to_envvar "$_regen_mcp_id")
+    eval "export ${_regen_envvar}=true"
+  done < <(yq -r '.mcps.defaults[]?' "$agent_yml" 2>/dev/null)
   # Claude profile: expand $HOME / ~ in the stored path. Backwards compat:
   # agents written before the claude.* section default to ~/.claude-personal.
   if [ -z "${CLAUDE_CONFIG_DIR:-}" ]; then

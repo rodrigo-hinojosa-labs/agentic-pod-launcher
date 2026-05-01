@@ -1,0 +1,11 @@
+id: time
+spec: mcp-server-time
+type: optional
+runtime: uvx
+description: "Timezone-aware time math — `get_current_time`, `convert_time` entre zonas IANA."
+when_useful: "Agentes que coordinan horarios cross-tz, reportan tiempos al usuario, calculan diferencias horarias."
+when_overhead: "~10MB idle (Python via uv). Bajo, pero si nunca preguntás por hora/timezone, no aporta."
+requires_secret: false
+secret_env_var: null
+secret_doc_url: null
+post_install_note: null

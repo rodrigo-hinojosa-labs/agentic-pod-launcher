@@ -1,0 +1,11 @@
+id: filesystem
+spec: "@modelcontextprotocol/server-filesystem"
+type: default
+runtime: npx
+description: "Filesystem ops estructuradas (read_multiple_files, search_files, directory_tree, move_file, get_file_info)."
+when_useful: "Navegación de jerarquías grandes (vault, repo multi-package). Mejor que Glob/Grep recurrentes para búsquedas estructuradas o reads en batch."
+when_overhead: "~50MB node runtime. Si tu agente trabaja sólo en archivos ya conocidos por path, los Read/Edit/Write builtins bastan."
+requires_secret: false
+secret_env_var: null
+secret_doc_url: null
+post_install_note: null

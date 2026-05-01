@@ -73,6 +73,11 @@ wizard_answers() {
   printf 'n\n'
   # Notify channel
   printf 'none\n'
+  # Optional MCPs from the catalog (alphabetical): aws, firecrawl,
+  # google-calendar, playwright, sequential-thinking, time, tree-sitter.
+  # All 'n' for the common test path. Secret sub-prompts only fire when
+  # the parent ask_yn was 'y', so they don't appear in this stdin stream.
+  printf 'n\nn\nn\nn\nn\nn\nn\n'
   # Atlassian + GitHub MCPs (both n; sub-prompts skipped)
   printf 'n\nn\n'
   # Heartbeat: enabled, interval, prompt

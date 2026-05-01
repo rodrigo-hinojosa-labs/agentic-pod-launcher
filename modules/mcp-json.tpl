@@ -1,21 +1,55 @@
 {
   "mcpServers": {
-    "playwright": {
-      "command": "npx",
-      "args": ["@playwright/mcp@latest"]
-    },
     "fetch": {
       "command": "uvx",
       "args": ["mcp-server-fetch"]
     },
+    "git": {
+      "command": "uvx",
+      "args": ["mcp-server-git", "--repository", "/workspace"]
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/agent"]
+    }{{#if MCPS_PLAYWRIGHT_ENABLED}},
+    "playwright": {
+      "command": "npx",
+      "args": ["@playwright/mcp@latest"]
+    }{{/if}}{{#if MCPS_TIME_ENABLED}},
     "time": {
       "command": "uvx",
       "args": ["mcp-server-time", "--local-timezone={{USER_TIMEZONE}}"]
-    },
+    }{{/if}}{{#if MCPS_SEQUENTIAL_THINKING_ENABLED}},
     "sequential-thinking": {
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
-    }{{#each MCPS_ATLASSIAN}},
+    }{{/if}}{{#if MCPS_FIRECRAWL_ENABLED}},
+    "firecrawl": {
+      "command": "npx",
+      "args": ["-y", "firecrawl-mcp"],
+      "env": {
+        "FIRECRAWL_API_KEY": "${FIRECRAWL_API_KEY}"
+      }
+    }{{/if}}{{#if MCPS_GOOGLE_CALENDAR_ENABLED}},
+    "google-calendar": {
+      "command": "npx",
+      "args": ["-y", "@cocal/google-calendar-mcp"],
+      "env": {
+        "GOOGLE_OAUTH_CREDENTIALS": "/home/agent/.gcal/gcp-oauth.keys.json"
+      }
+    }{{/if}}{{#if MCPS_AWS_ENABLED}},
+    "aws": {
+      "command": "uvx",
+      "args": ["awslabs.aws-api-mcp-server@latest"],
+      "env": {
+        "AWS_PROFILE": "${AWS_PROFILE}",
+        "AWS_REGION": "${AWS_REGION}"
+      }
+    }{{/if}}{{#if MCPS_TREE_SITTER_ENABLED}},
+    "tree-sitter": {
+      "command": "uvx",
+      "args": ["mcp-server-tree-sitter"]
+    }{{/if}}{{#each MCPS_ATLASSIAN}},
     "atlassian-{{name}}": {
       "command": "uvx",
       "args": ["mcp-atlassian"],
