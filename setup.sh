@@ -957,7 +957,7 @@ build_plugins_block() {
   case "$lang" in
     es|mixed)
       heading="## Plugins instalados"
-      intro="Los siguientes plugins se instalan automáticamente cuando completes \`/login\` dentro del tmux. Cada uno aporta capacidades distintas — el campo \`agent.yml.plugins[]\` es la fuente de verdad y podés editarlo a mano si querés agregar/quitar (luego \`./setup.sh --regenerate\`)."
+      intro="Los siguientes plugins se instalan automáticamente cuando completes \`/login\` dentro del tmux. Cada uno aporta capacidades distintas — el campo \`agent.yml.plugins[]\` es la fuente de verdad y puedes editarlo a mano si quieres agregar/quitar (luego \`./setup.sh --regenerate\`)."
       footer="Para desinstalar uno desde una sesión: \`claude plugin uninstall <spec>\`."
       ;;
     *)

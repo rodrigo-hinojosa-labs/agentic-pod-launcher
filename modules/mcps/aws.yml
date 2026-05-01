@@ -2,14 +2,14 @@ id: aws
 spec: awslabs.aws-api-mcp-server
 type: optional
 runtime: uvx
-description: "AWS CLI/API wrapper — invocá cualquier comando AWS CLI estructurado desde el agente."
+description: "AWS CLI/API wrapper — invoca cualquier comando AWS CLI estructurado desde el agente."
 when_useful: "Stacks AWS-native. Inspección de recursos (S3, Lambda, EC2, RDS), ad-hoc queries, troubleshooting."
-when_overhead: "~Python via uv. Requiere ~/.aws/credentials configurado en el host (montado al container vía bind si querés acceso)."
+when_overhead: "~Python via uv. Requiere ~/.aws/credentials configurado en el host (montado al container vía bind si quieres acceso)."
 requires_secret: false
 secret_env_var: null
 secret_doc_url: "https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-configure.html"
 post_install_note: |
-  AWS auth: usá uno de estos patrones (en orden de preferencia):
-    1. AWS_PROFILE en .env apuntando a un profile en ~/.aws/credentials del host (montá ~/.aws como bind si necesitás).
-    2. AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY directos en .env (menos seguro, quemás keys en el archivo).
-    3. IAM role si corrés en EC2/ECS (no aplica acá, esto es local).
+  AWS auth: usa uno de estos patrones (en orden de preferencia):
+    1. AWS_PROFILE en .env apuntando a un profile en ~/.aws/credentials del host (monta ~/.aws como bind si lo necesitas).
+    2. AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY directos en .env (menos seguro, quemas keys en el archivo).
+    3. IAM role si corres en EC2/ECS (no aplica acá, esto es local).
