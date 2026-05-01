@@ -13,6 +13,15 @@ docker compose up -d
 The container starts and the supervisor launches Claude Code inside a detached tmux session. Attach to it (not `docker attach` — that shows supervisor logs; the user-facing session lives in tmux):
 
 ```bash
+# Retry-loop: the supervisor polls every 2s and respawns the tmux session
+# after /login, /exit, or channel restart. Attaching during that window
+# returns "no sessions". This loop retries every 1s for up to 15s.
+for i in $(seq 15); do docker exec -it -u agent {{AGENT_NAME}} tmux attach -t agent && break; sleep 1; done
+```
+
+If you prefer the plain command (assuming the supervisor already respawned):
+
+```bash
 docker exec -it -u agent {{AGENT_NAME}} tmux attach -t agent
 ```
 
@@ -131,11 +140,21 @@ Full reference (all subcommands, validation rules, propagation timing): [docs/he
 
 #### `docker exec ... tmux attach -t agent` says "no sessions"
 
-`docker exec` defaults to root, and tmux keeps its socket per-UID in `/tmp/tmux-<uid>/`. The session lives under the `agent` UID (501 by default), so root looks at `/tmp/tmux-0/` and correctly reports empty. Always pass `-u agent`:
+Two distinct causes:
 
-```bash
-docker exec -it -u agent {{AGENT_NAME}} tmux attach -t agent
-```
+1. **Missing `-u agent`**: `docker exec` defaults to root, and tmux keeps its socket per-UID in `/tmp/tmux-<uid>/`. The session lives under the `agent` UID (501 by default), so root looks at `/tmp/tmux-0/` and correctly reports empty. Always pass `-u agent`:
+
+   ```bash
+   docker exec -it -u agent {{AGENT_NAME}} tmux attach -t agent
+   ```
+
+2. **Watchdog timing**: the supervisor polls every 2s and respawns the tmux session after `/login`, `/exit`, channel restart, or any process crash. Between "died" and "respawn complete" there's a 5–15s window with no `agent` session. Attaching during that window returns `no sessions`. Workaround: a retry-loop that polls until the watchdog finishes:
+
+   ```bash
+   for i in $(seq 15); do docker exec -it -u agent {{AGENT_NAME}} tmux attach -t agent && break; sleep 1; done
+   ```
+
+   It tries once per second up to 15 attempts, exits as soon as it connects. If 15s pass without success, something deeper is wrong (check `docker logs {{AGENT_NAME}}` and `docker exec -u agent {{AGENT_NAME}} tail -50 /workspace/claude.log`).
 
 #### `docker attach {{AGENT_NAME}}` hangs with no output
 
