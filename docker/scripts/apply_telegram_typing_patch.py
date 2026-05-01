@@ -3,14 +3,17 @@
 Patch the upstream claude-plugins-official/telegram `server.ts` with four
 independent fixes that improve Telegram chat reliability + observability:
 
-1. Typing refresh patch (v2) — refreshes the "typing..." action every 4s
+1. Typing refresh patch (v3) — refreshes the "typing..." action every 4s
    while Claude is processing, instead of upstream's single-shot
    sendChatAction that auto-expires after ~5s. The action persists until
    `case 'reply'` fires (signalling the session finished processing) or the
-   bun process exits — there is no fixed time cap. Includes an in-place
-   upgrader for `server.ts` files patched with v1 (which had a 120s cap):
-   on next boot the cap constant + setTimeout block are removed surgically
-   and the marker is bumped to v2.
+   bun process exits — there is no fixed time cap. v3 adds observability:
+   the setInterval logs a tick to stderr every 5 invocations (~20s), and
+   sendChatAction errors that v1/v2 silently swallowed are now surfaced
+   to /workspace/scripts/heartbeat/logs/telegram-mcp-stderr.log. Includes
+   in-place upgraders for files at v1 (cap removal + bump to v2) and at v2
+   (helper rewrite + bump to v3). The cascade runs on every boot, so any
+   already-patched server.ts ratchets up to v3 transparently.
 
 2. Offset persistence patch (v1) — persists the Telegram update_id offset
    to ~/.claude/channels/telegram/last-offset.json on each successful
@@ -55,7 +58,8 @@ import re
 import sys
 from pathlib import Path
 
-MARKER_TYPING = "agentic-pod-launcher: typing refresh patch v2"
+MARKER_TYPING = "agentic-pod-launcher: typing refresh patch v3"
+MARKER_TYPING_V2 = "agentic-pod-launcher: typing refresh patch v2"
 MARKER_TYPING_V1 = "agentic-pod-launcher: typing refresh patch v1"
 MARKER_OFFSET = "agentic-pod-launcher: offset persistence patch v1"
 MARKER_STDERR = "agentic-pod-launcher: stderr-capture patch v1"
@@ -64,10 +68,30 @@ MARKER_PRIMARY = "agentic-pod-launcher: primary lock patch v1"
 TYPING_HELPERS = (
     "\n// " + MARKER_TYPING + "\n"
     "const _typingIntervals = new Map<string | number, ReturnType<typeof setInterval>>()\n"
+    "const _typingTickCounts = new Map<string | number, number>()\n"
     "const _TYPING_REFRESH_MS = 4000\n"
     "function _typingKeepAlive(chat_id: string | number): void {\n"
     "  _typingStop(chat_id)\n"
-    "  const send = () => { void bot.api.sendChatAction(chat_id, 'typing').catch(() => {}) }\n"
+    "  _typingTickCounts.set(chat_id, 0)\n"
+    "  const send = () => {\n"
+    "    const tick = (_typingTickCounts.get(chat_id) ?? 0) + 1\n"
+    "    _typingTickCounts.set(chat_id, tick)\n"
+    "    bot.api.sendChatAction(chat_id, 'typing')\n"
+    "      .then(() => {\n"
+    "        // Beat every 5 ticks (~20s) so the stderr log shows the\n"
+    "        // setInterval is alive without saturating it on short replies.\n"
+    "        if (tick === 1 || tick % 5 === 0) {\n"
+    "          process.stderr.write(`telegram channel: typing tick ${tick} for chat ${chat_id}\\n`)\n"
+    "        }\n"
+    "      })\n"
+    "      .catch((err: any) => {\n"
+    "        // v1/v2 silently swallowed errors here. v3 surfaces them so\n"
+    "        // rate limits, network failures, or token issues become\n"
+    "        // visible in /workspace/scripts/heartbeat/logs/telegram-mcp-stderr.log.\n"
+    "        const msg = err && (err.message || err.description || String(err))\n"
+    "        process.stderr.write(`telegram channel: sendChatAction failed for chat ${chat_id} tick ${tick}: ${msg}\\n`)\n"
+    "      })\n"
+    "  }\n"
     "  send()\n"
     "  const timer = setInterval(send, _TYPING_REFRESH_MS)\n"
     "  _typingIntervals.set(chat_id, timer)\n"
@@ -75,6 +99,7 @@ TYPING_HELPERS = (
     "function _typingStop(chat_id: string | number): void {\n"
     "  const t = _typingIntervals.get(chat_id)\n"
     "  if (t) { clearInterval(t); _typingIntervals.delete(chat_id) }\n"
+    "  _typingTickCounts.delete(chat_id)\n"
     "}\n"
 )
 
@@ -205,11 +230,14 @@ def upgrade_typing_v1_to_v2(src: str) -> tuple[str, bool]:
     won't match and we leave the file untouched (returning False). Caller logs
     a warning so the operator notices the drift.
 
+    This function is the v1→v2 step of the upgrade chain. After it runs,
+    `upgrade_typing_v2_to_v3` picks up to add the v3 instrumentation.
+
     Returns (new_src, applied).
     """
-    if MARKER_TYPING in src:                          # v2 already there → no-op
+    if MARKER_TYPING_V2 in src or MARKER_TYPING in src:  # already at v2 or beyond
         return src, False
-    if MARKER_TYPING_V1 not in src:                   # never patched → no-op
+    if MARKER_TYPING_V1 not in src:                      # never patched → no-op
         return src, False
 
     # 1) Remove the cap constant declaration.
@@ -224,14 +252,74 @@ def upgrade_typing_v1_to_v2(src: str) -> tuple[str, bool]:
         warn("v1→v2 upgrade anchors not found (helpers may have been edited out-of-band) — leaving v1 in place")
         return src, False
 
-    # 3) Bump marker.
-    new_src = new_src.replace(MARKER_TYPING_V1, MARKER_TYPING)
-    # 4) Update the inline comment we wrote in v1 at the call site.
+    # 3) Bump marker to v2 (NOT v3 — the v2→v3 upgrader runs next and
+    #    handles the marker bump + helper rewrite together).
+    new_src = new_src.replace(MARKER_TYPING_V1, MARKER_TYPING_V2)
+    # 4) Update the inline comment at the call site to v2 wording.
     new_src = new_src.replace(
         "// Typing indicator — refreshed every 4s until reply fires, 120s hard cap.\n"
         "  // Patched by agentic-pod-launcher (telegram-typing v1).\n",
         "// Typing indicator — refreshed every 4s until reply fires (no cap; stops on reply or process exit).\n"
         "  // Patched by agentic-pod-launcher (telegram-typing v2).\n",
+    )
+    return new_src, True
+
+
+def upgrade_typing_v2_to_v3(src: str) -> tuple[str, bool]:
+    """Migrate a server.ts already patched with typing v2 to v3 in-place.
+
+    The behavioral diff between v2 and v3 is observability: v3's _typingKeepAlive
+    instruments each setInterval tick (logs every 5 ticks to stderr, tee'd to
+    /workspace/scripts/heartbeat/logs/telegram-mcp-stderr.log) and surfaces
+    sendChatAction errors instead of silently swallowing them via
+    `.catch(() => {})`. The runtime contract is unchanged: same setInterval
+    cadence, no cap, _typingStop only on `case 'reply'`.
+
+    Implementation: the v2 helper block has a known shape. We delete the entire
+    v2 marker line + helper functions, then inject the fresh TYPING_HELPERS
+    block (which carries the v3 marker). The call-site swap and `_typingStop`
+    in `case 'reply'` from earlier patches are unchanged so we don't touch them.
+
+    Defensive: if the v2 marker isn't followed by the expected helper shape,
+    the regex won't match and we leave the file at v2.
+
+    Returns (new_src, applied).
+    """
+    if MARKER_TYPING in src:                # already at v3
+        return src, False
+    if MARKER_TYPING_V2 not in src:         # not at v2 → caller may have a v1 to upgrade first, or never patched
+        return src, False
+
+    # Remove the v2 marker comment + the v2 helper block (everything from the
+    # v2 marker line through the end of `_typingStop`'s closing brace). The
+    # v2 shape is:
+    #   // agentic-pod-launcher: typing refresh patch v2
+    #   const _typingIntervals = ...
+    #   const _TYPING_REFRESH_MS = 4000
+    #   function _typingKeepAlive(...) { ... }
+    #   function _typingStop(...) { ... }
+    pattern = (
+        r"\n// " + re.escape(MARKER_TYPING_V2) + r"\n"
+        r"const _typingIntervals[^\n]*\n"
+        r"const _TYPING_REFRESH_MS = 4000\n"
+        r"function _typingKeepAlive\(chat_id: string \| number\): void \{\n"
+        r"(?:[^\n]*\n)+?"  # function body lines
+        r"\}\n"
+        r"function _typingStop\(chat_id: string \| number\): void \{\n"
+        r"(?:[^\n]*\n)+?"
+        r"\}\n"
+    )
+    new_src, n = re.subn(pattern, TYPING_HELPERS, src, count=1)
+    if n != 1:
+        warn("v2→v3 upgrade anchors not found (helpers may have been edited out-of-band) — leaving v2 in place")
+        return src, False
+
+    # Update the inline comment at the call site to match v3 wording.
+    new_src = new_src.replace(
+        "// Typing indicator — refreshed every 4s until reply fires (no cap; stops on reply or process exit).\n"
+        "  // Patched by agentic-pod-launcher (telegram-typing v2).\n",
+        "// Typing indicator — refreshed every 4s until reply fires (no cap; stops on reply or process exit).\n"
+        "  // Patched by agentic-pod-launcher (telegram-typing v3 — instrumented).\n",
     )
     return new_src, True
 
@@ -254,7 +342,7 @@ def apply_typing(src: str) -> tuple[str, bool]:
         r"  void bot\.api\.sendChatAction\(chat_id, 'typing'\)\.catch\(\(\) => \{\}\)",
         (
             "  // Typing indicator — refreshed every 4s until reply fires (no cap; stops on reply or process exit).\n"
-            "  // Patched by agentic-pod-launcher (telegram-typing v2).\n"
+            "  // Patched by agentic-pod-launcher (telegram-typing v3 — instrumented).\n"
             "  _typingKeepAlive(chat_id)"
         ),
         new_src,
@@ -443,17 +531,20 @@ def main(argv: list[str]) -> int:
     src = path.read_text()
     new_src = src
 
-    # Run the v1→v2 typing upgrade BEFORE apply_typing. If v1 is present, the
-    # upgrade rewrites the cap out and bumps the marker; apply_typing then
-    # short-circuits on the v2 marker. If neither marker is present,
-    # upgrade no-ops and apply_typing applies fresh.
-    new_src, tu = upgrade_typing_v1_to_v2(new_src)
+    # Run the typing upgrades BEFORE apply_typing, in cascade:
+    #   v1 → v2 (cap removed)  → v3 (instrumented)
+    # If a step's source marker isn't present, that step is a no-op and the
+    # next step picks up. apply_typing then short-circuits on the v3 marker
+    # if anything ran. If no markers were present at all, apply_typing
+    # installs v3 fresh.
+    new_src, tu1 = upgrade_typing_v1_to_v2(new_src)
+    new_src, tu2 = upgrade_typing_v2_to_v3(new_src)
     new_src, t = apply_typing(new_src)
     new_src, o = apply_offset(new_src)
     new_src, s = apply_stderr(new_src)
     new_src, p = apply_primary(new_src)
 
-    if not (tu or t or o or s or p):
+    if not (tu1 or tu2 or t or o or s or p):
         # Either everything is already patched, or every set of anchors missed.
         return 0
 
@@ -462,8 +553,10 @@ def main(argv: list[str]) -> int:
     tmp.write_text(new_src)
     tmp.replace(path)
     parts = []
-    if tu:
+    if tu1:
         parts.append("typing-upgrade-v1→v2")
+    if tu2:
+        parts.append("typing-upgrade-v2→v3")
     if t:
         parts.append("typing")
     if o:
