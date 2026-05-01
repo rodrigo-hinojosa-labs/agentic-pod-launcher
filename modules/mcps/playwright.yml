@@ -1,0 +1,11 @@
+id: playwright
+spec: "@playwright/mcp"
+type: optional
+runtime: npx
+description: "Browser automation — navega páginas web, llena formularios, screenshot, scrape."
+when_useful: "Agentes que tocan páginas web (research dinámico, monitoreo, web tests, scraping de SPA con JS)."
+when_overhead: "~80MB idle + Chromium runtime al primer uso. Si tu agente nunca abre browser, skip."
+requires_secret: false
+secret_env_var: null
+secret_doc_url: null
+post_install_note: null

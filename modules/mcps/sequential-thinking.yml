@@ -1,0 +1,11 @@
+id: sequential-thinking
+spec: "@modelcontextprotocol/server-sequential-thinking"
+type: optional
+runtime: npx
+description: "Wrapper externo de extended-thinking expuesto como MCP tool."
+when_useful: "Casos donde querés thinking explícito step-by-step visible en el transcript."
+when_overhead: "~50MB idle. Claude Opus 4.x ya tiene thinking interno potente — este server raramente aporta. Skip salvo caso muy específico."
+requires_secret: false
+secret_env_var: null
+secret_doc_url: null
+post_install_note: null

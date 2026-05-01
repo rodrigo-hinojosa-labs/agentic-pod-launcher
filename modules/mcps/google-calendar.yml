@@ -1,0 +1,16 @@
+id: google-calendar
+spec: "@cocal/google-calendar-mcp"
+type: optional
+runtime: npx
+description: "Google Calendar — listar/crear/actualizar eventos, buscar disponibilidades, leer agendas múltiples."
+when_useful: "Agentes que coordinan reuniones, consultan agendas, sugieren horarios o crean recordatorios automáticos."
+when_overhead: "OAuth flow es 3-legged: requiere proyecto GCP + descargar gcp-oauth.keys.json + autorizar en browser la primera vez. Pesado de configurar dentro de un container."
+requires_secret: true
+secret_env_var: GOOGLE_OAUTH_CREDENTIALS
+secret_doc_url: "https://github.com/nspady/google-calendar-mcp#setup"
+post_install_note: |
+  Setup OAuth flow:
+    1. Creá un proyecto en https://console.cloud.google.com/ y habilitá la Calendar API.
+    2. Descargá las credentials OAuth como gcp-oauth.keys.json.
+    3. Copialo a .state/.gcal/gcp-oauth.keys.json en el workspace del agente.
+    4. La primera vez que el agente invoque el MCP, abrirá un browser para autorizar — hacé el flow en tu host (no en el container).

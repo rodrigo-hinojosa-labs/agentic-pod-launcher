@@ -1,0 +1,11 @@
+id: fetch
+spec: mcp-server-fetch
+type: default
+runtime: uvx
+description: "HTTP fetch — GETs a URL and returns text/JSON to the agent."
+when_useful: "Casi cualquier agente. Ingest de URLs en el vault, lectura de docs públicos, scraping ligero."
+when_overhead: "Casi nadie debería desactivar fetch — es uno de los MCP más baratos (Python stdlib via uv) y más usados."
+requires_secret: false
+secret_env_var: null
+secret_doc_url: null
+post_install_note: null
