@@ -152,6 +152,7 @@ COPY scripts/heartbeatctl /opt/agent-admin/scripts/heartbeatctl
 COPY scripts/lib/interval.sh /opt/agent-admin/scripts/lib/interval.sh
 COPY scripts/lib/state.sh    /opt/agent-admin/scripts/lib/state.sh
 COPY scripts/lib/backup_identity.sh /opt/agent-admin/scripts/lib/backup_identity.sh
+COPY scripts/lib/backup_vault.sh    /opt/agent-admin/scripts/lib/backup_vault.sh
 RUN chmod +x /opt/agent-admin/scripts/heartbeatctl \
   && ln -s /opt/agent-admin/scripts/heartbeatctl /usr/local/bin/heartbeatctl
 

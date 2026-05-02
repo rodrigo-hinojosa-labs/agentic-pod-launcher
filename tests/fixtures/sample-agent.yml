@@ -40,6 +40,12 @@ features:
 backup:
   identity:
     recipient: null
+vault:
+  enabled: true
+  path: ".state/.vault"
+  seed_skeleton: true
+  force_reseed: false
+  backup_schedule: "0 * * * *"
 mcps:
   defaults:
     - fetch

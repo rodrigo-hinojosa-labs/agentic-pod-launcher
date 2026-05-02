@@ -26,9 +26,12 @@ LIB_DIR="${HEARTBEATCTL_LIB_DIR:-/opt/agent-admin/scripts/lib}"
 [ -f "$LIB_DIR/state.sh" ]    && source "$LIB_DIR/state.sh"
 # shellcheck source=/dev/null
 [ -f "$LIB_DIR/backup_identity.sh" ] && source "$LIB_DIR/backup_identity.sh"
+# shellcheck source=/dev/null
+[ -f "$LIB_DIR/backup_vault.sh" ]    && source "$LIB_DIR/backup_vault.sh"
 
 IDENTITY_STATE_DIR="${IDENTITY_STATE_DIR:-$WORKSPACE/.state}"
 IDENTITY_BACKUP_STATE_FILE="$HEARTBEAT_DIR/identity-backup.json"
+VAULT_BACKUP_STATE_FILE="$HEARTBEAT_DIR/vault-backup.json"
 
 cmd_help() {
   cat <<EOF
@@ -61,6 +64,11 @@ Backup:
                           encrypted .env) to the 'backup/identity' branch
                           on the agent's fork. Idempotent. See
                           docs/superpowers/specs/2026-04-22-identity-backup-design.md.
+  backup-vault    [--dry-run] [--gc]
+                          Snapshot the vault's markdown to the 'backup/vault'
+                          branch. Excludes Obsidian per-device config (.obsidian/
+                          workspace*.json, cache, .trash, sync-conflict files).
+                          Idempotent via sha256 over content + filenames.
 
 Exit codes:
   0  success
@@ -168,11 +176,24 @@ CONF
     backup_line="$bi_schedule /usr/local/bin/heartbeatctl backup-identity >> /workspace/scripts/heartbeat/logs/backup-identity.log 2>&1"
   fi
 
+  # Optional third crontab line for scheduled vault backup. Default
+  # cadence is hourly because the vault is the agent's working data
+  # and changes much faster than identity (which is roughly static
+  # post-setup). Override via vault.backup_schedule in agent.yml.
+  local vault_backup_line=""
+  local vault_enabled vault_backup_schedule
+  vault_enabled=$(_yq '.vault.enabled')
+  vault_backup_schedule=$(_yq '.vault.backup_schedule // "0 * * * *"')
+  if [ "$vault_enabled" = "true" ]; then
+    vault_backup_line="$vault_backup_schedule /usr/local/bin/heartbeatctl backup-vault >> /workspace/scripts/heartbeat/logs/backup-vault.log 2>&1"
+  fi
+
   local tmp_crontab="${CRONTAB_FILE}.tmp"
   if ! cat > "$tmp_crontab" <<CT
-# Cron for in-container agent heartbeat + identity backup. Managed by heartbeatctl.
+# Cron for in-container agent heartbeat + identity/vault backup. Managed by heartbeatctl.
 $line
 ${backup_line}
+${vault_backup_line}
 CT
   then
     rm -f "$tmp_crontab"
@@ -530,6 +551,112 @@ _bi_gc_then_run() {
   _bi_run
 }
 
+# Vault backup primitive — analogous to cmd_backup_identity. Snapshots
+# the markdown subset of the configured vault to a 'backup/vault' orphan
+# branch on the agent's fork. Idempotent.
+cmd_backup_vault() {
+  local mode="run"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dry-run) mode="dry-run"; shift ;;
+      --gc)      mode="gc"; shift ;;
+      -h|--help)
+        cat <<EOF
+Usage: heartbeatctl backup-vault [flags]
+
+Flags:
+  --dry-run   Stage + hash without push.
+  --gc        Run 'git gc' on the local clone before push.
+  (no flags)  Default: run the vault backup primitive.
+EOF
+        return 0 ;;
+      *) echo "backup-vault: unknown flag: $1" >&2; return 1 ;;
+    esac
+  done
+
+  case "$mode" in
+    run)     _bv_run ;;
+    dry-run) _bv_run --dry-run ;;
+    gc)      _bv_gc_then_run ;;
+  esac
+}
+
+# Resolve the vault directory the agent should back up. Tests override
+# via $VAULT_BACKUP_DIR; production reads it from agent.yml via
+# vault_resolve_root.
+_bv_dir() {
+  if [ -n "${VAULT_BACKUP_DIR:-}" ]; then
+    printf '%s\n' "$VAULT_BACKUP_DIR"
+    return
+  fi
+  command -v vault_resolve_root >/dev/null 2>&1 || return 0
+  vault_resolve_root "$AGENT_YML"
+}
+
+_bv_run() {
+  local dry_run=0
+  [ "${1:-}" = "--dry-run" ] && dry_run=1
+
+  local vault_dir
+  vault_dir=$(_bv_dir)
+  if [ -z "$vault_dir" ]; then
+    echo "backup-vault: vault not enabled in agent.yml — nothing to back up"
+    return 0
+  fi
+  if [ ! -d "$vault_dir" ]; then
+    echo "backup-vault: vault dir $vault_dir does not exist yet — skipping"
+    return 0
+  fi
+
+  local fork_url
+  fork_url=$(_yq '.scaffold.fork.url')
+
+  local current_hash last_hash
+  current_hash=$(vault_hash "$vault_dir")
+  last_hash=$(vault_last_hash "$VAULT_BACKUP_STATE_FILE")
+
+  if [ -n "$last_hash" ] && [ "$current_hash" = "$last_hash" ]; then
+    echo "backup-vault: no changes since last backup (hash $last_hash)"
+    return 0
+  fi
+
+  if [ "$dry_run" -eq 1 ]; then
+    echo "backup-vault: dry-run (no push) — would change from ${last_hash:-<none>} to $current_hash"
+    return 0
+  fi
+
+  if [ -z "$fork_url" ]; then
+    echo "backup-vault: agent.yml has no scaffold.fork.url — nothing to back up to"
+    return 0
+  fi
+
+  local clone_dir sha
+  clone_dir=$(vault_prepare_clone "$fork_url")
+  if ! sha=$(vault_commit_and_push "$clone_dir" "$vault_dir"); then
+    return $?
+  fi
+
+  if [ "$sha" = "-" ]; then
+    echo "backup-vault: no changes after stage-diff (hash $current_hash)"
+    vault_write_state "$VAULT_BACKUP_STATE_FILE" "$current_hash" "" ""
+    return 0
+  fi
+
+  vault_write_state "$VAULT_BACKUP_STATE_FILE" "$current_hash" "$sha" \
+    "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  printf 'backup-vault: %s pushed\n' "${sha:0:8}"
+}
+
+_bv_gc_then_run() {
+  local fork_url
+  fork_url=$(_yq '.scaffold.fork.url')
+  [ -z "$fork_url" ] && { echo "backup-vault: no fork url"; return 0; }
+  local clone_dir
+  clone_dir=$(vault_prepare_clone "$fork_url")
+  (cd "$clone_dir" && git gc --prune=now --aggressive >/dev/null 2>&1) || true
+  _bv_run
+}
+
 cmd_kick_channel() {
   if ! command -v tmux >/dev/null 2>&1; then
     echo "heartbeatctl: tmux not available — cannot kick session" >&2
@@ -590,6 +717,7 @@ main() {
     kick-channel) cmd_kick_channel ;;
     drop-plugin)  cmd_drop_plugin  "${1:-}" ;;
     backup-identity) cmd_backup_identity "$@" ;;
+    backup-vault)    cmd_backup_vault "$@" ;;
     set-interval) cmd_set_interval "${1:-}" ;;
     set-prompt)   cmd_set_prompt   "${1:-}" ;;
     set-notifier) cmd_set_notifier "${1:-}" ;;
