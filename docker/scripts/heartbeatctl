@@ -28,10 +28,13 @@ LIB_DIR="${HEARTBEATCTL_LIB_DIR:-/opt/agent-admin/scripts/lib}"
 [ -f "$LIB_DIR/backup_identity.sh" ] && source "$LIB_DIR/backup_identity.sh"
 # shellcheck source=/dev/null
 [ -f "$LIB_DIR/backup_vault.sh" ]    && source "$LIB_DIR/backup_vault.sh"
+# shellcheck source=/dev/null
+[ -f "$LIB_DIR/backup_config.sh" ]   && source "$LIB_DIR/backup_config.sh"
 
 IDENTITY_STATE_DIR="${IDENTITY_STATE_DIR:-$WORKSPACE/.state}"
 IDENTITY_BACKUP_STATE_FILE="$HEARTBEAT_DIR/identity-backup.json"
 VAULT_BACKUP_STATE_FILE="$HEARTBEAT_DIR/vault-backup.json"
+CONFIG_BACKUP_STATE_FILE="$HEARTBEAT_DIR/config-backup.json"
 
 cmd_help() {
   cat <<EOF
@@ -69,6 +72,11 @@ Backup:
                           branch. Excludes Obsidian per-device config (.obsidian/
                           workspace*.json, cache, .trash, sync-conflict files).
                           Idempotent via sha256 over content + filenames.
+  backup-config   [--dry-run] [--gc]
+                          Snapshot agent.yml (plaintext config, no secrets) to
+                          the 'backup/config' branch. Restored first by
+                          setup.sh --restore-from-fork so the agent.yml is
+                          available before identity + vault are pulled.
 
 Exit codes:
   0  success
@@ -188,12 +196,26 @@ CONF
     vault_backup_line="$vault_backup_schedule /usr/local/bin/heartbeatctl backup-vault >> /workspace/scripts/heartbeat/logs/backup-vault.log 2>&1"
   fi
 
+  # Optional fourth crontab line for scheduled config backup. Same
+  # cadence as identity (daily 03:30) because agent.yml only changes
+  # via setup.sh --regenerate. Set features.config_backup.enabled=false
+  # in agent.yml to opt out.
+  local config_backup_line=""
+  local cfg_enabled cfg_schedule
+  cfg_enabled=$(_yq '.features.config_backup.enabled')
+  [ -z "$cfg_enabled" ] && cfg_enabled="true"
+  cfg_schedule=$(_yq '.features.config_backup.schedule // "30 3 * * *"')
+  if [ "$cfg_enabled" = "true" ]; then
+    config_backup_line="$cfg_schedule /usr/local/bin/heartbeatctl backup-config >> /workspace/scripts/heartbeat/logs/backup-config.log 2>&1"
+  fi
+
   local tmp_crontab="${CRONTAB_FILE}.tmp"
   if ! cat > "$tmp_crontab" <<CT
-# Cron for in-container agent heartbeat + identity/vault backup. Managed by heartbeatctl.
+# Cron for in-container agent heartbeat + identity/vault/config backup. Managed by heartbeatctl.
 $line
 ${backup_line}
 ${vault_backup_line}
+${config_backup_line}
 CT
   then
     rm -f "$tmp_crontab"
@@ -657,6 +679,92 @@ _bv_gc_then_run() {
   _bv_run
 }
 
+# Config backup primitive — snapshots agent.yml to backup/config.
+cmd_backup_config() {
+  local mode="run"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dry-run) mode="dry-run"; shift ;;
+      --gc)      mode="gc"; shift ;;
+      -h|--help)
+        cat <<EOF
+Usage: heartbeatctl backup-config [flags]
+
+Flags:
+  --dry-run   Stage + hash without push.
+  --gc        Run 'git gc' on the local clone before push.
+  (no flags)  Default: run the config backup primitive.
+EOF
+        return 0 ;;
+      *) echo "backup-config: unknown flag: $1" >&2; return 1 ;;
+    esac
+  done
+
+  case "$mode" in
+    run)     _bc_run ;;
+    dry-run) _bc_run --dry-run ;;
+    gc)      _bc_gc_then_run ;;
+  esac
+}
+
+_bc_run() {
+  local dry_run=0
+  [ "${1:-}" = "--dry-run" ] && dry_run=1
+
+  if [ ! -f "$AGENT_YML" ]; then
+    echo "backup-config: $AGENT_YML missing — nothing to back up"
+    return 0
+  fi
+
+  local fork_url
+  fork_url=$(_yq '.scaffold.fork.url')
+
+  local current_hash last_hash
+  current_hash=$(config_hash "$AGENT_YML")
+  last_hash=$(config_last_hash "$CONFIG_BACKUP_STATE_FILE")
+
+  if [ -n "$last_hash" ] && [ "$current_hash" = "$last_hash" ]; then
+    echo "backup-config: no changes since last backup (hash $last_hash)"
+    return 0
+  fi
+
+  if [ "$dry_run" -eq 1 ]; then
+    echo "backup-config: dry-run (no push) — would change from ${last_hash:-<none>} to $current_hash"
+    return 0
+  fi
+
+  if [ -z "$fork_url" ]; then
+    echo "backup-config: agent.yml has no scaffold.fork.url — nothing to back up to"
+    return 0
+  fi
+
+  local clone_dir sha
+  clone_dir=$(config_prepare_clone "$fork_url")
+  if ! sha=$(config_commit_and_push "$clone_dir" "$AGENT_YML"); then
+    return $?
+  fi
+
+  if [ "$sha" = "-" ]; then
+    echo "backup-config: no changes after stage-diff (hash $current_hash)"
+    config_write_state "$CONFIG_BACKUP_STATE_FILE" "$current_hash" "" ""
+    return 0
+  fi
+
+  config_write_state "$CONFIG_BACKUP_STATE_FILE" "$current_hash" "$sha" \
+    "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  printf 'backup-config: %s pushed\n' "${sha:0:8}"
+}
+
+_bc_gc_then_run() {
+  local fork_url
+  fork_url=$(_yq '.scaffold.fork.url')
+  [ -z "$fork_url" ] && { echo "backup-config: no fork url"; return 0; }
+  local clone_dir
+  clone_dir=$(config_prepare_clone "$fork_url")
+  (cd "$clone_dir" && git gc --prune=now --aggressive >/dev/null 2>&1) || true
+  _bc_run
+}
+
 cmd_kick_channel() {
   if ! command -v tmux >/dev/null 2>&1; then
     echo "heartbeatctl: tmux not available — cannot kick session" >&2
@@ -718,6 +826,7 @@ main() {
     drop-plugin)  cmd_drop_plugin  "${1:-}" ;;
     backup-identity) cmd_backup_identity "$@" ;;
     backup-vault)    cmd_backup_vault "$@" ;;
+    backup-config)   cmd_backup_config "$@" ;;
     set-interval) cmd_set_interval "${1:-}" ;;
     set-prompt)   cmd_set_prompt   "${1:-}" ;;
     set-notifier) cmd_set_notifier "${1:-}" ;;
