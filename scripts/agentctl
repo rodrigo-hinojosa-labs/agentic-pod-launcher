@@ -118,6 +118,102 @@ _doctor_fail() {
 }
 _doctor_skip() { echo "  ⊝ $1 (skipped — $2)"; }
 
+# Convert an ISO 8601 UTC timestamp ("2026-05-02T03:30:00Z") to epoch
+# seconds. Tries GNU date (Linux) first, then BSD date (macOS).
+# Empty/invalid input → empty stdout.
+_epoch_from_iso() {
+  local ts="$1"
+  [ -z "$ts" ] && return 0
+  if date -d "$ts" +%s 2>/dev/null; then return 0; fi
+  date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$ts" +%s 2>/dev/null || true
+}
+
+# Render a delta in seconds as a human-readable string ("47s", "12m",
+# "23h", "4d"). Coarse-grained on purpose — doctor output is meant to be
+# scannable.
+_humanize_delta() {
+  local s="$1"
+  if   [ "$s" -lt 60 ];     then echo "${s}s"
+  elif [ "$s" -lt 3600 ];   then echo "$((s/60))m"
+  elif [ "$s" -lt 86400 ];  then echo "$((s/3600))h"
+  else                           echo "$((s/86400))d"
+  fi
+}
+
+# Doctor check for one backup branch. Reads
+# <workspace>/scripts/heartbeat/<name>-backup.json and reports:
+#   - ⚠ when the file is missing or has no last_push (never pushed)
+#   - ⚠ when the last push is older than max_hours
+#   - ✓ when fresh enough
+# $1 = backup name (identity|vault|config), $2 = max age in hours.
+_check_backup_freshness() {
+  local agent="$1" name="$2" max_hours="$3"
+  local state_file="$WORKSPACE/scripts/heartbeat/${name}-backup.json"
+  local label
+  case "$name" in
+    identity) label="Backup identity" ;;
+    vault)    label="Backup vault" ;;
+    config)   label="Backup config" ;;
+    *)        label="Backup $name" ;;
+  esac
+
+  if [ ! -f "$state_file" ]; then
+    _doctor_warn "$label: never pushed yet" "agentctl heartbeat backup-$name"
+    return
+  fi
+
+  local last_push
+  last_push=$(jq -r '.last_push // ""' "$state_file" 2>/dev/null)
+  if [ -z "$last_push" ]; then
+    _doctor_warn "$label: state file present but no last_push timestamp" "agentctl heartbeat backup-$name"
+    return
+  fi
+
+  local then now delta delta_max human
+  then=$(_epoch_from_iso "$last_push")
+  now=$(date -u +%s)
+  if [ -z "$then" ]; then
+    _doctor_warn "$label: could not parse last_push '$last_push'"
+    return
+  fi
+  delta=$((now - then))
+  # Compare in seconds to keep sub-hour overrides (e.g.
+  # DOCTOR_IDENTITY_MAX_AGE_HOURS=0 in tests) meaningful.
+  delta_max=$((max_hours * 3600))
+  human=$(_humanize_delta "$delta")
+
+  # Identity has an extra 'mode' field worth surfacing.
+  local extra=""
+  if [ "$name" = "identity" ]; then
+    local mode
+    mode=$(jq -r '.mode // ""' "$state_file" 2>/dev/null)
+    [ -n "$mode" ] && extra=" ($mode mode)"
+  fi
+
+  if [ "$delta" -gt "$delta_max" ]; then
+    _doctor_warn "$label: pushed ${human} ago — stale (>${max_hours}h)${extra}" \
+      "agentctl heartbeat backup-$name (or check the cron + GitHub token)"
+  else
+    _doctor_pass "$label: pushed ${human} ago${extra}"
+  fi
+}
+
+# Resolve the absolute path to the agent's workspace on the host. Used
+# by freshness checks to read state files via the bind-mount instead of
+# round-tripping through 'docker exec cat'. Falls back to cwd when
+# agent.yml is in the current directory.
+_resolve_workspace() {
+  local agent="$1"
+  if [ -f "./agent.yml" ]; then
+    pwd -P
+    return
+  fi
+  # docker inspect to find the bind-mount source path
+  docker inspect --format \
+    '{{range .Mounts}}{{if eq .Destination "/workspace"}}{{.Source}}{{end}}{{end}}' \
+    "$agent" 2>/dev/null
+}
+
 # Helper: run a command inside the container as agent, capture stdout.
 _in_container() {
   local agent="$1"; shift
@@ -296,6 +392,23 @@ cmd_doctor() {
     fi
   else
     _doctor_skip "Telegram plugin patches" "notifications.channel=$notif_channel"
+  fi
+
+  # 13-15. Backup freshness — read the state files from the bind-mounted
+  # workspace and warn when last_push is stale or never happened. The
+  # thresholds default to 2× the expected cadence (identity 48h, vault
+  # 25h, config 8d). Override via env vars for one-off invocations.
+  WORKSPACE=$(_resolve_workspace "$agent")
+  if [ -z "$WORKSPACE" ] || [ ! -d "$WORKSPACE/scripts/heartbeat" ]; then
+    _doctor_skip "Backup freshness" "could not locate workspace bind-mount"
+  else
+    local id_max="${DOCTOR_IDENTITY_MAX_AGE_HOURS:-48}"
+    local vault_max="${DOCTOR_VAULT_MAX_AGE_HOURS:-25}"
+    local config_max_days="${DOCTOR_CONFIG_MAX_AGE_DAYS:-8}"
+    local config_max=$((config_max_days * 24))
+    _check_backup_freshness "$agent" identity "$id_max"
+    _check_backup_freshness "$agent" vault "$vault_max"
+    _check_backup_freshness "$agent" config "$config_max"
   fi
 
   echo ""

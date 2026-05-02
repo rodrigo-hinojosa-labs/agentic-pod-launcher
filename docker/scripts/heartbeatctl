@@ -306,6 +306,22 @@ cmd_status() {
       echo "    heartbeatctl backup-identity --configure-key <path|pubkey>"
     fi
   fi
+
+  # Vault backup summary (no mode field — vault is plaintext markdown).
+  if [ -f "$VAULT_BACKUP_STATE_FILE" ]; then
+    local bv_commit bv_push
+    bv_commit=$(jq -r '.last_commit // ""' "$VAULT_BACKUP_STATE_FILE" 2>/dev/null)
+    bv_push=$(jq -r '.last_push // ""' "$VAULT_BACKUP_STATE_FILE" 2>/dev/null)
+    echo "vault backup:    commit=${bv_commit:0:8} last_push=${bv_push:-never}"
+  fi
+
+  # Config backup summary (also plaintext: agent.yml).
+  if [ -f "$CONFIG_BACKUP_STATE_FILE" ]; then
+    local bc_commit bc_push
+    bc_commit=$(jq -r '.last_commit // ""' "$CONFIG_BACKUP_STATE_FILE" 2>/dev/null)
+    bc_push=$(jq -r '.last_push // ""' "$CONFIG_BACKUP_STATE_FILE" 2>/dev/null)
+    echo "config backup:   commit=${bc_commit:0:8} last_push=${bc_push:-never}"
+  fi
 }
 
 cmd_logs() {
