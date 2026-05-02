@@ -24,3 +24,16 @@ setup() {
   # default schedule "30 3 * * *"
   [[ "$output" =~ [0-9]+\ [0-9]+\ \*\ \*\ \* ]]
 }
+
+@test "sample-agent.yml declares vault.enabled" {
+  run yq '.vault.enabled' "$AGENT_YML"
+  [ "$status" -eq 0 ]
+  [ "$output" = "true" ] || [ "$output" = "false" ]
+}
+
+@test "sample-agent.yml declares vault.backup_schedule" {
+  run yq '.vault.backup_schedule' "$AGENT_YML"
+  [ "$status" -eq 0 ]
+  # 5-field cron expression — any valid pattern
+  [[ "$output" =~ [\*0-9/]+\ [\*0-9/]+\ [\*0-9/]+\ [\*0-9/]+\ [\*0-9/]+ ]]
+}

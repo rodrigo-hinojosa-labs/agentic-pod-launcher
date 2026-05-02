@@ -1367,52 +1367,108 @@ mirror_catalog_to_docker() {
   fi
 }
 
-# Clone the backup/identity branch of a fork and populate <dest>/.state/.
-# If .env.age is present, try to decrypt with standard SSH key paths.
-# Non-fatal if the branch doesn't exist (fresh install path).
+# Clone a single backup branch into a tmp dir. STDOUT: tmp dir path on
+# success, empty on missing-branch (treated as a normal "fresh install"
+# state by callers — they decide whether to warn).
+_restore_clone_branch() {
+  local fork_url="$1" branch="$2"
+  local tmp
+  tmp=$(mktemp -d)
+  if ! git clone --branch "$branch" --single-branch --depth 1 \
+         "$fork_url" "$tmp" >/dev/null 2>&1; then
+    rm -rf "$tmp"
+    return 1
+  fi
+  printf '%s\n' "$tmp"
+}
+
+# Decrypt $1 (.env.age) into $2 (.env path) using whichever SSH key works.
+# RESTORE_IDENTITY_KEY override is tried first; otherwise the standard pair.
+_restore_decrypt_env() {
+  local age_in="$1" env_out="$2"
+  [ -f "$age_in" ] || return 0
+  local identity_files=(
+    "${RESTORE_IDENTITY_KEY:-}"
+    "$HOME/.ssh/id_ed25519"
+    "$HOME/.ssh/id_rsa"
+  )
+  local idfile
+  for idfile in "${identity_files[@]}"; do
+    [ -z "$idfile" ] && continue
+    [ -f "$idfile" ] || continue
+    if age -d -i "$idfile" -o "$env_out" "$age_in" 2>/dev/null; then
+      echo "  ✓ restore: decrypted .env with $idfile"
+      return 0
+    fi
+  done
+  echo "  ⚠ restore: .env.age present but could not decrypt — pass --identity-key <path> or regenerate .env via wizard"
+  return 0
+}
+
+# Restore from the agent's fork by pulling the three backup branches in
+# order: config (agent.yml) first so vault.path is known, then identity
+# (login + pairing + plugins + .env.age), then vault (markdown). Each
+# branch is independently optional — missing branches log a clear notice
+# and continue, supporting partial-state forks too.
 restore_from_fork() {
   local fork_url="$1"
   local dest="$2"
-  local tmp
-  tmp=$(mktemp -d)
-
-  if ! git clone --branch backup/identity --single-branch --depth 1 \
-         "$fork_url" "$tmp" >/dev/null 2>&1; then
-    echo "  ⚠ restore: no backup/identity branch at $fork_url — skipping (fresh install)"
-    rm -rf "$tmp"
-    return 0
-  fi
 
   mkdir -p "$dest/.state/.claude"
-  [ -f "$tmp/.claude.json" ] && cp -a "$tmp/.claude.json" "$dest/.state/.claude.json"
-  if [ -d "$tmp/.claude" ]; then
-    cp -a "$tmp/.claude/." "$dest/.state/.claude/"
-  fi
 
-  if [ -f "$tmp/.env.age" ]; then
-    local decrypted=0
-    local identity_files=(
-      "${RESTORE_IDENTITY_KEY:-}"
-      "$HOME/.ssh/id_ed25519"
-      "$HOME/.ssh/id_rsa"
-    )
-    local idfile
-    for idfile in "${identity_files[@]}"; do
-      [ -z "$idfile" ] && continue
-      [ -f "$idfile" ] || continue
-      if age -d -i "$idfile" -o "$dest/.env" "$tmp/.env.age" 2>/dev/null; then
-        decrypted=1
-        echo "  ✓ restore: decrypted .env with $idfile"
-        break
-      fi
-    done
-    if [ "$decrypted" -eq 0 ]; then
-      echo "  ⚠ restore: .env.age present but could not decrypt — pass --identity-key <path> or regenerate .env via wizard"
+  # 1. Config — agent.yml lands at workspace root.
+  local cfg_tmp
+  if cfg_tmp=$(_restore_clone_branch "$fork_url" "backup/config"); then
+    if [ -f "$cfg_tmp/agent.yml" ]; then
+      cp -a "$cfg_tmp/agent.yml" "$dest/agent.yml"
+      echo "  ✓ restore: agent.yml restored from backup/config"
     fi
+    rm -rf "$cfg_tmp"
+  else
+    echo "  ⚠ restore: no backup/config branch — keeping any existing agent.yml at $dest"
   fi
 
-  echo "  ✓ restore: state populated into $dest/.state/"
-  rm -rf "$tmp"
+  # 2. Identity — .claude/* + optional .env.age decrypt.
+  local id_tmp
+  if id_tmp=$(_restore_clone_branch "$fork_url" "backup/identity"); then
+    [ -f "$id_tmp/.claude.json" ] && cp -a "$id_tmp/.claude.json" "$dest/.state/.claude.json"
+    if [ -d "$id_tmp/.claude" ]; then
+      cp -a "$id_tmp/.claude/." "$dest/.state/.claude/"
+    fi
+    _restore_decrypt_env "$id_tmp/.env.age" "$dest/.env"
+    echo "  ✓ restore: identity restored into $dest/.state/"
+    rm -rf "$id_tmp"
+  else
+    echo "  ⚠ restore: no backup/identity branch at $fork_url — skipping (fresh install)"
+  fi
+
+  # 3. Vault — markdown subset, target dir resolved from the freshly
+  #    restored agent.yml's vault.path (default .state/.vault).
+  local vault_tmp vault_path
+  if vault_tmp=$(_restore_clone_branch "$fork_url" "backup/vault"); then
+    if [ -f "$dest/agent.yml" ]; then
+      vault_path=$(yq -r '.vault.path // ".state/.vault"' "$dest/agent.yml" 2>/dev/null)
+    else
+      vault_path=".state/.vault"
+    fi
+    [ "$vault_path" = "null" ] && vault_path=".state/.vault"
+    mkdir -p "$dest/$vault_path"
+    # Copy the markdown tree without dot-files that don't exist in the
+    # branch anyway (the vault backup stages only *.md files).
+    if [ -n "$(ls -A "$vault_tmp" 2>/dev/null)" ]; then
+      ( cd "$vault_tmp" && find . -type f -name '*.md' -print0 \
+          | while IFS= read -r -d '' f; do
+              local rel="${f#./}"
+              mkdir -p "$dest/$vault_path/$(dirname "$rel")"
+              cp -a "$f" "$dest/$vault_path/$rel"
+            done
+      )
+    fi
+    echo "  ✓ restore: vault restored into $dest/$vault_path/"
+    rm -rf "$vault_tmp"
+  else
+    echo "  ⚠ restore: no backup/vault branch — keeping any existing vault at $dest"
+  fi
 }
 
 # Copy system files to the destination, move agent.yml/.env, chdir, git init.

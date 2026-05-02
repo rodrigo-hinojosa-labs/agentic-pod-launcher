@@ -142,6 +142,16 @@ All layers stay populated across `docker compose restart`, image rebuilds, and `
 
 All agent state (OAuth login, Telegram pairing, sessions, plugin cache, channels state, heartbeat logs) lives under `<workspace>/.state/` via a bind-mount to `/home/agent` in the container. The workspace directory **is** the agent: portable via `rsync` / `cp -a`, immune to `docker compose down -v`, and removed only when the workspace itself is deleted. `.state/` is gitignored and contains OAuth tokens — never commit it.
 
+### Backup to the agent's own fork (three orphan branches)
+
+The non-regenerable subset of the workspace is replicated to the agent's own GitHub fork as three orphan branches:
+
+- `backup/identity` — OAuth login, Telegram pairing, plugin config, settings, age-encrypted `.env`. Triggered by `heartbeatctl backup-identity`, the watchdog (60s hash check), post-plugin-install hooks, and a daily 03:30 cron.
+- `backup/vault` — the vault's markdown subset, hourly by default. Excludes `.obsidian/workspace*.json`, cache, `.trash/`, and `*.sync-conflict-*` so Syncthing-induced churn doesn't pollute snapshots.
+- `backup/config` — `agent.yml` (plaintext, no secrets), daily.
+
+Encryption uses your existing GitHub SSH key (no extra secret to manage), fetched from `github.com/<owner>.keys` at scaffold time. Restore on a new machine with `setup.sh --restore-from-fork <url>` — the agent rehydrates without re-`/login`, re-pairing, or re-installing plugins. Each branch is independently optional; partial forks rehydrate whatever's available. Full reference in [`docs/heartbeatctl.md`](docs/heartbeatctl.md#backup-commands).
+
 ### UID/GID matched at build
 
 `setup.sh` reads the host user's UID/GID and writes them as build args in `docker-compose.yml`. The container's `agent` user is created with the same numeric ownership at image-build time, so writes through the bind-mount land with the host user's identity. macOS hosts often have GID 20 (`staff`) which collides with Alpine's `dialout` group — the Dockerfile deletes the colliding user/group before `addgroup agent`.

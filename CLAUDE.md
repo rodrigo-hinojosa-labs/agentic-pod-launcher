@@ -93,6 +93,21 @@ After PR #3 (2026-04-22) all agent state (OAuth login, Telegram pairing, session
 - `.state/` is gitignored at the template level and contains OAuth tokens — never commit it, never log its contents.
 - Migration is `rsync` / `cp -a` of the workspace directory.
 
+### Backup model: three orphan branches in the agent's fork
+
+The non-regenerable subset of the workspace is replicated to the agent's own fork in three independent orphan branches:
+
+- `backup/identity` — `.claude.json` + `.claude/settings.json` + `.claude/channels/telegram/access.json` + `.claude/plugins/config/` + `.env.age`. Encryption uses an SSH key recipient fetched from `github.com/<owner>.keys` at scaffold time; absent a recipient, the primitive falls back to **partial mode** (plaintext, `.env.age` omitted). Triggered by `heartbeatctl backup-identity`, the watchdog (60s hash check), post-plugin-install hooks, and a daily 03:30 cron.
+- `backup/vault` — markdown subset of the configured vault (`vault.path` in `agent.yml`, default `.state/.vault`). Excludes `.obsidian/workspace*.json`, `cache/`, `.trash/`, and `*.sync-conflict-*` files. Cron `0 * * * *` by default; override via `vault.backup_schedule`. Helpers in `docker/scripts/lib/backup_vault.sh`.
+- `backup/config` — `agent.yml` (plaintext, no secrets — those live in `.env`, which is in identity). Cron `30 3 * * *` by default; toggle via `features.config_backup.enabled`. Helpers in `docker/scripts/lib/backup_config.sh`.
+
+All three primitives share the same shape: hash-based idempotency (sha256 over content + filenames), worktree-staged commit + push, atomic state file in `<workspace>/scripts/heartbeat/<X>-backup.json`. Each branch can be missing without breaking the others — restore via `setup.sh --restore-from-fork <url>` pulls all three in order (`config` first so `vault.path` is known, then `identity`, then `vault`) and skips any that are absent.
+
+Three things to remember when touching the backup code:
+1. **Don't merge primitives across branches.** Each `backup_X.sh` library mirrors the others' shape but stays independent — different filesystem inputs, different schedules, different threat models. Splitting was an explicit design goal so a noisy vault doesn't churn the identity branch's hash, and so sharing the config-only branch with another agent doesn't expose `.env.age`.
+2. **Trees are wiped before each commit.** `vault_commit_and_push` and `config_commit_and_push` blow away the existing stage tree before copying the current snapshot in. This is what makes deletes propagate. Don't add merge logic — the branch is append-only commits, but the tree per commit is a complete replacement.
+3. **Per-branch clone caches.** `~/.cache/agent-backup/{identity,vault,config}-clone/` are independent worktrees against the same fork. Don't try to share them — `git worktree add` on the same path would conflict, and the orphan-branch `init` flow in each lib expects a private clone dir.
+
 ### Telegram plugin patch
 
 `docker/scripts/apply_telegram_typing_patch.py` is re-applied on every boot by `start_services.sh::apply_plugin_patches` against the plugin copy in `~/.claude/plugins/cache/claude-plugins-official/telegram/*/server.ts`. Idempotent via marker comments (one per patch group: typing, offset, stderr, primary), fail-silent if any of the anchor regexes drift. Don't move the patch invocation out of the boot path — the plugin cache lives under `.state/` which means a workspace clone receives an unpatched plugin until the next boot.

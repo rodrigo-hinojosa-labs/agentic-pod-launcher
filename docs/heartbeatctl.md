@@ -154,11 +154,25 @@ All under `/workspace/scripts/heartbeat/`:
 - `logs/cron.log` — crond stderr for schedule-dispatch debugging.
 - `logs/sessions/*.log` — per-run tmux session output (last 20 retained).
 
-## `backup-identity`
+## Backup commands
+
+The agent's persistent state is sliced into three orphan branches on the
+agent's own fork (`backup/identity`, `backup/vault`, `backup/config`).
+Each primitive is idempotent, hash-based, and pushes nothing when its
+input hasn't changed since the last commit. Restore happens via
+`setup.sh --restore-from-fork <url>`, which pulls all three in order.
+
+| Branch | Cadence | What it stores |
+|---|---|---|
+| `backup/identity` | watchdog 60s + post-plugin-install + cron 03:30 | OAuth login, Telegram pairing, plugin config, settings, age-encrypted `.env` |
+| `backup/vault` | cron `0 * * * *` (override via `vault.backup_schedule`) | Markdown subset of the vault. Excludes `.obsidian/workspace*.json`, cache, `.trash/`, `*.sync-conflict-*` |
+| `backup/config` | cron 03:30 (toggle via `features.config_backup.enabled`) | `agent.yml` (plaintext, no secrets) |
+
+### `backup-identity`
 
 Snapshot the agent's identity subset (login, pairing, plugin config,
 settings, optionally age-encrypted `.env`) to the `backup/identity`
-orphan branch on the fork. Idempotent.
+orphan branch on the fork.
 
 ```
 heartbeatctl backup-identity                       # default: run
@@ -168,9 +182,47 @@ heartbeatctl backup-identity --dry-run             # stage + diff, no push
 heartbeatctl backup-identity --gc                  # git gc before push
 ```
 
-See the full spec at
-`docs/superpowers/specs/2026-04-22-identity-backup-design.md` for
-triggers, hash-based idempotency, encryption, and restore flow.
+Encryption uses an SSH-key recipient fetched from `github.com/<owner>.keys`
+at scaffold time. Without a configured recipient, the primitive falls
+back to **partial mode** — plaintext files committed, `.env.age` omitted,
+visible in `heartbeatctl status`. Full spec at
+`docs/superpowers/specs/2026-04-22-identity-backup-design.md`.
+
+### `backup-vault`
+
+Snapshot the markdown subset of the vault to `backup/vault`.
+
+```
+heartbeatctl backup-vault              # default: run
+heartbeatctl backup-vault --dry-run    # stage + hash, no push
+heartbeatctl backup-vault --gc         # git gc before push
+```
+
+The vault location comes from `vault.path` in `agent.yml` (default
+`.state/.vault`, mapped to `/home/agent/.vault` inside the container by
+the bind-mount). Files are filtered by `*.md` extension; the
+`.obsidian/`, `.trash/`, and `*.sync-conflict-*` exclusions exist so
+Syncthing-induced churn doesn't pollute the snapshots when the vault
+is also synced to other devices.
+
+Deletes propagate: the staged tree is wiped before each commit, so a
+removed note drops out of the next `backup/vault` commit instead of
+lingering forever.
+
+### `backup-config`
+
+Snapshot `agent.yml` to `backup/config`.
+
+```
+heartbeatctl backup-config              # default: run
+heartbeatctl backup-config --dry-run    # stage + hash, no push
+heartbeatctl backup-config --gc         # git gc before push
+```
+
+This branch is what `setup.sh --restore-from-fork` reads first during a
+restore — `vault.path` and other rendered-file inputs all live in
+`agent.yml`. Disable scheduled config backups via
+`features.config_backup.enabled=false` in `agent.yml`.
 
 ## Exit codes (global)
 
