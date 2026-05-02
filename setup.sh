@@ -1661,7 +1661,12 @@ install_service() {
   local unit_file="/etc/systemd/system/agent-${agent_name}.service"
   local staged
   staged=$(mktemp)
-  trap 'rm -f "$staged"' RETURN
+  # Bind $staged into the trap body at set-time (double quotes), not at
+  # fire-time (single quotes). With set -u, fire-time expansion blew up
+  # because the trap runs after install_service returns and the local has
+  # already gone out of scope, killing run_wizard before render_next_steps
+  # and the initial-commit step.
+  trap "rm -f '$staged'" RETURN
   render_to_file "$modules_dir/systemd.service.tpl" "$staged"
 
   if sudo -n true 2>/dev/null; then
