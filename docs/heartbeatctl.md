@@ -115,6 +115,21 @@ Updates `features.heartbeat.default_prompt`. Accepts the prompt as an arg or via
 
 Warns to stderr (but does not refuse) if the current `notifications.channel` is `telegram` and `.env` is missing `NOTIFY_BOT_TOKEN` / `NOTIFY_CHAT_ID`.
 
+#### Prompt examples by use case
+
+The default prompt (`Status check — return a short plain-text report (uptime, notable issues). No tool use; your stdout is forwarded verbatim to the notifier.`) is intentionally generic. Replace it via `heartbeatctl set-prompt "..."` to match what your agent actually does:
+
+- **Cluster health** — *"List Kubernetes pods in CrashLoopBackOff or Error in the last 30m via `kubectl get pods -A`. Return only the failing pods with their namespace and reason. If everything is healthy, output `OK: N pods running`."*
+- **Vault ingestion monitor** — *"Count `*.md` files under `~/.vault/wiki/` and compare against the last value in `~/.vault/log.md`. Report any drop or > 10% gain. Note any sync-conflict files in `~/.vault/`."*
+- **Jira sprint blockers** — *"Use `mcp__atlassian__jira_search` to query the active sprint of project KEY. List blockers (status=Blocked or label=blocker). Group by assignee. Output one bullet per blocker with `[KEY-123] @user — title`."*
+- **Log tailer** — *"Tail the last 50 lines of `/workspace/claude.log` and report any ERROR or WARN. Include timestamps and a one-line summary of patterns (e.g. `3× 'connection refused' between 14:05 and 14:18`)."*
+- **Heartbeat-as-canary** — *"Reply with `pong @ <ISO timestamp>`. No tool use. This proves Claude Code is reachable and the notifier round-trip works."*
+
+Each prompt should:
+1. Be self-contained — heartbeat sessions run in an isolated `CLAUDE_CONFIG_DIR=/home/agent/.claude-heartbeat` with no plugins by default and no conversation history.
+2. Constrain output length — heartbeat trims at 3500 chars before forwarding to the notifier; prompts that ramble waste the budget.
+3. Be explicit about tools — say *"no tool use"* when you want a fast pulse, or *"use `mcp__X__Y`"* when you want a query.
+
 ### `set-notifier <none|log|telegram>`
 
 Updates `notifications.channel`. Membership check — anything else rejected.

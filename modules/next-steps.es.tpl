@@ -84,6 +84,47 @@ git pull                                 # si tu workspace es un fork
 docker compose build && ./scripts/agentctl restart
 ```
 
+### Cheatsheet completo de `agentctl`
+
+```bash
+# Ciclo de vida del contenedor
+./scripts/agentctl up                    # docker compose up -d
+./scripts/agentctl stop                  # docker compose stop (preserva state)
+./scripts/agentctl restart               # stop + up
+./scripts/agentctl ps                    # estado del contenedor
+
+# Sesión interactiva
+./scripts/agentctl attach                # tmux attach (retry-loop 15s)
+./scripts/agentctl shell                 # bash dentro del contenedor (como agent)
+./scripts/agentctl shell --root          # bash como root (debugging)
+./scripts/agentctl run <cmd…>            # ejecuta un comando arbitrario (como agent)
+
+# Observabilidad
+./scripts/agentctl logs                  # tail del claude.log
+./scripts/agentctl logs -f               # follow
+./scripts/agentctl logs --stderr         # forensic tail del MCP stderr de Telegram
+./scripts/agentctl status                # heartbeat status (atajo a heartbeat status)
+./scripts/agentctl doctor                # 12 chequeos en orden de dependencia
+
+# MCP servers
+./scripts/agentctl mcp                   # claude mcp list (ver servers + estado)
+
+# Heartbeat (proxy a heartbeatctl)
+./scripts/agentctl heartbeat status      # last run + counters
+./scripts/agentctl heartbeat test        # un tick manual
+./scripts/agentctl heartbeat logs        # últimos 20 runs
+./scripts/agentctl heartbeat pause       # pausar el cron
+./scripts/agentctl heartbeat resume      # reanudar
+./scripts/agentctl heartbeat set-interval 5m
+./scripts/agentctl heartbeat set-prompt "..."
+./scripts/agentctl heartbeat kick-channel  # respawn de tmux cuando Telegram ghosting
+./scripts/agentctl heartbeat backup-identity
+./scripts/agentctl heartbeat backup-vault
+./scripts/agentctl heartbeat backup-config
+```
+
+> **Resolución de nombre del agente**: `agentctl` lee `agent.yml` del cwd (o el flag `-a NAME`) para saber qué container atacar. Si cambias de directorio o tienes varios agentes, usa `-a <name>`.
+
 {{PLUGINS_BLOCK}}
 
 ## Desmantelamiento

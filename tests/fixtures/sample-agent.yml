@@ -37,6 +37,9 @@ features:
   identity_backup:
     enabled: true
     schedule: "30 3 * * *"
+  config_backup:
+    enabled: true
+    schedule: "30 3 * * *"
 backup:
   identity:
     recipient: null
