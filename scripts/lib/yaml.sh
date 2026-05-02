@@ -38,6 +38,17 @@ yaml_array_item() {
   echo "$result"
 }
 
+# yaml_yq_version_ok — return 0 if `yq` on PATH is mikefarah v4+.
+# Rejects mikefarah v3 ("yq version 3.x") and python-yq/kislyuk ("yq 3.x"),
+# both of which use incompatible syntax. Future-proofed for v5+ via the
+# [4-9]/[1-9][0-9]+ alternation so a major bump won't silently lock users out.
+yaml_yq_version_ok() {
+  local v
+  v="$(yq --version 2>&1 | head -1)" || return 1
+  [[ "$v" =~ version[[:space:]]+v([4-9]|[1-9][0-9]+)\. ]] && return 0
+  return 1
+}
+
 # yaml_yq_arch — map uname -m to yq release arch suffix
 yaml_yq_arch() {
   local arch
@@ -62,6 +73,7 @@ yaml_bootstrap_yq() {
   # Already vendored from a previous run?
   if [ -x "$vendor_dir/yq" ]; then
     export PATH="$vendor_dir:$PATH"
+    hash -r 2>/dev/null || true
     return 0
   fi
 
@@ -83,17 +95,24 @@ yaml_bootstrap_yq() {
   if [ -x "$vendor_dir/yq" ]; then
     echo "  ✓ yq installed at $vendor_dir/yq" >&2
     export PATH="$vendor_dir:$PATH"
+    hash -r 2>/dev/null || true
     return 0
   fi
   return 1
 }
 
-# yaml_require_yq — ensure yq is available; auto-download if missing.
+# yaml_require_yq — ensure a mikefarah yq v4+ is available; bootstrap into
+# scripts/vendor/bin/ if PATH yq is missing OR the wrong version (v3 / python-yq).
+# Without the version check, a Debian apt-installed yq 3.x passes `command -v`
+# and breaks downstream when render.sh runs `yq '.. | select(...)'`.
 yaml_require_yq() {
-  if command -v yq &>/dev/null; then
+  if command -v yq &>/dev/null && yaml_yq_version_ok; then
     return 0
   fi
-  if yaml_bootstrap_yq && command -v yq &>/dev/null; then
+  if command -v yq &>/dev/null; then
+    echo "▸ Detected incompatible yq ($(yq --version 2>&1 | head -1)) — bootstrapping v4 into vendor/bin/" >&2
+  fi
+  if yaml_bootstrap_yq && yaml_yq_version_ok; then
     return 0
   fi
   local arch yq_arch
