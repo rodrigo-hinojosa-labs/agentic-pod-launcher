@@ -96,6 +96,16 @@ docker compose build && ./scripts/agentctl restart
 
 ## Troubleshooting
 
+### When something is off: run `agentctl doctor` first
+
+Before anything else:
+
+```bash
+./scripts/agentctl doctor
+```
+
+Runs 12 checks in dependency order (Docker daemon → container → health → agent.yml → tmux → crond → Telegram plugin → heartbeat → vault → patches) and reports `✓` / `⚠` / `✗` per subsystem with an actionable hint when something fails. The fastest way to know what's broken without running 8 commands.
+
 ### The agent stops responding on Telegram ("ghosting")
 
 Symptom: you send Telegram messages to the chat bot, the agent replies once after a restart and then goes silent. `ps` shows `bun server.ts` and `claude` still alive, but messages do not reach Claude. It is a known bug in the MCP bridge inside `claude-plugins-official/telegram` (upstream, not this repo).

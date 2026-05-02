@@ -12,6 +12,7 @@
 # Example: ./scripts/agentctl attach        # tmux attach with retry-loop
 #          ./scripts/agentctl status        # heartbeatctl status proxy
 #          ./scripts/agentctl logs -f       # tail -f /workspace/claude.log
+#          ./scripts/agentctl doctor        # full system diagnostic
 #
 # Style and exit codes mirror docker/scripts/heartbeatctl: 0=ok,
 # 1=validation/usage, 2=operational error.
@@ -61,11 +62,244 @@ resolve_agent_name() {
   exit 1
 }
 
+# _require_docker — friendly bail-out when the Docker daemon isn't reachable.
+# Most subcommands need to talk to docker; calling this once at the top of
+# each one keeps the error message consistent and actionable instead of
+# leaking the raw "Cannot connect to the Docker daemon" trace.
+_require_docker() {
+  if ! docker info >/dev/null 2>&1; then
+    echo "agentctl: cannot reach the Docker daemon." >&2
+    echo "" >&2
+    if [ "$(uname -s)" = "Darwin" ]; then
+      echo "  • macOS: open Docker Desktop (Cmd+Space → \"Docker\") and wait ~30s." >&2
+    else
+      echo "  • Linux: sudo systemctl start docker" >&2
+    fi
+    echo "" >&2
+    echo "Then retry." >&2
+    exit 2
+  fi
+}
+
+# ─── Doctor helpers ──────────────────────────────────────────────────────
+
+_doctor_warn_count=0
+_doctor_fail_count=0
+
+_doctor_pass() { echo "  ✓ $1"; }
+_doctor_warn() {
+  echo "  ⚠ $1"
+  [ -n "${2:-}" ] && echo "    → $2"
+  _doctor_warn_count=$((_doctor_warn_count + 1))
+}
+_doctor_fail() {
+  echo "  ✗ $1"
+  [ -n "${2:-}" ] && echo "    → $2"
+  _doctor_fail_count=$((_doctor_fail_count + 1))
+}
+_doctor_skip() { echo "  ⊝ $1 (skipped — $2)"; }
+
+# Helper: run a command inside the container as agent, capture stdout.
+_in_container() {
+  local agent="$1"; shift
+  docker exec -u agent "$agent" "$@" 2>/dev/null
+}
+
+cmd_doctor() {
+  local agent
+  agent=$(resolve_agent_name) || exit $?
+  echo "agentctl doctor — diagnosing $agent"
+  echo ""
+
+  # 1. Docker daemon
+  if docker info >/dev/null 2>&1; then
+    _doctor_pass "Docker daemon running"
+  else
+    if [ "$(uname -s)" = "Darwin" ]; then
+      _doctor_fail "Docker daemon unreachable" "Open Docker Desktop and wait ~30s, then retry"
+    else
+      _doctor_fail "Docker daemon unreachable" "sudo systemctl start docker, then retry"
+    fi
+    echo ""
+    echo "Issues found: $_doctor_fail_count error(s), $_doctor_warn_count warning(s)."
+    exit 2
+  fi
+
+  # 2. Container exists
+  local container_id
+  container_id=$(docker ps -a -q --filter "name=^${agent}$" 2>/dev/null)
+  if [ -z "$container_id" ]; then
+    _doctor_fail "Container '$agent' does not exist" "agentctl up"
+    echo ""
+    echo "Issues found: $_doctor_fail_count error(s), $_doctor_warn_count warning(s)."
+    exit 2
+  fi
+
+  # 3. Container running
+  local status uptime
+  status=$(docker inspect --format '{{.State.Status}}' "$agent" 2>/dev/null)
+  if [ "$status" != "running" ]; then
+    _doctor_fail "Container '$agent' status: $status" "agentctl up"
+    echo ""
+    echo "Skipping in-container checks (container not running)."
+    echo ""
+    echo "Issues found: $_doctor_fail_count error(s), $_doctor_warn_count warning(s)."
+    exit 2
+  fi
+  uptime=$(docker inspect --format '{{.State.StartedAt}}' "$agent" 2>/dev/null | head -c 19)
+  _doctor_pass "Container '$agent' running (started $uptime)"
+
+  # 4. Container health
+  local health
+  health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$agent" 2>/dev/null)
+  case "$health" in
+    healthy)   _doctor_pass "Container health: healthy" ;;
+    starting)  _doctor_warn "Container health: still starting" "Healthcheck still in start_period (~60s). Re-run doctor in a minute." ;;
+    unhealthy) _doctor_fail "Container health: unhealthy" "Check 'agentctl logs -n 50' and 'docker logs $agent | tail -50'" ;;
+    none)      _doctor_warn "Container health: not configured" "Older agent without HEALTHCHECK in docker-compose.yml. Re-scaffold or add it manually." ;;
+    *)         _doctor_warn "Container health: $health" ;;
+  esac
+
+  # 5. agent.yml valid (host-side check; file is in cwd or workspace)
+  local yml=""
+  for probe in "./agent.yml" "$(dirname "$0")/../agent.yml"; do
+    [ -f "$probe" ] && { yml="$probe"; break; }
+  done
+  if [ -z "$yml" ]; then
+    _doctor_warn "agent.yml not found" "Run from the workspace dir, or pass -a NAME to skip this check"
+  elif yq -e '.' "$yml" >/dev/null 2>&1; then
+    _doctor_pass "agent.yml is valid"
+  else
+    _doctor_fail "agent.yml is malformed (yq parse failed)" "Restore from agent.yml.prev if available, or re-run setup.sh"
+  fi
+
+  # 6. .env present and 0600 (host-side)
+  local env_file
+  env_file=$(dirname "${yml:-./agent.yml}")/.env
+  if [ -f "$env_file" ]; then
+    local perms
+    perms=$(stat -f '%Lp' "$env_file" 2>/dev/null || stat -c '%a' "$env_file" 2>/dev/null)
+    if [ "$perms" = "600" ]; then
+      _doctor_pass ".env present (0600)"
+    else
+      _doctor_warn ".env permissions are $perms (should be 600)" "chmod 600 $env_file"
+    fi
+  else
+    _doctor_warn ".env not found at $env_file" "Re-run setup.sh --regenerate"
+  fi
+
+  # 7. tmux session 'agent' alive (in-container, via pgrep — works without
+  #    user-scoped tmux socket access)
+  if _in_container "$agent" pgrep -f "tmux .*-s agent" >/dev/null; then
+    _doctor_pass "tmux session 'agent' alive"
+  else
+    _doctor_warn "tmux session 'agent' not found" "Watchdog respawns every 2s. Wait 5s and re-run; if it persists, agentctl restart"
+  fi
+
+  # 8. crond running
+  if _in_container "$agent" pgrep -x crond >/dev/null; then
+    local crond_pid
+    crond_pid=$(_in_container "$agent" pgrep -x crond)
+    _doctor_pass "crond alive (PID $crond_pid)"
+  else
+    _doctor_fail "crond is not running" "agentctl restart (heartbeat won't fire without crond)"
+  fi
+
+  # 9. Telegram plugin running (only if notifications.channel=telegram)
+  local notif_channel=""
+  [ -n "$yml" ] && notif_channel=$(yq -r '.notifications.channel' "$yml" 2>/dev/null)
+  if [ "$notif_channel" = "telegram" ]; then
+    if _in_container "$agent" pgrep -f "bun server.ts" >/dev/null; then
+      local bun_pid
+      bun_pid=$(_in_container "$agent" pgrep -f "bun server.ts")
+      _doctor_pass "Telegram plugin running (PID $bun_pid)"
+    else
+      _doctor_fail "Telegram plugin (bun server.ts) is not running" "agentctl heartbeat kick-channel"
+    fi
+  else
+    _doctor_skip "Telegram plugin" "notifications.channel=$notif_channel"
+  fi
+
+  # 10. Heartbeat last run
+  local hb_enabled=""
+  [ -n "$yml" ] && hb_enabled=$(yq -r '.features.heartbeat.enabled' "$yml" 2>/dev/null)
+  if [ "$hb_enabled" = "true" ]; then
+    local hb_status
+    hb_status=$(_in_container "$agent" sh -c 'cat /workspace/scripts/heartbeat/logs/state.json 2>/dev/null | jq -r ".last_run.status // empty"' 2>/dev/null)
+    case "$hb_status" in
+      ok)
+        local hb_at hb_ms
+        hb_at=$(_in_container "$agent" sh -c 'cat /workspace/scripts/heartbeat/logs/state.json | jq -r ".last_run.ended_at"' 2>/dev/null)
+        hb_ms=$(_in_container "$agent" sh -c 'cat /workspace/scripts/heartbeat/logs/state.json | jq -r ".last_run.duration_ms"' 2>/dev/null)
+        _doctor_pass "Heartbeat last run: ok @ $hb_at (${hb_ms}ms)"
+        ;;
+      "")
+        _doctor_warn "Heartbeat enabled but no run recorded yet" "Wait for the first cron tick, or trigger one with 'agentctl heartbeat test'"
+        ;;
+      *)
+        _doctor_fail "Heartbeat last run: $hb_status" "agentctl logs -n 100 ; agentctl heartbeat logs"
+        ;;
+    esac
+  else
+    _doctor_skip "Heartbeat" "features.heartbeat.enabled=$hb_enabled"
+  fi
+
+  # 11. Vault skeleton seeded (only if vault.enabled)
+  local vault_enabled=""
+  [ -n "$yml" ] && vault_enabled=$(yq -r '.vault.enabled' "$yml" 2>/dev/null)
+  if [ "$vault_enabled" = "true" ]; then
+    if _in_container "$agent" test -f /home/agent/.vault/CLAUDE.md; then
+      _doctor_pass "Vault skeleton seeded at /home/agent/.vault"
+    else
+      _doctor_fail "Vault is enabled but skeleton missing" "agentctl restart (entrypoint seeds it on boot if dir is empty)"
+    fi
+  else
+    _doctor_skip "Vault" "vault.enabled=$vault_enabled"
+  fi
+
+  # 12. Telegram plugin patched
+  if [ "$notif_channel" = "telegram" ]; then
+    local plugin_dir
+    plugin_dir=$(_in_container "$agent" sh -c 'ls -d /home/agent/.claude/plugins/cache/claude-plugins-official/telegram/*/server.ts 2>/dev/null | head -1')
+    if [ -n "$plugin_dir" ]; then
+      local typing_v3 offset stderr primary
+      typing_v3=$(_in_container "$agent" grep -c "typing refresh patch v3" "$plugin_dir" 2>/dev/null || echo 0)
+      offset=$(_in_container "$agent" grep -c "offset persistence patch v1" "$plugin_dir" 2>/dev/null || echo 0)
+      stderr=$(_in_container "$agent" grep -c "stderr-capture patch v1" "$plugin_dir" 2>/dev/null || echo 0)
+      primary=$(_in_container "$agent" grep -c "primary lock patch v1" "$plugin_dir" 2>/dev/null || echo 0)
+      if [ "$typing_v3" -ge 1 ] && [ "$offset" -ge 1 ] && [ "$stderr" -ge 1 ] && [ "$primary" -ge 1 ]; then
+        _doctor_pass "Telegram plugin patches: typing v3, offset v1, stderr v1, primary v1"
+      else
+        _doctor_warn "Telegram plugin patches incomplete (typing=$typing_v3 offset=$offset stderr=$stderr primary=$primary)" "agentctl restart (apply_telegram_typing_patch.py runs at boot)"
+      fi
+    else
+      _doctor_skip "Telegram plugin patches" "plugin not yet installed in cache"
+    fi
+  else
+    _doctor_skip "Telegram plugin patches" "notifications.channel=$notif_channel"
+  fi
+
+  echo ""
+  if [ "$_doctor_fail_count" -eq 0 ] && [ "$_doctor_warn_count" -eq 0 ]; then
+    echo "All checks passed."
+    exit 0
+  elif [ "$_doctor_fail_count" -eq 0 ]; then
+    echo "$_doctor_warn_count warning(s). Re-run after addressing the hints above."
+    exit 1
+  else
+    echo "$_doctor_fail_count error(s), $_doctor_warn_count warning(s)."
+    exit 2
+  fi
+}
+
 cmd_help() {
   cat <<'HELP_EOF'
 agentctl — wrapper for the most common ops against a scaffolded agent.
 
 Usage: agentctl [-a NAME] <subcommand> [args]
+
+Diagnostic:
+  doctor                   full system diagnostic (Docker → container → MCPs)
 
 Container/lifecycle:
   up                       docker compose up -d
@@ -93,6 +327,7 @@ Misc:
   --help                   this help
 
 Examples:
+  agentctl doctor                  # diagnose every subsystem at once
   agentctl attach                  # connects via retry-loop
   agentctl logs -f                 # follow claude.log
   agentctl heartbeat status        # delegated to heartbeatctl
@@ -103,6 +338,7 @@ HELP_EOF
 cmd_attach() {
   local agent retry=true
   agent=$(resolve_agent_name) || exit $?
+  _require_docker
   case "${1:-}" in
     --no-retry) retry=false ;;
   esac
@@ -113,7 +349,7 @@ cmd_attach() {
       sleep 1
     done
     echo "agentctl: tmux 'agent' session never appeared after 15s." >&2
-    echo "  Check: agentctl logs -n 100 ; docker logs $agent" >&2
+    echo "  Check: agentctl doctor" >&2
     exit 2
   else
     exec docker exec -it -u agent "$agent" tmux attach -t agent
@@ -123,6 +359,7 @@ cmd_attach() {
 cmd_shell() {
   local agent root=false
   agent=$(resolve_agent_name) || exit $?
+  _require_docker
   case "${1:-}" in
     --root) root=true ;;
   esac
@@ -136,6 +373,7 @@ cmd_shell() {
 cmd_run() {
   local agent
   agent=$(resolve_agent_name) || exit $?
+  _require_docker
   if [ $# -eq 0 ]; then
     echo "agentctl run: missing command" >&2
     exit 1
@@ -146,6 +384,7 @@ cmd_run() {
 cmd_logs() {
   local agent
   agent=$(resolve_agent_name) || exit $?
+  _require_docker
   case "${1:-}" in
     --stderr)
       shift
@@ -160,12 +399,14 @@ cmd_logs() {
 cmd_status() {
   local agent
   agent=$(resolve_agent_name) || exit $?
+  _require_docker
   exec docker exec -u agent "$agent" heartbeatctl status
 }
 
 cmd_heartbeat() {
   local agent
   agent=$(resolve_agent_name) || exit $?
+  _require_docker
   if [ $# -eq 0 ]; then
     echo "agentctl heartbeat: missing subcommand (try 'agentctl heartbeat help')" >&2
     exit 1
@@ -176,10 +417,12 @@ cmd_heartbeat() {
 cmd_mcp() {
   local agent
   agent=$(resolve_agent_name) || exit $?
+  _require_docker
   exec docker exec -u agent "$agent" claude mcp "${@:-list}"
 }
 
 cmd_compose() {
+  _require_docker
   exec docker compose "$@"
 }
 
@@ -194,6 +437,7 @@ main() {
   shift || true
   case "$sub" in
     help|--help|-h) cmd_help ;;
+    doctor) cmd_doctor "$@" ;;
     attach) cmd_attach "$@" ;;
     shell) cmd_shell "$@" ;;
     run) cmd_run "$@" ;;

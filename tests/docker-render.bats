@@ -45,6 +45,15 @@ teardown() { teardown_tmp_dir; }
   [[ "$result" != *"ports:"* ]]
 }
 
+@test "docker-compose.yml.tpl declares a healthcheck on crond + tmux session" {
+  result=$(render_template "$REPO_ROOT/modules/docker-compose.yml.tpl")
+  [[ "$result" == *"healthcheck:"* ]]
+  [[ "$result" == *"pgrep -x crond"* ]]
+  [[ "$result" == *"tmux .*-s agent"* ]]
+  # start_period must be generous enough for first-boot plugin install.
+  [[ "$result" == *"start_period: 60s"* ]]
+}
+
 @test "systemd unit has Type=oneshot RemainAfterExit=yes" {
   result=$(render_template "$REPO_ROOT/modules/systemd.service.tpl")
   [[ "$result" == *"Type=oneshot"* ]]

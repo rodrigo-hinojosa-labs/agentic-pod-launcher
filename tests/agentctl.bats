@@ -31,6 +31,7 @@ teardown() { teardown_tmp_dir; }
   echo "$output" | grep -q "mcp"
   echo "$output" | grep -q "shell"
   echo "$output" | grep -q "run"
+  echo "$output" | grep -q "doctor"
 }
 
 @test "agentctl unknown-subcommand exits 1 with a hint" {
@@ -149,4 +150,64 @@ YML
   grep -q "^claude$" "$TMP_TEST_DIR/recorded"
   grep -q "^mcp$" "$TMP_TEST_DIR/recorded"
   grep -q "^list$" "$TMP_TEST_DIR/recorded"
+}
+
+# ─── Doctor + friendly errors ────────────────────────────────────────────
+# These tests use a richer docker shim that returns different exit codes
+# per subcommand, so the doctor can walk its dependency chain (daemon → ps
+# -a → inspect → exec) realistically.
+
+# Helper: install a parameterized docker shim. Set DOCKER_INFO_RC=1 to
+# simulate "daemon down". Set CONTAINER_EXISTS=0 to simulate "container
+# does not exist".
+_install_docker_shim() {
+  local info_rc="${DOCKER_INFO_RC:-0}"
+  local container_exists="${CONTAINER_EXISTS:-1}"
+  cat > "$TMP_TEST_DIR/docker" <<SHIM
+#!/usr/bin/env bash
+case "\$1" in
+  info)   exit $info_rc ;;
+  ps)     [ "$container_exists" = "1" ] && echo "abc123def456" ; exit 0 ;;
+  inspect) echo "running" ; exit 0 ;;
+  exec)   exit 0 ;;
+  *)      printf '%s\n' "\$@" > "$TMP_TEST_DIR/recorded" ; exit 0 ;;
+esac
+SHIM
+  chmod +x "$TMP_TEST_DIR/docker"
+}
+
+@test "agentctl doctor: friendly error when Docker daemon is down" {
+  cd "$TMP_TEST_DIR"
+  DOCKER_INFO_RC=1 _install_docker_shim
+  AGENT_NAME=test run "$AGENTCTL" doctor
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q "Docker daemon"
+  # OS-aware hint must mention the right path. Both branches accepted to
+  # keep the test portable across Linux/macOS bats hosts.
+  echo "$output" | grep -qE "Docker Desktop|systemctl start docker"
+}
+
+@test "agentctl status: friendly error when Docker daemon is down" {
+  cd "$TMP_TEST_DIR"
+  DOCKER_INFO_RC=1 _install_docker_shim
+  AGENT_NAME=test run "$AGENTCTL" status
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q "cannot reach the Docker daemon"
+}
+
+@test "agentctl doctor: reports container missing when 'docker ps' returns empty" {
+  cd "$TMP_TEST_DIR"
+  CONTAINER_EXISTS=0 _install_docker_shim
+  AGENT_NAME=ghost run "$AGENTCTL" doctor
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q "Docker daemon running"
+  echo "$output" | grep -q "Container 'ghost' does not exist"
+  echo "$output" | grep -q "agentctl up"
+}
+
+@test "agentctl doctor: prints diagnostic header with the resolved agent name" {
+  cd "$TMP_TEST_DIR"
+  _install_docker_shim
+  AGENT_NAME=specific-name run "$AGENTCTL" doctor
+  echo "$output" | grep -q "diagnosing specific-name"
 }

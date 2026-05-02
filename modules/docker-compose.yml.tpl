@@ -23,6 +23,18 @@ services:
       - /tmp:size=100m
     restart: unless-stopped
     stop_grace_period: 30s
+    # Container is healthy when both crond and the agent's tmux session are
+    # running — same liveness signals start_services.sh's watchdog uses.
+    # Healthcheck runs as root (Docker default), so we use pgrep instead of
+    # `tmux has-session` (tmux's socket is per-UID under /tmp/tmux-<uid>/,
+    # invisible to root). start_period is generous because first boot installs
+    # plugins + warms up bun before the supervisor lays down the tmux session.
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -x crond >/dev/null && pgrep -f 'tmux .*-s agent' >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     stdin_open: true
     tty: true
     volumes:
