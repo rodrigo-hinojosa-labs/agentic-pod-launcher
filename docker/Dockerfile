@@ -37,6 +37,7 @@ RUN apk add --no-cache \
       su-exec \
       ca-certificates \
       python3 \
+      age \
       flock
 
 # Install gum from the charmbracelet tap alternative: use the static binary.
@@ -150,6 +151,7 @@ RUN chmod +x /opt/agent-admin/entrypoint.sh \
 COPY scripts/heartbeatctl /opt/agent-admin/scripts/heartbeatctl
 COPY scripts/lib/interval.sh /opt/agent-admin/scripts/lib/interval.sh
 COPY scripts/lib/state.sh    /opt/agent-admin/scripts/lib/state.sh
+COPY scripts/lib/backup_identity.sh /opt/agent-admin/scripts/lib/backup_identity.sh
 RUN chmod +x /opt/agent-admin/scripts/heartbeatctl \
   && ln -s /opt/agent-admin/scripts/heartbeatctl /usr/local/bin/heartbeatctl
 

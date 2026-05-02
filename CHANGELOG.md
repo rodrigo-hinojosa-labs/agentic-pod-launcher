@@ -94,6 +94,17 @@
   can overwrite the file but not rename into `/etc/crontabs/`.
 
 ### Added
+- backup: identity backup via git orphan branch. `heartbeatctl
+  backup-identity` snapshots login / pairing / plugin list / settings
+  / age-encrypted .env to `backup/identity` on the agent's fork.
+  Three triggers (manual, post-plugin-install + 60s watchdog hash
+  check, daily cron at 03:30). Restore via
+  `setup.sh --destination <path> --restore-from-fork <fork-url>`.
+  age encryption uses the fork owner's SSH key from
+  `github.com/<owner>.keys` — no extra secrets. A4 fallback (partial
+  mode, plaintext-only) kicks in when no key is available; user can
+  upgrade via `heartbeatctl backup-identity --configure-key <key>`.
+  Design: `docs/superpowers/specs/2026-04-22-identity-backup-design.md`.
 - telegram plugin: post-install patch
   (`docker/scripts/apply_telegram_typing_patch.py`) keeps the Telegram
   "typing…" chat action refreshed every 4s while Claude is processing a

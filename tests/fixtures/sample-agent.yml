@@ -34,6 +34,12 @@ features:
     timeout: 300
     retries: 1
     default_prompt: "Status check — return a short plain-text report (uptime, notable issues). No tool use; your stdout is forwarded verbatim to the notifier."
+  identity_backup:
+    enabled: true
+    schedule: "30 3 * * *"
+backup:
+  identity:
+    recipient: null
 mcps:
   defaults:
     - fetch

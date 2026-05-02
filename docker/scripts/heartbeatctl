@@ -24,6 +24,11 @@ LIB_DIR="${HEARTBEATCTL_LIB_DIR:-/opt/agent-admin/scripts/lib}"
 [ -f "$LIB_DIR/interval.sh" ] && source "$LIB_DIR/interval.sh"
 # shellcheck source=/dev/null
 [ -f "$LIB_DIR/state.sh" ]    && source "$LIB_DIR/state.sh"
+# shellcheck source=/dev/null
+[ -f "$LIB_DIR/backup_identity.sh" ] && source "$LIB_DIR/backup_identity.sh"
+
+IDENTITY_STATE_DIR="${IDENTITY_STATE_DIR:-$WORKSPACE/.state}"
+IDENTITY_BACKUP_STATE_FILE="$HEARTBEAT_DIR/identity-backup.json"
 
 cmd_help() {
   cat <<EOF
@@ -49,6 +54,13 @@ Mutate (all atomic with rollback against agent.yml.prev):
   set-notifier  <none|log|telegram>
   set-timeout   <seconds>
   set-retries   <0..5>
+
+Backup:
+  backup-identity [--configure-key <pubkey>] [--disable] [--dry-run] [--gc]
+                          Snapshot identity (login, pairing, plugin config,
+                          encrypted .env) to the 'backup/identity' branch
+                          on the agent's fork. Idempotent. See
+                          docs/superpowers/specs/2026-04-22-identity-backup-design.md.
 
 Exit codes:
   0  success
@@ -147,10 +159,20 @@ CONF
   else
     line="# paused: $cron /workspace/scripts/heartbeat/heartbeat.sh >> /workspace/scripts/heartbeat/logs/cron.log 2>&1"
   fi
+  # Optional second crontab line for scheduled identity backup
+  local backup_line=""
+  local bi_enabled bi_schedule
+  bi_enabled=$(_yq '.features.identity_backup.enabled')
+  bi_schedule=$(_yq '.features.identity_backup.schedule // "30 3 * * *"')
+  if [ "$bi_enabled" = "true" ]; then
+    backup_line="$bi_schedule /usr/local/bin/heartbeatctl backup-identity >> /workspace/scripts/heartbeat/logs/backup-identity.log 2>&1"
+  fi
+
   local tmp_crontab="${CRONTAB_FILE}.tmp"
   if ! cat > "$tmp_crontab" <<CT
-# Cron for in-container agent heartbeat. Managed by heartbeatctl.
+# Cron for in-container agent heartbeat + identity backup. Managed by heartbeatctl.
 $line
+${backup_line}
 CT
   then
     rm -f "$tmp_crontab"
@@ -226,6 +248,20 @@ cmd_status() {
   if [ -f "$RUNS_FILE" ]; then
     echo "recent runs:"
     tail -5 "$RUNS_FILE" | jq -r '"  " + .ts + "  " + .status + "  " + (.duration_ms|tostring) + "ms  " + (.prompt | .[0:60])'
+  fi
+
+  # Identity backup summary (non-fatal if state file missing)
+  if [ -f "$IDENTITY_BACKUP_STATE_FILE" ]; then
+    local bi_mode bi_commit bi_push
+    bi_mode=$(jq -r '.mode // ""' "$IDENTITY_BACKUP_STATE_FILE" 2>/dev/null)
+    bi_commit=$(jq -r '.last_commit // ""' "$IDENTITY_BACKUP_STATE_FILE" 2>/dev/null)
+    bi_push=$(jq -r '.last_push // ""' "$IDENTITY_BACKUP_STATE_FILE" 2>/dev/null)
+    echo
+    echo "identity backup: mode=${bi_mode:-unknown} commit=${bi_commit:0:8} last_push=${bi_push:-never}"
+    if [ "$bi_mode" = "partial" ]; then
+      echo "  ⚠ partial mode — .env not encrypted. Run:"
+      echo "    heartbeatctl backup-identity --configure-key <path|pubkey>"
+    fi
   fi
 }
 
@@ -360,6 +396,140 @@ cmd_test() {
 # `notifications/claude/channel` messages don't reach the session.
 # This command kills the tmux session; start_services.sh watchdog
 # respawns it within ~2 seconds with a fresh plugin attachment.
+cmd_backup_identity() {
+  local mode="run"
+  local configure_key=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --configure-key) shift; configure_key="${1:-}"; mode="configure"; shift ;;
+      --disable)       mode="disable"; shift ;;
+      --dry-run)       mode="dry-run"; shift ;;
+      --gc)            mode="gc"; shift ;;
+      -h|--help)
+        cat <<EOF
+Usage: heartbeatctl backup-identity [flags]
+
+Flags:
+  --configure-key <path|pubkey-string>   Set backup.identity.recipient, trigger backup.
+  --disable                              Set features.identity_backup.enabled=false.
+  --dry-run                              Stage + diff without push.
+  --gc                                   Run 'git gc' on the local clone before push.
+  (no flags)                             Default: run the backup primitive.
+EOF
+        return 0 ;;
+      *) echo "backup-identity: unknown flag: $1" >&2; return 1 ;;
+    esac
+  done
+
+  [ -d "$IDENTITY_STATE_DIR" ] || {
+    echo "backup-identity: no state dir at $IDENTITY_STATE_DIR — nothing to back up yet"
+    return 0
+  }
+
+  case "$mode" in
+    run)        _bi_run ;;
+    configure)  _bi_configure_key "$configure_key" ;;
+    disable)    _bi_disable ;;
+    dry-run)    _bi_run --dry-run ;;
+    gc)         _bi_gc_then_run ;;
+  esac
+}
+
+_bi_run() {
+  local dry_run=0
+  [ "${1:-}" = "--dry-run" ] && dry_run=1
+
+  local any=0 path
+  while IFS= read -r path; do
+    [ -e "$IDENTITY_STATE_DIR/$path" ] && { any=1; break; }
+  done < <(identity_whitelist "$IDENTITY_STATE_DIR")
+  if [ "$any" -eq 0 ]; then
+    echo "backup-identity: no identity files yet, skipping"
+    return 0
+  fi
+
+  local fork_url recipient
+  fork_url=$(_yq '.scaffold.fork.url')
+  recipient=$(_yq '.backup.identity.recipient')
+  [ "$recipient" = "null" ] && recipient=""
+
+  local current_hash last_hash
+  current_hash=$(identity_hash "$IDENTITY_STATE_DIR" "$recipient")
+  last_hash=$(identity_last_hash "$IDENTITY_BACKUP_STATE_FILE")
+
+  if [ -n "$last_hash" ] && [ "$current_hash" = "$last_hash" ]; then
+    echo "backup-identity: no changes since last backup (hash $last_hash)"
+    return 0
+  fi
+
+  if [ "$dry_run" -eq 1 ]; then
+    echo "backup-identity: dry-run (no push) — would change from ${last_hash:-<none>} to $current_hash"
+    return 0
+  fi
+
+  if [ -z "$fork_url" ]; then
+    echo "backup-identity: agent.yml has no scaffold.fork.url — fork-less agent, nothing to back up to"
+    return 0
+  fi
+
+  local clone_dir result sha mode
+  clone_dir=$(identity_prepare_clone "$fork_url")
+  if ! result=$(identity_commit_and_push "$clone_dir" "$IDENTITY_STATE_DIR" "$recipient"); then
+    return $?
+  fi
+  sha="${result%% *}"
+  mode="${result##* }"
+
+  if [ "$sha" = "-" ]; then
+    echo "backup-identity: no changes after stage-diff (hash $current_hash)"
+    identity_write_state "$IDENTITY_BACKUP_STATE_FILE" "$current_hash" "$mode" "" ""
+    return 0
+  fi
+
+  identity_write_state "$IDENTITY_BACKUP_STATE_FILE" "$current_hash" "$mode" "$sha" \
+    "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  printf 'backup-identity: %s pushed (%s)\n' "${sha:0:8}" "$mode"
+}
+
+_bi_configure_key() {
+  local arg="$1"
+  local key
+
+  if [ -f "$arg" ]; then
+    key=$(tr -d '\r\n' < "$arg")
+  else
+    key="$arg"
+  fi
+
+  if ! [[ "$key" =~ ^(ssh-ed25519|ssh-rsa)\  ]]; then
+    echo "backup-identity: invalid key '$arg' — must be an ssh-ed25519 or ssh-rsa public key" >&2
+    return 1
+  fi
+
+  yq -i ".backup.identity.recipient = \"$key\"" "$AGENT_YML" || {
+    echo "backup-identity: failed to update $AGENT_YML" >&2
+    return 2
+  }
+  echo "backup-identity: recipient updated"
+
+  _bi_run
+}
+_bi_disable() {
+  yq -i '.features.identity_backup.enabled = false' "$AGENT_YML" || return 2
+  echo "backup-identity: identity_backup disabled in agent.yml"
+  cmd_reload >/dev/null 2>&1 || true
+}
+
+_bi_gc_then_run() {
+  local fork_url
+  fork_url=$(_yq '.scaffold.fork.url')
+  [ -z "$fork_url" ] && { echo "backup-identity: no fork url"; return 0; }
+  local clone_dir
+  clone_dir=$(identity_prepare_clone "$fork_url")
+  (cd "$clone_dir" && git gc --prune=now --aggressive >/dev/null 2>&1) || true
+  _bi_run
+}
+
 cmd_kick_channel() {
   if ! command -v tmux >/dev/null 2>&1; then
     echo "heartbeatctl: tmux not available — cannot kick session" >&2
@@ -419,6 +589,7 @@ main() {
     test)   cmd_test "$@" ;;
     kick-channel) cmd_kick_channel ;;
     drop-plugin)  cmd_drop_plugin  "${1:-}" ;;
+    backup-identity) cmd_backup_identity "$@" ;;
     set-interval) cmd_set_interval "${1:-}" ;;
     set-prompt)   cmd_set_prompt   "${1:-}" ;;
     set-notifier) cmd_set_notifier "${1:-}" ;;

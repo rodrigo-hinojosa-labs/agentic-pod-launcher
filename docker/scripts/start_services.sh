@@ -29,6 +29,13 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [start_services] $*" >&2; }
 [ -f /opt/agent-admin/scripts/lib/vault.sh ] \
   && source /opt/agent-admin/scripts/lib/vault.sh
 
+# Backup-identity helpers (image-baked). Provides identity_whitelist,
+# identity_hash, identity_prepare_clone, identity_commit_and_push,
+# identity_write_state. Sourced no-op if missing.
+# shellcheck source=/dev/null
+[ -f /opt/agent-admin/scripts/lib/backup_identity.sh ] \
+  && source /opt/agent-admin/scripts/lib/backup_identity.sh
+
 # seed_vault_if_needed — at first boot, copy the skeleton into the per-agent
 # vault dir if vault.enabled + vault.seed_skeleton and the target is empty.
 # Honors vault.force_reseed: when true, the existing vault is moved aside to
@@ -168,6 +175,7 @@ ensure_plugin_installed_one() {
   # post-install hooks on a broken cache and quietly fail-silent.
   if [ -d "$cache" ] && [ -f "$cache/.installed-ok" ]; then
     apply_plugin_post_hooks "$spec" "$cache"
+    _trigger_identity_backup "post-plugin-check"
     return 0
   fi
   if [ -d "$cache" ]; then
@@ -179,6 +187,7 @@ ensure_plugin_installed_one() {
     log "plugin installed: $spec"
     [ -d "$cache" ] && : > "$cache/.installed-ok"
     apply_plugin_post_hooks "$spec" "$cache"
+    _trigger_identity_backup "post-plugin-install"
     return 0
   fi
   log "plugin install skipped (not authenticated yet or install failed): $spec"
@@ -202,6 +211,16 @@ ensure_all_plugins_installed() {
     [ -z "$spec" ] && continue
     ensure_plugin_installed_one "$spec" || true
   done < <(plugin_catalog_specs /workspace/agent.yml)
+}
+
+# Best-effort backup trigger. Never fails the caller even if backup errors.
+_trigger_identity_backup() {
+  local reason="$1"
+  if command -v heartbeatctl >/dev/null 2>&1; then
+    heartbeatctl backup-identity >/dev/null 2>&1 \
+      && log "identity backup triggered ($reason)" \
+      || log "identity backup trigger failed ($reason) — non-fatal"
+  fi
 }
 
 # apply_plugin_post_hooks SPEC CACHE — run any per-plugin post-install hook
@@ -568,50 +587,95 @@ crash_budget_check() {
 # channel_plugin_alive (above) still handles the case where bun
 # itself dies; that one is reliably detectable from outside.
 
-# Tests source this script with START_SERVICES_NO_RUN=1 set so they can
-# call functions (notably crash_budget_check) in isolation without
-# triggering the runtime watchdog loop.
-if [ "${START_SERVICES_NO_RUN:-0}" = "1" ]; then
-  return 0 2>/dev/null || exit 0
-fi
+# Backup-identity: every 60s, compare identity hash vs last-backup hash.
+# Fires the primitive when they differ. Throttled to avoid bursts.
+_last_backup_check=0
+_check_identity_backup() {
+  local now
+  now=$(date +%s)
+  if [ $((now - _last_backup_check)) -lt 60 ]; then
+    return 0
+  fi
+  _last_backup_check=$now
 
-boot_side_effects
+  if [ -f /opt/agent-admin/scripts/lib/backup_identity.sh ]; then
+    # shellcheck source=/dev/null
+    source /opt/agent-admin/scripts/lib/backup_identity.sh
+  else
+    return 0
+  fi
 
-log "starting tmux session '$SESSION'"
-if ! start_session; then
-  log "ERROR: initial tmux session failed to start"
-  exit 1
-fi
+  local state_dir="/workspace/.state"
+  [ -d "$state_dir" ] || return 0
+
+  local current last state_file recipient
+  state_file="/workspace/scripts/heartbeat/identity-backup.json"
+  recipient=$(yq '.backup.identity.recipient // ""' /workspace/agent.yml 2>/dev/null)
+  [ "$recipient" = "null" ] && recipient=""
+  current=$(identity_hash "$state_dir" "$recipient" 2>/dev/null || echo "")
+  last=$(identity_last_hash "$state_file" 2>/dev/null || echo "")
+
+  [ -z "$current" ] && return 0
+  if [ "$current" != "$last" ]; then
+    _trigger_identity_backup "watchdog-hash-change"
+  fi
+}
 
 # ── 6. Watchdog ───────────────────────────────────────────
 # Poll every 2s so the re-attach gap between Claude dying (/exit) and the
 # next tmux session coming up is barely noticeable. Cheap check — just
 # `tmux has-session`.
-while true; do
-  sleep 2
-  if ! pgrep -x crond >/dev/null 2>&1; then
-    echo "CRITICAL: crond died — exiting container (docker restart policy will revive)"
+_run_watchdog() {
+  while true; do
+    sleep 2
+    if ! pgrep -x crond >/dev/null 2>&1; then
+      echo "CRITICAL: crond died — exiting container (docker restart policy will revive)"
+      exit 1
+    fi
+
+    # Best-effort backup check (throttled internally to one per 60s).
+    _check_identity_backup
+
+    if session_alive && channel_plugin_alive; then
+      continue
+    fi
+
+    if session_alive && ! channel_plugin_alive; then
+      log "channel plugin (bun server.ts) died — killing tmux for respawn"
+      tmux kill-session -t "$SESSION" 2>/dev/null || true
+      sleep 1
+    fi
+
+    now=$(date +%s)
+    CRASH_TIMES="$(crash_budget_check "$now" "$CRASH_TIMES $now")" || {
+      log "CRITICAL: $MAX_CRASHES crashes in ${WINDOW}s — exiting for Docker to restart"
+      exit 1
+    }
+
+    # Recount for the log line — cheap, runs at most every 2s.
+    local crash_count=0
+    for _t in $CRASH_TIMES; do crash_count=$(( crash_count + 1 )); done
+    log "tmux session ended (crash $crash_count/${MAX_CRASHES} in trailing ${WINDOW}s) — respawning"
+    start_session || log "WARN: respawn failed, watchdog will retry in 2s"
+  done
+}
+
+main() {
+  boot_side_effects
+
+  log "starting tmux session '$SESSION'"
+  if ! start_session; then
+    log "ERROR: initial tmux session failed to start"
     exit 1
   fi
-  if session_alive && channel_plugin_alive; then
-    continue
-  fi
 
-  if session_alive && ! channel_plugin_alive; then
-    log "channel plugin (bun server.ts) died — killing tmux for respawn"
-    tmux kill-session -t "$SESSION" 2>/dev/null || true
-    sleep 1
-  fi
+  _run_watchdog
+}
 
-  now=$(date +%s)
-  CRASH_TIMES="$(crash_budget_check "$now" "$CRASH_TIMES $now")" || {
-    log "CRITICAL: $MAX_CRASHES crashes in ${WINDOW}s — exiting for Docker to restart"
-    exit 1
-  }
-
-  # Recount for the log line — cheap, runs at most every 2s.
-  CRASH_COUNT=0
-  for _t in $CRASH_TIMES; do CRASH_COUNT=$(( CRASH_COUNT + 1 )); done
-  log "tmux session ended (crash $CRASH_COUNT/${MAX_CRASHES} in trailing ${WINDOW}s) — respawning"
-  start_session || log "WARN: respawn failed, watchdog will retry in 2s"
-done
+# Tests source this script with START_SERVICES_NO_RUN=1 set so they can
+# call functions (notably crash_budget_check) in isolation without
+# triggering the runtime watchdog loop. The BASH_SOURCE guard provides
+# the same protection for `source` cases that don't set the env var.
+if [ "${START_SERVICES_NO_RUN:-0}" != "1" ] && [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  main "$@"
+fi
