@@ -1549,6 +1549,15 @@ scaffold_destination() {
   # without any runtime chown dance.
   mkdir -p "$dest/.state"
 
+  # Pre-create scripts/heartbeat/logs/ for the same reason. The container's
+  # entrypoint runs as root with cap_drop: ALL (only CHOWN/SETUID/SETGID
+  # granted, no DAC_OVERRIDE). Without DAC_OVERRIDE, root inside cannot
+  # mkdir into /workspace/scripts/heartbeat/ (host-owned 1000:1000, mode 775
+  # → "other" is r-x for non-owner non-group root). Creating logs/ here on
+  # the host means the entrypoint's `mkdir -p` is a no-op and the container
+  # boots cleanly instead of restart-looping with EACCES.
+  mkdir -p "$dest/scripts/heartbeat/logs"
+
   # Move agent.yml + .env (transactional: copy, verify, delete source)
   cp "$agent_yml" "$dest/agent.yml" && [ -f "$dest/agent.yml" ] && rm "$agent_yml"
   if [ -f "$env_file" ]; then
@@ -1698,6 +1707,12 @@ regenerate() {
     render_to_file "$modules_dir/heartbeat-conf.tpl" "$SCRIPT_DIR/scripts/heartbeat/heartbeat.conf"
     echo "  ✓ scripts/heartbeat/heartbeat.conf"
   fi
+
+  # Ensure logs/ exists on the host so the container entrypoint's
+  # `mkdir -p` is a no-op (see scaffold_destination for the full reason).
+  # Unconditional and idempotent — covers `--regenerate` on workspaces
+  # scaffolded before this fix.
+  [ -d "$SCRIPT_DIR/scripts/heartbeat" ] && mkdir -p "$SCRIPT_DIR/scripts/heartbeat/logs"
 
   if [ "${DEPLOYMENT_INSTALL_SERVICE:-false}" = "true" ]; then
     install_service "$agent_name" "$workspace"
