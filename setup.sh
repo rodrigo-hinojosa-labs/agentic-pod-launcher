@@ -11,6 +11,49 @@ source "$SCRIPT_DIR/scripts/lib/mcp-catalog.sh"
 
 GUM=""  # populated by ensure_gum
 
+# require_tool TOOL [DOC_URL]
+# Bail out with an OS-aware install hint if a CLI tool is missing. Centralises
+# what would otherwise be ad-hoc `command -v X &>/dev/null || echo "install X"`
+# scattered through the script. Keeps every "missing tool" path producing the
+# same friendly message shape.
+require_tool() {
+  local tool="$1" doc_url="${2:-}"
+  command -v "$tool" >/dev/null 2>&1 && return 0
+  echo "ERROR: $tool is required but was not found in PATH." >&2
+  echo "" >&2
+  echo "Install it:" >&2
+  case "$tool" in
+    yq)
+      echo "  • macOS:  brew install yq" >&2
+      echo "  • Linux:  apt install yq    (Debian/Ubuntu)" >&2
+      echo "            dnf install yq    (Fedora)" >&2
+      echo "  • Other:  https://github.com/mikefarah/yq#install" >&2
+      ;;
+    jq)
+      echo "  • macOS:  brew install jq" >&2
+      echo "  • Linux:  apt install jq | dnf install jq" >&2
+      echo "  • Other:  https://stedolan.github.io/jq/download/" >&2
+      ;;
+    gh)
+      echo "  • macOS:  brew install gh" >&2
+      echo "  • Linux:  apt install gh   (or follow https://cli.github.com/)" >&2
+      echo "  • Auth:   gh auth login   (after install)" >&2
+      ;;
+    git)
+      echo "  • macOS:  xcode-select --install   (or brew install git)" >&2
+      echo "  • Linux:  apt install git | dnf install git" >&2
+      ;;
+    docker)
+      echo "  • macOS:  https://docs.docker.com/desktop/install/mac-install/" >&2
+      echo "  • Linux:  https://docs.docker.com/engine/install/" >&2
+      ;;
+    *)
+      [ -n "$doc_url" ] && echo "  • Docs: $doc_url" >&2
+      ;;
+  esac
+  exit 1
+}
+
 # Detect which claude CLI variant is installed. Preference order:
 # claude-enterprise > claude-personal > claude. Falls back to "claude"
 # if none are found (user will install it later).
@@ -263,10 +306,7 @@ run_wizard() {
   local template_url="https://github.com/rodrigo-hinojosa-labs/agentic-pod-launcher"
   fork_enabled=$(ask_yn "Create a GitHub fork for this agent?" "y")
   if [ "$fork_enabled" = "true" ]; then
-    if ! command -v gh &>/dev/null; then
-      echo "  ✗ gh CLI not found — install it first: https://cli.github.com/"
-      exit 1
-    fi
+    require_tool gh
     local host_lc agent_lc default_fork
     host_lc=$(echo "$deploy_host" | tr '[:upper:]' '[:lower:]')
     agent_lc=$(echo "$agent_name" | tr '[:upper:]' '[:lower:]')
@@ -1227,7 +1267,12 @@ scaffold_destination() {
   # Safety: destination must not already exist
   if [ -e "$dest" ]; then
     echo "ERROR: destination already exists: $dest" >&2
-    echo "       Choose a fresh path, or remove the existing one first." >&2
+    echo "" >&2
+    echo "  Choose a different path with --destination, OR remove the existing one:" >&2
+    echo "    rm -rf \"$dest\"" >&2
+    echo "" >&2
+    echo "  If that path has a running agent, stop it first:" >&2
+    echo "    cd \"$dest\" && docker compose down -v" >&2
     exit 1
   fi
 
