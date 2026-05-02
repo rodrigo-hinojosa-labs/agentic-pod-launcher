@@ -38,7 +38,9 @@ docker compose build
 #  f. Detach with Ctrl-b d.
 ```
 
-`agentctl` is a thin host wrapper for the most common `docker exec -u agent NAME ...` patterns. It resolves the container name from `agent.yml`, applies `-u agent` automatically, and includes a retry-loop in `attach` for the post-`/login` window. Subcommands: `attach`, `logs [-f]`, `status`, `heartbeat <sub>`, `mcp [list]`, `shell [--root]`, `up`, `stop`, `restart`, `ps`, `run <cmd…>`. Run `./scripts/agentctl --help` for the full list.
+`agentctl` is a thin host wrapper for the most common `docker exec -u agent NAME ...` patterns. It resolves the container name from `agent.yml`, applies `-u agent` automatically, and includes a retry-loop in `attach` for the post-`/login` window. Subcommands: `doctor` (full diagnostic), `attach`, `logs [-f]`, `status`, `heartbeat <sub>`, `mcp [list]`, `shell [--root]`, `up`, `stop`, `restart`, `ps`, `run <cmd…>`. Run `./scripts/agentctl --help` for the full list.
+
+When something looks off, the first move is **`./scripts/agentctl doctor`** — it checks Docker daemon, container status, healthcheck, agent.yml, .env, tmux, crond, the Telegram plugin, the heartbeat, the vault, and the plugin patches in dependency order, and prints an actionable hint per failing subsystem.
 
 The full step-by-step (with troubleshooting) lives in [`docs/getting-started.md`](docs/getting-started.md). Each scaffolded agent also gets a `NEXT_STEPS.md` with concrete commands using the agent's name and paths.
 
