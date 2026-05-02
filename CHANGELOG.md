@@ -3,6 +3,24 @@
 ## [Unreleased]
 
 ### Added
+- backup: vault backup primitive — `heartbeatctl backup-vault` snapshots
+  the vault's markdown subset to a `backup/vault` orphan branch on the
+  fork, hourly by default (override via `vault.backup_schedule` in
+  `agent.yml`). Excludes Obsidian per-device noise (`.obsidian/
+  workspace*.json`, `cache/`, `.trash/`, `*.sync-conflict-*`) so
+  Syncthing-induced churn doesn't pollute the snapshots. Idempotent via
+  sha256 hash over content + filenames; deletes propagate (the staged
+  tree is wiped before each commit so removed notes drop out of the
+  next snapshot). Helpers in `docker/scripts/lib/backup_vault.sh`.
+- backup: config backup primitive — `heartbeatctl backup-config`
+  snapshots `agent.yml` (plaintext, no secrets) to a `backup/config`
+  orphan branch. Daily at 03:30 by default. Disable via
+  `features.config_backup.enabled=false` in `agent.yml`.
+- restore: `setup.sh --restore-from-fork <url>` now pulls all three
+  backup branches in order — `backup/config` first (so `vault.path` is
+  known), then `backup/identity`, then `backup/vault`. Each branch is
+  independently optional: a partial fork still rehydrates whatever's
+  available with a clear "no backup/X branch" notice for the rest.
 - telegram: persist Telegram `update_id` offset to disk on each successful
   reply (`/home/agent/.claude/channels/telegram/last-offset.json`) and
   replay from disk on plugin startup via a synchronous
