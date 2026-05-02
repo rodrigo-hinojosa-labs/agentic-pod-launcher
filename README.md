@@ -152,6 +152,47 @@ The non-regenerable subset of the workspace is replicated to the agent's own Git
 
 Encryption uses your existing GitHub SSH key (no extra secret to manage), fetched from `github.com/<owner>.keys` at scaffold time. Restore on a new machine with `setup.sh --restore-from-fork <url>` — the agent rehydrates without re-`/login`, re-pairing, or re-installing plugins. Each branch is independently optional; partial forks rehydrate whatever's available. Full reference in [`docs/heartbeatctl.md`](docs/heartbeatctl.md#backup-commands).
 
+#### Restore walkthrough (Mac → Linux example)
+
+You lost your laptop, or you're moving the agent to a Raspberry Pi. From the new host:
+
+```bash
+# 1. Pre-requisites: gh, git, docker, age (apk on Alpine; brew/apt elsewhere).
+#    The same SSH key registered with GitHub must be on the new host
+#    (`~/.ssh/id_ed25519`) — that's what decrypts .env.age.
+
+# 2. Clone the launcher.
+git clone https://github.com/rodrigo-hinojosa-labs/agentic-pod-launcher.git
+cd agentic-pod-launcher
+
+# 3. Restore. Pulls backup/{config,identity,vault} in order, copies files
+#    into <dest>, decrypts .env with your SSH key.
+./setup.sh \
+    --restore-from-fork git@github.com:<your-user>/<agent-fork>.git \
+    --destination ~/agentic-agents/<agent-name>
+
+# Expected output:
+#   ✓ restore: agent.yml restored from backup/config
+#   ✓ restore: decrypted .env with /home/<you>/.ssh/id_ed25519
+#   ✓ restore: identity restored into ~/agentic-agents/<agent-name>/.state/
+#   ✓ restore: vault restored into ~/agentic-agents/<agent-name>/.state/.vault/
+
+# 4. Build the image (slow on the first run — pulls Alpine, installs uv/bun,
+#    pre-installs Python MCPs). Subsequent rebuilds are fast.
+cd ~/agentic-agents/<agent-name>
+docker compose build
+
+# 5. Boot. The agent comes up authenticated and paired — no /login, no
+#    /telegram:access pair, no plugin re-install.
+./scripts/agentctl up
+./scripts/agentctl doctor   # 12 green checks if everything is right
+```
+
+Common gotchas:
+- **No SSH key on the new host** → `.env.age` cannot be decrypted. Either copy the key over (`scp ~/.ssh/id_ed25519 newhost:~/.ssh/`) or pass `RESTORE_IDENTITY_KEY=/path/to/private-key` env var to `setup.sh`. As a last resort, regenerate `.env` by re-running the wizard's secrets section: `./setup.sh --regenerate` followed by `./scripts/agentctl shell` to paste the Telegram token manually.
+- **Different host UID/GID** → the bind-mount needs the container's `agent` user to match the host UID. The wizard auto-detects via `id -u`/`id -g`, so a fresh `--regenerate` after restore re-bakes the right build args.
+- **Partial fork** (only some branches present) → restore continues with a `⚠ no backup/X branch` notice for the missing ones. You can re-run `--restore-from-fork` later when the missing branch is populated.
+
 ### UID/GID matched at build
 
 `setup.sh` reads the host user's UID/GID and writes them as build args in `docker-compose.yml`. The container's `agent` user is created with the same numeric ownership at image-build time, so writes through the bind-mount land with the host user's identity. macOS hosts often have GID 20 (`staff`) which collides with Alpine's `dialout` group — the Dockerfile deletes the colliding user/group before `addgroup agent`.

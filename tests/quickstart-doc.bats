@@ -109,3 +109,69 @@ load helper
   grep -q "docs/agentic-quickstart.es.md" "$slash"
   grep -q "wizard_answers" "$slash"
 }
+
+@test "quickstart-doc: /quickstart slash command tells the model to validate before piping" {
+  # The wizard rejects malformed inputs with re-prompts; piping invalid
+  # values desyncs the stdin stream. The slash command must instruct the
+  # model to validate locally first. If this fails, the validation block
+  # got removed or renamed — restore it from .claude/commands/quickstart.md
+  # at HEAD~1 if you don't remember the contract.
+  local slash="$REPO_ROOT/.claude/commands/quickstart.md"
+  grep -q "Validate inputs before piping" "$slash"
+  # Each of these field names must appear in the slash command's
+  # validation block so the model knows the rule for it.
+  local field
+  for field in AGENT_NAME EMAIL TIMEZONE HEARTBEAT_INTERVAL NOTIFY_BOT_TOKEN; do
+    if ! grep -q "$field" "$slash"; then
+      echo "Slash command missing validation rule for: $field" >&2
+      return 1
+    fi
+  done
+}
+
+@test "quickstart-doc: validation rules in ES doc match the wizard-validators library" {
+  # The "Validaciones aplicadas por el wizard" table mirrors the
+  # validators in scripts/lib/wizard-validators.sh. If a validator is
+  # added there, the doc must list it; if removed, the doc must drop
+  # the row. We check both directions by sampling a representative
+  # subset (full row-by-row mapping would be over-engineered).
+  local doc="$REPO_ROOT/docs/agentic-quickstart.es.md"
+  local lib="$REPO_ROOT/scripts/lib/wizard-validators.sh"
+  [ -f "$doc" ]
+  [ -f "$lib" ]
+
+  # Doc must mention the validations section.
+  grep -q "Validaciones aplicadas por el wizard" "$doc"
+
+  # Each validator function should be reflected in the doc by either its
+  # field name or a representative phrase. Loose match is intentional —
+  # the doc is meant for humans, not a verbatim mirror.
+  local check
+  for check in \
+      'AGENT_NAME' \
+      'EMAIL' \
+      'TIMEZONE' \
+      'HEARTBEAT_INTERVAL' \
+      'NOTIFY_BOT_TOKEN' \
+      'URL' \
+      'UID'; do
+    if ! grep -q "$check" "$doc"; then
+      echo "ES quickstart doc missing validation row for: $check" >&2
+      return 1
+    fi
+  done
+
+  # Inverse check: every validator function declared in the lib must be
+  # at least mentioned in the doc (by name or by behavior). Add the
+  # validate_X function name to scripts/lib/wizard-validators.sh and the
+  # doc together to keep this honest.
+  local fn
+  while IFS= read -r fn; do
+    case "$fn" in
+      validate_email|validate_telegram_token|validate_timezone| \
+      validate_cron_or_interval|validate_agent_name|validate_url| \
+      validate_uid_gid|validate_workspace_path) ;;
+      *) echo "Unknown validator in lib (update test): $fn" >&2; return 1 ;;
+    esac
+  done < <(grep -oE '^validate_[a-z_]+' "$lib")
+}

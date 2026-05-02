@@ -181,6 +181,24 @@ procede salvo que falte un valor crítico o falle una validación.
 
 ---
 
+## Validaciones aplicadas por el wizard
+
+El wizard (manual y agéntico) valida los inputs antes de aceptarlos. Si el slash command pipea un valor inválido, el wizard hace re-prompt y queda colgado esperando entrada que nunca llega — por eso el slash command **debe validar antes de pipear**:
+
+| Campo | Regla | Ejemplo válido | Ejemplo inválido |
+|---|---|---|---|
+| `AGENT_NAME` | DNS label: lowercase + dígitos + guiones, sin guiones al inicio/fin, sin doble guion, 1..63 chars | `my-agent`, `agent01` | `My_Agent`, `-agent`, `agent--01` |
+| `EMAIL` (cualquiera) | Match `user@host.tld` (RFC 5322 simplificado) | `alice@example.com` | `alice@example`, `not-an-email` |
+| `TIMEZONE` | Debe existir en `/usr/share/zoneinfo/` o cumplir patrón `Region/City` | `America/Santiago`, `UTC` | `Chile time`, `hace 2 horas` |
+| `HEARTBEAT_INTERVAL` | `Nm` / `Nh` o expresión cron de 5 campos | `30m`, `2h`, `0 * * * *` | `30 minutes`, `every hour` |
+| `NOTIFY_BOT_TOKEN` (si no vacío) | `<dígitos>:<base64-like 25+>` | `123456789:AAEhBP0...` | `mi-token`, `123:short` |
+| `*_URL` (Atlassian, fork) | http(s) only, sin whitespace | `https://acme.atlassian.net` | `acme.atlassian.net`, `ftp://...` |
+| `UID`/`GID` | Entero no-negativo (auto-detectado, no se pregunta) | `1000`, `501` | `-1`, `abc` |
+
+Si el slash command no puede validar localmente (e.g. el token es opaco para el slash), pipea el valor crudo y deja al wizard hacer el rechazo. Si el wizard re-prompt'ea, el stdin pipeado se desincroniza — captura ese caso reportando "wizard rechazó X — re-ejecuta el quickstart con un valor válido".
+
+---
+
 ## Seguridad
 
 ⚠ El PAT queda en el contexto de la sesión de Claude. Si tu sistema de memoria (`claude-mem`, plugins similares) indexa las sesiones, **considera el token comprometido** y revócalo desde https://github.com/settings/tokens cuando termines. Genera uno nuevo para uso continuo.

@@ -106,6 +106,20 @@ You are running inside the **agentic-pod-launcher** repo. The user wants to scaf
    - `[ ! -e "$DESTINATION" ]` — destination must not exist
    - On macOS, warn if `Docker.app` isn't running (the user will need it to `docker compose build` later, but it's not blocking the wizard).
 
+   **Validate inputs before piping them in.** The wizard re-prompts on
+   invalid inputs and the piped stdin will desync. Run these regex
+   checks on whatever the user provided — if any fail, report the exact
+   issue and ask for a corrected value before proceeding:
+
+   - `AGENT_NAME` matches `^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$`, 1..63 chars, no `--`.
+   - Every `EMAIL` field matches `^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$`.
+   - `TIMEZONE` is `UTC` or matches `^[A-Z][a-z]+(/[A-Z][A-Za-z_]+)+$`. Pre-flight via `[ -f /usr/share/zoneinfo/$TIMEZONE ]` if you can.
+   - `HEARTBEAT_INTERVAL` matches `^[0-9]+[mh]$` or 5-field cron `^[0-9*,/-]+( +[0-9*,/-]+){4}$`.
+   - `NOTIFY_BOT_TOKEN`, when non-empty, matches `^[0-9]+:[A-Za-z0-9_-]{25,}$`.
+   - Any URL field (Atlassian, fork) starts with `http://` or `https://` and contains no whitespace.
+
+   Full table with examples in `docs/agentic-quickstart.es.md` ("Validaciones aplicadas por el wizard").
+
 5. **Build the wizard stdin** with `printf`, in this exact order (mirror of `wizard_answers()`). Skip `install_service` if `uname -s` ≠ Linux:
 
    ```

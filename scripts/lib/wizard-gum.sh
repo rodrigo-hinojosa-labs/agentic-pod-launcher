@@ -106,3 +106,48 @@ ask_choice() {
   _log_qa "$prompt" "$result"
   echo "$result"
 }
+
+# ask_validated PROMPT VALIDATOR_FN [DEFAULT] → input that passes the
+# validator. Re-prompts on failure; the validator's stderr hint goes
+# straight to the terminal (gum doesn't capture stderr from external
+# commands). Empty input maps to the default if one is given.
+ask_validated() {
+  local prompt="$1" validator="$2" default="${3:-}" result rc=0
+  while true; do
+    if [ -n "$default" ]; then
+      result=$("$GUM" input --prompt "$prompt: " --value "$default") || rc=$?
+    else
+      result=$("$GUM" input --prompt "$prompt: " --placeholder "...") || rc=$?
+    fi
+    _abort_if_interrupted "$rc"
+    result="${result:-$default}"
+    if [ -z "$result" ]; then
+      echo "  (required)" >&2
+      continue
+    fi
+    if "$validator" "$result"; then
+      _log_qa "$prompt" "$result"
+      echo "$result"
+      return 0
+    fi
+  done
+}
+
+# ask_secret_validated PROMPT VALIDATOR_FN → password input that passes
+# the validator. Same loop semantics as ask_validated.
+ask_secret_validated() {
+  local prompt="$1" validator="$2" result rc=0
+  while true; do
+    result=$("$GUM" input --password --prompt "$prompt: ") || rc=$?
+    _abort_if_interrupted "$rc"
+    if [ -z "$result" ]; then
+      echo "  (required)" >&2
+      continue
+    fi
+    if "$validator" "$result"; then
+      _log_qa "$prompt" "********"
+      echo "$result"
+      return 0
+    fi
+  done
+}

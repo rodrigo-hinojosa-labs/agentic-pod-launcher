@@ -180,6 +180,24 @@ proceed unless a required value is missing or a validation fails.
 
 ---
 
+## Validations applied by the wizard
+
+The wizard (both interactive and agentic) validates inputs before accepting them. If the slash command pipes an invalid value, the wizard re-prompts and hangs waiting for input that never arrives — so the slash command **must validate before piping**:
+
+| Field | Rule | Valid example | Invalid example |
+|---|---|---|---|
+| `AGENT_NAME` | DNS label: lowercase + digits + hyphens, no leading/trailing hyphen, no double hyphen, 1..63 chars | `my-agent`, `agent01` | `My_Agent`, `-agent`, `agent--01` |
+| `EMAIL` (any) | Matches `user@host.tld` (simplified RFC 5322) | `alice@example.com` | `alice@example`, `not-an-email` |
+| `TIMEZONE` | Must exist under `/usr/share/zoneinfo/` or match `Region/City` pattern | `America/Santiago`, `UTC` | `Chile time`, `2 hours ago` |
+| `HEARTBEAT_INTERVAL` | `Nm` / `Nh` or 5-field cron expression | `30m`, `2h`, `0 * * * *` | `30 minutes`, `every hour` |
+| `NOTIFY_BOT_TOKEN` (if non-empty) | `<digits>:<base64-like 25+>` | `123456789:AAEhBP0...` | `my-token`, `123:short` |
+| `*_URL` (Atlassian, fork) | http(s) only, no whitespace | `https://acme.atlassian.net` | `acme.atlassian.net`, `ftp://...` |
+| `UID`/`GID` | Non-negative integer (auto-detected, never asked) | `1000`, `501` | `-1`, `abc` |
+
+If the slash command can't validate locally (e.g. the token is opaque), pipe the raw value and let the wizard reject it. If the wizard re-prompts, the piped stdin desyncs — catch that case by reporting "wizard rejected X — re-run quickstart with a valid value".
+
+---
+
 ## Security
 
 ⚠ The PAT lives in the Claude session's context. If your memory system (`claude-mem`, similar plugins) indexes sessions, **treat the token as compromised** and revoke it at https://github.com/settings/tokens when you're done. Generate a new one for ongoing use.

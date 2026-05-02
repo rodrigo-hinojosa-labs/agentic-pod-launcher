@@ -37,3 +37,15 @@ setup() {
   # 5-field cron expression — any valid pattern
   [[ "$output" =~ [\*0-9/]+\ [\*0-9/]+\ [\*0-9/]+\ [\*0-9/]+\ [\*0-9/]+ ]]
 }
+
+@test "sample-agent.yml declares features.config_backup.enabled" {
+  run yq '.features.config_backup.enabled' "$AGENT_YML"
+  [ "$status" -eq 0 ]
+  [ "$output" = "true" ] || [ "$output" = "false" ]
+}
+
+@test "sample-agent.yml declares features.config_backup.schedule" {
+  run yq '.features.config_backup.schedule' "$AGENT_YML"
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ [0-9]+\ [0-9]+\ \*\ \*\ \* ]]
+}

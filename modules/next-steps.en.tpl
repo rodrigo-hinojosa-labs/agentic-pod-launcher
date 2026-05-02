@@ -84,6 +84,47 @@ git pull                                 # if your workspace is a fork
 docker compose build && ./scripts/agentctl restart
 ```
 
+### Full `agentctl` cheatsheet
+
+```bash
+# Container lifecycle
+./scripts/agentctl up                    # docker compose up -d
+./scripts/agentctl stop                  # docker compose stop (state preserved)
+./scripts/agentctl restart               # stop + up
+./scripts/agentctl ps                    # container status
+
+# Interactive session
+./scripts/agentctl attach                # tmux attach (15s retry-loop)
+./scripts/agentctl shell                 # bash inside container (as agent)
+./scripts/agentctl shell --root          # bash as root (debugging)
+./scripts/agentctl run <cmd…>            # arbitrary command (as agent)
+
+# Observability
+./scripts/agentctl logs                  # tail claude.log
+./scripts/agentctl logs -f               # follow
+./scripts/agentctl logs --stderr         # forensic tail of Telegram MCP stderr
+./scripts/agentctl status                # heartbeat status (alias)
+./scripts/agentctl doctor                # 12 dependency-ordered checks
+
+# MCP servers
+./scripts/agentctl mcp                   # claude mcp list (servers + state)
+
+# Heartbeat (proxies to heartbeatctl)
+./scripts/agentctl heartbeat status      # last run + counters
+./scripts/agentctl heartbeat test        # one manual tick
+./scripts/agentctl heartbeat logs        # last 20 runs
+./scripts/agentctl heartbeat pause       # pause the cron
+./scripts/agentctl heartbeat resume      # resume
+./scripts/agentctl heartbeat set-interval 5m
+./scripts/agentctl heartbeat set-prompt "..."
+./scripts/agentctl heartbeat kick-channel  # respawn tmux when Telegram ghosts
+./scripts/agentctl heartbeat backup-identity
+./scripts/agentctl heartbeat backup-vault
+./scripts/agentctl heartbeat backup-config
+```
+
+> **Agent-name resolution**: `agentctl` reads `agent.yml` from the current working directory (or the `-a NAME` flag) to know which container to target. If you change directories or run multiple agents, pass `-a <name>` explicitly.
+
 {{PLUGINS_BLOCK}}
 
 ## Teardown
