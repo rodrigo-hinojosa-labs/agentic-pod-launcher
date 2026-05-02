@@ -3,6 +3,21 @@
 ## [Unreleased]
 
 ### Added
+- doctor: backup-freshness checks. `agentctl doctor` now reads the three
+  state files at `<workspace>/scripts/heartbeat/{identity,vault,config}-
+  backup.json` and reports `pushed Nh ago` for each. Marks the check as
+  ⚠ when the last push is older than the expected cadence × 2 (identity
+  48h, vault 25h, config 8d) — clear surface for "the cron stopped
+  pushing days ago and you didn't notice". Three new bash helpers:
+  `_epoch_from_iso` (portable ISO 8601 → epoch on macOS BSD date and
+  Linux GNU date), `_humanize_delta`, `_check_backup_freshness`.
+  Thresholds overridable per-invocation via env vars
+  `DOCTOR_IDENTITY_MAX_AGE_HOURS`, `DOCTOR_VAULT_MAX_AGE_HOURS`,
+  `DOCTOR_CONFIG_MAX_AGE_DAYS`.
+- heartbeatctl: `cmd_status` now also enriches `vault backup` and
+  `config backup` (was identity-only) — closes a colateral gap where
+  the two state files existed but never surfaced via the CLI. The
+  doctor and status now read the same data and report consistently.
 - backup: vault backup primitive — `heartbeatctl backup-vault` snapshots
   the vault's markdown subset to a `backup/vault` orphan branch on the
   fork, hourly by default (override via `vault.backup_schedule` in

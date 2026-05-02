@@ -183,6 +183,8 @@ input hasn't changed since the last commit. Restore happens via
 | `backup/vault` | cron `0 * * * *` (override via `vault.backup_schedule`) | Markdown subset of the vault. Excludes `.obsidian/workspace*.json`, cache, `.trash/`, `*.sync-conflict-*` |
 | `backup/config` | cron 03:30 (toggle via `features.config_backup.enabled`) | `agent.yml` (plaintext, no secrets) |
 
+> **Freshness check**: `agentctl doctor` verifies that each backup pushed within its expected cadence × 2 (identity 48h, vault 25h, config 8d) and prints a humanized delta (`pushed 12h ago`). Override the thresholds for one-off runs via `DOCTOR_IDENTITY_MAX_AGE_HOURS`, `DOCTOR_VAULT_MAX_AGE_HOURS`, `DOCTOR_CONFIG_MAX_AGE_DAYS`. `heartbeatctl status` prints the same `last_push` timestamps for all three branches under their respective sections.
+
 ### `backup-identity`
 
 Snapshot the agent's identity subset (login, pairing, plugin config,
