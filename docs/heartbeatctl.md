@@ -154,6 +154,24 @@ All under `/workspace/scripts/heartbeat/`:
 - `logs/cron.log` — crond stderr for schedule-dispatch debugging.
 - `logs/sessions/*.log` — per-run tmux session output (last 20 retained).
 
+## `backup-identity`
+
+Snapshot the agent's identity subset (login, pairing, plugin config,
+settings, optionally age-encrypted `.env`) to the `backup/identity`
+orphan branch on the fork. Idempotent.
+
+```
+heartbeatctl backup-identity                       # default: run
+heartbeatctl backup-identity --configure-key KEY   # set recipient + backup
+heartbeatctl backup-identity --disable             # stop scheduled backups
+heartbeatctl backup-identity --dry-run             # stage + diff, no push
+heartbeatctl backup-identity --gc                  # git gc before push
+```
+
+See the full spec at
+`docs/superpowers/specs/2026-04-22-identity-backup-design.md` for
+triggers, hash-based idempotency, encryption, and restore flow.
+
 ## Exit codes (global)
 
 - `0` — success

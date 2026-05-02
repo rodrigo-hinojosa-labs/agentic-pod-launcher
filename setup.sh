@@ -3,7 +3,7 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/scripts/lib/yaml.sh"
 source "$SCRIPT_DIR/scripts/lib/render.sh"
 source "$SCRIPT_DIR/scripts/lib/plugin-catalog.sh"
@@ -65,6 +65,56 @@ detect_claude_cli() {
     fi
   done
   echo "claude"
+}
+
+# Fetch a user's preferred SSH public key from GitHub.
+# Prefers ssh-ed25519, falls back to ssh-rsa. Returns the full key line
+# (type + base64 + comment) on stdout, or non-zero on failure / no keys.
+#
+# SSH_KEYS_URL_TEMPLATE allows tests to override the endpoint. In production
+# it resolves to https://github.com/<user>.keys.
+fetch_github_ssh_key() {
+  local owner="$1"
+  local url_tpl="${SSH_KEYS_URL_TEMPLATE:-https://github.com/%s.keys}"
+  local url
+  # shellcheck disable=SC2059  # the template IS the format
+  url=$(printf "$url_tpl" "$owner")
+
+  local body
+  if ! body=$(curl -fsSL --max-time 10 "$url" 2>/dev/null); then
+    return 1
+  fi
+  [ -n "$body" ] || return 1
+
+  local key
+  key=$(printf '%s\n' "$body" | grep -m 1 '^ssh-ed25519 ' || true)
+  [ -z "$key" ] && key=$(printf '%s\n' "$body" | grep -m 1 '^ssh-rsa ' || true)
+  [ -n "$key" ] || return 1
+
+  printf '%s\n' "$key"
+}
+
+# Given a path to an agent.yml, populate backup.identity.recipient by
+# fetching the fork owner's GitHub SSH keys. Falls back to leaving it null
+# + warning when no key is available (Fallback A4 — partial backup mode).
+configure_identity_backup() {
+  local agent_yml="$1"
+  local owner
+  owner=$(yq '.scaffold.fork.owner // ""' "$agent_yml" 2>/dev/null)
+
+  if [ -z "$owner" ] || [ "$owner" = "null" ]; then
+    echo "▸ Identity backup: skipping (no scaffold.fork.owner — fork-less agent)"
+    return 0
+  fi
+
+  local key
+  if key=$(fetch_github_ssh_key "$owner"); then
+    yq -i ".backup.identity.recipient = \"$key\"" "$agent_yml"
+    echo "  ✓ identity backup: using SSH key from github.com/$owner.keys"
+  else
+    echo "  ⚠ identity backup: no SSH key at github.com/$owner.keys — running in partial mode (plaintext-only, .env excluded)"
+    echo "    Run 'heartbeatctl backup-identity --configure-key <path>' later to enable .env encryption."
+  fi
 }
 
 # Ensure gum is available. Returns 0 if found or downloaded; 1 otherwise.
@@ -232,6 +282,8 @@ UNINSTALL_YES=false
 UNINSTALL_NUKE=false
 DESTINATION=""
 IN_PLACE=false
+RESTORE_FORK_URL=""
+RESTORE_IDENTITY_KEY=""
 
 print_usage() {
   cat << 'EOF'
@@ -285,6 +337,9 @@ parse_args() {
       --yes|-y) UNINSTALL_YES=true; shift ;;
       --destination) DESTINATION="$2"; shift 2 ;;
       --in-place) IN_PLACE=true; shift ;;
+      --restore-from-fork) RESTORE_FORK_URL="$2"; shift 2 ;;
+      --identity-key) RESTORE_IDENTITY_KEY="$2"; shift 2 ;;
+      --backup) MODE="backup"; shift ;;
       --help|-h) print_usage; exit 0 ;;
       *) echo "Unknown option: $1" >&2; print_usage; exit 1 ;;
     esac
@@ -1312,6 +1367,54 @@ mirror_catalog_to_docker() {
   fi
 }
 
+# Clone the backup/identity branch of a fork and populate <dest>/.state/.
+# If .env.age is present, try to decrypt with standard SSH key paths.
+# Non-fatal if the branch doesn't exist (fresh install path).
+restore_from_fork() {
+  local fork_url="$1"
+  local dest="$2"
+  local tmp
+  tmp=$(mktemp -d)
+
+  if ! git clone --branch backup/identity --single-branch --depth 1 \
+         "$fork_url" "$tmp" >/dev/null 2>&1; then
+    echo "  ⚠ restore: no backup/identity branch at $fork_url — skipping (fresh install)"
+    rm -rf "$tmp"
+    return 0
+  fi
+
+  mkdir -p "$dest/.state/.claude"
+  [ -f "$tmp/.claude.json" ] && cp -a "$tmp/.claude.json" "$dest/.state/.claude.json"
+  if [ -d "$tmp/.claude" ]; then
+    cp -a "$tmp/.claude/." "$dest/.state/.claude/"
+  fi
+
+  if [ -f "$tmp/.env.age" ]; then
+    local decrypted=0
+    local identity_files=(
+      "${RESTORE_IDENTITY_KEY:-}"
+      "$HOME/.ssh/id_ed25519"
+      "$HOME/.ssh/id_rsa"
+    )
+    local idfile
+    for idfile in "${identity_files[@]}"; do
+      [ -z "$idfile" ] && continue
+      [ -f "$idfile" ] || continue
+      if age -d -i "$idfile" -o "$dest/.env" "$tmp/.env.age" 2>/dev/null; then
+        decrypted=1
+        echo "  ✓ restore: decrypted .env with $idfile"
+        break
+      fi
+    done
+    if [ "$decrypted" -eq 0 ]; then
+      echo "  ⚠ restore: .env.age present but could not decrypt — pass --identity-key <path> or regenerate .env via wizard"
+    fi
+  fi
+
+  echo "  ✓ restore: state populated into $dest/.state/"
+  rm -rf "$tmp"
+}
+
 # Copy system files to the destination, move agent.yml/.env, chdir, git init.
 # If IN_PLACE=true or destination == SCRIPT_DIR, skip (user chose in-place mode).
 scaffold_destination() {
@@ -1417,6 +1520,17 @@ scaffold_destination() {
       fi
     )
     echo "  ✓ git init (branch: $branch)"
+  fi
+
+  # Configure identity backup recipient (non-fatal — graceful fallback if
+  # the owner has no SSH key on GitHub).
+  configure_identity_backup "$dest/agent.yml" || true
+
+  # Optional: restore from an existing fork's backup/identity branch
+  if [ -n "${RESTORE_FORK_URL:-}" ]; then
+    echo ""
+    echo "▸ Restoring identity from $RESTORE_FORK_URL..."
+    restore_from_fork "$RESTORE_FORK_URL" "$dest"
   fi
 
   # Redirect all subsequent operations to $dest
@@ -1787,6 +1901,21 @@ uninstall() {
   fi
 }
 
+# Trigger an identity backup inside the container. Requires a scaffolded
+# workspace (agent.yml + a running container with the agent's name).
+cmd_backup() {
+  local agent_yml="$SCRIPT_DIR/agent.yml"
+  [ -f "$agent_yml" ] || { echo "ERROR: agent.yml not found at $agent_yml" >&2; exit 1; }
+  local agent_name
+  agent_name=$(yq '.agent.name' "$agent_yml" 2>/dev/null)
+  [ -z "$agent_name" ] || [ "$agent_name" = "null" ] && {
+    echo "ERROR: cannot read agent.name from agent.yml" >&2
+    exit 1
+  }
+  echo "▸ Triggering identity backup for $agent_name..."
+  docker exec -u agent "$agent_name" heartbeatctl backup-identity
+}
+
 main() {
   parse_args "$@"
   yaml_require_yq || exit 1
@@ -1822,6 +1951,9 @@ main() {
     sync-template)
       sync_template
       ;;
+    backup)
+      cmd_backup
+      ;;
     auto)
       if [ -f "$agent_yml" ]; then
         regenerate
@@ -1832,4 +1964,6 @@ main() {
   esac
 }
 
-main "$@"
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  main "$@"
+fi
