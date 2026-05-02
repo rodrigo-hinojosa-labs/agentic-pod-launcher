@@ -45,3 +45,55 @@ setup() {
   result=$(yaml_array_item "$FIXTURE" '.mcps.atlassian' 0 '.nonexistent')
   [ -z "$result" ]
 }
+
+# yaml_yq_version_ok — guards against Debian-style apt yq (v3) and python-yq.
+# Mocks yq via a PATH override so we can simulate every relevant `yq --version`
+# output without touching the real binary on the host.
+
+@test "yaml_yq_version_ok rejects mikefarah v3" {
+  local mock="$BATS_TEST_TMPDIR/bin"
+  mkdir -p "$mock"
+  cat > "$mock/yq" <<'EOF'
+#!/bin/sh
+echo "yq version 3.4.3"
+EOF
+  chmod +x "$mock/yq"
+  PATH="$mock:$PATH" run yaml_yq_version_ok
+  [ "$status" -ne 0 ]
+}
+
+@test "yaml_yq_version_ok rejects python-yq" {
+  local mock="$BATS_TEST_TMPDIR/bin"
+  mkdir -p "$mock"
+  cat > "$mock/yq" <<'EOF'
+#!/bin/sh
+echo "yq 3.4.3"
+EOF
+  chmod +x "$mock/yq"
+  PATH="$mock:$PATH" run yaml_yq_version_ok
+  [ "$status" -ne 0 ]
+}
+
+@test "yaml_yq_version_ok accepts mikefarah v4" {
+  local mock="$BATS_TEST_TMPDIR/bin"
+  mkdir -p "$mock"
+  cat > "$mock/yq" <<'EOF'
+#!/bin/sh
+echo "yq (https://github.com/mikefarah/yq/) version v4.45.1"
+EOF
+  chmod +x "$mock/yq"
+  PATH="$mock:$PATH" run yaml_yq_version_ok
+  [ "$status" -eq 0 ]
+}
+
+@test "yaml_yq_version_ok future-proof for v5+" {
+  local mock="$BATS_TEST_TMPDIR/bin"
+  mkdir -p "$mock"
+  cat > "$mock/yq" <<'EOF'
+#!/bin/sh
+echo "yq (https://github.com/mikefarah/yq/) version v5.0.0"
+EOF
+  chmod +x "$mock/yq"
+  PATH="$mock:$PATH" run yaml_yq_version_ok
+  [ "$status" -eq 0 ]
+}

@@ -37,6 +37,25 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# Source yaml lib for `yaml_require_yq` — agentctl uses `yq -r` directly
+# (resolve_agent_name, doctor's parse checks, etc.), so a Debian apt-installed
+# yq 3.x or python-yq would silently fail. yaml_require_yq vendors a v4 binary
+# into scripts/vendor/bin/ and prepends it to PATH.
+__agentctl_dir="$(cd "$(dirname "$0")" && pwd)"
+for __agentctl_yaml in \
+    "$__agentctl_dir/lib/yaml.sh" \
+    "$__agentctl_dir/../scripts/lib/yaml.sh"; do
+  if [ -f "$__agentctl_yaml" ]; then
+    # shellcheck disable=SC1090
+    source "$__agentctl_yaml"
+    break
+  fi
+done
+unset __agentctl_dir __agentctl_yaml
+if command -v yaml_require_yq &>/dev/null; then
+  yaml_require_yq || exit 1
+fi
+
 resolve_agent_name() {
   if [ -n "$AGENTCTL_NAME_OVERRIDE" ]; then
     printf '%s\n' "$AGENTCTL_NAME_OVERRIDE"

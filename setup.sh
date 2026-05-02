@@ -135,6 +135,84 @@ ensure_gum() {
   return 1
 }
 
+# Ensure gh is available. Returns 0 if found or downloaded; 1 otherwise.
+# Pattern mirrors ensure_gum / yaml_bootstrap_yq — vendor into scripts/vendor/bin/
+# instead of telling the user to apt/brew install it. Pinned because
+# scaffold_with_fork() depends on flags introduced in gh ≥2.40
+# (`--accept-visibility-change-consequences` on `gh repo edit`).
+#
+# Naming caveats baked in (release-page reality, not arbitrary choices):
+#   - gh tarballs name macOS as "macOS" (capitalized), not "darwin".
+#   - gh uses "armv6" for 32-bit ARM (covers RPi Zero/2/3 armv7l/armv6l).
+#   - macOS asset is .zip; Linux is .tar.gz.
+ensure_gh() {
+  command -v gh &>/dev/null && return 0
+
+  local vendor_dir="$SCRIPT_DIR/scripts/vendor/bin"
+  if [ -x "$vendor_dir/gh" ]; then
+    export PATH="$vendor_dir:$PATH"
+    hash -r 2>/dev/null || true
+    return 0
+  fi
+
+  local version="2.62.0"
+  local os arch pkg_os ext
+  os=$(uname -s | tr '[:upper:]' '[:lower:]')
+  case "$(uname -m)" in
+    x86_64|amd64)  arch="amd64" ;;
+    arm64|aarch64) arch="arm64" ;;
+    armv7l|armv6l) arch="armv6" ;;
+    i386|i686)     arch="386" ;;
+    *)
+      echo "WARN: gh auto-download not supported for arch '$(uname -m)'." >&2
+      return 1
+      ;;
+  esac
+  case "$os" in
+    darwin) pkg_os="macOS"; ext="zip" ;;
+    linux)  pkg_os="linux"; ext="tar.gz" ;;
+    *)
+      echo "WARN: gh auto-download not supported for OS '$os'." >&2
+      return 1
+      ;;
+  esac
+
+  local pkg="gh_${version}_${pkg_os}_${arch}"
+  local url="https://github.com/cli/cli/releases/download/v${version}/${pkg}.${ext}"
+
+  mkdir -p "$vendor_dir"
+  echo "▸ Bootstrapping gh v${version} (${os}/${arch}, one-time, ~10MB)..." >&2
+  if ! curl -sL --fail "$url" -o "$vendor_dir/gh.archive" 2>/dev/null; then
+    echo "WARN: gh download failed ($url)." >&2
+    rm -f "$vendor_dir/gh.archive"
+    return 1
+  fi
+
+  if [ "$ext" = "zip" ]; then
+    if ! command -v unzip &>/dev/null; then
+      echo "WARN: unzip is required to extract gh on macOS — install with 'brew install unzip' or grab gh manually from https://cli.github.com/" >&2
+      rm -f "$vendor_dir/gh.archive"
+      return 1
+    fi
+    (cd "$vendor_dir" && unzip -qo gh.archive && mv "${pkg}/bin/gh" gh && rm -rf "${pkg}")
+  else
+    tar -xzf "$vendor_dir/gh.archive" -C "$vendor_dir" --strip-components=2 "${pkg}/bin/gh" 2>/dev/null \
+      || { tar -xzf "$vendor_dir/gh.archive" -C "$vendor_dir" \
+            && mv "$vendor_dir/${pkg}/bin/gh" "$vendor_dir/gh" \
+            && rm -rf "$vendor_dir/${pkg}"; }
+  fi
+  rm -f "$vendor_dir/gh.archive"
+
+  if [ -x "$vendor_dir/gh" ]; then
+    echo "  ✓ gh installed at $vendor_dir/gh" >&2
+    export PATH="$vendor_dir:$PATH"
+    hash -r 2>/dev/null || true
+    return 0
+  fi
+  echo "WARN: gh extraction failed." >&2
+  return 1
+}
+
 # Decide which wizard helper set to load. Prefer gum when:
 # - stdin is a TTY (interactive user, not piped test input)
 # - and gum can be installed/found
@@ -306,7 +384,7 @@ run_wizard() {
   local template_url="https://github.com/rodrigo-hinojosa-labs/agentic-pod-launcher"
   fork_enabled=$(ask_yn "Create a GitHub fork for this agent?" "y")
   if [ "$fork_enabled" = "true" ]; then
-    require_tool gh
+    ensure_gh || require_tool gh
     local host_lc agent_lc default_fork
     host_lc=$(echo "$deploy_host" | tr '[:upper:]' '[:lower:]')
     agent_lc=$(echo "$agent_name" | tr '[:upper:]' '[:lower:]')
