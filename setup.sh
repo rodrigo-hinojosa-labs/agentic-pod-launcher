@@ -266,7 +266,10 @@ ensure_gh() {
 # Decide which wizard helper set to load. Prefer gum when:
 # - stdin is a TTY (interactive user, not piped test input)
 # - and gum can be installed/found
+# Validators (validate_email, validate_telegram_token, etc.) are pure
+# helpers shared by both wizard variants — sourced unconditionally.
 load_wizard_helpers() {
+  source "$SCRIPT_DIR/scripts/lib/wizard-validators.sh"
   if [ -t 0 ] && ensure_gum; then
     source "$SCRIPT_DIR/scripts/lib/wizard-gum.sh"
   else
@@ -364,14 +367,22 @@ run_wizard() {
   # ── 1. Identity ─────────────────────────────────────
   echo "▸ Agent identity"
   local agent_name agent_display agent_role agent_vibe
-  agent_name=$(ask "Agent name (lowercase, no spaces)" "my-agent")
-  # Force lowercase + strip spaces — used for filenames, branches, service
-  # names. If the user typed otherwise, normalize silently and show it back.
-  local agent_name_raw="$agent_name"
-  agent_name=$(echo "$agent_name" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
-  if [ "$agent_name" != "$agent_name_raw" ]; then
-    echo "  ↳ normalized to: $agent_name"
-  fi
+  # Lowercase + strip spaces first so the user's "My Agent" still passes
+  # validation as "my-agent" (typed for them by the normalizer). The
+  # validator then enforces hyphens-only / 1..63 chars / no leading-trailing
+  # hyphen / no double-hyphen — surfacing a clear error instead of failing
+  # silently in `docker compose build` later.
+  local _raw_input
+  while true; do
+    _raw_input=$(ask "Agent name (lowercase, no spaces)" "my-agent")
+    agent_name=$(echo "$_raw_input" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+    if [ "$agent_name" != "$_raw_input" ]; then
+      echo "  ↳ normalized to: $agent_name"
+    fi
+    if validate_agent_name "$agent_name"; then
+      break
+    fi
+  done
   agent_display=$(ask "Display name (with emoji)" "MyAgent 🤖")
   agent_role=$(ask "Role description" "Admin assistant for my ecosystem")
   agent_vibe=$(ask "Vibe / personality (one line)" "Direct, useful, no drama")
@@ -389,8 +400,8 @@ run_wizard() {
   elif [ -L /etc/localtime ]; then
     tz_default=$(readlink /etc/localtime | sed 's|.*zoneinfo/||')
   fi
-  user_tz=$(ask "Timezone" "$tz_default")
-  user_email=$(ask_required "Primary email")
+  user_tz=$(ask_validated "Timezone" validate_timezone "$tz_default")
+  user_email=$(ask_validated "Primary email" validate_email)
   user_lang=$(ask_choice "Preferred language" "en" "es en mixed")
   echo ""
 
@@ -473,7 +484,14 @@ run_wizard() {
     echo "  Heartbeat will use a dedicated bot (separate from the chat plugin)."
     echo "  Create it at @BotFather and copy its token."
     echo "  (Press Enter to skip — fill NOTIFY_BOT_TOKEN in .env later.)"
-    notify_bot_token=$(ask_secret "Heartbeat bot token (or skip)")
+    while true; do
+      notify_bot_token=$(ask_secret "Heartbeat bot token (or skip)")
+      # Empty = skip (fill .env later). Non-empty must look like a real token.
+      [ -z "$notify_bot_token" ] && break
+      if validate_telegram_token "$notify_bot_token"; then
+        break
+      fi
+    done
 
     # If we got a token, offer to auto-discover the chat id via the Telegram
     # Bot API's getUpdates endpoint. The user just needs to DM the bot once.
@@ -589,8 +607,8 @@ run_wizard() {
     while true; do
       local ws_name ws_url ws_email ws_token
       ws_name=$(ask_required "Workspace alias (e.g. personal, work) — unique identifier for this Atlassian account")
-      ws_url=$(ask_required "Atlassian URL (e.g. https://yourco.atlassian.net)")
-      ws_email=$(ask "Email" "$user_email")
+      ws_url=$(ask_validated "Atlassian URL (e.g. https://yourco.atlassian.net)" validate_url)
+      ws_email=$(ask_validated "Email" validate_email "$user_email")
       echo "  API token for this workspace — generate one at"
       echo "  https://id.atlassian.com/manage-profile/security/api-tokens"
       local _upper_hint
@@ -622,7 +640,7 @@ ATLASSIAN_${upper}_TOKEN=${ws_token}
   local github_enabled="false" github_email="" github_pat=""
   if [ "$(ask_yn 'Enable GitHub MCP?' 'n')" = "true" ]; then
     github_enabled="true"
-    github_email=$(ask "GitHub account email" "$user_email")
+    github_email=$(ask_validated "GitHub account email" validate_email "$user_email")
     echo "  This is the PAT the GitHub MCP server uses to call the API — it is"
     echo "  independent from any fork token you may have given earlier."
     echo "  (Press Enter to skip — fill GITHUB_PAT in .env later.)"
@@ -637,7 +655,7 @@ ATLASSIAN_${upper}_TOKEN=${ws_token}
   hb_interval="30m"
   hb_prompt="Status check — return a short plain-text report (uptime, notable issues). No tool use; your stdout is forwarded verbatim to the notifier."
   if [ "$hb_enabled" = "true" ]; then
-    hb_interval=$(ask "Default interval" "30m")
+    hb_interval=$(ask_validated "Default interval (Nm/Nh or 5-field cron)" validate_cron_or_interval "30m")
     hb_prompt=$(ask "Default prompt" "Status check — return a short plain-text report (uptime, notable issues). No tool use; your stdout is forwarded verbatim to the notifier.")
   fi
   echo ""

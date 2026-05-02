@@ -67,3 +67,49 @@ ask_choice() {
     echo "  must be one of: $options" >&2
   done
 }
+
+# ask_validated PROMPT VALIDATOR_FN [DEFAULT] → user input that passes
+# the validator. Re-prompts on failure; the validator prints its own
+# stderr hint, so the user always sees why their input was rejected.
+# Empty input maps to the default if one is given; otherwise it's
+# rejected (the prompt loops with "(required)").
+ask_validated() {
+  local prompt="$1" validator="$2" default="${3:-}" answer
+  while true; do
+    if [ -n "$default" ]; then
+      read -r -p "$prompt [$default]: " answer >&2 2>&1
+      answer="${answer:-$default}"
+    else
+      read -r -p "$prompt: " answer >&2 2>&1
+    fi
+    if [ -z "$answer" ]; then
+      echo "  (required)" >&2
+      continue
+    fi
+    if "$validator" "$answer"; then
+      echo "$answer"
+      return 0
+    fi
+  done
+}
+
+# ask_secret_validated PROMPT VALIDATOR_FN → secret input (no echo) that
+# passes the validator. Use for tokens (Telegram, Atlassian API key, GitHub
+# PAT) where format is well-defined. Empty is rejected — call ask_secret
+# directly if optional.
+ask_secret_validated() {
+  local prompt="$1" validator="$2" answer
+  while true; do
+    read -r -s -p "$prompt: " answer >&2 2>&1
+    echo "" >&2
+    if [ -z "$answer" ]; then
+      echo "  (required)" >&2
+      continue
+    fi
+    if "$validator" "$answer" >/dev/null 2>&1; then
+      echo "$answer"
+      return 0
+    fi
+    "$validator" "$answer" >/dev/null  # surface the hint
+  done
+}
