@@ -36,6 +36,8 @@ TOKEN_HEALTH_LIB_DIR="$LIB_DIR"
 [ -f "$LIB_DIR/safe-exec.sh" ]    && source "$LIB_DIR/safe-exec.sh"
 # shellcheck source=/dev/null
 [ -f "$LIB_DIR/token-health.sh" ] && source "$LIB_DIR/token-health.sh"
+# shellcheck source=/dev/null
+[ -f "$LIB_DIR/mcp-health.sh" ]   && source "$LIB_DIR/mcp-health.sh"
 
 cmd_help() {
   cat <<EOF
@@ -47,7 +49,8 @@ Read:
   show                    Dump heartbeat.conf + installed crontab + agent.yml section.
   doctor                  Diagnose container health (workspace, agent.yml, .env perms,
                           crond, tmux session, claude credentials, channel plugin,
-                          vault, token health). Exit 0 = healthy, 1 = warnings, 2 = errors.
+                          vault, token health, MCP health). Exit 0 = healthy,
+                          1 = warnings, 2 = errors.
   token-health            Probe upstream APIs for every configured token (Telegram,
                           GitHub, Atlassian, Firecrawl). Same exit-code contract as
                           doctor. Subset of `doctor` for scripted use.
@@ -577,6 +580,21 @@ cmd_doctor() {
       1) errors=$((errors + 1)) ;;       # at least one rejected token
       2) warnings=$((warnings + 1)) ;;   # transient — likely retryable
     esac
+  fi
+
+  # 11. MCP health. Two complementary layers:
+  #   - env validation: are the secrets each MCP needs actually in .env?
+  #     Cheap, deterministic, runs even pre-/login.
+  #   - runtime status: `claude mcp list --json` for live connection state.
+  #     Skipped if claude isn't authenticated yet.
+  # An MCP with missing env is unfixable until .env is patched — caller
+  # should treat as error. A runtime failure can be transient (server
+  # restart, plugin install storm) — still error since the user notices.
+  if command -v mcp_health_summary >/dev/null 2>&1; then
+    printf '\n'
+    local mh_rc=0
+    mcp_health_summary "$AGENT_YML" "$WORKSPACE/.env" "$WORKSPACE/.mcp.json" || mh_rc=$?
+    [ "$mh_rc" = "1" ] && errors=$((errors + 1))
   fi
 
   printf '\n'
