@@ -150,6 +150,13 @@ RUN chmod +x /opt/agent-admin/entrypoint.sh \
 COPY scripts/heartbeatctl /opt/agent-admin/scripts/heartbeatctl
 COPY scripts/lib/interval.sh /opt/agent-admin/scripts/lib/interval.sh
 COPY scripts/lib/state.sh    /opt/agent-admin/scripts/lib/state.sh
+# Fault-tolerance primitives + the per-subsystem health libs that
+# compose on top. Sourced best-effort by heartbeatctl and
+# start_services.sh — keep in sync with the source guards there if
+# the path ever moves.
+COPY scripts/lib/safe-exec.sh    /opt/agent-admin/scripts/lib/safe-exec.sh
+COPY scripts/lib/token-health.sh /opt/agent-admin/scripts/lib/token-health.sh
+COPY scripts/lib/mcp-health.sh   /opt/agent-admin/scripts/lib/mcp-health.sh
 RUN chmod +x /opt/agent-admin/scripts/heartbeatctl \
   && ln -s /opt/agent-admin/scripts/heartbeatctl /usr/local/bin/heartbeatctl
 
