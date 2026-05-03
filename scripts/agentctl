@@ -198,6 +198,76 @@ _check_backup_freshness() {
   fi
 }
 
+# Doctor check for one token-health probe. Reads
+# <workspace>/scripts/heartbeat/token-health/<id>.json and reports the
+# probe outcome:
+#   - ⚠ when the file is missing (probe never ran)
+#   - ⚠ when last_check is older than max_age_hours
+#   - ✗ when status is auth_fail (token expired/revoked)
+#   - ⚠ when status is network (transient — degrade not fatal)
+#   - ⊝ when status is skipped (token not configured for this kind)
+#   - ✓ when status is ok
+# $1 = id slug (e.g. "github", "telegram", "atlassian-work"),
+# $2 = label shown in output, $3 = max_hours threshold for staleness.
+_check_token_health() {
+  local id="$1" label="$2" max_hours="$3"
+  local state_file="$WORKSPACE/scripts/heartbeat/token-health/${id}.json"
+
+  if [ ! -f "$state_file" ]; then
+    _doctor_warn "$label: never probed yet" "agentctl heartbeat token-check"
+    return
+  fi
+
+  local status last_check error latency http_code
+  status=$(jq -r '.status // ""' "$state_file" 2>/dev/null)
+  last_check=$(jq -r '.last_check // ""' "$state_file" 2>/dev/null)
+  error=$(jq -r '.error // ""' "$state_file" 2>/dev/null)
+  latency=$(jq -r '.latency_ms // 0' "$state_file" 2>/dev/null)
+  http_code=$(jq -r '.http_code // ""' "$state_file" 2>/dev/null)
+
+  if [ -z "$status" ] || [ -z "$last_check" ]; then
+    _doctor_warn "$label: state file present but malformed" "agentctl heartbeat token-check"
+    return
+  fi
+
+  local then now delta delta_max human
+  then=$(_epoch_from_iso "$last_check")
+  now=$(date -u +%s)
+  if [ -z "$then" ]; then
+    _doctor_warn "$label: could not parse last_check '$last_check'"
+    return
+  fi
+  delta=$((now - then))
+  delta_max=$((max_hours * 3600))
+  human=$(_humanize_delta "$delta")
+
+  if [ "$delta" -gt "$delta_max" ]; then
+    _doctor_warn "$label: last probe ${human} ago — stale (>${max_hours}h)" \
+      "agentctl heartbeat token-check (or check the cron is running)"
+    return
+  fi
+
+  case "$status" in
+    ok)
+      _doctor_pass "$label: ok (probed ${human} ago, ${latency}ms)"
+      ;;
+    auth_fail)
+      _doctor_fail "$label: auth-fail (HTTP ${http_code}, probed ${human} ago)" \
+        "Regenerate the token, update .env, then ./setup.sh --regenerate"
+      ;;
+    network)
+      _doctor_warn "$label: network error (${error}, probed ${human} ago)" \
+        "Likely transient. Check container has outbound HTTPS."
+      ;;
+    skipped)
+      _doctor_skip "$label" "${error:-token not configured}"
+      ;;
+    *)
+      _doctor_warn "$label: unknown status '$status'"
+      ;;
+  esac
+}
+
 # Resolve the absolute path to the agent's workspace on the host. Used
 # by freshness checks to read state files via the bind-mount instead of
 # round-tripping through 'docker exec cat'. Falls back to cwd when
@@ -409,6 +479,30 @@ cmd_doctor() {
     _check_backup_freshness "$agent" identity "$id_max"
     _check_backup_freshness "$agent" vault "$vault_max"
     _check_backup_freshness "$agent" config "$config_max"
+  fi
+
+  # 16-18. Token health — read state files written by the hourly
+  # check_token_health.sh cron and surface auth failures (token expired
+  # or revoked) before the user notices via a broken Claude tool call.
+  # github + telegram are single tokens; atlassian loops by workspace
+  # because each fork has its own state file (atlassian-work, atlassian-personal).
+  if [ -n "$WORKSPACE" ] && [ -d "$WORKSPACE/scripts/heartbeat" ]; then
+    local th_max="${DOCTOR_TOKEN_MAX_AGE_HOURS:-2}"
+    local th_dir="$WORKSPACE/scripts/heartbeat/token-health"
+    if [ -d "$th_dir" ]; then
+      [ -f "$th_dir/github.json" ] \
+        && _check_token_health github "Token github" "$th_max"
+      [ -f "$th_dir/telegram.json" ] \
+        && _check_token_health telegram "Token telegram" "$th_max"
+      local atl_file
+      for atl_file in "$th_dir"/atlassian-*.json; do
+        [ -f "$atl_file" ] || continue
+        local atl_id atl_name
+        atl_id=$(basename "$atl_file" .json)
+        atl_name="${atl_id#atlassian-}"
+        _check_token_health "$atl_id" "Token atlassian-$atl_name" "$th_max"
+      done
+    fi
   fi
 
   echo ""

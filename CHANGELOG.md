@@ -3,6 +3,25 @@
 ## [Unreleased]
 
 ### Added
+- token-health: hourly probe of free-tier auth endpoints to catch
+  expired/revoked tokens *before* Claude tries to use them and dies
+  with a 401 mid-task. Three probes today: GitHub PAT (`/user`),
+  Telegram bot (`/getMe`), Atlassian token per workspace
+  (`/rest/api/3/myself`). Firecrawl + Google Calendar are deliberately
+  skipped from cron (cost + OAuth refresh fragility). State files at
+  `<workspace>/scripts/heartbeat/token-health/<id>.json` mirror the
+  backup-freshness pattern; `agentctl doctor` gains 3 checks (16-18)
+  that surface auth failures as ✗ and stale probes as ⚠. Warnings
+  flow through the configured heartbeat notifier with a 24h dedup so
+  Telegram doesn't get 168 reminders for a week-old expired PAT.
+  Override the cadence via `features.token_health.schedule`; opt out
+  with `features.token_health.enabled=false`. New file
+  `docker/scripts/lib/token_health.sh` (probes + state I/O), new
+  runner `docker/scripts/check_token_health.sh`, new heartbeatctl
+  subcommand `token-check` (also via `agentctl heartbeat token-check`).
+  Status enrichment shows one line per probed token. The runner never
+  modifies `.mcp.json` or disables MCPs — purely observational, so a
+  flaky probe can't degrade the running session.
 - doctor: backup-freshness checks. `agentctl doctor` now reads the three
   state files at `<workspace>/scripts/heartbeat/{identity,vault,config}-
   backup.json` and reports `pushed Nh ago` for each. Marks the check as

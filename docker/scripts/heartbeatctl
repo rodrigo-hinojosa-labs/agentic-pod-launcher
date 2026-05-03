@@ -30,11 +30,14 @@ LIB_DIR="${HEARTBEATCTL_LIB_DIR:-/opt/agent-admin/scripts/lib}"
 [ -f "$LIB_DIR/backup_vault.sh" ]    && source "$LIB_DIR/backup_vault.sh"
 # shellcheck source=/dev/null
 [ -f "$LIB_DIR/backup_config.sh" ]   && source "$LIB_DIR/backup_config.sh"
+# shellcheck source=/dev/null
+[ -f "$LIB_DIR/token_health.sh" ]    && source "$LIB_DIR/token_health.sh"
 
 IDENTITY_STATE_DIR="${IDENTITY_STATE_DIR:-$WORKSPACE/.state}"
 IDENTITY_BACKUP_STATE_FILE="$HEARTBEAT_DIR/identity-backup.json"
 VAULT_BACKUP_STATE_FILE="$HEARTBEAT_DIR/vault-backup.json"
 CONFIG_BACKUP_STATE_FILE="$HEARTBEAT_DIR/config-backup.json"
+TOKEN_HEALTH_DIR="$HEARTBEAT_DIR/token-health"
 
 cmd_help() {
   cat <<EOF
@@ -77,6 +80,13 @@ Backup:
                           the 'backup/config' branch. Restored first by
                           setup.sh --restore-from-fork so the agent.yml is
                           available before identity + vault are pulled.
+
+Token health:
+  token-check             Probe configured token endpoints (GitHub PAT, Telegram
+                          bot, Atlassian) and write state files to
+                          scripts/heartbeat/token-health/. Cron-driven hourly;
+                          this subcommand triggers an ad-hoc probe. Warnings
+                          (debounced 24h) flow through the configured notifier.
 
 Exit codes:
   0  success
@@ -209,13 +219,28 @@ CONF
     config_backup_line="$cfg_schedule /usr/local/bin/heartbeatctl backup-config >> /workspace/scripts/heartbeat/logs/backup-config.log 2>&1"
   fi
 
+  # Optional fifth crontab line for hourly token-health probe. Default
+  # cadence is once per hour because GitHub/Telegram/Atlassian tokens
+  # rarely change state — hourly catches expiry within an hour without
+  # spamming free-tier rate limits. Opt out via
+  # features.token_health.enabled=false.
+  local token_health_line=""
+  local th_enabled th_schedule
+  th_enabled=$(_yq '.features.token_health.enabled')
+  [ -z "$th_enabled" ] && th_enabled="true"
+  th_schedule=$(_yq '.features.token_health.schedule // "0 * * * *"')
+  if [ "$th_enabled" = "true" ]; then
+    token_health_line="$th_schedule /opt/agent-admin/scripts/check_token_health.sh >> /workspace/scripts/heartbeat/logs/token-health.log 2>&1"
+  fi
+
   local tmp_crontab="${CRONTAB_FILE}.tmp"
   if ! cat > "$tmp_crontab" <<CT
-# Cron for in-container agent heartbeat + identity/vault/config backup. Managed by heartbeatctl.
+# Cron for in-container agent heartbeat + identity/vault/config backup + token-health. Managed by heartbeatctl.
 $line
 ${backup_line}
 ${vault_backup_line}
 ${config_backup_line}
+${token_health_line}
 CT
   then
     rm -f "$tmp_crontab"
@@ -321,6 +346,25 @@ cmd_status() {
     bc_commit=$(jq -r '.last_commit // ""' "$CONFIG_BACKUP_STATE_FILE" 2>/dev/null)
     bc_push=$(jq -r '.last_push // ""' "$CONFIG_BACKUP_STATE_FILE" 2>/dev/null)
     echo "config backup:   commit=${bc_commit:0:8} last_push=${bc_push:-never}"
+  fi
+
+  # Token-health summary (one line per probed token). Emits nothing
+  # when no probes have run yet (first hour after a fresh boot).
+  if [ -d "$TOKEN_HEALTH_DIR" ]; then
+    local th_file emitted=0
+    for th_file in "$TOKEN_HEALTH_DIR"/*.json; do
+      [ -f "$th_file" ] || continue
+      [ "$emitted" -eq 0 ] && { echo; echo "token health:"; emitted=1; }
+      local th_id th_status th_check th_lat th_err
+      th_id=$(jq -r '.id // ""'         "$th_file" 2>/dev/null)
+      th_status=$(jq -r '.status // ""' "$th_file" 2>/dev/null)
+      th_check=$(jq -r '.last_check // ""' "$th_file" 2>/dev/null)
+      th_lat=$(jq -r '.latency_ms // 0' "$th_file" 2>/dev/null)
+      th_err=$(jq -r '.error // ""'     "$th_file" 2>/dev/null)
+      printf '  %-22s %-9s last_check=%s lat=%sms%s\n' \
+        "$th_id" "$th_status" "${th_check:-never}" "$th_lat" \
+        "$([ -n "$th_err" ] && [ "$th_err" != "null" ] && printf ' err=%s' "$th_err")"
+    done
   fi
 }
 
@@ -827,6 +871,23 @@ cmd_drop_plugin() {
   echo "heartbeatctl: dropped $spec from agent.yml — run 'heartbeatctl kick-channel' to apply"
 }
 
+# cmd_token_check — ad-hoc trigger for the token-health probe. Same
+# script as the cron tick, just invoked manually. Useful right after
+# updating .env or when doctor reports a stale state file.
+cmd_token_check() {
+  local runner="/opt/agent-admin/scripts/check_token_health.sh"
+  if [ ! -x "$runner" ]; then
+    # Fallback for tests where the script isn't installed at the
+    # canonical path.
+    runner="${HEARTBEATCTL_TOKEN_RUNNER:-$runner}"
+  fi
+  if [ ! -x "$runner" ]; then
+    echo "heartbeatctl: token-check runner not found ($runner)" >&2
+    return 2
+  fi
+  "$runner"
+}
+
 main() {
   local sub="${1:-help}"; shift || true
   case "$sub" in
@@ -843,6 +904,7 @@ main() {
     backup-identity) cmd_backup_identity "$@" ;;
     backup-vault)    cmd_backup_vault "$@" ;;
     backup-config)   cmd_backup_config "$@" ;;
+    token-check)     cmd_token_check ;;
     set-interval) cmd_set_interval "${1:-}" ;;
     set-prompt)   cmd_set_prompt   "${1:-}" ;;
     set-notifier) cmd_set_notifier "${1:-}" ;;
