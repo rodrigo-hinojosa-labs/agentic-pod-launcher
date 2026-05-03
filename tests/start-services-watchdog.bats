@@ -103,3 +103,56 @@ STUB
   PATH="$TMP_TEST_DIR/bin:$PATH" run channel_plugin_alive
   [ "$status" -eq 0 ]
 }
+
+# Regression: in May 2026, _trigger_identity_backup ran heartbeatctl
+# synchronously without GIT_TERMINAL_PROMPT=0. When the fork URL needed
+# auth and .env had no PAT yet (fresh install pre-/login), git clone
+# blocked on a stdin username prompt → the watchdog deadlocked → tmux
+# never respawned → user couldn't /login. Fix: background + 90s
+# timeout + pgrep guard.
+
+@test "_trigger_identity_backup returns immediately when heartbeatctl is slow" {
+  # Stub heartbeatctl that sleeps forever and pgrep that always says
+  # "no prior backup running". _trigger_identity_backup must detach
+  # via & and return within a fraction of a second.
+  mkdir -p "$TMP_TEST_DIR/bin"
+  cat > "$TMP_TEST_DIR/bin/heartbeatctl" <<'STUB'
+#!/bin/bash
+sleep 30
+STUB
+  chmod +x "$TMP_TEST_DIR/bin/heartbeatctl"
+  cat > "$TMP_TEST_DIR/bin/pgrep" <<'STUB'
+#!/bin/bash
+exit 1
+STUB
+  chmod +x "$TMP_TEST_DIR/bin/pgrep"
+
+  local start end
+  start=$(date +%s)
+  PATH="$TMP_TEST_DIR/bin:$PATH" _trigger_identity_backup "test-reason"
+  end=$(date +%s)
+  # Must complete in under 3s; the actual backup is detached.
+  [ $((end - start)) -lt 3 ]
+}
+
+@test "_trigger_identity_backup is reentrancy-guarded by pgrep" {
+  # When pgrep says "a previous heartbeatctl backup-identity is still
+  # running", the trigger must short-circuit (no new spawn).
+  mkdir -p "$TMP_TEST_DIR/bin"
+  cat > "$TMP_TEST_DIR/bin/heartbeatctl" <<'STUB'
+#!/bin/bash
+echo "should not be called" > "$BATS_TEST_TMPDIR/called"
+STUB
+  chmod +x "$TMP_TEST_DIR/bin/heartbeatctl"
+  cat > "$TMP_TEST_DIR/bin/pgrep" <<'STUB'
+#!/bin/bash
+echo "999"
+exit 0
+STUB
+  chmod +x "$TMP_TEST_DIR/bin/pgrep"
+
+  PATH="$TMP_TEST_DIR/bin:$PATH" _trigger_identity_backup "test-reentry"
+  # Give the would-be-detached subshell time to (not) run.
+  sleep 1
+  [ ! -f "$BATS_TEST_TMPDIR/called" ]
+}

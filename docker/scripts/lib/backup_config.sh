@@ -4,6 +4,18 @@
 # this branch first to recover the agent.yml + run setup.sh --regenerate
 # before pulling identity and vault.
 
+# Non-interactive git wrapper (60s cap when timeout(1) is available).
+# Same rationale as _identity_git / _vault_git: prevents a
+# missing-credential prompt from deadlocking the cron / watchdog.
+# timeout(1) absence is tolerated for portability with macOS host tests.
+_config_git() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 60 env GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/true git "$@"
+  else
+    env GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/true git "$@"
+  fi
+}
+
 # Stable hash over agent.yml content. Trivial — single file, no walk.
 config_hash() {
   local agent_yml="${1:?config_hash: need agent.yml path}"
@@ -36,9 +48,9 @@ config_prepare_clone() {
   mkdir -p "$cache_base"
 
   if [ ! -d "$dir/.git" ]; then
-    git clone --no-checkout "$fork_url" "$dir" >/dev/null 2>&1
+    _config_git clone --no-checkout "$fork_url" "$dir" >/dev/null 2>&1
   fi
-  (cd "$dir" && git fetch origin backup/config >/dev/null 2>&1 || true)
+  (cd "$dir" && _config_git fetch origin backup/config >/dev/null 2>&1 || true)
   printf '%s\n' "$dir"
 }
 
@@ -81,7 +93,7 @@ config_commit_and_push() {
   msg="config snapshot $ts"
   git -C "$stage" -c user.email=config-backup@localhost -c user.name=config-backup \
        commit -m "$msg" >/dev/null
-  if ! git -C "$stage" push origin backup/config >/dev/null 2>&1; then
+  if ! _config_git -C "$stage" push origin backup/config >/dev/null 2>&1; then
     echo "backup-config: push failed" >&2
     if [ "$orphan" -eq 1 ]; then
       rm -rf "$stage"

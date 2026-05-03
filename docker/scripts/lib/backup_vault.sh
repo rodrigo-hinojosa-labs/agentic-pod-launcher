@@ -4,6 +4,19 @@
 # .state/.vault). Bind-mount maps that to /home/agent/.vault inside the
 # container — vault_resolve_root handles the translation.
 
+# Non-interactive git wrapper (60s cap when timeout(1) is available).
+# Same rationale as _identity_git in backup_identity.sh: cron +
+# watchdog can't survive a git stdin prompt when fork creds are
+# missing. timeout(1) absence is tolerated for portability with macOS
+# host tests.
+_vault_git() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 60 env GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/true git "$@"
+  else
+    env GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/true git "$@"
+  fi
+}
+
 # Resolve the in-container vault root from agent.yml.
 # stdout: absolute path under /home/agent. Empty if vault not enabled.
 vault_resolve_root() {
@@ -110,9 +123,9 @@ vault_prepare_clone() {
   mkdir -p "$cache_base"
 
   if [ ! -d "$dir/.git" ]; then
-    git clone --no-checkout "$fork_url" "$dir" >/dev/null 2>&1
+    _vault_git clone --no-checkout "$fork_url" "$dir" >/dev/null 2>&1
   fi
-  (cd "$dir" && git fetch origin backup/vault >/dev/null 2>&1 || true)
+  (cd "$dir" && _vault_git fetch origin backup/vault >/dev/null 2>&1 || true)
   printf '%s\n' "$dir"
 }
 
@@ -168,7 +181,7 @@ vault_commit_and_push() {
   msg="vault snapshot $ts"
   git -C "$stage" -c user.email=vault-backup@localhost -c user.name=vault-backup \
        commit -m "$msg" >/dev/null
-  if ! git -C "$stage" push origin backup/vault >/dev/null 2>&1; then
+  if ! _vault_git -C "$stage" push origin backup/vault >/dev/null 2>&1; then
     echo "backup-vault: push failed" >&2
     if [ "$orphan" -eq 1 ]; then
       rm -rf "$stage"

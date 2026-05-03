@@ -214,13 +214,27 @@ ensure_all_plugins_installed() {
 }
 
 # Best-effort backup trigger. Never fails the caller even if backup errors.
+#
+# Background + 90s outer timeout because the watchdog must NEVER block
+# on backup IO. The lib already wraps each git call with timeout 60 +
+# GIT_TERMINAL_PROMPT=0, but a hung TLS handshake before git starts, or
+# heartbeatctl's own bookkeeping (state file write, jq), could still
+# stall — this is the defense in depth. The pgrep guard avoids stacking
+# multiple concurrent triggers when watchdog ticks fire while a slow
+# clone is still finishing.
 _trigger_identity_backup() {
   local reason="$1"
-  if command -v heartbeatctl >/dev/null 2>&1; then
-    heartbeatctl backup-identity >/dev/null 2>&1 \
-      && log "identity backup triggered ($reason)" \
-      || log "identity backup trigger failed ($reason) — non-fatal"
+  command -v heartbeatctl >/dev/null 2>&1 || return 0
+  if pgrep -f "heartbeatctl backup-identity" >/dev/null 2>&1; then
+    return 0
   fi
+  (
+    if timeout 90 heartbeatctl backup-identity >/dev/null 2>&1; then
+      log "identity backup triggered ($reason)"
+    else
+      log "identity backup trigger failed ($reason) — non-fatal"
+    fi
+  ) &
 }
 
 # apply_plugin_post_hooks SPEC CACHE — run any per-plugin post-install hook
