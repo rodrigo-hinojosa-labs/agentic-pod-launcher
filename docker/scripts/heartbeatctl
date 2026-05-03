@@ -28,6 +28,14 @@ VAULT_ROOT="${HEARTBEATCTL_VAULT_ROOT:-${HOME:-/home/agent}/.vault}"
 [ -f "$LIB_DIR/interval.sh" ] && source "$LIB_DIR/interval.sh"
 # shellcheck source=/dev/null
 [ -f "$LIB_DIR/state.sh" ]    && source "$LIB_DIR/state.sh"
+# Auxiliary subsystem libs (safe-exec + token-health). Each is loaded
+# best-effort so missing files (e.g. partial test fixtures) don't break
+# the core heartbeatctl commands.
+TOKEN_HEALTH_LIB_DIR="$LIB_DIR"
+# shellcheck source=/dev/null
+[ -f "$LIB_DIR/safe-exec.sh" ]    && source "$LIB_DIR/safe-exec.sh"
+# shellcheck source=/dev/null
+[ -f "$LIB_DIR/token-health.sh" ] && source "$LIB_DIR/token-health.sh"
 
 cmd_help() {
   cat <<EOF
@@ -39,7 +47,10 @@ Read:
   show                    Dump heartbeat.conf + installed crontab + agent.yml section.
   doctor                  Diagnose container health (workspace, agent.yml, .env perms,
                           crond, tmux session, claude credentials, channel plugin,
-                          vault). Exit 0 = healthy, 1 = warnings, 2 = errors.
+                          vault, token health). Exit 0 = healthy, 1 = warnings, 2 = errors.
+  token-health            Probe upstream APIs for every configured token (Telegram,
+                          GitHub, Atlassian, Firecrawl). Same exit-code contract as
+                          doctor. Subset of `doctor` for scripted use.
 
 Control:
   test   [--prompt "..."] Run one heartbeat now (trigger=manual).
@@ -551,6 +562,23 @@ cmd_doctor() {
     printf '  ⊝ Vault not seeded (disabled in agent.yml, or first boot pending)\n'
   fi
 
+  # 10. Token health. Probes upstream APIs (Telegram, GitHub, Atlassian,
+  # Firecrawl) for every credential declared in agent.yml + present in
+  # .env. Each probe is a single sub-second call wrapped in safe_curl,
+  # so the whole section finishes in <5s on healthy networks. A rejected
+  # token surfaces here BEFORE the user sees ghosting / "Bad credentials"
+  # buried in claude.log.
+  if command -v token_health_summary >/dev/null 2>&1 && [ -f "$AGENT_YML" ]; then
+    printf '\nToken health:\n'
+    local th_rc=0
+    token_health_summary "$AGENT_YML" "$WORKSPACE/.env" || th_rc=$?
+    case "$th_rc" in
+      0) : ;;
+      1) errors=$((errors + 1)) ;;       # at least one rejected token
+      2) warnings=$((warnings + 1)) ;;   # transient — likely retryable
+    esac
+  fi
+
   printf '\n'
   if [ "$errors" -gt 0 ] || [ "$warnings" -gt 0 ]; then
     printf '%d error(s), %d warning(s).\n' "$errors" "$warnings"
@@ -563,6 +591,23 @@ cmd_doctor() {
   return 0
 }
 
+# cmd_token_health — public-facing wrapper around token_health_summary.
+# Same contract as cmd_doctor: 0=ok, 1=rejected, 2=transient. Useful as
+# a scripted check (e.g. cron, CI) that probes credentials independently
+# of the rest of doctor.
+cmd_token_health() {
+  if ! command -v token_health_summary >/dev/null 2>&1; then
+    echo "heartbeatctl: token-health library not loaded ($LIB_DIR/token-health.sh missing?)" >&2
+    return 2
+  fi
+  if [ ! -f "$AGENT_YML" ]; then
+    echo "heartbeatctl: $AGENT_YML missing — cannot determine which tokens to probe" >&2
+    return 2
+  fi
+  printf 'Token health:\n'
+  token_health_summary "$AGENT_YML" "$WORKSPACE/.env"
+}
+
 main() {
   local sub="${1:-help}"; shift || true
   case "$sub" in
@@ -572,6 +617,7 @@ main() {
     status) cmd_status "$@" ;;
     logs)   cmd_logs   "$@" ;;
     doctor) cmd_doctor "$@" ;;
+    token-health) cmd_token_health "$@" ;;
     pause)  cmd_pause ;;
     resume) cmd_resume ;;
     test)   cmd_test "$@" ;;

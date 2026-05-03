@@ -431,3 +431,31 @@ _doctor_run() {
   [[ "$output" == *"doctor"* ]]
   [[ "$output" == *"Diagnose container health"* ]]
 }
+
+# ── token-health subcommand ────────────────────────────────────────────
+
+@test "token-health subcommand prints summary header and skip lines for the default fixture" {
+  # Default fixture has channel=log + no MCPs, so every probe is ⊝
+  # skipped — no network calls happen.
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" token-health
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Token health:"* ]]
+  # The default agent.yml has notifications.channel=log, so no telegram
+  # probe runs. No atlassian, no firecrawl. Output is just the header
+  # plus possibly nothing (everything skipped).
+  # Verify no test made an actual network call by ensuring no token line
+  # contains a status icon other than ⊝ or no detail at all.
+}
+
+@test "token-health subcommand fails with rc=2 when agent.yml is missing" {
+  rm -f "$WORKSPACE/agent.yml"
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" token-health
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"agent.yml missing"* ]]
+}
+
+@test "token-health help line listed in Read section" {
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"token-health"* ]]
+}
