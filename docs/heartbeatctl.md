@@ -241,6 +241,81 @@ restore — `vault.path` and other rendered-file inputs all live in
 `agent.yml`. Disable scheduled config backups via
 `features.config_backup.enabled=false` in `agent.yml`.
 
+## Token health
+
+Periodically probes the free-tier auth endpoints of every configured
+external token, so you find out a PAT expired *before* Claude tries to
+use it and dies with a 401 mid-task.
+
+Probed endpoints (free, no quota cost):
+
+| Token              | Endpoint                                              | Detects                |
+|--------------------|-------------------------------------------------------|------------------------|
+| `GITHUB_PAT`       | `GET https://api.github.com/user`                     | expired/revoked PAT    |
+| `NOTIFY_BOT_TOKEN` | `GET https://api.telegram.org/bot<TOKEN>/getMe`       | revoked Telegram bot   |
+| `ATLASSIAN_*_TOKEN`| `GET <jira_url>/rest/api/3/myself` (basic auth)       | expired Atlassian token|
+
+Firecrawl and Google Calendar are NOT probed automatically — Firecrawl
+charges per call and Google's OAuth refresh path is fragile. Run a
+manual probe with `agentctl heartbeat token-check` if you suspect either,
+or rely on Claude's own error reporting when it hits the MCP.
+
+### `token-check`
+
+```
+heartbeatctl token-check
+agentctl heartbeat token-check          # same, from the host
+```
+
+Triggers a one-shot probe of all configured tokens. Hourly cron does
+the same automatically (default schedule `0 * * * *`). State files land
+in `<workspace>/scripts/heartbeat/token-health/<id>.json`:
+
+```json
+{
+  "id": "github",
+  "kind": "github_pat",
+  "last_check": "2026-05-02T22:00:00Z",
+  "status": "ok",
+  "http_code": "200",
+  "latency_ms": 142,
+  "consecutive_failures": 0,
+  "first_failure_at": null,
+  "last_warned_at": null,
+  "error": null
+}
+```
+
+`status` ∈ `{ok, auth_fail, network, skipped}`. Only `auth_fail` and
+sustained `network` failures emit warnings — `agentctl doctor` adds
+checks 16-18 that read the same files and surface them as `✗`/`⚠`.
+
+### Warnings
+
+When a token transitions from `ok` → `auth_fail`, the runner emits ONE
+warning through the configured heartbeat notifier (Telegram if set,
+log otherwise). The same warning re-fires every 24h if the failure
+persists, so the user gets a daily reminder without spam. Recovery
+(`auth_fail` → `ok`) emits a single "recovered" notice.
+
+Warning history is appended to
+`<workspace>/scripts/heartbeat/token-health/warnings.jsonl` regardless
+of the notifier outcome, so the audit trail survives a broken Telegram
+channel.
+
+### Disable / tune
+
+```yaml
+# agent.yml
+features:
+  token_health:
+    enabled: false        # opt out entirely
+    schedule: "*/15 * * * *"   # custom cron, default "0 * * * *"
+```
+
+Override the dedup window per-invocation: `TH_DEDUP_SECS=3600
+heartbeatctl token-check` (default 86400 = 24h).
+
 ## Exit codes (global)
 
 - `0` — success
