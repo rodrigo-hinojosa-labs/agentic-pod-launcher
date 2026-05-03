@@ -290,3 +290,144 @@ JS
   [ "$status" -eq 0 ]
   [[ "$output" == *"drop-plugin"* ]]
 }
+
+# ── doctor ────────────────────────────────────────────────────────────────
+# Helper: stage a doctor-friendly fixture. Tests then mutate one piece at a
+# time to exercise individual checks. Tests run on the host (macOS or Linux),
+# so the host's stat (BSD or GNU) must work — that's exactly what the
+# portable _doctor_file_mode helper covers.
+_doctor_setup_fixture() {
+  export DOCTOR_HOME="$TMP_TEST_DIR/doctor-home"
+  export DOCTOR_VAULT="$TMP_TEST_DIR/doctor-vault"
+  mkdir -p "$DOCTOR_HOME/.claude/plugins/cache/claude-plugins-official/telegram"
+  mkdir -p "$DOCTOR_VAULT"
+  echo "DUMMY=1" > "$WORKSPACE/.env"
+  chmod 600 "$WORKSPACE/.env"
+  echo '{}' > "$DOCTOR_HOME/.claude/.credentials.json"
+  echo "seeded" > "$DOCTOR_VAULT/log.md"
+}
+
+_doctor_run() {
+  HEARTBEATCTL_CLAUDE_HOME="$DOCTOR_HOME/.claude" \
+  HEARTBEATCTL_VAULT_ROOT="$DOCTOR_VAULT" \
+  bash "$REPO_ROOT/docker/scripts/heartbeatctl" doctor "$@"
+}
+
+@test "doctor lists every check section in order" {
+  _doctor_setup_fixture
+  run _doctor_run
+  # We don't pin the exit code (crond + tmux can't be running in bats), but
+  # every check section title must appear so the user gets a complete pass.
+  [[ "$output" == *"Workspace mounted"* ]]
+  [[ "$output" == *"agent.yml is valid"* ]]
+  [[ "$output" == *".env permissions"* ]]
+  [[ "$output" == *"crond"* ]]
+  [[ "$output" == *"tmux session"* ]]
+  [[ "$output" == *"Claude credentials"* ]]
+  [[ "$output" == *"Vault"* ]]
+}
+
+@test "doctor reports .env permissions: 600 cleanly when correct" {
+  _doctor_setup_fixture
+  chmod 600 "$WORKSPACE/.env"
+  run _doctor_run
+  [[ "$output" == *".env permissions: 600"* ]]
+  # Must not bleed stat -f filesystem fields (the upstream bug):
+  [[ "$output" != *"Fichero:"* ]]
+  [[ "$output" != *"ID:"* ]]
+  [[ "$output" != *"Longnombre"* ]]
+}
+
+@test "doctor flags .env permissions=644 with portable mode and chmod hint" {
+  _doctor_setup_fixture
+  chmod 644 "$WORKSPACE/.env"
+  run _doctor_run
+  [[ "$output" == *".env permissions: 644"* ]]
+  [[ "$output" == *"should be 600"* ]]
+  [[ "$output" == *"chmod 600"* ]]
+  # No stat output bleed.
+  [[ "$output" != *"Fichero:"* ]]
+  [[ "$output" != *"ID:"* ]]
+}
+
+@test "doctor reports .env missing as ⊝ skip (not an error)" {
+  _doctor_setup_fixture
+  rm -f "$WORKSPACE/.env"
+  run _doctor_run
+  [[ "$output" == *".env missing"* ]]
+  # Skip ⊝ should not increment errors. We can't assert exit code (crond
+  # absence may push us to 2 in bats), but the line should not say "should be 600".
+  [[ "$output" != *"should be 600"* ]]
+}
+
+@test "doctor reports agent.yml missing as ✗ error" {
+  _doctor_setup_fixture
+  rm -f "$WORKSPACE/agent.yml"
+  run _doctor_run
+  [[ "$output" == *"agent.yml missing"* ]]
+  [[ "$output" == *"✗"* ]]
+  [ "$status" -eq 2 ]
+}
+
+@test "doctor reports invalid agent.yml as ✗ error" {
+  _doctor_setup_fixture
+  printf 'this is\n  : not [yaml' > "$WORKSPACE/agent.yml"
+  run _doctor_run
+  [[ "$output" == *"yq cannot parse"* ]]
+  [ "$status" -eq 2 ]
+}
+
+@test "doctor reports missing claude credentials as ⚠ warning" {
+  _doctor_setup_fixture
+  rm -f "$DOCTOR_HOME/.claude/.credentials.json"
+  run _doctor_run
+  [[ "$output" == *"Claude credentials missing"* ]]
+  [[ "$output" == *"agentctl attach"* ]]
+}
+
+@test "doctor reports channel plugin not installed as ⊝ skip when no .installed-ok" {
+  _doctor_setup_fixture
+  # Plugin cache dir exists from setup but no .installed-ok sentinel — that's the pre-/login state.
+  run _doctor_run
+  [[ "$output" == *"Telegram channel plugin not installed yet"* ]]
+}
+
+@test "doctor reports channel plugin installed when sentinel exists" {
+  _doctor_setup_fixture
+  : > "$DOCTOR_HOME/.claude/plugins/cache/claude-plugins-official/telegram/.installed-ok"
+  run _doctor_run
+  [[ "$output" == *"Telegram channel plugin installed"* ]]
+  # bun won't be running in bats — expect the warn for that.
+  [[ "$output" == *"bun server.ts"* ]]
+}
+
+@test "doctor reports vault seeded when directory has content" {
+  _doctor_setup_fixture
+  run _doctor_run
+  [[ "$output" == *"Vault skeleton seeded"* ]]
+}
+
+@test "doctor reports vault not seeded when directory empty" {
+  _doctor_setup_fixture
+  rm -rf "$DOCTOR_VAULT"
+  mkdir -p "$DOCTOR_VAULT"
+  run _doctor_run
+  [[ "$output" == *"Vault not seeded"* ]]
+}
+
+@test "doctor exit code: errors → 2, warnings only → 1, all clean → 0 (covered by other tests via specific assertions)" {
+  # Direct exit code coverage: all-clean is unreachable in bats (no crond,
+  # no tmux), so this test pins the worst-case (errors=2) only. Per-warning
+  # assertions live in dedicated tests above.
+  _doctor_setup_fixture
+  rm -f "$WORKSPACE/agent.yml"   # → ✗ error → exit 2
+  run _doctor_run
+  [ "$status" -eq 2 ]
+}
+
+@test "doctor help line lists doctor in Read section" {
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"doctor"* ]]
+  [[ "$output" == *"Diagnose container health"* ]]
+}

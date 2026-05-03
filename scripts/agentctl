@@ -83,6 +83,8 @@ Observability:
   logs [-f] [-n N]         tail [-f] [-n N] /workspace/claude.log
   logs --stderr            tail of telegram-mcp-stderr.log (forensic)
   status                   heartbeatctl status (pretty)
+  doctor                   container + workspace health checks. Exit codes:
+                           0=healthy, 1=warnings, 2=errors.
   mcp [list]               claude mcp list
 
 Heartbeat (proxy to in-container heartbeatctl):
@@ -163,6 +165,82 @@ cmd_status() {
   exec docker exec -u agent "$agent" heartbeatctl status
 }
 
+# cmd_doctor — host-side diagnostics first (Docker daemon, container exists,
+# container running, container healthy), then proxy to heartbeatctl doctor
+# for the in-container layer (workspace, agent.yml, .env, crond, tmux,
+# credentials, channel plugin, vault).
+#
+# Exit code is the worst of the two layers: 0=ok, 1=warnings, 2=errors.
+# Host-side errors short-circuit (no point asking for in-container state if
+# the container itself isn't up).
+cmd_doctor() {
+  local agent errors=0 warnings=0
+  agent=$(resolve_agent_name) || exit $?
+
+  printf 'agentctl doctor — host-side checks for %s\n\n' "$agent"
+
+  # 1. Docker daemon. `docker ps` against an offline daemon returns
+  # immediately with exit 1 — no network probe needed.
+  if docker ps >/dev/null 2>&1; then
+    printf '  ✓ Docker daemon running\n'
+  else
+    printf '  ✗ Docker daemon not reachable\n'
+    printf '    → Start Docker Desktop (macOS) or systemctl start docker (Linux)\n'
+    return 2
+  fi
+
+  # 2. Container exists. Inspect rather than `ps -f` so a stopped container
+  # is visible (state will tell us it's not running, in step 3).
+  if ! docker inspect "$agent" >/dev/null 2>&1; then
+    printf '  ✗ Container %s does not exist\n' "$agent"
+    printf '    → cd into the workspace and run agentctl up\n'
+    return 2
+  fi
+  printf '  ✓ Container %s exists\n' "$agent"
+
+  # 3. Container running.
+  local state
+  state=$(docker inspect -f '{{.State.Status}}' "$agent" 2>/dev/null)
+  if [ "$state" = "running" ]; then
+    printf '  ✓ Container running (state=%s)\n' "$state"
+  else
+    printf '  ✗ Container not running (state=%s)\n' "$state"
+    printf '    → agentctl up\n'
+    return 2
+  fi
+
+  # 4. Container health. A healthcheck might not be configured, in which
+  # case Status is "" and we treat it as a skip rather than warn.
+  local health
+  health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$agent" 2>/dev/null)
+  case "$health" in
+    healthy)   printf '  ✓ Container health: healthy\n' ;;
+    starting)  printf '  ⊝ Container health: starting (give it 30s, re-run)\n' ;;
+    unhealthy) printf '  ⚠ Container health: unhealthy — see below for details\n'
+               warnings=$((warnings + 1)) ;;
+    "")        printf '  ⊝ Container has no healthcheck configured\n' ;;
+    *)         printf '  ⚠ Container health: %s (unknown state)\n' "$health"
+               warnings=$((warnings + 1)) ;;
+  esac
+
+  printf '\n'
+
+  # 5. Proxy to in-container heartbeatctl doctor. We capture exit code so
+  # the worst-of-both-layers logic at the bottom is honest.
+  local in_rc=0
+  docker exec -u agent "$agent" heartbeatctl doctor || in_rc=$?
+
+  case "$in_rc" in
+    0) : ;;
+    1) warnings=$((warnings + 1)) ;;
+    *) errors=$((errors + 1)) ;;
+  esac
+
+  if [ "$errors" -gt 0 ]; then return 2; fi
+  if [ "$warnings" -gt 0 ]; then return 1; fi
+  return 0
+}
+
 cmd_heartbeat() {
   local agent
   agent=$(resolve_agent_name) || exit $?
@@ -199,6 +277,7 @@ main() {
     run) cmd_run "$@" ;;
     logs) cmd_logs "$@" ;;
     status) cmd_status "$@" ;;
+    doctor) cmd_doctor "$@" ;;
     heartbeat) cmd_heartbeat "$@" ;;
     mcp) cmd_mcp "$@" ;;
     up) cmd_up ;;

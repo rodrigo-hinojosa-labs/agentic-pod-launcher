@@ -19,6 +19,10 @@ RUNS_FILE="$HEARTBEAT_DIR/logs/runs.jsonl"
 # it directly (no sync loop needed in test context).
 CRONTAB_FILE="${HEARTBEATCTL_CRONTAB_FILE:-$HEARTBEAT_DIR/.crontab.staging}"
 LIB_DIR="${HEARTBEATCTL_LIB_DIR:-/opt/agent-admin/scripts/lib}"
+# Paths inspected by `doctor`. Overridable in tests so the bats fixtures don't
+# need a real /home/agent or a real claude profile to assert per-check output.
+CLAUDE_HOME="${HEARTBEATCTL_CLAUDE_HOME:-${HOME:-/home/agent}/.claude}"
+VAULT_ROOT="${HEARTBEATCTL_VAULT_ROOT:-${HOME:-/home/agent}/.vault}"
 
 # shellcheck source=/dev/null
 [ -f "$LIB_DIR/interval.sh" ] && source "$LIB_DIR/interval.sh"
@@ -33,6 +37,9 @@ Read:
   status [--json]         Print human or machine-readable state.
   logs   [-n N] [--json]  Tail logs/runs.jsonl. Default N=20.
   show                    Dump heartbeat.conf + installed crontab + agent.yml section.
+  doctor                  Diagnose container health (workspace, agent.yml, .env perms,
+                          crond, tmux session, claude credentials, channel plugin,
+                          vault). Exit 0 = healthy, 1 = warnings, 2 = errors.
 
 Control:
   test   [--prompt "..."] Run one heartbeat now (trigger=manual).
@@ -406,6 +413,156 @@ cmd_drop_plugin() {
   echo "heartbeatctl: dropped $spec from agent.yml — run 'heartbeatctl kick-channel' to apply"
 }
 
+# _doctor_file_mode FILE → echoes octal mode, empty if file missing.
+# Portable across busybox stat (Alpine, supports `-c '%a'`) and BSD stat
+# (macOS host, needs `-f '%Lp'`). Both cover the test/runtime split.
+_doctor_file_mode() {
+  local f="$1"
+  [ -e "$f" ] || return 1
+  stat -c '%a' "$f" 2>/dev/null || stat -f '%Lp' "$f" 2>/dev/null
+}
+
+# cmd_doctor — surface health of the container's auxiliary subsystems in one
+# pass. Read-only; no mutations. Exits with the worst-found code so callers
+# (CI, agentctl) can treat the result as a single boolean. Categories:
+#
+#   ✓ ok      no action needed
+#   ⊝ skip    feature off / N/A in this configuration
+#   ⚠ warn    likely transient or recoverable; suggested fix shown inline
+#   ✗ error   the container can't deliver its core promise
+#
+# Why these specific checks: each one has paged a real user before. Workspace
+# missing → bind-mount drift; agent.yml unreadable → yq parse breaks every
+# subsequent command; .env perms → secret leak via shared filesystem; crond
+# → no heartbeat will ever fire; tmux session → no live Claude; credentials
+# → user thinks they logged in but didn't; channel plugin / bun → silent
+# Telegram ghosting; vault → lost notes if the workspace has features.vault.
+cmd_doctor() {
+  local errors=0 warnings=0
+  local agent_name
+  agent_name=$(yq -r '.agent.name // "agent"' "$AGENT_YML" 2>/dev/null || echo "agent")
+  printf 'heartbeatctl doctor — diagnosing %s\n\n' "$agent_name"
+
+  # 1. Workspace bind-mount.
+  if [ -d "$WORKSPACE" ]; then
+    printf '  ✓ Workspace mounted at %s\n' "$WORKSPACE"
+  else
+    printf '  ✗ Workspace %s not mounted\n' "$WORKSPACE"
+    errors=$((errors + 1))
+  fi
+
+  # 2. agent.yml validity. We require a successful yq parse, not just
+  # presence — a corrupted agent.yml breaks every subsequent command.
+  if [ -f "$AGENT_YML" ]; then
+    if yq '.agent.name' "$AGENT_YML" >/dev/null 2>&1; then
+      printf '  ✓ agent.yml is valid\n'
+    else
+      printf '  ✗ agent.yml exists but yq cannot parse it\n'
+      errors=$((errors + 1))
+    fi
+  else
+    printf '  ✗ agent.yml missing at %s\n' "$AGENT_YML"
+    errors=$((errors + 1))
+  fi
+
+  # 3. .env permissions. Must be 600 so secrets don't leak via the
+  # workspace bind-mount to other host users. Portable stat (busybox + BSD)
+  # so this check works both inside the Alpine container and from host
+  # bats fixtures on macOS.
+  local env_file="$WORKSPACE/.env"
+  if [ -f "$env_file" ]; then
+    local mode
+    mode=$(_doctor_file_mode "$env_file") || mode=""
+    if [ "$mode" = "600" ]; then
+      printf '  ✓ .env permissions: 600\n'
+    elif [ -n "$mode" ]; then
+      printf '  ⚠ .env permissions: %s (should be 600)\n' "$mode"
+      printf '    → chmod 600 %s\n' "$env_file"
+      warnings=$((warnings + 1))
+    else
+      printf '  ⚠ .env exists but permissions unreadable\n'
+      warnings=$((warnings + 1))
+    fi
+  else
+    printf '  ⊝ .env missing — first boot or no secrets configured\n'
+  fi
+
+  # 4. crond. If dead, no heartbeat tick will ever fire and the watchdog
+  # will exit the container (start_services.sh:592-594).
+  local crond_pid
+  crond_pid=$(_crond_pid)
+  if [ -n "$crond_pid" ]; then
+    printf '  ✓ crond alive (PID %s)\n' "$crond_pid"
+  else
+    printf '  ✗ crond is not running\n'
+    errors=$((errors + 1))
+  fi
+
+  # 5. tmux session 'agent'. Absence is sometimes legitimate (we caught
+  # it during a 2s respawn gap), so this is a warning with a hint about
+  # timing — a real persistent absence is visible by re-running doctor.
+  if command -v tmux >/dev/null 2>&1; then
+    if tmux has-session -t agent 2>/dev/null; then
+      printf "  ✓ tmux session 'agent' present\n"
+    else
+      printf "  ⚠ tmux session 'agent' not found\n"
+      printf '    → Watchdog respawns every 2s. Wait 5s and re-run; if it persists, agentctl restart\n'
+      warnings=$((warnings + 1))
+    fi
+  else
+    printf '  ⊝ tmux not installed — skipping session check\n'
+  fi
+
+  # 6. Claude credentials. Existence of .credentials.json is the reliable
+  # post-/login signal (the file is written atomically by the OAuth flow).
+  local creds_path="$CLAUDE_HOME/.credentials.json"
+  if [ -f "$creds_path" ]; then
+    printf '  ✓ Claude credentials present\n'
+  else
+    printf '  ⚠ Claude credentials missing — run /login inside the tmux session\n'
+    printf '    → agentctl attach\n'
+    warnings=$((warnings + 1))
+  fi
+
+  # 7+8. Channel plugin (Telegram). Cache + .installed-ok sentinel is the
+  # readiness signal (mirrors start_services.sh::_channel_plugin_ready).
+  # Skip the bun check entirely if the plugin isn't installed — there's
+  # no expectation of a running server in that case.
+  local channel_cache="$CLAUDE_HOME/plugins/cache/claude-plugins-official/telegram"
+  if [ -d "$channel_cache" ] && [ -f "$channel_cache/.installed-ok" ]; then
+    printf '  ✓ Telegram channel plugin installed\n'
+    if pgrep -f "bun server.ts" >/dev/null 2>&1; then
+      printf '  ✓ Telegram MCP (bun server.ts) running\n'
+    else
+      printf '  ⚠ Telegram MCP (bun server.ts) not running\n'
+      printf '    → Try: heartbeatctl kick-channel\n'
+      warnings=$((warnings + 1))
+    fi
+  else
+    printf '  ⊝ Telegram channel plugin not installed yet (skipped)\n'
+  fi
+
+  # 9. Vault. Per the seed contract (scripts/lib/vault.sh::vault_seed_if_empty),
+  # a non-empty target dir means the skeleton has been copied in. Empty or
+  # missing dir → either vault disabled or seed never ran.
+  if [ -d "$VAULT_ROOT" ] && [ -n "$(ls -A "$VAULT_ROOT" 2>/dev/null)" ]; then
+    printf '  ✓ Vault skeleton seeded at %s\n' "$VAULT_ROOT"
+  else
+    printf '  ⊝ Vault not seeded (disabled in agent.yml, or first boot pending)\n'
+  fi
+
+  printf '\n'
+  if [ "$errors" -gt 0 ] || [ "$warnings" -gt 0 ]; then
+    printf '%d error(s), %d warning(s).\n' "$errors" "$warnings"
+  else
+    printf 'No issues found.\n'
+  fi
+
+  if [ "$errors" -gt 0 ]; then return 2; fi
+  if [ "$warnings" -gt 0 ]; then return 1; fi
+  return 0
+}
+
 main() {
   local sub="${1:-help}"; shift || true
   case "$sub" in
@@ -414,6 +571,7 @@ main() {
     reload) cmd_reload "$@" ;;
     status) cmd_status "$@" ;;
     logs)   cmd_logs   "$@" ;;
+    doctor) cmd_doctor "$@" ;;
     pause)  cmd_pause ;;
     resume) cmd_resume ;;
     test)   cmd_test "$@" ;;
