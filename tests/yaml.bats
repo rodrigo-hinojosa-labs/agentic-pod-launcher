@@ -97,3 +97,72 @@ EOF
   PATH="$mock:$PATH" run yaml_yq_version_ok
   [ "$status" -eq 0 ]
 }
+
+# yaml_require_yq + yaml_bootstrap_yq — Ferrari scenario regression:
+# Debian/Ubuntu's apt yq is v3 (Python wrapper). Without bootstrap, render.sh
+# would die on the first `yq '.. | select(...)'`. This test mocks both yq (v3
+# on PATH) and curl (writes a fake v4 binary into the override vendor dir) to
+# prove `yaml_require_yq` repairs the situation end-to-end.
+
+@test "yaml_require_yq bootstraps when PATH yq is v3 (Debian apt scenario)" {
+  local mock="$BATS_TEST_TMPDIR/bin"
+  local vendor="$BATS_TEST_TMPDIR/vendor"
+  mkdir -p "$mock" "$vendor"
+
+  # 1. Mock the system yq (v3 — what apt installs on Debian/Ubuntu).
+  cat > "$mock/yq" <<'EOF'
+#!/bin/sh
+echo "yq 3.4.3"
+EOF
+  chmod +x "$mock/yq"
+
+  # 2. Mock curl: when bootstrap downloads, write a "v4" yq into the output path.
+  # The output path is the last positional arg after `-o`.
+  cat > "$mock/curl" <<'EOF'
+#!/bin/sh
+out=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[ -n "$out" ] || exit 1
+cat > "$out" <<'YQ'
+#!/bin/sh
+[ "$1" = "--version" ] && echo "yq (https://github.com/mikefarah/yq/) version v4.45.1"
+YQ
+chmod +x "$out"
+EOF
+  chmod +x "$mock/curl"
+
+  YAML_VENDOR_DIR_OVERRIDE="$vendor" PATH="$mock:$PATH" run yaml_require_yq
+  [ "$status" -eq 0 ]
+  [ -x "$vendor/yq" ]
+  echo "$output" | grep -q "Detected incompatible yq"
+}
+
+@test "yaml_require_yq fails loud when bootstrap can't reach the network" {
+  local mock="$BATS_TEST_TMPDIR/bin"
+  local vendor="$BATS_TEST_TMPDIR/vendor"
+  mkdir -p "$mock" "$vendor"
+
+  cat > "$mock/yq" <<'EOF'
+#!/bin/sh
+echo "yq 3.4.3"
+EOF
+  chmod +x "$mock/yq"
+
+  # curl fails (simulates no network / GitHub down).
+  cat > "$mock/curl" <<'EOF'
+#!/bin/sh
+exit 22
+EOF
+  chmod +x "$mock/curl"
+
+  YAML_VENDOR_DIR_OVERRIDE="$vendor" PATH="$mock:$PATH" run yaml_require_yq
+  [ "$status" -ne 0 ]
+  echo "$output" | grep -q "auto-download failed"
+  # Manual install hint must NOT mention `apt install yq` — that's the v3 trap.
+  ! echo "$output" | grep -q "apt install yq"
+}

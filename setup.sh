@@ -24,10 +24,14 @@ require_tool() {
   echo "Install it:" >&2
   case "$tool" in
     yq)
+      # main() calls yaml_require_yq before this branch can fire, so it's
+      # mostly defensive. Keep it free of `apt install yq` because Debian/
+      # Ubuntu's package is python-yq v3 (Python wrapper, incompatible
+      # syntax), not mikefarah's Go binary.
       echo "  • macOS:  brew install yq" >&2
-      echo "  • Linux:  apt install yq    (Debian/Ubuntu)" >&2
-      echo "            dnf install yq    (Fedora)" >&2
-      echo "  • Other:  https://github.com/mikefarah/yq#install" >&2
+      echo "  • Linux:  https://github.com/mikefarah/yq#install" >&2
+      echo "            (do NOT use apt install yq — that's the v3 Python wrapper)" >&2
+      echo "  • Auto:   re-run ./setup.sh — yaml_require_yq vendors v4+ for you" >&2
       ;;
     jq)
       echo "  • macOS:  brew install jq" >&2

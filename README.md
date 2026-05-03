@@ -11,7 +11,7 @@ The launcher clone is disposable after scaffolding. Every subsequent operation (
 ## Prerequisites
 
 - Docker 24+ with the Compose v2 plugin (`docker compose`, not `docker-compose`).
-- `git`, `yq` v4+, `jq`, and `bash` 4+ on the host (wizard only).
+- `git`, `jq`, and `bash` 4+ on the host (wizard only). `yq` is auto-vendored — `setup.sh` downloads mikefarah/yq v4+ to `scripts/vendor/bin/` on first run if missing or if the system yq is v3 (Debian/Ubuntu's `apt install yq` ships the Python wrapper v3; the launcher detects that and bootstraps the right one).
 - macOS or Linux (the wizard tolerates both BSD and GNU `sed`).
 
 ## Quickstart
