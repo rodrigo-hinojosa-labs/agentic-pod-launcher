@@ -15,6 +15,19 @@ if [ "$(stat -c %U /home/agent)" = "root" ]; then
   chown -R agent:agent /home/agent
 fi
 
+# 1b. Apply the user's timezone (set by docker-compose from
+#     agent.yml::user.timezone). With tzdata installed in the image,
+#     `date`, bash, jq, python3, and busybox all respect $TZ. The
+#     symlink to /etc/localtime additionally covers C tools that read
+#     the binary zoneinfo file directly (some logging libs, glibc
+#     callers). Silent no-op when TZ is unset or points at a missing
+#     zoneinfo file — never fail the boot over a bad TZ string.
+if [ -n "${TZ:-}" ] && [ -f "/usr/share/zoneinfo/$TZ" ]; then
+  ln -sf "/usr/share/zoneinfo/$TZ" /etc/localtime
+  printf '%s\n' "$TZ" > /etc/timezone
+  log "timezone set to $TZ"
+fi
+
 # 2. Ensure workspace heartbeat dir is agent-owned (idempotent). Includes
 #    a pre-mkdir of logs/ so it exists at chown-time — on macOS Docker
 #    Desktop, dirs mkdir'd later via the bind-mount translation layer

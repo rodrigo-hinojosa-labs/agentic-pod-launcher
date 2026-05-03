@@ -44,5 +44,11 @@ services:
       # immune to `docker compose down -v`, removed only with the
       # workspace itself.
       - ./.state:/home/agent
+    environment:
+      # User's timezone, propagated from agent.yml::user.timezone. Without
+      # this (and tzdata in the image), Alpine falls back to UTC and the
+      # heartbeat / agent timestamp logs in the wrong zone — surfaces as
+      # "I logged this row at GMT-4 but the heartbeat says GMT+0" noise.
+      TZ: "{{USER_TIMEZONE}}"
     env_file:
       - ./.env

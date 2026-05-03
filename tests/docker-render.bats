@@ -54,6 +54,16 @@ teardown() { teardown_tmp_dir; }
   [[ "$result" == *"start_period: 60s"* ]]
 }
 
+@test "docker-compose.yml.tpl propagates user.timezone via TZ env var" {
+  # Without TZ + tzdata in the image, Alpine defaults to UTC and
+  # heartbeats log timestamps in the wrong zone — surfaced 6× by Linus
+  # on Ferrari before this fix landed. Fixture has user.timezone="UTC"
+  # so the rendered file must contain TZ: "UTC".
+  result=$(render_template "$REPO_ROOT/modules/docker-compose.yml.tpl")
+  [[ "$result" == *"environment:"* ]]
+  [[ "$result" == *'TZ: "UTC"'* ]]
+}
+
 @test "systemd unit has Type=oneshot RemainAfterExit=yes" {
   result=$(render_template "$REPO_ROOT/modules/systemd.service.tpl")
   [[ "$result" == *"Type=oneshot"* ]]

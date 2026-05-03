@@ -38,7 +38,8 @@ RUN apk add --no-cache \
       ca-certificates \
       python3 \
       age \
-      flock
+      flock \
+      tzdata
 
 # Install gum from the charmbracelet tap alternative: use the static binary.
 ARG GUM_VERSION=0.14.5

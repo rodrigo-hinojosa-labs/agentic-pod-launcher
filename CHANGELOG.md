@@ -3,6 +3,21 @@
 ## [Unreleased]
 
 ### Fixed
+- timezone in container falls back to UTC even when `agent.yml::user.timezone`
+  is set. The Alpine base image ships without `tzdata` and the compose
+  template never passed `TZ` to the container — `date`, bash, and any
+  tool reading `/etc/localtime` all rendered timestamps in UTC, which
+  surfaced as the agent (Linus on Ferrari) repeatedly logging "GMT-4"
+  metadata while heartbeats stamped UTC. Three-line fix: (1) Dockerfile
+  installs `tzdata` so `/usr/share/zoneinfo/<region>/<city>` exists;
+  (2) `modules/docker-compose.yml.tpl` adds `environment: TZ:
+  "{{USER_TIMEZONE}}"` rendered from the user's wizard answer; (3)
+  `entrypoint.sh` symlinks `/etc/localtime → /usr/share/zoneinfo/$TZ`
+  on boot for C tools that read the binary file directly. Defensive:
+  silent no-op if `$TZ` is unset or names a missing zoneinfo file —
+  never fails the boot over a bad string. Regression test in
+  `tests/docker-render.bats` asserts the rendered compose file contains
+  the TZ env var matching the fixture's `user.timezone`.
 - watchdog deadlock on first-boot before /login. When the fork URL
   needed auth (private repo) and `.env` had no PAT yet, the
   watchdog-triggered identity backup ran `git clone` synchronously
