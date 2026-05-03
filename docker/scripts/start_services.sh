@@ -10,6 +10,32 @@
 #   4. Watchdog loop: respawn tmux/claude on death, exit to Docker on
 #      excessive crashes. Post-login, the first respawn auto-installs the
 #      plugin and the second respawn attaches --channels.
+#
+# Core vs Auxiliary subsystems (load-bearing distinction; see
+# docs/architecture.md#core-vs-auxiliary):
+#
+#   CORE   — failure exits the container so Docker restarts it:
+#            - crond (heartbeat schedule executor)
+#            - tmux session 'agent'  (5-crashes-in-300s budget)
+#            - bun server.ts         (channel plugin MCP, when --channels)
+#
+#   AUX    — failure must NOT exit the container; log to aux.jsonl and
+#            continue. The full list:
+#            - plugin install (ensure_all_plugins_installed)
+#            - plugin post-hooks (apply_plugin_post_hooks)
+#            - extra marketplace registration
+#            - vault seed
+#            - settings.json mutations (pre_accept_*)
+#            - channel env sync
+#            - token health probes
+#            - any future feature with network I/O or external state
+#
+# Rule: every aux subsystem reachable from the watchdog poll loop MUST
+# either (a) bound its synchronous time with `timeout`, or (b) dispatch
+# via safe_run_bg from docker/scripts/lib/safe-exec.sh. Synchronous
+# unbounded calls are the bug class that produced PR-equivalent
+# incidents on feat/identity-backup-git — see
+# plans/como-se-arregla-esto-silly-lagoon.md.
 
 set -euo pipefail
 
@@ -28,6 +54,15 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [start_services] $*" >&2; }
 # shellcheck source=/dev/null
 [ -f /opt/agent-admin/scripts/lib/vault.sh ] \
   && source /opt/agent-admin/scripts/lib/vault.sh
+
+# safe-exec primitives (timeout-bounded dispatch + aux logging).
+# Image-baked at the standard lib path. Sourced best-effort so a
+# minimal-fixture test that doesn't expose the lib still loads the
+# rest of start_services without error — but the runtime path always
+# has it in the real container.
+# shellcheck source=/dev/null
+[ -f /opt/agent-admin/scripts/lib/safe-exec.sh ] \
+  && source /opt/agent-admin/scripts/lib/safe-exec.sh
 
 # seed_vault_if_needed — at first boot, copy the skeleton into the per-agent
 # vault dir if vault.enabled + vault.seed_skeleton and the target is empty.
@@ -175,13 +210,34 @@ ensure_plugin_installed_one() {
     rm -rf "$cache"
   fi
   log "attempting to install plugin: $spec"
-  if CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR_VAL" claude plugin install "$spec" >/dev/null 2>&1; then
+  # Bound the install network call. A registry going slow / DNS retrying
+  # used to keep this synchronous call alive long enough that the
+  # watchdog respawn perceived it as the agent hanging. 60s is the
+  # ceiling — the install's own retries should fit comfortably; anything
+  # past that means the registry is genuinely down and we should give
+  # up and let the next respawn try again.
+  local _install_rc=0
+  if command -v timeout >/dev/null 2>&1; then
+    CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR_VAL" timeout 60 claude plugin install "$spec" >/dev/null 2>&1 \
+      || _install_rc=$?
+  else
+    CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR_VAL" claude plugin install "$spec" >/dev/null 2>&1 \
+      || _install_rc=$?
+  fi
+  if [ "$_install_rc" -eq 0 ]; then
     log "plugin installed: $spec"
     [ -d "$cache" ] && : > "$cache/.installed-ok"
     apply_plugin_post_hooks "$spec" "$cache"
     return 0
   fi
-  log "plugin install skipped (not authenticated yet or install failed): $spec"
+  if [ "$_install_rc" -eq 124 ] || [ "$_install_rc" -eq 137 ]; then
+    log "plugin install timed out (>60s) for $spec — will retry on next respawn"
+    if command -v log_aux_fail >/dev/null 2>&1; then
+      log_aux_fail "plugin-install" "timeout (>60s) installing $spec"
+    fi
+  else
+    log "plugin install skipped (not authenticated yet or install failed): $spec"
+  fi
   return 1
 }
 
@@ -236,9 +292,25 @@ _hook_telegram_typing_patch() {
   local server_ts
   for server_ts in "$cache"/*/server.ts; do
     [ -f "$server_ts" ] || continue
-    python3 "$patcher" "$server_ts" 2>&1 | while IFS= read -r line; do
+    # 30s ceiling on the patcher. The patch itself is regex-based and
+    # runs in milliseconds; the ceiling is defensive against pathological
+    # input (server.ts somehow becomes a 1GB file) so this hook can
+    # never hang the watchdog.
+    local _runner=(python3 "$patcher" "$server_ts")
+    if command -v timeout >/dev/null 2>&1; then
+      _runner=(timeout 30 "${_runner[@]}")
+    fi
+    "${_runner[@]}" 2>&1 | while IFS= read -r line; do
       log "$line"
     done
+    local _rc=${PIPESTATUS[0]}
+    if [ "$_rc" -ne 0 ] && command -v log_aux_fail >/dev/null 2>&1; then
+      if [ "$_rc" -eq 124 ] || [ "$_rc" -eq 137 ]; then
+        log_aux_fail "telegram-typing-patch" "timeout patching $server_ts"
+      else
+        log_aux_fail "telegram-typing-patch" "exit=$_rc patching $server_ts"
+      fi
+    fi
   done
 }
 
