@@ -74,6 +74,12 @@ Polls every 2s. Three failure modes it handles:
 
 Crash budget: 5 crashes per 300s window → exit. Docker restarts the container, restarting the budget. There used to be a "bridge watchdog" that detected the silent-stuck case (bun alive but MCP notifications dropped); it was reverted in commit `ebfe35f` because tmux pane scraping produced too many false positives. Manual recovery for that case is `heartbeatctl kick-channel`. **Don't re-add automated detection for this without solving the false-positive problem first** — it killed sessions every ~2 minutes during normal operation.
 
+### Core vs Auxiliary contract
+
+The watchdog distinguishes **core** subsystems (`crond`, `tmux`, `bun`) from **auxiliary** ones (plugin install, plugin post-hooks, marketplace registration, vault seed, settings.json mutations, channel env sync, token / MCP health probes). Core failure exits the container; auxiliary failure logs to `aux.jsonl` and continues.
+
+Every aux subsystem reachable from the watchdog poll loop MUST either bound its synchronous time with `timeout` or dispatch via `safe_run_bg` from `docker/scripts/lib/safe-exec.sh`. Synchronous unbounded calls are the bug class that produced the May 2026 incident on `feat/identity-backup-git` (a `git clone` without `GIT_TERMINAL_PROMPT=0` hung on stdin and blocked the watchdog). Full contract + reusable primitives in [`docs/architecture.md#core-vs-auxiliary-subsystems`](docs/architecture.md).
+
 ### Heartbeat data contract
 
 `scripts/heartbeat/heartbeat.sh` (workspace-templated, runs as agent under crond) emits per-tick:

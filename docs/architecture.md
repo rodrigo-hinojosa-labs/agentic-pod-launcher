@@ -112,6 +112,48 @@ Real-world detail worth noting:
 
 Every N minutes (configurable via `agent.yml`'s `features.heartbeat.interval`, default 30m), `crond` dispatches `/workspace/scripts/heartbeat/heartbeat.sh` as the `agent` user. The heartbeat probes the agent and writes a structured trace; the notifier (none / log / telegram, configurable) forwards a status line. See [Heartbeat Pipeline](#heartbeat-pipeline) below.
 
+## Core vs Auxiliary subsystems
+
+The watchdog in `docker/scripts/start_services.sh` makes a load-bearing distinction between **core** subsystems (whose failure should exit the container so Docker can restart it) and **auxiliary** ones (whose failure is logged but never blocks the watchdog).
+
+| Layer | Subsystems | Failure response |
+|---|---|---|
+| **Core** | `crond`, `tmux session 'agent'`, `bun server.ts` (when `--channels` is active) | Exit container; Docker restart policy revives. tmux death also subject to a 5-crashes-in-300s budget. |
+| **Auxiliary** | plugin install, plugin post-hooks (typing patch, etc.), extra-marketplace registration, vault seed, settings.json mutations, channel env sync, token health probes, MCP health probes | Append to `aux.jsonl`, mirror a one-line warning to stderr (visible in `docker logs`), continue. |
+
+**Rule for new features.** Every aux subsystem reachable from the watchdog poll loop MUST do one of:
+
+1. Bound its synchronous time with `timeout` (busybox / coreutils — already in the image). Example: `timeout 60 claude plugin install …` in `start_services.sh::ensure_plugin_installed_one`.
+2. Dispatch via `safe_run_bg` from `docker/scripts/lib/safe-exec.sh`. The library returns to the caller in <1ms, runs the command in a backgrounded subshell with `flock` dedup and `timeout`, and routes failure / timeout / skip lines to `aux.jsonl`.
+
+Synchronous unbounded calls are the bug class that produced the May 2026 incident on `feat/identity-backup-git`: a `git clone` without `GIT_TERMINAL_PROMPT=0` hung waiting for stdin, blocking the watchdog and killing the chat with the agent. Same class of bug applies to any `git`, `curl`, `npm`, `pip`, `claude plugin install` invocation that touches the network.
+
+### Reusable primitives
+
+`docker/scripts/lib/safe-exec.sh`:
+
+| Primitive | Purpose |
+|---|---|
+| `safe_run_bg NAME TIMEOUT_SEC CMD…` | Background dispatch with timeout + dedup + structured logging. |
+| `with_git_noninteractive CMD…` | Sets `GIT_TERMINAL_PROMPT=0`, `GIT_ASKPASS=/bin/true`, `SSH_ASKPASS=/bin/true`, `GCM_INTERACTIVE=Never`, `GIT_HTTP_LOW_SPEED_LIMIT/TIME` — git/ssh exit immediately on missing creds instead of hanging on stdin. |
+| `safe_curl URL [OPTS…]` | curl with `--max-time 10`. Always prints HTTP code (000 on transport failure); body on stderr. |
+| `log_aux_fail SUBSYSTEM REASON [RETRY_IN_SEC]` | Append a JSON line to `aux.jsonl`. Schema: `ts, subsystem, reason, retry_in_sec, pid`. |
+
+Health-check libs that build on top:
+
+- `docker/scripts/lib/token-health.sh` — Telegram, GitHub, Atlassian, Firecrawl token vigência. Three-bucket exit code: 0=ok, 1=rejected, 2=transient. Surfaced via `agentctl doctor` and the standalone `heartbeatctl token-health` subcommand.
+- `docker/scripts/lib/mcp-health.sh` — Two layers: (a) static env validation (every `${VAR}` in `.mcp.json` must be set in `.env`) and (b) runtime `claude mcp list --json`. Surfaced via `agentctl doctor`.
+
+### `aux.jsonl`
+
+`/workspace/scripts/heartbeat/logs/aux.jsonl`. Append-only JSONL, same rotation policy as `runs.jsonl` (10MB → `.1` → `.2.gz` → `.3.gz`). Schema:
+
+```json
+{"ts":"2026-05-02T23:53:18Z","subsystem":"plugin-install","reason":"timeout (>60s) installing claude-mem@thedotmack","retry_in_sec":null,"pid":1234}
+```
+
+Future versions of `agentctl doctor` and `heartbeatctl status` consume this file to surface a 24h failure window without requiring users to grep `docker logs`.
+
 ## Restart Layers
 
 Three independent restart mechanisms:

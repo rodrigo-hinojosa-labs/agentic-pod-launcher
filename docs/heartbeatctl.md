@@ -51,6 +51,65 @@ Pretty output (no flag): a table of `TS | STATUS | DUR | ATTMPT | PROMPT[:60]`.
 
 `--json`: emits raw JSON lines, one per run, piping-safe for `jq`.
 
+### `doctor`
+
+Single-pass diagnosis of every check the in-container supervisor cares about. Read-only; no mutations. Exit code is the worst-found across all sections (`0` = healthy, `1` = at least one warning, `2` = at least one error).
+
+Sections, in order:
+
+1. **Container basics** — workspace bind-mount, `agent.yml` parse, `.env` permissions (uses portable `stat -c '%a' || stat -f '%Lp'` to work under both busybox and BSD), `crond` alive, `tmux session 'agent'` present, claude credentials present, channel plugin install status, bun (`server.ts`) running, vault seeded.
+
+2. **Token health** (`Token health:`) — probes upstream APIs for every token declared in `agent.yml` and present in `.env`:
+   - Telegram: `GET /bot<TOKEN>/getMe` against `api.telegram.org`. Reports `bot @<username>` on healthy.
+   - GitHub: `GET /user` against `api.github.com` (used for both `FORK_PAT` and `GITHUB_PAT` if distinct).
+   - Atlassian: `GET /rest/api/3/myself` against each declared workspace URL.
+   - Firecrawl: `GET /v1/team` against `api.firecrawl.dev`. 429 (rate-limited) is reported as ok+warning, not error — the key is valid.
+   Each probe times out at 10s via `safe_curl`. The whole section finishes in <5s on healthy networks. A token that's missing from `.env` is reported as ⊝ skip (the wizard / scaffold is responsible for visibility on that).
+
+3. **MCP env validation** (`MCP env validation:`) — for every server in `.mcp.json` with an `env` block, every `${VAR}` reference must be set + non-empty in `.env`. Static parse, no network. ✗ rows list which env vars are missing per server.
+
+4. **MCP runtime status** (`MCP runtime status:`) — `claude mcp list --json` with a 10s ceiling. Reports per-MCP connection state. Skipped (⊝) when claude isn't authenticated yet.
+
+Output icons: ✓ ok, ⊝ skip / not configured, ⚠ transient (likely retryable), ✗ error (user-actionable).
+
+```text
+heartbeatctl doctor — diagnosing linus
+
+  ✓ Workspace mounted at /workspace
+  ✓ agent.yml is valid
+  ✓ .env permissions: 600
+  ✓ crond alive (PID 19)
+  ✓ tmux session 'agent' present
+  ✓ Claude credentials present
+  ✓ Telegram channel plugin installed
+  ✓ Telegram MCP (bun server.ts) running
+  ✓ Vault skeleton seeded at /home/agent/.vault
+
+Token health:
+  ✓ telegram         bot @linus_bot
+  ✓ fork PAT         user rodrigo-hinojosa
+  ✗ atlassian/personal HTTP 401 — token or email rejected
+
+MCP env validation:
+  ⊝ fetch              no env block (no secrets required)
+  ⊝ filesystem         no env block (no secrets required)
+  ✓ atlassian-personal env vars set (CONFLUENCE_URL,JIRA_URL,...)
+  ✗ firecrawl          missing in .env: FIRECRAWL_API_KEY
+
+MCP runtime status:
+  ✓ 9 MCP(s) connected
+
+2 error(s), 0 warning(s).
+```
+
+### `token-health`
+
+Standalone probe of every configured token, without the rest of the doctor sections. Same upstream calls, same exit-code contract (0=ok, 1=rejected, 2=transient). Useful as a scripted check or scheduled cron.
+
+```bash
+heartbeatctl token-health
+```
+
 ### `show`
 
 Dumps the three primary sources of truth so you can tell what's actually installed vs. what's configured:
