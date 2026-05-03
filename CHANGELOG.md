@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+### Fixed
+- watchdog deadlock on first-boot before /login. When the fork URL
+  needed auth (private repo) and `.env` had no PAT yet, the
+  watchdog-triggered identity backup ran `git clone` synchronously
+  without `GIT_TERMINAL_PROMPT=0` — git asked for a username on stdin,
+  blocked forever, and the watchdog never came back to respawn the
+  tmux session the user needed to /login. Fix layered in three places:
+  (1) `_identity_git`/`_vault_git`/`_config_git` wrappers in each
+  backup lib set `GIT_TERMINAL_PROMPT=0 + GIT_ASKPASS=/bin/true` and a
+  60s `timeout(1)` cap (when available — falls back gracefully on
+  macOS hosts without coreutils for tests); (2)
+  `start_services.sh::_trigger_identity_backup` now backgrounds the
+  call with a 90s outer `timeout` + a `pgrep` reentrancy guard so the
+  watchdog can never block on backup IO; (3) regression tests in
+  `tests/backup-identity-lib.bats` (env exported correctly, fallback
+  branch works) and `tests/start-services-watchdog.bats` (trigger
+  returns in <3s with a 30s-sleeping stub heartbeatctl, reentrancy
+  guard short-circuits when previous run is still in flight). Reported
+  on Ferrari (Raspberry Pi) right after PR #41 + #42 landed; the bug
+  predates both — workaround on existing installs is to add
+  `GIT_TERMINAL_PROMPT=0` to `.env` and restart the container.
+
 ### Added
 - token-health: hourly probe of free-tier auth endpoints to catch
   expired/revoked tokens *before* Claude tries to use them and dies

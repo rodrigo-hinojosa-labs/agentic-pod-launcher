@@ -3,6 +3,26 @@
 # file operations (cp, git) live here but the orchestration (the flow)
 # lives in heartbeatctl's cmd_backup_identity.
 
+# Run a git network command in a non-interactive environment, capped at
+# 60s when timeout(1) is available. The agent runs unattended
+# (watchdog + cron); without these guards, git asks for a username on
+# stdin when credentials are missing or the fork URL is unreachable —
+# that prompt blocks forever and deadlocks the watchdog (which then
+# can't respawn the tmux session the user needs to /login). The
+# timeout is a second-line defense for a hung TLS handshake or DNS
+# that ignores the prompt guard. timeout(1) is GNU coreutils, present
+# on Alpine (production) but not on macOS by default (tests) — fall
+# back to a plain invocation so the lib stays portable; the outer
+# safeguard in start_services.sh::_trigger_identity_backup applies
+# anyway in the production code path.
+_identity_git() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 60 env GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/true git "$@"
+  else
+    env GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/true git "$@"
+  fi
+}
+
 # Emit the whitelist of identity-relevant paths (relative to the state
 # dir). STDOUT: one path per line. Order matters for hashing — keep
 # sorted.
@@ -85,9 +105,9 @@ identity_prepare_clone() {
   mkdir -p "$cache_base"
 
   if [ ! -d "$dir/.git" ]; then
-    git clone --no-checkout "$fork_url" "$dir" >/dev/null 2>&1
+    _identity_git clone --no-checkout "$fork_url" "$dir" >/dev/null 2>&1
   fi
-  (cd "$dir" && git fetch origin backup/identity >/dev/null 2>&1 || true)
+  (cd "$dir" && _identity_git fetch origin backup/identity >/dev/null 2>&1 || true)
   printf '%s\n' "$dir"
 }
 
@@ -152,7 +172,7 @@ identity_commit_and_push() {
   msg="identity snapshot $ts"
   git -C "$stage" -c user.email=identity-backup@localhost -c user.name=identity-backup \
        commit -m "$msg" >/dev/null
-  if ! git -C "$stage" push origin backup/identity >/dev/null 2>&1; then
+  if ! _identity_git -C "$stage" push origin backup/identity >/dev/null 2>&1; then
     echo "backup-identity: push failed" >&2
     if [ "$orphan" -eq 1 ]; then
       rm -rf "$stage"
