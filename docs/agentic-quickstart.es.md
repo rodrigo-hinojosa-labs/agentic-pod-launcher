@@ -16,7 +16,8 @@ El resto del documento sigue siendo válido: cubre los inputs en detalle (útil 
 
 ## Prerequisitos
 
-- `git`, `yq` v4+, `gh` y `claude` instalados.
+- `git` y `claude` instalados.
+- `yq` v4+ y `gh`: opcionales. Si faltan, `setup.sh` los baja automáticamente a `scripts/vendor/bin/` la primera vez (`yaml_require_yq` descarga mikefarah/yq v4+; `ensure_gh` descarga gh ≥ 2.40). En Debian/Ubuntu, **no instales con `apt install yq`** — ese paquete es el wrapper Python v3 (sintaxis incompatible); el launcher detecta esa versión y vendoriza la correcta de todos modos. Si quieres pre-instalarlo a mano, usa `brew install yq` (macOS) o baja el binario de [github.com/mikefarah/yq](https://github.com/mikefarah/yq#install).
 - Un Personal Access Token de GitHub con scope `repo` (y `delete_repo` si vas a usar `--delete-fork` en el futuro).
 - Acceso de push al owner del fork (cuenta personal u org de la que seas miembro).
 
@@ -109,9 +110,14 @@ PLUGIN_SUPERPOWERS="n"
 Ejecuta el wizard de agentic-pod-launcher usando los valores de arriba.
 
 PRE-FLIGHT — antes de tocar setup.sh:
-1. Confirma que `yq` (v4+), `git` y `gh` están en el PATH.
-2. Si FORK_ENABLED="y", exporta GH_TOKEN=$FORK_PAT y verifica que `gh api user`
-   retorne un login válido. Si falla, detente y muéstrame el error.
+1. Confirma que `git` está en el PATH (obligatorio, no se auto-instala). NO bloquees
+   por la ausencia de `yq` o `gh` — `setup.sh` los descarga a `scripts/vendor/bin/`
+   automáticamente (`yaml_require_yq` baja mikefarah/yq v4+ aunque el sistema tenga
+   apt yq v3; `ensure_gh` baja gh ≥ 2.40).
+2. Si FORK_ENABLED="y" y `gh` ya está disponible, exporta GH_TOKEN=$FORK_PAT y
+   verifica que `gh api user` retorne un login válido. Si `gh` no está en PATH,
+   sáltate este chequeo — `ensure_gh` lo vendoriza durante el wizard y la
+   verificación de auth pasa allí.
 3. Verifica que $DESTINATION no exista (`[ ! -e $DESTINATION ]`). Si existe, detente.
 4. Si algún valor obligatorio está vacío detente y pídeme los faltantes:
    - AGENT_NAME, USER_NAME, EMAIL — siempre requeridos

@@ -64,11 +64,19 @@ yaml_yq_arch() {
 
 # yaml_bootstrap_yq — try to auto-download yq into scripts/vendor/bin.
 # Returns 0 if yq ends up available (on PATH or via vendor dir, which is prepended to PATH).
+#
+# YAML_VENDOR_DIR_OVERRIDE bypasses the repo-relative resolution. Tests use it
+# to point at a tmpdir so they don't write a fake binary into the real
+# scripts/vendor/bin/. Production code must never set it.
 yaml_bootstrap_yq() {
   local lib_dir repo_root vendor_dir os yq_arch url
-  lib_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-  repo_root=$(cd "$lib_dir/../.." && pwd)
-  vendor_dir="$repo_root/scripts/vendor/bin"
+  if [ -n "${YAML_VENDOR_DIR_OVERRIDE:-}" ]; then
+    vendor_dir="$YAML_VENDOR_DIR_OVERRIDE"
+  else
+    lib_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+    repo_root=$(cd "$lib_dir/../.." && pwd)
+    vendor_dir="$repo_root/scripts/vendor/bin"
+  fi
 
   # Already vendored from a previous run?
   if [ -x "$vendor_dir/yq" ]; then

@@ -100,11 +100,12 @@ You are running inside the **agentic-pod-launcher** repo. The user wants to scaf
    - All 5 optional plugins (`code-simplifier`, `commit-commands`, `github`, `skill-creator`, `superpowers`) = `n` unless the user asked for them
 
 4. **Pre-flight checks** (stop and report on failure — do not silently work around):
-   - `command -v yq && yq --version` (must be v4+)
-   - `command -v git`
-   - If `FORK_ENABLED=y`: `command -v gh` AND `GH_TOKEN=$FORK_PAT gh api user` returns a login
-   - `[ ! -e "$DESTINATION" ]` — destination must not exist
-   - On macOS, warn if `Docker.app` isn't running (the user will need it to `docker compose build` later, but it's not blocking the wizard).
+   - `command -v git` (required, no auto-install).
+   - `[ ! -e "$DESTINATION" ]` — destination must not exist.
+   - If `FORK_ENABLED=y` and `gh` is already on PATH: `GH_TOKEN=$FORK_PAT gh api user` returns a login. If `gh` is missing, skip this — `ensure_gh` vendors it during the wizard and the auth check happens there.
+   - On macOS, warn if `Docker.app` isn't running (needed for `docker compose build` later, but doesn't block the wizard).
+
+   **Do NOT gate on `yq` or `gh`.** `setup.sh` auto-vendors both into `scripts/vendor/bin/`: `yaml_require_yq` downloads mikefarah/yq v4+ when missing OR when the system yq is v3, and `ensure_gh` downloads gh ≥ 2.40 when missing. Debian/Ubuntu's `apt install yq` ships the **v3 Python wrapper** (incompatible syntax) — blocking on it forces a manual workaround the launcher already automates.
 
    **Validate inputs before piping them in.** The wizard re-prompts on
    invalid inputs and the piped stdin will desync. Run these regex
@@ -145,7 +146,10 @@ You are running inside the **agentic-pod-launcher** repo. The user wants to scaf
 
 6. **Run** `./setup.sh --destination "$DESTINATION"` with that stdin piped in. Capture stdout+stderr; show it if anything fails. Never use `--non-interactive` from this slash command — that flag requires a pre-existing `agent.yml`, which is a different flow.
 
-7. **On failure**, show the full error and stop. Do not edit `agent.yml` or any rendered file to "fix" anything without user confirmation. Common fixable errors: `yq` missing → `brew install yq` / `apt install yq`. `gh api user` failing → wrong PAT or expired token. `$DESTINATION` exists → user must `rm -rf` or pick a new path.
+7. **On failure**, show the full error and stop. Do not edit `agent.yml` or any rendered file to "fix" anything without user confirmation. Common errors:
+   - `gh api user` failing → wrong PAT or expired token. Regenerate at https://github.com/settings/tokens.
+   - `$DESTINATION` exists → user must `rm -rf` or pick a new path.
+   - `yaml_bootstrap_yq` failed (no network, GitHub releases unreachable) → suggest `brew install yq` (macOS) or downloading the right binary from https://github.com/mikefarah/yq/releases (Linux: `yq_linux_amd64`/`yq_linux_arm64`/`yq_linux_arm`). **Don't suggest `apt install yq`** — that's the v3 Python wrapper.
 
 8. **On success**:
    - `cat $DESTINATION/NEXT_STEPS.md` and show it (it now starts with a retry-loop attach command — explain that the user should use it because the watchdog respawns the tmux session after `/login` and a plain attach can hit the gap with `no sessions`).

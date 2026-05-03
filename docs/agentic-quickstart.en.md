@@ -16,7 +16,8 @@ The rest of this document is still useful: it covers the inputs in detail (helpf
 
 ## Prerequisites
 
-- `git`, `yq` v4+, `gh`, and `claude` installed.
+- `git` and `claude` installed.
+- `yq` v4+ and `gh`: optional. If missing, `setup.sh` auto-vendors them into `scripts/vendor/bin/` on first run (`yaml_require_yq` downloads mikefarah/yq v4+; `ensure_gh` downloads gh ≥ 2.40). On Debian/Ubuntu, **don't run `apt install yq`** — that package is the v3 Python wrapper (incompatible syntax); the launcher detects that and vendors the right binary anyway. To pre-install manually, use `brew install yq` (macOS) or grab the binary from [github.com/mikefarah/yq](https://github.com/mikefarah/yq#install).
 - A GitHub Personal Access Token with `repo` scope (and `delete_repo` if you plan to use `--delete-fork` later).
 - Push access to the fork owner (your personal account or an org you belong to).
 
@@ -109,9 +110,14 @@ PLUGIN_SUPERPOWERS="n"
 Run the agentic-pod-launcher wizard using the values above.
 
 PRE-FLIGHT — before touching setup.sh:
-1. Confirm `yq` (v4+), `git`, and `gh` are on PATH.
-2. If FORK_ENABLED="y", export GH_TOKEN=$FORK_PAT and verify `gh api user`
-   returns a valid login. If it fails, stop and show me the error.
+1. Confirm `git` is on PATH (required, no auto-install). Do NOT block on `yq`
+   or `gh` being absent — `setup.sh` vendors them into `scripts/vendor/bin/`
+   itself (`yaml_require_yq` downloads mikefarah/yq v4+ even if the system
+   has apt's v3; `ensure_gh` downloads gh ≥ 2.40).
+2. If FORK_ENABLED="y" and `gh` is already on PATH, export GH_TOKEN=$FORK_PAT
+   and verify `gh api user` returns a valid login. If `gh` is missing, skip
+   this — `ensure_gh` vendors it during the wizard and the auth check happens
+   there.
 3. Verify $DESTINATION does not exist (`[ ! -e $DESTINATION ]`). If it does, stop.
 4. If any required value is empty, stop and ask me for the missing ones:
    - AGENT_NAME, USER_NAME, EMAIL — always required
