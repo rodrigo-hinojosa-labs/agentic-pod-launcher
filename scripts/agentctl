@@ -502,6 +502,12 @@ cmd_doctor() {
         atl_name="${atl_id#atlassian-}"
         _check_token_health "$atl_id" "Token atlassian-$atl_name" "$th_max"
       done
+      # Claude Code OAuth — surfaced from the same token-health pipeline.
+      # File-local probe (no network), so its presence in token-health/
+      # depends only on the cron tick of check_token_health.sh detecting
+      # ~/.claude/.credentials.json inside the container.
+      [ -f "$th_dir/claude_oauth.json" ] \
+        && _check_token_health claude_oauth "Token claude_oauth" "$th_max"
     fi
   fi
 

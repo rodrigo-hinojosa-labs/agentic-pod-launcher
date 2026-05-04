@@ -238,6 +238,11 @@ status="error"
 attempt=0
 duration_ms=0
 claude_exit_code=0
+# error_kind disambiguates the "error" status into a category. Empty when
+# status is ok/skipped/timeout. Set to "auth_failed" when claude returns a
+# 401 / "Please run /login" body in stdout despite exit code 0 — the
+# post-check below catches that case.
+error_kind=""
 
 if is_prior_session_alive; then
   status="skipped"
@@ -254,6 +259,24 @@ else
     fi
     [ "$attempt" -lt "$max_attempts" ] && sleep 5
   done
+fi
+
+# Override status=ok→error when claude printed an authentication failure
+# message to stdout. This is the failure mode of expired Claude Code OAuth
+# tokens: the CLI prints the API 401 body to stdout and exits 0, which
+# without this guard counts as a successful run. Detection patterns mirror
+# the strings claude prints in v2.x:
+#   - "API Error: 401" (raw API response body)
+#   - "authentication_error" (error.type from the 401 body)
+#   - "Please run /login" (claude's own banner)
+# Persists error_kind="auth_failed" so consumers (doctor, dashboards,
+# token-health follow-up alerts) can distinguish this from timeout/network/oom.
+if [ "$status" = "ok" ] && [ -n "$last_session_log" ] && [ -f "$last_session_log" ]; then
+  if grep -qiE 'API Error: 401|authentication_error|Please run /login' "$last_session_log"; then
+    status="error"
+    claude_exit_code=1
+    error_kind="auth_failed"
+  fi
 fi
 
 case "$status" in
@@ -282,9 +305,11 @@ line=$(jq -cn \
   --argjson duration_ms "$duration_ms" \
   --argjson cec "$claude_exit_code" \
   --arg sess "$session" \
+  --arg error_kind "$error_kind" \
   --argjson notifier "$notifier_json" \
   '{ts:$ts, run_id:$run_id, trigger:$trigger, status:$status, attempt:$attempt,
     duration_ms:$duration_ms, claude_exit_code:$cec,
+    error_kind:(if $error_kind == "" then null else $error_kind end),
     prompt:'"$prompt_json"',
     tmux_session:$sess, notifier:$notifier}')
 

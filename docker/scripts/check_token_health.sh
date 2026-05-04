@@ -181,6 +181,16 @@ _run_all() {
     _check_one "atlassian-$name" "atlassian" \
       "$(probe_atlassian "$url" "$email" "$token")"
   done < <(discover_atlassian_workspaces)
+
+  # Claude Code OAuth — file-local check, only when the cred file exists.
+  # The agent's interactive claude session writes/reads ~/.claude/.credentials.json
+  # on /login. Probe is read-only: it inspects expiresAt vs now and warns
+  # early (≤30 min before expiry) so the user has time to /login before the
+  # next heartbeat actually fails with API 401.
+  local claude_cred="${TH_CLAUDE_CRED_OVERRIDE:-$HOME/.claude/.credentials.json}"
+  if [ -f "$claude_cred" ]; then
+    _check_one "claude_oauth" "claude_oauth" "$(probe_claude_oauth "$claude_cred")"
+  fi
 }
 
 # Allow sourcing for tests without running.
