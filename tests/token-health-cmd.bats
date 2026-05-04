@@ -66,11 +66,16 @@ STUB
 
 # Helper: invoke the runner with the canonical overrides pointing at the
 # tmpdir tree. All env vars the runner cares about must already be set.
+# TH_CLAUDE_CRED_OVERRIDE defaults to a non-existent path so the runner
+# does not pick up the real cred file of the user running the tests
+# (~/.claude/.credentials.json). Tests that exercise probe_claude_oauth
+# override TH_CLAUDE_CRED_OVERRIDE explicitly.
 _run_runner() {
   TH_WORKSPACE_OVERRIDE="$WS" \
   TH_LIB_DIR_OVERRIDE="$BATS_TEST_DIRNAME/../docker/scripts/lib" \
   TH_NOTIFIERS_DIR_OVERRIDE="$NOTIFIERS" \
   TH_DEDUP_SECS="${TH_DEDUP_SECS:-86400}" \
+  TH_CLAUDE_CRED_OVERRIDE="${TH_CLAUDE_CRED_OVERRIDE:-$BATS_TEST_TMPDIR/no-such-cred.json}" \
   run "$RUNNER"
 }
 
@@ -216,6 +221,41 @@ JSON
   [ "$status" -eq 0 ]
   grep -q "token-health-github warn" "$NOTIFY_OUT"
   jq -e '.consecutive_failures == 25' "$TH/github.json"
+}
+
+@test "runner: claude_oauth probe writes state file when cred exists" {
+  # Cred file con expiresAt 24h adelante → status=ok, sin notificación.
+  local cred="$TMP_TEST_DIR/.credentials.json"
+  local later_ms=$(( ($(date -u +%s) + 86400) * 1000 ))
+  jq -n --argjson exp "$later_ms" \
+    '{claudeAiOauth:{accessToken:"x",refreshToken:"y",expiresAt:$exp}}' > "$cred"
+
+  TH_CLAUDE_CRED_OVERRIDE="$cred" _run_runner
+  [ "$status" -eq 0 ]
+  [ -f "$TH/claude_oauth.json" ]
+  jq -e '.status == "ok"' "$TH/claude_oauth.json"
+  jq -e '.kind == "claude_oauth"' "$TH/claude_oauth.json"
+}
+
+@test "runner: claude_oauth expired cred → auth_fail + warn emitted" {
+  local cred="$TMP_TEST_DIR/.credentials.json"
+  local expired_ms=$(( ($(date -u +%s) - 3600) * 1000 ))
+  jq -n --argjson exp "$expired_ms" \
+    '{claudeAiOauth:{accessToken:"x",refreshToken:"y",expiresAt:$exp}}' > "$cred"
+
+  TH_CLAUDE_CRED_OVERRIDE="$cred" _run_runner
+  [ "$status" -eq 0 ]
+  jq -e '.status == "auth_fail"' "$TH/claude_oauth.json"
+  jq -e '.consecutive_failures == 1' "$TH/claude_oauth.json"
+  grep -q "token-health-claude_oauth warn" "$NOTIFY_OUT"
+  grep -q "/login" "$NOTIFY_OUT"
+}
+
+@test "runner: claude_oauth probe skipped when cred file absent" {
+  # Default override apunta a path no existente → probe es skipped, NO crea state file.
+  TH_CLAUDE_CRED_OVERRIDE="$TMP_TEST_DIR/nonexistent.json" _run_runner
+  [ "$status" -eq 0 ]
+  [ ! -f "$TH/claude_oauth.json" ]
 }
 
 @test "runner: notifier failure does not abort the cron tick" {

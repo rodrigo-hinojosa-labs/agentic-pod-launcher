@@ -8,10 +8,13 @@
 #
 # Token-health probes free-tier endpoints to detect expired/revoked
 # tokens BEFORE the user notices through a broken Claude tool call.
-# Three probes today:
+# Four probes today:
 #   - probe_github_pat:    GET https://api.github.com/user
 #   - probe_telegram_bot:  GET https://api.telegram.org/bot<TOKEN>/getMe
 #   - probe_atlassian:     GET <JIRA_URL>/rest/api/3/myself  (basic auth)
+#   - probe_claude_oauth:  file-local check of expiresAt in cred file
+#                          (no network call — Anthropic does not expose
+#                          a free /me endpoint for the OAuth flow).
 #
 # Probes return on stdout a single line:
 #   STATUS HTTP_CODE LATENCY_MS [ERROR_MESSAGE]
@@ -98,6 +101,49 @@ probe_atlassian() {
   url="${url%/}"
   _th_run_probe "${url}/rest/api/3/myself" \
     -u "${email}:${token}"
+}
+
+# probe_claude_oauth [CRED_FILE] → STATUS HTTP_CODE LATENCY_MS [ERROR]
+# File-local probe: reads ~/.claude/.credentials.json (or arg override),
+# extracts claudeAiOauth.expiresAt (epoch milliseconds), compares against
+# now. NOT a network call — Anthropic does not expose a free identity
+# endpoint for the Claude Code OAuth flow that we could probe without
+# burning rate limit. The cred file IS the source of truth: claude
+# itself updates it on /login (and, when the CLI eventually implements
+# auto-refresh, on refresh too).
+#
+# Status mapping:
+#   - missing file              → skipped 000 0 missing cred file
+#   - malformed / no expiresAt  → skipped 000 0 malformed expiresAt
+#   - expiresAt < now           → auth_fail 000 0 expired Ns ago
+#   - expiresAt - now < 30 min  → auth_fail 000 0 expires in Nm  (early warn)
+#   - else                      → ok 000 0
+# We use auth_fail (instead of a hypothetical "expiring") for the
+# <30min margin so the existing token_health_decide_action + dedup logic
+# treats it identically — surface a warning early enough to give the
+# user time to /login before the heartbeat actually breaks.
+probe_claude_oauth() {
+  local cred_file="${1:-$HOME/.claude/.credentials.json}"
+  if [ ! -f "$cred_file" ]; then
+    printf 'skipped 000 0 missing cred file\n'
+    return 0
+  fi
+  local expires_ms expires_s now_s
+  expires_ms=$(jq -r '.claudeAiOauth.expiresAt // empty' "$cred_file" 2>/dev/null)
+  if [ -z "$expires_ms" ] || ! [[ "$expires_ms" =~ ^[0-9]+$ ]]; then
+    printf 'skipped 000 0 malformed expiresAt\n'
+    return 0
+  fi
+  expires_s=$(( expires_ms / 1000 ))
+  now_s=$(_th_now_epoch)
+  local margin_s=1800   # 30 min
+  if [ "$expires_s" -le "$now_s" ]; then
+    printf 'auth_fail 000 0 expired %ds ago\n' "$(( now_s - expires_s ))"
+  elif [ "$(( expires_s - now_s ))" -lt "$margin_s" ]; then
+    printf 'auth_fail 000 0 expires in %dm\n' "$(( (expires_s - now_s) / 60 ))"
+  else
+    printf 'ok 000 0\n'
+  fi
 }
 
 # Enumerate Atlassian workspaces from the environment. For each
@@ -201,7 +247,7 @@ token_health_decide_action() {
 
 # Format a warning message for a token-health failure. Caller pipes to
 # the configured notifier.
-# $1 = id, $2 = kind (github_pat|telegram_bot|atlassian), $3 = error.
+# $1 = id, $2 = kind (github_pat|telegram_bot|atlassian|claude_oauth), $3 = error.
 token_health_format_warning() {
   local id="$1" kind="$2" error="$3"
   local hint=""
@@ -212,6 +258,12 @@ token_health_format_warning() {
       hint="Talk to @BotFather → /token to revoke + reissue. Update NOTIFY_BOT_TOKEN in .env." ;;
     atlassian)
       hint="Regenerate at https://id.atlassian.com/manage-profile/security/api-tokens. Update ATLASSIAN_<WORKSPACE>_TOKEN in .env." ;;
+    claude_oauth)
+      hint="OAuth de Claude Code expirado o por expirar. Conéctate a la sesión: agentctl attach → /login → completa el flow OAuth en el browser. Si sigue fallando tras /login, considera el feature flag features.claude_oauth_refresh.enabled (experimental, requiere validación previa)."
+      printf '[token-health] %s (%s): %s\n%s\n' \
+        "$id" "$kind" "$error" "$hint"
+      return 0
+      ;;
   esac
   printf '[token-health] %s (%s): %s\n%s\nThen run ./setup.sh --regenerate to refresh derived files.\n' \
     "$id" "$kind" "$error" "$hint"

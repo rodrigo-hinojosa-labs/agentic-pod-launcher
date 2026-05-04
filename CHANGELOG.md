@@ -3,6 +3,34 @@
 ## [Unreleased]
 
 ### Fixed
+- heartbeat reports `status: ok` when claude returns API 401 in stdout.
+  When the OAuth access token expires inside the container, `claude --print`
+  emits the API error JSON (`{"type":"authentication_error",...}`) to stdout
+  and exits 0. The heartbeat wrapper trusted exit code and counted the run
+  as success, sending a misleading `[ok]` notification while the agent was
+  effectively dead. Fix: post-check the session log for `API Error: 401` /
+  `authentication_error` / `Please run /login` and override `status` to
+  `error` with new field `error_kind: "auth_failed"` (persisted in
+  `runs.jsonl` and `state.json::last_run`). Detected on Linus/Ferrari at
+  2026-05-03 22:30 –04. Phase A1 of the OAuth resilience plan.
+
+### Added
+- token-health probe for Claude Code OAuth. New file-local probe
+  `probe_claude_oauth` reads `~/.claude/.credentials.json` (path overridable
+  via `TH_CLAUDE_CRED_OVERRIDE`), extracts `claudeAiOauth.expiresAt` (epoch
+  ms), and classifies: missing/malformed → `skipped`, expired → `auth_fail`
+  with `expired Ns ago`, expires in <30 min → `auth_fail` with `expires in
+  Nm` (early warning), else `ok`. The probe is purely local (no network
+  call to Anthropic) because the OAuth flow does not expose a free /me
+  endpoint suitable for repeated polling. Wired into the existing token-
+  health pipeline: hourly cron in `check_token_health.sh::_run_all`,
+  state file at `<workspace>/scripts/heartbeat/token-health/claude_oauth.json`,
+  doctor check 19 in `agentctl::cmd_doctor` (only fires if the state file
+  exists). Warning hint points at `agentctl attach → /login`. Phase A2 of
+  the OAuth resilience plan. Same dedup (24h) and warn/recover/silent
+  state machine as the other token-health probes.
+
+### Fixed
 - timezone in container falls back to UTC even when `agent.yml::user.timezone`
   is set. The Alpine base image ships without `tzdata` and the compose
   template never passed `TZ` to the container — `date`, bash, and any
