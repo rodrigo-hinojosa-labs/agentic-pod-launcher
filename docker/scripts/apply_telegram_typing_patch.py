@@ -58,15 +58,20 @@ import re
 import sys
 from pathlib import Path
 
-MARKER_TYPING = "agentic-pod-launcher: typing refresh patch v3"
+MARKER_TYPING = "agentic-pod-launcher: typing refresh patch v4"
+MARKER_TYPING_V3 = "agentic-pod-launcher: typing refresh patch v3"
 MARKER_TYPING_V2 = "agentic-pod-launcher: typing refresh patch v2"
 MARKER_TYPING_V1 = "agentic-pod-launcher: typing refresh patch v1"
 MARKER_OFFSET = "agentic-pod-launcher: offset persistence patch v1"
 MARKER_STDERR = "agentic-pod-launcher: stderr-capture patch v1"
 MARKER_PRIMARY = "agentic-pod-launcher: primary lock patch v1"
 
-TYPING_HELPERS = (
-    "\n// " + MARKER_TYPING + "\n"
+# V3 helpers — used by the v2→v3 upgrade ONLY. Fresh installs and v3→v4
+# upgrades use TYPING_HELPERS (v4 — anti-zombie). Without this separation,
+# v2→v3 would jump straight to v4 and the v3→v4 step would no-op,
+# mis-stamping the upgrade history.
+TYPING_HELPERS_V3 = (
+    "\n// " + MARKER_TYPING_V3 + "\n"
     "const _typingIntervals = new Map<string | number, ReturnType<typeof setInterval>>()\n"
     "const _typingTickCounts = new Map<string | number, number>()\n"
     "const _TYPING_REFRESH_MS = 4000\n"
@@ -78,6 +83,70 @@ TYPING_HELPERS = (
     "    _typingTickCounts.set(chat_id, tick)\n"
     "    bot.api.sendChatAction(chat_id, 'typing')\n"
     "      .then(() => {\n"
+    "        if (tick === 1 || tick % 5 === 0) {\n"
+    "          process.stderr.write(`telegram channel: typing tick ${tick} for chat ${chat_id}\\n`)\n"
+    "        }\n"
+    "      })\n"
+    "      .catch((err: any) => {\n"
+    "        const msg = err && (err.message || err.description || String(err))\n"
+    "        process.stderr.write(`telegram channel: sendChatAction failed for chat ${chat_id} tick ${tick}: ${msg}\\n`)\n"
+    "      })\n"
+    "  }\n"
+    "  send()\n"
+    "  const timer = setInterval(send, _TYPING_REFRESH_MS)\n"
+    "  _typingIntervals.set(chat_id, timer)\n"
+    "}\n"
+    "function _typingStop(chat_id: string | number): void {\n"
+    "  const t = _typingIntervals.get(chat_id)\n"
+    "  if (t) { clearInterval(t); _typingIntervals.delete(chat_id) }\n"
+    "  _typingTickCounts.delete(chat_id)\n"
+    "}\n"
+)
+
+TYPING_HELPERS = (
+    "\n// " + MARKER_TYPING + "\n"
+    "const _typingIntervals = new Map<string | number, ReturnType<typeof setInterval>>()\n"
+    "const _typingTickCounts = new Map<string | number, number>()\n"
+    "const _typingStartedAt = new Map<string | number, number>()\n"
+    "const _TYPING_REFRESH_MS = 4000\n"
+    "// v4: hard cap on typing duration. After _TYPING_MAX_DURATION_MS without\n"
+    "// case 'reply' firing, abort the setInterval, send a user-facing message\n"
+    "// to the chat, and log to stderr. Default 5 min; override via env var.\n"
+    "// This prevents the \"zombie typing\" UX seen when claude is blocked on\n"
+    "// /login (OAuth expired) — without v4 the user sees the bot \"thinking\"\n"
+    "// for hours while the agent is dead.\n"
+    "const _TYPING_MAX_DURATION_MS = (() => {\n"
+    "  const raw = process.env.TELEGRAM_TYPING_MAX_MS\n"
+    "  const n = raw ? parseInt(raw, 10) : NaN\n"
+    "  return Number.isFinite(n) && n > 0 ? n : 300000\n"
+    "})()\n"
+    "function _typingKeepAlive(chat_id: string | number): void {\n"
+    "  _typingStop(chat_id)\n"
+    "  _typingTickCounts.set(chat_id, 0)\n"
+    "  _typingStartedAt.set(chat_id, Date.now())\n"
+    "  const send = () => {\n"
+    "    const tick = (_typingTickCounts.get(chat_id) ?? 0) + 1\n"
+    "    _typingTickCounts.set(chat_id, tick)\n"
+    "    const started = _typingStartedAt.get(chat_id) ?? Date.now()\n"
+    "    const elapsed = Date.now() - started\n"
+    "    if (elapsed > _TYPING_MAX_DURATION_MS) {\n"
+    "      // Abort: stop typing, notify the user, log forensics. The\n"
+    "      // typical cause is OAuth expired (claude blocked on /login)\n"
+    "      // or a stuck MCP — both require operator intervention. v3\n"
+    "      // would have left the typing tick spinning indefinitely.\n"
+    "      _typingStop(chat_id)\n"
+    "      const minutes = Math.round(elapsed / 60000)\n"
+    "      const warnMsg = `⚠️ Tardé más de ${minutes} min en responder. Es probable que el OAuth de Claude haya expirado o haya un error de conectividad. Revisa: agentctl doctor.`\n"
+    "      bot.api.sendMessage(chat_id, warnMsg)\n"
+    "        .catch((err: any) => {\n"
+    "          const msg = err && (err.message || err.description || String(err))\n"
+    "          process.stderr.write(`telegram channel: timeout-warn sendMessage failed for chat ${chat_id}: ${msg}\\n`)\n"
+    "        })\n"
+    "      process.stderr.write(`telegram channel: typing aborted after ${minutes}m (${tick} ticks) for chat ${chat_id}\\n`)\n"
+    "      return\n"
+    "    }\n"
+    "    bot.api.sendChatAction(chat_id, 'typing')\n"
+    "      .then(() => {\n"
     "        // Beat every 5 ticks (~20s) so the stderr log shows the\n"
     "        // setInterval is alive without saturating it on short replies.\n"
     "        if (tick === 1 || tick % 5 === 0) {\n"
@@ -85,7 +154,7 @@ TYPING_HELPERS = (
     "        }\n"
     "      })\n"
     "      .catch((err: any) => {\n"
-    "        // v1/v2 silently swallowed errors here. v3 surfaces them so\n"
+    "        // v1/v2 silently swallowed errors here. v3+ surfaces them so\n"
     "        // rate limits, network failures, or token issues become\n"
     "        // visible in /workspace/scripts/heartbeat/logs/telegram-mcp-stderr.log.\n"
     "        const msg = err && (err.message || err.description || String(err))\n"
@@ -100,6 +169,7 @@ TYPING_HELPERS = (
     "  const t = _typingIntervals.get(chat_id)\n"
     "  if (t) { clearInterval(t); _typingIntervals.delete(chat_id) }\n"
     "  _typingTickCounts.delete(chat_id)\n"
+    "  _typingStartedAt.delete(chat_id)\n"
     "}\n"
 )
 
@@ -309,7 +379,7 @@ def upgrade_typing_v2_to_v3(src: str) -> tuple[str, bool]:
         r"(?:[^\n]*\n)+?"
         r"\}\n"
     )
-    new_src, n = re.subn(pattern, TYPING_HELPERS, src, count=1)
+    new_src, n = re.subn(pattern, TYPING_HELPERS_V3, src, count=1)
     if n != 1:
         warn("v2→v3 upgrade anchors not found (helpers may have been edited out-of-band) — leaving v2 in place")
         return src, False
@@ -320,6 +390,64 @@ def upgrade_typing_v2_to_v3(src: str) -> tuple[str, bool]:
         "  // Patched by agentic-pod-launcher (telegram-typing v2).\n",
         "// Typing indicator — refreshed every 4s until reply fires (no cap; stops on reply or process exit).\n"
         "  // Patched by agentic-pod-launcher (telegram-typing v3 — instrumented).\n",
+    )
+    return new_src, True
+
+
+def upgrade_typing_v3_to_v4(src: str) -> tuple[str, bool]:
+    """Migrate a server.ts already patched with typing v3 to v4 in-place.
+
+    The behavioral diff between v3 and v4 is the anti-zombie timeout: v3's
+    setInterval kept refreshing the typing indicator forever if `case 'reply'`
+    never fired (typical OAuth-expired scenario). v4 caps the indicator at
+    `_TYPING_MAX_DURATION_MS` (default 5 min, overridable via env
+    TELEGRAM_TYPING_MAX_MS), aborts cleanly, sends the user a "tardé >Nm"
+    message, and logs to stderr.
+
+    Implementation: same shape as v2→v3 — replace the entire v3 helper block
+    (from the v3 marker through the `_typingStop` closing brace) with the
+    fresh TYPING_HELPERS block which carries the v4 marker.
+
+    Defensive: if the v3 helper shape was edited out-of-band, the regex
+    won't match and we leave the file at v3.
+
+    Returns (new_src, applied).
+    """
+    if MARKER_TYPING in src:                # already at v4
+        return src, False
+    if MARKER_TYPING_V3 not in src:         # not at v3 → caller may have a v1/v2 to upgrade first
+        return src, False
+
+    # Remove the v3 marker comment + the v3 helper block. v3 shape:
+    #   // agentic-pod-launcher: typing refresh patch v3
+    #   const _typingIntervals = ...
+    #   const _typingTickCounts = ...
+    #   const _TYPING_REFRESH_MS = 4000
+    #   function _typingKeepAlive(...) { ... }
+    #   function _typingStop(...) { ... }
+    pattern = (
+        r"\n// " + re.escape(MARKER_TYPING_V3) + r"\n"
+        r"const _typingIntervals[^\n]*\n"
+        r"const _typingTickCounts[^\n]*\n"
+        r"const _TYPING_REFRESH_MS = 4000\n"
+        r"function _typingKeepAlive\(chat_id: string \| number\): void \{\n"
+        r"(?:[^\n]*\n)+?"  # function body
+        r"\}\n"
+        r"function _typingStop\(chat_id: string \| number\): void \{\n"
+        r"(?:[^\n]*\n)+?"
+        r"\}\n"
+    )
+    new_src, n = re.subn(pattern, TYPING_HELPERS, src, count=1)
+    if n != 1:
+        warn("v3→v4 upgrade anchors not found (helpers may have been edited out-of-band) — leaving v3 in place")
+        return src, False
+
+    # Update the inline comment at the call site.
+    new_src = new_src.replace(
+        "// Typing indicator — refreshed every 4s until reply fires (no cap; stops on reply or process exit).\n"
+        "  // Patched by agentic-pod-launcher (telegram-typing v3 — instrumented).\n",
+        "// Typing indicator — refreshed every 4s until reply fires; aborts after _TYPING_MAX_DURATION_MS (default 5min) with user-facing warning.\n"
+        "  // Patched by agentic-pod-launcher (telegram-typing v4 — anti-zombie).\n",
     )
     return new_src, True
 
@@ -341,8 +469,8 @@ def apply_typing(src: str) -> tuple[str, bool]:
         r"  // Typing indicator — signals \"processing\" until we reply \(or ~5s elapses\)\.\n"
         r"  void bot\.api\.sendChatAction\(chat_id, 'typing'\)\.catch\(\(\) => \{\}\)",
         (
-            "  // Typing indicator — refreshed every 4s until reply fires (no cap; stops on reply or process exit).\n"
-            "  // Patched by agentic-pod-launcher (telegram-typing v3 — instrumented).\n"
+            "  // Typing indicator — refreshed every 4s until reply fires; aborts after _TYPING_MAX_DURATION_MS (default 5min) with user-facing warning.\n"
+            "  // Patched by agentic-pod-launcher (telegram-typing v4 — anti-zombie).\n"
             "  _typingKeepAlive(chat_id)"
         ),
         new_src,
@@ -532,19 +660,20 @@ def main(argv: list[str]) -> int:
     new_src = src
 
     # Run the typing upgrades BEFORE apply_typing, in cascade:
-    #   v1 → v2 (cap removed)  → v3 (instrumented)
+    #   v1 → v2 (cap removed) → v3 (instrumented) → v4 (anti-zombie timeout)
     # If a step's source marker isn't present, that step is a no-op and the
-    # next step picks up. apply_typing then short-circuits on the v3 marker
+    # next step picks up. apply_typing then short-circuits on the v4 marker
     # if anything ran. If no markers were present at all, apply_typing
-    # installs v3 fresh.
+    # installs v4 fresh.
     new_src, tu1 = upgrade_typing_v1_to_v2(new_src)
     new_src, tu2 = upgrade_typing_v2_to_v3(new_src)
+    new_src, tu3 = upgrade_typing_v3_to_v4(new_src)
     new_src, t = apply_typing(new_src)
     new_src, o = apply_offset(new_src)
     new_src, s = apply_stderr(new_src)
     new_src, p = apply_primary(new_src)
 
-    if not (tu1 or tu2 or t or o or s or p):
+    if not (tu1 or tu2 or tu3 or t or o or s or p):
         # Either everything is already patched, or every set of anchors missed.
         return 0
 
@@ -557,6 +686,8 @@ def main(argv: list[str]) -> int:
         parts.append("typing-upgrade-v1→v2")
     if tu2:
         parts.append("typing-upgrade-v2→v3")
+    if tu3:
+        parts.append("typing-upgrade-v3→v4")
     if t:
         parts.append("typing")
     if o:
