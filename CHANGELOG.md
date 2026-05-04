@@ -2,6 +2,35 @@
 
 ## [Unreleased]
 
+### Added
+- watchdog detects `Please run /login` banner in `claude.log` and emits an
+  immediate warning via the configured notifier. Closes the gap between
+  "OAuth expires" and "user gets warned" — without this, the user only
+  finds out at the next heartbeat (up to 30 min lag) or by attaching the
+  tmux session manually. New function `_check_auth_banner` in
+  `start_services.sh` is throttled to 1× per 60s, reads the last 50 lines
+  of `claude.log`, persists a state file at
+  `<workspace>/scripts/heartbeat/auth-status.json` with `{status,
+  first_seen_at, last_warned_at}`, and dedups warnings 24h. When the
+  banner clears (post-/login), emits a recovery message + resets the
+  state. Test-only env vars `AUTH_BANNER_LOG_OVERRIDE`,
+  `AUTH_BANNER_STATE_OVERRIDE`, `AUTH_BANNER_AGENT_YML_OVERRIDE`,
+  `AUTH_BANNER_NOTIFIERS_OVERRIDE` enable bats coverage without touching
+  `/workspace/`. Phase B1 of the OAuth resilience plan.
+- Telegram plugin patch v4 (anti-zombie typing). Closes the UX hole
+  where the bot would show "typing…" forever when claude was blocked on
+  `/login` (OAuth expired) — observed during the 2026-05-03 incident
+  with 415+ stranded typing ticks. v4 caps the indicator at
+  `_TYPING_MAX_DURATION_MS` (default 5 min, override via env
+  `TELEGRAM_TYPING_MAX_MS`), aborts the `setInterval`, sends the user a
+  message ("⚠️ Tardé más de Nm en responder. Es probable que el OAuth
+  de Claude haya expirado. Revisa: agentctl doctor."), and logs to
+  stderr (tee'd to `telegram-mcp-stderr.log` by the v3 stderr patch).
+  Idempotent upgrade cascade: v1→v2→v3→v4. The v3 helper block remains
+  available as `TYPING_HELPERS_V3` so v2→v3 upgrades land on v3 first
+  before `upgrade_typing_v3_to_v4` lifts them to v4 — preserves accurate
+  upgrade-step logging. Phase B2 of the OAuth resilience plan.
+
 ### Fixed
 - heartbeat reports `status: ok` when claude returns API 401 in stdout.
   When the OAuth access token expires inside the container, `claude --print`

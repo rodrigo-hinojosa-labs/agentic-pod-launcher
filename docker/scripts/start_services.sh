@@ -601,6 +601,128 @@ crash_budget_check() {
 # channel_plugin_alive (above) still handles the case where bun
 # itself dies; that one is reliably detectable from outside.
 
+# Auth banner detect: every 60s, scan the tail of /workspace/claude.log
+# for "Please run /login" / "API Error: 401" / "authentication_error".
+# When detected on a fresh run (or after 24h of persistence), emit a
+# warning via the configured notifier so the user finds out within a
+# minute instead of waiting for the next heartbeat tick (up to 30 min).
+# State file at /workspace/scripts/heartbeat/auth-status.json with shape:
+#   {status: "detected"|"ok", first_seen_at: <iso>, last_warned_at: <iso|null>}
+# Reuses the same iso↔epoch helpers and notifier dispatch as the
+# heartbeat. Idempotent: repeated detections within 24h stay silent.
+_last_auth_check=0
+
+_auth_banner_iso_now() { date -u +"%Y-%m-%dT%H:%M:%SZ"; }
+_auth_banner_iso_to_epoch() {
+  local ts="$1"
+  [ -z "$ts" ] || [ "$ts" = "null" ] && return 0
+  if date -d "$ts" +%s 2>/dev/null; then return 0; fi
+  date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$ts" +%s 2>/dev/null || true
+}
+
+_emit_auth_warning() {
+  local kind="$1"   # "detected" or "recovered"
+  local agent_yml="${AUTH_BANNER_AGENT_YML_OVERRIDE:-/workspace/agent.yml}"
+  local notifiers_dir="${AUTH_BANNER_NOTIFIERS_OVERRIDE:-/workspace/scripts/heartbeat/notifiers}"
+  local channel="none"
+  if [ -f "$agent_yml" ] && command -v yq >/dev/null 2>&1; then
+    channel=$(yq -r '.notifications.channel // "none"' "$agent_yml" 2>/dev/null)
+    [ "$channel" = "null" ] && channel="none"
+  fi
+  [ "$channel" = "none" ] && return 0
+  local notifier="${notifiers_dir}/${channel}.sh"
+  [ -x "$notifier" ] || return 0
+  local msg
+  if [ "$kind" = "recovered" ]; then
+    msg="[auth-banner] Claude OAuth recuperado — la sesión ya no muestra 'Please run /login'."
+  else
+    msg="[auth-banner] ⚠ Claude Code muestra 'Please run /login' (API 401). Conéctate: agentctl attach → /login → completa OAuth desde el browser. Mientras tanto el heartbeat reporta error_kind=auth_failed."
+  fi
+  printf '%s' "$msg" | "$notifier" "auth-banner-${kind}" "warn" >/dev/null 2>&1 || true
+}
+
+_write_auth_state() {
+  local file="$1" status="$2" first_seen="$3" last_warned="$4"
+  local dir tmp
+  dir=$(dirname "$file")
+  mkdir -p "$dir" 2>/dev/null || true
+  tmp=$(mktemp "$dir/.auth-status.json.XXXXXX") || return 0
+  jq -n \
+    --arg status "$status" \
+    --arg first "$first_seen" \
+    --arg last "$last_warned" \
+    '{status:$status,
+      first_seen_at:(if $first == "" then null else $first end),
+      last_warned_at:(if $last == "" then null else $last end)}' \
+    > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
+  mv "$tmp" "$file" 2>/dev/null || rm -f "$tmp"
+}
+
+_check_auth_banner() {
+  local now
+  now=$(date +%s)
+  if [ $((now - _last_auth_check)) -lt 60 ]; then
+    return 0
+  fi
+  _last_auth_check=$now
+
+  local claude_log="${AUTH_BANNER_LOG_OVERRIDE:-/workspace/claude.log}"
+  local state_file="${AUTH_BANNER_STATE_OVERRIDE:-/workspace/scripts/heartbeat/auth-status.json}"
+  [ -f "$claude_log" ] || return 0
+
+  local detected=0
+  if tail -n 50 "$claude_log" 2>/dev/null \
+       | grep -qiE 'Please run /login|API Error: 401|authentication_error'; then
+    detected=1
+  fi
+
+  local prev_status="" prev_warned="" prev_first=""
+  if [ -f "$state_file" ]; then
+    prev_status=$(jq -r '.status // ""'         "$state_file" 2>/dev/null)
+    prev_warned=$(jq -r '.last_warned_at // ""' "$state_file" 2>/dev/null)
+    prev_first=$(jq -r '.first_seen_at // ""'   "$state_file" 2>/dev/null)
+  fi
+  [ "$prev_status"  = "null" ] && prev_status=""
+  [ "$prev_warned"  = "null" ] && prev_warned=""
+  [ "$prev_first"   = "null" ] && prev_first=""
+
+  if [ "$detected" -eq 1 ]; then
+    local should_warn=0
+    if [ "$prev_status" != "detected" ]; then
+      # Transition ok→detected (or first-ever detection) — warn.
+      should_warn=1
+    elif [ -n "$prev_warned" ]; then
+      local last_epoch
+      last_epoch=$(_auth_banner_iso_to_epoch "$prev_warned")
+      if [ -n "$last_epoch" ] && [ $((now - last_epoch)) -gt 86400 ]; then
+        should_warn=1
+      fi
+    else
+      should_warn=1
+    fi
+
+    local first_at iso_now
+    iso_now=$(_auth_banner_iso_now)
+    first_at="$prev_first"
+    [ -z "$first_at" ] && first_at="$iso_now"
+
+    if [ "$should_warn" -eq 1 ]; then
+      _emit_auth_warning "detected"
+      log "auth-banner detected in claude.log — warning emitted via notifier"
+      _write_auth_state "$state_file" "detected" "$first_at" "$iso_now"
+    else
+      _write_auth_state "$state_file" "detected" "$first_at" "$prev_warned"
+    fi
+  else
+    # Banner not present. If we previously detected, this is a recovery.
+    if [ "$prev_status" = "detected" ]; then
+      _emit_auth_warning "recovered"
+      log "auth-banner cleared in claude.log — recovery emitted via notifier"
+      _write_auth_state "$state_file" "ok" "" ""
+    fi
+  fi
+}
+
 # Backup-identity: every 60s, compare identity hash vs last-backup hash.
 # Fires the primitive when they differ. Throttled to avoid bursts.
 _last_backup_check=0
@@ -649,6 +771,12 @@ _run_watchdog() {
 
     # Best-effort backup check (throttled internally to one per 60s).
     _check_identity_backup
+
+    # Best-effort auth-banner check (throttled internally to one per 60s).
+    # Detects when claude.log shows the "Please run /login" banner and
+    # emits a warning via the configured notifier — orthogonal to the
+    # heartbeat-based detection (which has up to 30 min latency).
+    _check_auth_banner
 
     if session_alive && channel_plugin_alive; then
       continue
