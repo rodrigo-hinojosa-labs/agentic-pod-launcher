@@ -1558,9 +1558,12 @@ scaffold_destination() {
   echo "▸ Scaffolding destination: $dest"
   mkdir -p "$dest"
 
-  # Copy system files (installer → destination)
+  # Copy system files (installer → destination). VERSION ships with the
+  # launcher and must reach the dest so `--regenerate` from inside the
+  # workspace can stamp meta.launcher_version against the same value
+  # the wizard used during scaffold.
   local item
-  for item in setup.sh .gitignore LICENSE; do
+  for item in setup.sh VERSION .gitignore LICENSE; do
     [ -e "$src_dir/$item" ] && cp "$src_dir/$item" "$dest/"
   done
   for item in modules scripts docker; do

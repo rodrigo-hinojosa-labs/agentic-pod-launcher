@@ -145,8 +145,11 @@ JS
   done > "$WORKSPACE/scripts/heartbeat/logs/runs.jsonl"
   run bash "$REPO_ROOT/docker/scripts/heartbeatctl" logs
   [ "$status" -eq 0 ]
-  [[ "$output" == *"r-30"* ]]
-  [[ "$output" != *"r-01"* ]]
+  # Default tail is 20: latest 20 of 30 should be visible (p11..p30),
+  # earliest 10 hidden (p01..p10). The table column shows .prompt, not
+  # .run_id, so assert on the prompt strings.
+  [[ "$output" == *"p30"* ]]
+  [[ "$output" != *"p01"* ]]
 }
 
 @test "logs --json emits raw lines" {

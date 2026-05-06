@@ -67,23 +67,24 @@ teardown() { teardown_tmp_dir; }
   cd "$TMP_TEST_DIR/installer"
   wizard_answers name=regen-bot display=RegenBot | ./setup.sh --destination "$dest"
 
-  # Tamper meta.launcher_version to confirm regenerate refreshes it from
-  # the launcher's current VERSION.
-  yq -i '.meta.launcher_version = "stale-version"' "$dest/agent.yml"
+  # The wizard's final regenerate() step already stamps both fields, so
+  # tamper them to a known stale value first; the explicit --regenerate
+  # below has to refresh them past those values to pass.
+  local stale_ts="2020-01-01T00:00:00Z"
+  yq -i ".meta.launcher_version = \"stale-version\" | .meta.regenerated_at = \"$stale_ts\"" \
+    "$dest/agent.yml"
   [ "$(yq '.meta.launcher_version' "$dest/agent.yml")" = "stale-version" ]
-  local before_regenerated
-  before_regenerated=$(yq '.meta.regenerated_at // ""' "$dest/agent.yml")
-  [ -z "$before_regenerated" ]
+  [ "$(yq '.meta.regenerated_at' "$dest/agent.yml")" = "$stale_ts" ]
 
   cd "$dest"
   ./setup.sh --regenerate
 
-  local after_v after_regen
+  local after_v after_regen expected
   after_v=$(yq '.meta.launcher_version' "$dest/agent.yml")
   after_regen=$(yq '.meta.regenerated_at' "$dest/agent.yml")
-  local expected
   expected=$(tr -d '[:space:]' < "$REPO_ROOT/VERSION")
   [ "$after_v" = "$expected" ]
+  [ "$after_regen" != "$stale_ts" ]
   [[ "$after_regen" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]
 }
 
