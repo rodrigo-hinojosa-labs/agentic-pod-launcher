@@ -1,0 +1,47 @@
+name: shellcheck
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shellcheck-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shellcheck:
+    name: shellcheck (severity=error)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify shellcheck is available
+        run: shellcheck --version
+
+      - name: Run shellcheck
+        run: |
+          set -euo pipefail
+          # Find every shell script + the two extension-less CLIs (agentctl,
+          # heartbeatctl). Excludes:
+          #   - tests/ (helper.bash uses dynamic sourcing patterns shellcheck
+          #     can't follow without false positives; covered by bats itself)
+          #   - scripts/vendor/ (third-party binaries, no source)
+          #   - SC1090/SC1091 globally — we source by computed paths in many
+          #     libs (e.g. heartbeatctl resolves HEARTBEATCTL_LIB_DIR at
+          #     runtime from /opt/agent-admin/scripts/lib in the image vs.
+          #     the repo path during tests). Following sources is opt-in
+          #     per-file, not a project-wide signal.
+          {
+            find . -type f \( -name '*.sh' -o -name '*.bash' \) \
+              -not -path './.git/*' \
+              -not -path './scripts/vendor/*' \
+              -not -path './tests/*'
+            printf './scripts/agentctl\n./docker/scripts/heartbeatctl\n'
+          } | xargs shellcheck -S error -e SC1090,SC1091

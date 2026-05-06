@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Library: helpers for the identity backup primitive.
 # Sourced by heartbeatctl and tests. Pure functions where possible; the
 # file operations (cp, git) live here but the orchestration (the flow)
