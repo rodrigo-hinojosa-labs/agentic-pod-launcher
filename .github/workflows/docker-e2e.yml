@@ -1,0 +1,60 @@
+name: docker-e2e (nightly)
+
+on:
+  # 05:00 UTC = 01:00 Santiago (off-peak). Adjust if it collides with
+  # other nightly jobs on the runner queue later.
+  schedule:
+    - cron: '0 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-e2e
+  # Nightly runs are independent — don't let a manual dispatch cancel
+  # the scheduled one (or vice versa).
+  cancel-in-progress: false
+
+jobs:
+  e2e:
+    name: docker e2e suite (DOCKER_E2E=1)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install yq v4 (mikefarah)
+        run: |
+          set -euo pipefail
+          sudo curl -fsSL -o /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
+
+      - name: Install bats-core
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch v1.11.0 \
+            https://github.com/bats-core/bats-core /tmp/bats
+          sudo /tmp/bats/install.sh /usr/local
+          bats --version
+
+      - name: Verify deps + docker
+        run: |
+          set -euo pipefail
+          bash --version | head -1
+          bats --version
+          yq --version
+          jq --version
+          git --version
+          tmux -V
+          docker --version
+          docker compose version
+          docker info | head -10
+
+      - name: Run docker-e2e suite
+        env:
+          DOCKER_E2E: '1'
+        run: bats --print-output-on-failure tests/docker-e2e-*.bats
