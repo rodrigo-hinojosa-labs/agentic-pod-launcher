@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Library: helpers for the config backup primitive.
 # Snapshots agent.yml (no secrets, no encryption needed) to the
 # 'backup/config' orphan branch on the agent's fork. Restoration uses

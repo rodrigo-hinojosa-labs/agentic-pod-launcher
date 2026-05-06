@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Library: helpers for the vault backup primitive.
 # Mirrors backup_identity.sh in shape: pure helpers + commit/push flow.
 # Source of truth for the vault path is agent.yml's vault.path (default
