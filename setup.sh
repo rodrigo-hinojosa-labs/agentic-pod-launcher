@@ -8,6 +8,7 @@ source "$SCRIPT_DIR/scripts/lib/yaml.sh"
 source "$SCRIPT_DIR/scripts/lib/render.sh"
 source "$SCRIPT_DIR/scripts/lib/plugin-catalog.sh"
 source "$SCRIPT_DIR/scripts/lib/mcp-catalog.sh"
+source "$SCRIPT_DIR/scripts/lib/schema.sh"
 
 GUM=""  # populated by ensure_gum
 
@@ -1782,31 +1783,11 @@ install_service() {
 # accidentally-truncated agent.yml never silently produces a broken
 # scaffold.
 validate_agent_yml_required() {
-  local yml="$1"
-  local required=(
-    ".agent.name"
-    ".deployment.workspace"
-    ".features.heartbeat.interval"
-    ".features.heartbeat.timeout"
-    ".features.heartbeat.retries"
-    ".features.heartbeat.default_prompt"
-    ".notifications.channel"
-    ".docker.uid"
-    ".docker.gid"
-    ".docker.image_tag"
-    ".docker.base_image"
-  )
-  local missing=()
-  local key val
-  for key in "${required[@]}"; do
-    val=$(yq "$key" "$yml" 2>/dev/null)
-    if [ -z "$val" ] || [ "$val" = "null" ]; then
-      missing+=("$key")
-    fi
-  done
-  if [ ${#missing[@]} -gt 0 ]; then
-    echo "ERROR: agent.yml is missing required field(s):" >&2
-    printf '  - %s\n' "${missing[@]}" >&2
+  # Thin wrapper around agent_yml_validate (scripts/lib/schema.sh) so the
+  # existing call sites in main() keep working. The schema lib now owns
+  # the source of truth for required fields, enums, and boolean checks;
+  # both --regenerate and --non-interactive flow through this helper.
+  if ! agent_yml_validate "$1"; then
     echo "" >&2
     echo "Run ./setup.sh --reset to re-collect, or edit agent.yml by hand." >&2
     return 1
