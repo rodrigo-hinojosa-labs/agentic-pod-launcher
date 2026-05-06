@@ -358,6 +358,31 @@ cmd_doctor() {
     _doctor_fail "agent.yml is malformed (yq parse failed)" "Restore from agent.yml.prev if available, or re-run setup.sh"
   fi
 
+  # 5b. Launcher version stamped in agent.yml::meta — surfaces drift between
+  #     the launcher rev that scaffolded the workspace and what's running
+  #     today. Informational only (legacy agents predating the meta block
+  #     get a hint to regenerate).
+  if [ -n "$yml" ] && yq -e '.' "$yml" >/dev/null 2>&1; then
+    local launcher_v scaffolded regenerated meta_extra
+    launcher_v=$(yq -r '.meta.launcher_version // ""' "$yml" 2>/dev/null)
+    scaffolded=$(yq -r '.meta.scaffolded_at // ""' "$yml" 2>/dev/null)
+    regenerated=$(yq -r '.meta.regenerated_at // ""' "$yml" 2>/dev/null)
+    meta_extra=""
+    if [ -n "$scaffolded" ] || [ -n "$regenerated" ]; then
+      meta_extra=" ("
+      [ -n "$scaffolded" ]  && meta_extra="${meta_extra}scaffolded ${scaffolded}"
+      [ -n "$scaffolded" ] && [ -n "$regenerated" ] && meta_extra="${meta_extra}, "
+      [ -n "$regenerated" ] && meta_extra="${meta_extra}regenerated ${regenerated}"
+      meta_extra="${meta_extra})"
+    fi
+    if [ -n "$launcher_v" ]; then
+      _doctor_pass "Launcher version: v${launcher_v}${meta_extra}"
+    else
+      _doctor_warn "Launcher version not stamped (legacy agent.yml)" \
+        "Run ./setup.sh --regenerate from the launcher repo to stamp meta.launcher_version"
+    fi
+  fi
+
   # 6. .env present and 0600 (host-side)
   local env_file
   env_file=$(dirname "${yml:-./agent.yml}")/.env

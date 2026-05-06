@@ -2,7 +2,24 @@
 
 ## [Unreleased]
 
+_No entries since 0.1.0._
+
+## [0.1.0] - 2026-05-06
+
+First tagged baseline. Cuts the `[Unreleased]` accumulation that had been
+running since the initial import; subsequent changes will land under a
+new `[Unreleased]` heading and graduate to a numbered release on cut.
+
 ### Added
+- `VERSION` file at the repo root (semver, hand-maintained alongside
+  CHANGELOG entries) plus a `meta:` block in scaffolded `agent.yml`.
+  `setup.sh` stamps `meta.launcher_version` + `meta.scaffolded_at` on
+  first scaffold and refreshes `meta.launcher_version` +
+  `meta.regenerated_at` on every `--regenerate`. `agentctl doctor`
+  surfaces "Launcher version: vX.Y.Z (scaffolded …, regenerated …)" as a
+  new check between agent.yml-valid and the .env-perms check; legacy
+  agents lacking the meta block get a hint to regenerate. `setup.sh
+  --version` / `-V` prints the version and exits.
 - watchdog detects `Please run /login` banner in `claude.log` and emits an
   immediate warning via the configured notifier. Closes the gap between
   "OAuth expires" and "user gets warned" — without this, the user only
