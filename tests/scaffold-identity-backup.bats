@@ -1,25 +1,21 @@
 #!/usr/bin/env bats
 load 'helper'
 
+# Exercise scaffold's GitHub-key lookup against fixture files via
+# `file://`. Same migration as fetch-github-key.bats: spawning
+# `python3 -m http.server` per test left children that blocked bats's
+# post-suite cleanup in CI. `file://` reuses curl's full request path
+# without any background process.
+
 setup() {
-  PORT=$((10000 + RANDOM % 50000))
   FIXTURE_DIR="$BATS_TEST_TMPDIR/keys-fixture"
   mkdir -p "$FIXTURE_DIR"
 
   SCRIPT_DIR="$BATS_TEST_DIRNAME/.."
-  export SSH_KEYS_URL_TEMPLATE="http://localhost:$PORT/%s.keys"
-
-  (cd "$FIXTURE_DIR" && python3 -m http.server "$PORT" >/dev/null 2>&1) &
-  SERVER_PID=$!
-  for i in $(seq 1 20); do
-    curl -fsSL "http://localhost:$PORT/" >/dev/null 2>&1 && break
-    sleep 0.1
-  done
+  export SSH_KEYS_URL_TEMPLATE="file://$FIXTURE_DIR/%s.keys"
 }
 
-teardown() {
-  [ -n "${SERVER_PID:-}" ] && kill "$SERVER_PID" 2>/dev/null || true
-}
+teardown() { :; }
 
 @test "scaffold populates backup.identity.recipient when GitHub key exists" {
   cat > "$FIXTURE_DIR/alice.keys" <<EOF

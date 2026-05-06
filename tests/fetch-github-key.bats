@@ -1,29 +1,22 @@
 #!/usr/bin/env bats
 load 'helper'
 
-# Exercise fetch_github_ssh_key against a mock HTTP endpoint. Uses `python3 -m
-# http.server` in a child process serving a fixture file.
+# Exercise fetch_github_ssh_key against fixture files via `file://`. The
+# previous implementation spawned `python3 -m http.server` per test;
+# leftover children blocked bats's post-suite cleanup for ~13 min in CI.
+# `file://` keeps the curl path under test (same scheme parsing, same
+# header handling) without any background process.
 
 setup() {
-  PORT=$((10000 + RANDOM % 50000))
   FIXTURE_DIR="$BATS_TEST_TMPDIR/keys-fixture"
   mkdir -p "$FIXTURE_DIR"
 
   SCRIPT_DIR="$BATS_TEST_DIRNAME/.."
-  SSH_KEYS_URL_TEMPLATE="http://localhost:$PORT/%s.keys"
+  SSH_KEYS_URL_TEMPLATE="file://$FIXTURE_DIR/%s.keys"
   export SSH_KEYS_URL_TEMPLATE
-
-  (cd "$FIXTURE_DIR" && python3 -m http.server "$PORT" >/dev/null 2>&1) &
-  SERVER_PID=$!
-  for i in $(seq 1 20); do
-    curl -fsSL "http://localhost:$PORT/" >/dev/null 2>&1 && break
-    sleep 0.1
-  done
 }
 
-teardown() {
-  [ -n "${SERVER_PID:-}" ] && kill "$SERVER_PID" 2>/dev/null || true
-}
+teardown() { :; }
 
 @test "fetch_github_ssh_key returns ed25519 when available" {
   cat > "$FIXTURE_DIR/alice.keys" <<EOF
