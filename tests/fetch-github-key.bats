@@ -22,7 +22,21 @@ setup() {
 }
 
 teardown() {
-  [ -n "${SERVER_PID:-}" ] && kill "$SERVER_PID" 2>/dev/null || true
+  if [ -n "${SERVER_PID:-}" ]; then
+    # Ask nicely first, then reap. Without `wait`, bats's own
+    # post-suite cleanup blocks for ~13 min waiting on the python3
+    # children we spawned with `&` — visible as the CI bats job
+    # hanging well after the last `ok` line.
+    kill "$SERVER_PID" 2>/dev/null || true
+    # Bound the graceful window: 5 × 0.1s = 0.5s, plenty for python's
+    # http.server to drop the listen socket and exit.
+    for _ in 1 2 3 4 5; do
+      kill -0 "$SERVER_PID" 2>/dev/null || break
+      sleep 0.1
+    done
+    kill -KILL "$SERVER_PID" 2>/dev/null || true
+    wait "$SERVER_PID" 2>/dev/null || true
+  fi
 }
 
 @test "fetch_github_ssh_key returns ed25519 when available" {
