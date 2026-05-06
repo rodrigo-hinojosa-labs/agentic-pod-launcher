@@ -57,8 +57,12 @@ ENV
   done
   [ "$(docker inspect --format '{{.State.Running}}' e2ebot)" = "true" ]
 
-  # Named volume exists and is owned by our UID.
-  run docker volume inspect e2ebot-state
+  # State lives in <workspace>/.state as a bind-mount (since PR #3); the
+  # workspace IS the agent. Verify the bind-mount is in place from both
+  # sides: directory exists on host and the container sees /home/agent
+  # populated.
+  [ -d "$E2E_AGENT_DIR/.state" ]
+  run docker exec -u agent e2ebot test -d /home/agent
   [ "$status" -eq 0 ]
 
   # Tmux session eventually comes up (claude may fail without real credentials,
@@ -74,8 +78,10 @@ ENV
   run docker exec -u agent e2ebot tmux has-session -t agent
   [ "$status" -eq 0 ]
 
-  # Teardown: down -v must leave no container and no volume.
+  # Teardown: down -v must leave no container behind. State bind-mount
+  # survives intentionally (the workspace owns the data, not docker) and
+  # is removed only by deleting the workspace directory.
   docker compose down -v
   ! docker inspect e2ebot 2>/dev/null
-  ! docker volume inspect e2ebot-state 2>/dev/null
+  [ -d "$E2E_AGENT_DIR/.state" ]
 }
