@@ -48,6 +48,7 @@ load_lib() {
 wizard_answers() {
   local name=test-bot display=TestBot role=r vibe=v
   local vault=off qmd=off superpowers=off
+  local notify=none notify_bot="" notify_chat=""
   local kv
   for kv in "$@"; do
     case "$kv" in
@@ -58,6 +59,9 @@ wizard_answers() {
       vault=*)       vault="${kv#vault=}" ;;
       qmd=*)         qmd="${kv#qmd=}" ;;
       superpowers=*) superpowers="${kv#superpowers=}" ;;
+      notify=*)      notify="${kv#notify=}" ;;
+      notify_bot=*)  notify_bot="${kv#notify_bot=}" ;;
+      notify_chat=*) notify_chat="${kv#notify_chat=}" ;;
       *) echo "wizard_answers: unknown kv: $kv" >&2; return 1 ;;
     esac
   done
@@ -71,8 +75,28 @@ wizard_answers() {
   [ "$(uname -s)" = "Linux" ] && printf 'n\n'
   # GitHub fork
   printf 'n\n'
-  # Notify channel
-  printf 'none\n'
+  # Notify channel + telegram extras when applicable. Empty notify_bot
+  # tells the wizard to skip the token/chat prompts and accept incomplete
+  # credentials (the "Telegram credentials incomplete" warning path).
+  case "$notify" in
+    none|log)
+      printf '%s\n' "$notify"
+      ;;
+    telegram)
+      printf 'telegram\n'
+      printf '%s\n' "$notify_bot"
+      if [ -n "$notify_bot" ]; then
+        # Non-empty token: skip auto-discovery via the Telegram API and
+        # take the manual paste path. notify_chat may still be empty.
+        printf 'n\n'
+        printf '%s\n' "$notify_chat"
+      fi
+      ;;
+    *)
+      echo "wizard_answers: unknown notify: $notify (use none|log|telegram)" >&2
+      return 1
+      ;;
+  esac
   # Optional MCPs from the catalog (alphabetical): aws, firecrawl,
   # google-calendar, playwright, time, tree-sitter.
   # All 'n' for the common test path. Secret sub-prompts only fire when

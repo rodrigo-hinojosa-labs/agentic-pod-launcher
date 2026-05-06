@@ -16,35 +16,15 @@ teardown() { teardown_tmp_dir; }
 @test "telegram channel allows skipping bot token and chat id" {
   local dest="$TMP_TEST_DIR/tg-skip"
   cd "$TMP_TEST_DIR/installer"
-  # Answers: identity x4, user x5, deployment x2 (host, install_service=n),
-  # notifications: telegram, <empty bot token>, <empty chat id>,
-  # mcps x2 (atlassian=n, github=n), heartbeat y + interval + prompt,
-  # principles y, confirm y
-  run ./setup.sh --destination "$dest" <<EOF
-tg-bot
-TgBot
-r
-v
-Alice
-Alice
-UTC
-a@b.com
-en
-host
-n
-n
-telegram
-
-
-n
-n
-y
-30m
-ok
-y
-n
-proceed
-EOF
+  # Use the wizard_answers helper (with notify=telegram + empty
+  # notify_bot) so the stdin sequence stays in sync with setup.sh
+  # whenever new wizard prompts are added. The previous hand-rolled
+  # heredoc went stale when PR #37 introduced the optional-MCPs
+  # catalog, causing the wizard to hang on stdin (the test ran fine
+  # locally on already-warmed shells but timed out in CI at 15m).
+  local stdin
+  stdin=$(wizard_answers name=tg-bot display=TgBot notify=telegram)
+  run ./setup.sh --destination "$dest" <<< "$stdin"
   [ "$status" -eq 0 ]
   [[ "$output" == *"Telegram credentials incomplete"* ]]
   [ -f "$dest/.env" ]
