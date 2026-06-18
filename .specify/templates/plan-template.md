@@ -39,8 +39,14 @@
 ## Constitution Check
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
+*Source: `.specify/memory/constitution.md` (v1.0.0). Mark each PASS / N/A / VIOLATION; justify any VIOLATION in Complexity Tracking.*
 
-[Gates determined based on constitution file]
+- [ ] **I. Single Source of Truth** — any new/changed output is rendered from `agent.yml` via `render.sh`; no hand-edited derived files; change survives `./setup.sh --regenerate`. Runtime mutations write `agent.yml` first (atomic `.prev`), then regenerate.
+- [ ] **II. Least-Privilege (NON-NEGOTIABLE)** — no weakening of `cap_drop: ALL` / `no-new-privileges`; every `docker exec` uses `-u agent`; crontabs stay root-owned. New capability/mount/socket justified in Complexity Tracking.
+- [ ] **III. Test-First, Host-Runnable** — behavior change ships `bats` coverage; default suite runs without Docker; Docker work gated behind `DOCKER_E2E=1`; `shellcheck -S error` clean; sourced libs have no side effects.
+- [ ] **IV. Idempotent, Fail-Silent Lifecycle** — boot/patch/install/backup steps are re-runnable, guarded by sentinel/marker/hash (not mtime), degrade gracefully, never crash supervisor/heartbeat; notifiers exit 0.
+- [ ] **V. Workspace-Is-the-Agent** — state stays under bind-mounted `.state/`; secrets never committed/logged; backup branches stay independent; `--restore-from-fork` preserved.
+- [ ] **VI. Reproducible, Pinned Dependencies** — toolchain versions pinned + intentionally bumped (auto-updater stays off); chosen versions plumbed through `build.args`, not hardcoded-only; no new duplicate pins; `CHANGELOG.md`/`VERSION` updated for user-facing changes.
 
 ## Project Structure
 
