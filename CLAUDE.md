@@ -130,6 +130,8 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3`. Already-p
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
-For additional context about technologies to be used, project structure,
-shell commands, and other important information, read the current plan
+Active spec-kit feature: **001-deps-upgrade** — reproducible in-container dependency
+upgrades (resolve-and-record latest-stable toolchain via `agent.yml`).
+Plan: `specs/001-deps-upgrade/plan.md` · Spec: `specs/001-deps-upgrade/spec.md` ·
+Constitution: `.specify/memory/constitution.md`.
 <!-- SPECKIT END -->

@@ -29,6 +29,19 @@
 - Q: Where do the managed versions live in the agent configuration? → A: Extended
   onto the existing `docker:` block (alongside the base image), not a new
   top-level section.
+- Q: Should the default be a frozen version number? → A: No. The launcher MUST NOT
+  ship a hardcoded default version literal; defaults are expressed as upstream
+  channels — Claude Code tracks the `stable` channel, the others track latest
+  stable — and "latest stable of the moment" is resolved to a concrete version on
+  demand, never frozen in the repo.
+- Q: When is "latest stable" resolved to the concrete version that gets baked? → A:
+  Resolve-and-record on upgrade. At scaffold, `./setup.sh --regenerate`, or an
+  explicit `agentctl versions --upgrade`, the launcher queries each upstream,
+  resolves the latest stable, and RECORDS the concrete version into `agent.yml`.
+  Builds then use the recorded concrete versions (reproducible); runtime never
+  auto-updates.
+- Q: Concrete initial targets (resolved 2026-06-18)? → A: Claude Code `stable`
+  2.1.170, Alpine 3.24.1, `uv` 0.11.22, `bun` 1.3.14, `gum` 0.17.0.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -158,10 +171,11 @@ be reached.
 
 ### Functional Requirements
 
-- **FR-001**: Operators MUST be able to set the version of each managed image
-  toolchain component (Claude Code, OS base image, `uv`, `bun`, `gum`) by editing
-  a single declared location in the agent's configuration (the existing `docker:`
-  block).
+- **FR-001**: Operators MUST be able to control the version of each managed image
+  toolchain component (Claude Code, OS base image, `uv`, `bun`, `gum`) from a
+  single declared location in the agent's configuration (the existing `docker:`
+  block) — either by accepting the default channel (latest stable) or by pinning a
+  concrete version.
 - **FR-002**: The documented build-and-run workflow MUST produce a container
   running the declared versions, without requiring the operator to edit the image
   definition or invoke a non-standard build command.
@@ -183,7 +197,21 @@ be reached.
   and whether it is outdated; this report MUST degrade gracefully to "unknown" when
   upstream is unreachable.
 - **FR-007**: As the first application of this capability, the managed components'
-  declared versions MUST be upgraded to their latest stable upstream releases.
+  recorded versions MUST be resolved to their latest stable upstream releases —
+  resolved 2026-06-18 as: Claude Code (`stable`) 2.1.170, Alpine 3.24.1, `uv`
+  0.11.22, `bun` 1.3.14, `gum` 0.17.0.
+- **FR-011**: The launcher MUST NOT ship a hardcoded default version literal as the
+  source of truth. Defaults MUST be expressed as upstream channels (Claude Code →
+  `stable`; others → latest stable). "Latest stable of the moment" MUST be resolved
+  to a concrete version and RECORDED into `agent.yml` at scaffold, `--regenerate`,
+  and an explicit `agentctl versions --upgrade`; the build MUST consume the
+  recorded concrete versions.
+- **FR-012**: An operator who pins a concrete version MUST have that pin honored
+  and NOT overwritten by the resolve step unless they opt back into channel
+  tracking. When upstream is unreachable during resolution, the system MUST fall
+  back to the currently recorded version (or a documented last-known floor for a
+  first-ever offline scaffold) and report the degradation, never silently install
+  a wrong version.
 - **FR-008**: New behavior MUST be covered by automated tests that run without a
   container runtime, covering the declaration→generated-build-input wiring and the
   no-duplicate-version invariant; the end-to-end check that a built image actually
@@ -223,7 +251,9 @@ be reached.
 - **SC-004**: After the initial upgrade, all five managed components run their
   latest stable upstream versions, confirmed at container runtime.
 - **SC-005**: The default automated test suite passes with no container runtime,
-  and regenerating an agent twice yields identical build configuration.
+  and regenerating an agent twice WITHOUT an intervening upgrade yields identical
+  build configuration (resolution changes the recorded versions only at scaffold or
+  an explicit `--upgrade`).
 - **SC-006**: An agent created before this feature picks up the new mechanism on
   the next regeneration with zero manual edits.
 
@@ -242,8 +272,14 @@ be reached.
   this feature; only the pinned, image-baked toolchain is managed.
 - Images are built locally from the in-repo image definition; no
   registry-published image is pulled.
-- "Latest stable" means the newest non-prerelease upstream release at the time the
-  upgrade is implemented.
-- The outdated-check reads upstream release information on demand via a live,
-  best-effort lookup and treats the network as optional, never as a hard
-  dependency of building.
+- "Latest stable" means the newest non-prerelease upstream release at the moment of
+  resolution (Claude Code uses its `stable` dist-tag; the others use their latest
+  non-prerelease release).
+- The default is a channel, not a frozen number; "latest stable of the moment" is
+  resolved to a concrete version and recorded into `agent.yml` at scaffold,
+  `--regenerate`, or an explicit `agentctl versions --upgrade`. Building consumes
+  the recorded concrete versions and therefore needs no network; only resolution
+  (`--upgrade` / scaffold) and `--check` touch the network, best-effort.
+- The outdated-check and the resolve step read upstream release information on
+  demand via a live, best-effort lookup and treat the network as optional, never as
+  a hard dependency of building.
