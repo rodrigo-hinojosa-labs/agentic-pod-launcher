@@ -1,5 +1,9 @@
 # syntax=docker/dockerfile:1.6
-FROM alpine:3.20
+# Base image — overridable via build arg (recorded in agent.yml docker.base_image
+# and passed through by docker-compose). Default tracks the latest stable Alpine;
+# keep in sync with scripts/lib/versions.sh (a bats drift-guard enforces it).
+ARG BASE_IMAGE=alpine:3.24.1
+FROM ${BASE_IMAGE}
 
 ARG UID=1000
 ARG GID=1000
@@ -42,7 +46,7 @@ RUN apk add --no-cache \
       tzdata
 
 # Install gum from the charmbracelet tap alternative: use the static binary.
-ARG GUM_VERSION=0.14.5
+ARG GUM_VERSION=0.17.0
 RUN set -eux; \
     arch=$(uname -m); \
     case "$arch" in \
@@ -59,7 +63,7 @@ RUN set -eux; \
 # Install uv / uvx (required by MCPs that ship as Python packages —
 # time, fetch, mcp-atlassian). Without this, those MCPs fail at startup
 # with "uvx: not found".
-ARG UV_VERSION=0.5.14
+ARG UV_VERSION=0.11.22
 RUN set -eux; \
     arch=$(uname -m); \
     case "$arch" in \
@@ -84,8 +88,13 @@ RUN set -eux; \
 # inherited by every container process, so when the agent user runs
 # `uvx mcp-atlassian`, uv finds the pre-installed tool instead of
 # re-downloading.
+# UV_PYTHON_PREFERENCE=only-system: uv >=0.8.0 validates that discovered
+# interpreters match the python preference and may otherwise auto-download a
+# managed CPython, which would defeat the warm /opt/uv cache and break the
+# offline MCP handshake. Pin uv to the apk-installed system python3.
 ENV UV_TOOL_DIR=/opt/uv/tools \
-    UV_CACHE_DIR=/opt/uv/cache
+    UV_CACHE_DIR=/opt/uv/cache \
+    UV_PYTHON_PREFERENCE=only-system
 RUN mkdir -p /opt/uv \
  && uv tool install --python python3 mcp-atlassian \
  && uv tool install --python python3 mcp-server-fetch \
@@ -94,7 +103,7 @@ RUN mkdir -p /opt/uv \
 
 # Install bun (required by the official telegram plugin which ships a bun-
 # runtime MCP server, and useful for any other modern JS tooling).
-ARG BUN_VERSION=1.1.38
+ARG BUN_VERSION=1.3.14
 RUN set -eux; \
     apk add --no-cache libgcc libstdc++; \
     apk add --no-cache --virtual .bun-unpack unzip; \
@@ -117,7 +126,7 @@ RUN set -eux; \
 # the `agent` user can invoke it. Pinned via build arg so rebuilds are
 # reproducible — override with `docker build --build-arg CLAUDE_CODE_VERSION=...`
 # or pass through compose's `build.args` to track upstream releases.
-ARG CLAUDE_CODE_VERSION=2.1.119
+ARG CLAUDE_CODE_VERSION=2.1.170
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 
 # Create the non-root agent user matching host UID/GID.

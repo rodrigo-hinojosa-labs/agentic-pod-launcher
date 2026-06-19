@@ -93,3 +93,25 @@ _stub_fetch_ok() {
   run versions_resolve nonsense
   [ "$status" -ne 0 ]
 }
+
+@test "Dockerfile FROM is build-arg driven (no hardcoded alpine pin)" {
+  local df="$REPO_ROOT/docker/Dockerfile"
+  grep -Eq '^ARG BASE_IMAGE=' "$df"
+  grep -Eq '^FROM \$\{BASE_IMAGE\}' "$df"
+  run grep -Eq '^FROM alpine:[0-9]' "$df"
+  [ "$status" -ne 0 ]
+}
+
+@test "Dockerfile ARG version defaults match the versions.sh floor (drift guard)" {
+  load_lib versions
+  local df="$REPO_ROOT/docker/Dockerfile"
+  grep -Eq "^ARG BASE_IMAGE=alpine:${AGENTIC_FLOOR_ALPINE}\$" "$df"
+  grep -Eq "^ARG GUM_VERSION=${AGENTIC_FLOOR_GUM}\$" "$df"
+  grep -Eq "^ARG UV_VERSION=${AGENTIC_FLOOR_UV}\$" "$df"
+  grep -Eq "^ARG BUN_VERSION=${AGENTIC_FLOOR_BUN}\$" "$df"
+  grep -Eq "^ARG CLAUDE_CODE_VERSION=${AGENTIC_FLOOR_CLAUDE_CODE}\$" "$df"
+}
+
+@test "Dockerfile sets UV_PYTHON_PREFERENCE=only-system (uv 0.8.0 guard)" {
+  grep -Eq 'UV_PYTHON_PREFERENCE=only-system' "$REPO_ROOT/docker/Dockerfile"
+}
