@@ -32,14 +32,19 @@ teardown() {
 }
 
 @test "fresh scaffold → container boot → cron tick → runs.jsonl has an entry" {
-  # 1) prepare a workspace with agent.yml + all source dirs copied
+  # 1) prepare a workspace with agent.yml + all source dirs copied.
+  # base_image (and the docker.*_version fields) are intentionally omitted
+  # from the docker: map: --regenerate backfills them to the resolver floor,
+  # so this gating crond/busybox smoke always boots on the current latest-
+  # stable Alpine (3.24.1+) instead of a pinned-stale base. See setup.sh
+  # regenerate backfill.
   mkdir -p "$DEST"
   cat > "$DEST/agent.yml" <<YML
 version: 1
 agent: {name: $AGENT_NAME, display_name: "e2e 🧪", role: "test", vibe: "terse"}
 user: {name: "Tester", nickname: "Tester", timezone: "UTC", email: "t@e.x", language: "en"}
 deployment: {host: "test", workspace: "$DEST", install_service: false, claude_cli: "claude"}
-docker: {image_tag: "agent-admin:e2e", uid: $(id -u), gid: $(id -g), state_volume: "${AGENT_NAME}-state", base_image: "alpine:3.20"}
+docker: {image_tag: "agent-admin:e2e", uid: $(id -u), gid: $(id -g), state_volume: "${AGENT_NAME}-state"}
 claude: {config_dir: "/home/agent/.claude", profile_new: true}
 notifications: {channel: none}
 features:
@@ -120,5 +125,7 @@ PY
   [ "$status" -eq 0 ]
   run jq -r '.status' "$DEST/scripts/heartbeat/logs/runs.jsonl"
   [ "$status" -eq 0 ]
-  [[ "$output" == "ok" || "$output" == "error" ]]
+  # Take the first tick only: a fast runner could append a second line before
+  # this assertion, and a multi-line "$output" would never == "ok"/"error".
+  [[ "${output%%$'\n'*}" == "ok" || "${output%%$'\n'*}" == "error" ]]
 }
