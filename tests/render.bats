@@ -71,3 +71,22 @@ TPL
   [[ "$result" == *'https://q1.example/path?ref=$1&v=\1'* ]]
   [[ "$result" == *'$2-test@example.com'* ]]
 }
+
+@test "docker-compose template forwards toolchain versions as build args" {
+  # The build-arg passthrough is the fix for "docker compose build ignores
+  # chosen versions": agent.yml docker.* must reach the image as build.args.
+  export AGENT_NAME="bot" AGENT_DISPLAY_NAME="Bot"
+  export DOCKER_IMAGE_TAG="agentic-pod:latest"
+  export DOCKER_UID=1000 DOCKER_GID=1000 USER_TIMEZONE=UTC
+  export DOCKER_BASE_IMAGE="alpine:3.24.1"
+  export DOCKER_CLAUDE_CODE_VERSION="2.1.170"
+  export DOCKER_UV_VERSION="0.11.22"
+  export DOCKER_BUN_VERSION="1.3.14"
+  export DOCKER_GUM_VERSION="0.17.0"
+  result=$(render_template "$REPO_ROOT/modules/docker-compose.yml.tpl")
+  [[ "$result" == *'BASE_IMAGE: "alpine:3.24.1"'* ]]
+  [[ "$result" == *'CLAUDE_CODE_VERSION: "2.1.170"'* ]]
+  [[ "$result" == *'UV_VERSION: "0.11.22"'* ]]
+  [[ "$result" == *'BUN_VERSION: "1.3.14"'* ]]
+  [[ "$result" == *'GUM_VERSION: "0.17.0"'* ]]
+}

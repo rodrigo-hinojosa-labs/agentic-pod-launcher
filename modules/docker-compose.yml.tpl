@@ -10,6 +10,15 @@ services:
       args:
         UID: "{{DOCKER_UID}}"
         GID: "{{DOCKER_GID}}"
+        # Toolchain versions recorded in agent.yml's docker: block
+        # (resolve-and-record latest stable). Passing them as build args is
+        # what makes `docker compose build` actually honor the declared
+        # versions instead of baking the Dockerfile's fallback defaults.
+        BASE_IMAGE: "{{DOCKER_BASE_IMAGE}}"
+        CLAUDE_CODE_VERSION: "{{DOCKER_CLAUDE_CODE_VERSION}}"
+        UV_VERSION: "{{DOCKER_UV_VERSION}}"
+        BUN_VERSION: "{{DOCKER_BUN_VERSION}}"
+        GUM_VERSION: "{{DOCKER_GUM_VERSION}}"
     cap_drop:
       - ALL
     cap_add:
