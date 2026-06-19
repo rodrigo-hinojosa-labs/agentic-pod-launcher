@@ -2,7 +2,42 @@
 
 ## [Unreleased]
 
-_No entries since 0.1.0._
+### Added
+- **Reproducible in-container dependency upgrades** (`001-deps-upgrade`). The
+  image toolchain — Claude Code, the Alpine base, `uv`, `bun`, `gum` — tracks the
+  latest stable of the moment from a single declared place that the documented
+  build honors, with no hardcoded version literals and no drift.
+  - `scripts/lib/versions.sh`: default channels (Claude Code → `stable`, others →
+    latest stable) + a best-effort upstream resolver (`versions_resolve`) with an
+    offline floor. `AGENTIC_VERSIONS_OFFLINE=1` forces the floor (offline scaffold
+    / deterministic tests).
+  - `setup.sh` resolves each channel and **records** the concrete version into
+    `agent.yml`'s `docker:` block (`claude_code_version`, `uv_version`,
+    `bun_version`, `gum_version`, `base_image`, `toolchain_channels`) at scaffold;
+    `--regenerate` backfills only missing fields (deterministic). `ensure_gum` is
+    single-sourced from `versions.sh`.
+  - `docker-compose.yml` forwards the recorded versions as `build.args`; the
+    Dockerfile is build-arg driven (`FROM ${BASE_IMAGE}`) and adds
+    `ENV UV_PYTHON_PREFERENCE=only-system` (uv ≥0.8 guard).
+  - `agentctl versions [--check] [--json] [--upgrade]`: list recorded versions +
+    channels, compare against upstream (best-effort, degrades to `unknown`
+    offline), or re-resolve non-pinned channels and record them (skips `pinned`,
+    writes `agent.yml.prev`). `agentctl doctor` gains a recorded-toolchain line.
+  - `agent.yml` schema validates `docker.toolchain_channels.*` ∈
+    {`stable`,`latest`,`pinned`} (absent = legacy-safe).
+  - Specced with GitHub Spec Kit under `specs/001-deps-upgrade/` against a new
+    project constitution (`.specify/memory/constitution.md`).
+
+### Changed
+- Bumped the baked toolchain to latest stable: Claude Code 2.1.119 → **2.1.170**
+  (`stable`), Alpine 3.20 → **3.24.1** (Node 24, Python 3.14, apk v3, busybox
+  1.37), `uv` 0.5.14 → **0.11.22**, `bun` 1.1.38 → **1.3.14**, `gum` 0.14.5 →
+  **0.17.0**.
+
+### Fixed
+- `scripts/lib/wizard-gum.sh`: gum ≥0.15 changed the Esc exit code for
+  `input`/`choose` from 2 to 1; the wizard abort check is now widget-scoped so Esc
+  aborts input/choose while `gum confirm`'s legitimate "no" (rc 1) still works.
 
 ## [0.1.0] - 2026-05-06
 
