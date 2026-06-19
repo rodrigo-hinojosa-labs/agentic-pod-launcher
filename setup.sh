@@ -153,8 +153,9 @@ ensure_gum() {
 
   # 3. Auto-download from GitHub releases.
   # Single-sourced from scripts/lib/versions.sh so the host gum and the
-  # image-baked gum can't drift (a bats invariant enforces it).
-  local version="${AGENTIC_FLOOR_GUM:-0.14.5}"
+  # image-baked gum can't drift (a bats invariant enforces it). Fail loud if
+  # versions.sh wasn't sourced rather than fall back to a stale literal.
+  local version="${AGENTIC_FLOOR_GUM:?scripts/lib/versions.sh must be sourced}"
   local os arch
   os=$(uname -s | tr '[:upper:]' '[:lower:]')
   arch=$(uname -m)
