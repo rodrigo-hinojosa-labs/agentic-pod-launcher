@@ -8,6 +8,28 @@
 
 **Input**: User description: "Upgrade dependencies — e.g. the latest version of Claude Code inside the container — and make in-container toolchain upgrades easy, reproducible, and drift-free."
 
+## Clarifications
+
+### Session 2026-06-18
+
+- Q: How far should the single-source-of-truth for versions reach? → A: The image
+  toolchain (Claude Code, OS base, `uv`, `bun`, `gum`) PLUS the host-side launcher
+  copies of those same tool versions (the wizard's `gum` literal and the base-image
+  echo in the wizard/config) — all derived from the single declaration.
+  Continuous-integration pin definitions remain OUT of scope.
+- Q: For the outdated report (P3), how is "latest available" determined? → A: A
+  live, best-effort query to each component's upstream release source at command
+  time; network-optional, degrading to "unknown" when offline (never a hard
+  dependency of building).
+- Q: How is "the build produces the declared version" verified given the
+  Docker-less default suite? → A: The default (no-container) suite asserts the
+  rendering (declared versions → generated build inputs) and the
+  no-duplicate-version invariant; the end-to-end `claude --version`-in-container
+  check is an opt-in container-runtime (Docker-e2e) test.
+- Q: Where do the managed versions live in the agent configuration? → A: Extended
+  onto the existing `docker:` block (alongside the base image), not a new
+  top-level section.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Upgrade the in-container toolchain from one place (Priority: P1)
@@ -71,7 +93,8 @@ no leftover stale copies.
 
 1. **Given** a managed toolchain version, **When** the repository is inspected,
    **Then** that version value appears in exactly one authoritative source and all
-   other occurrences are generated from it.
+   other occurrences (including the host-side launcher copies) are generated from
+   it.
 2. **Given** a one-place version change, **When** derived configuration is
    regenerated, **Then** all generated artifacts reflect the new version and no
    manual edit of a second location is required.
@@ -94,8 +117,9 @@ is an enhancement layered on top.
 
 **Independent Test**: Run the diagnostic surface against an agent pinned below the
 latest upstream and confirm it reports each component's declared version, the
-latest available version, and a clear outdated/current status — degrading
-gracefully to "unknown" when upstream cannot be reached.
+latest available version (from a live best-effort upstream lookup), and a clear
+outdated/current status — degrading gracefully to "unknown" when upstream cannot
+be reached.
 
 **Acceptance Scenarios**:
 
@@ -118,7 +142,7 @@ gracefully to "unknown" when upstream cannot be reached.
 - **Stale build cache**: a version is changed but a cached image layer exists →
   the documented build MUST produce the newly declared version, not silently reuse
   the old one.
-- **No network during the outdated-check**: the latest-available lookup MUST
+- **No network during the outdated-check**: the live latest-available lookup MUST
   degrade to "unknown" and never block a build or crash the diagnostic.
 - **Legacy agent configuration**: an agent scaffolded before this feature lacks
   the new version declarations → safe built-in defaults apply and the diagnostic
@@ -136,13 +160,17 @@ gracefully to "unknown" when upstream cannot be reached.
 
 - **FR-001**: Operators MUST be able to set the version of each managed image
   toolchain component (Claude Code, OS base image, `uv`, `bun`, `gum`) by editing
-  a single declared location in the agent's configuration.
+  a single declared location in the agent's configuration (the existing `docker:`
+  block).
 - **FR-002**: The documented build-and-run workflow MUST produce a container
   running the declared versions, without requiring the operator to edit the image
   definition or invoke a non-standard build command.
 - **FR-003**: Each managed version MUST have exactly one authoritative
   declaration; taking effect MUST NOT require editing the same version in more than
-  one location.
+  one location. The host-side launcher copies of the same tool versions (the
+  wizard's `gum` literal and the base-image echo) MUST be derived from that single
+  declaration rather than maintained independently. Continuous-integration pin
+  definitions are out of scope for this feature.
 - **FR-004**: Regenerating derived configuration MUST reproduce the build
   configuration deterministically from the declared versions, and the change MUST
   survive the launcher's regenerate workflow.
@@ -150,13 +178,17 @@ gracefully to "unknown" when upstream cannot be reached.
   disabled so the running version equals the declared version (no silent runtime
   drift).
 - **FR-006**: The system MUST provide a way to report, for each managed component,
-  its declared version, the latest available upstream version, and whether it is
-  outdated; this report MUST degrade gracefully when upstream is unreachable.
+  its declared version, the latest available upstream version (obtained via a live,
+  best-effort query to the component's upstream release source at command time),
+  and whether it is outdated; this report MUST degrade gracefully to "unknown" when
+  upstream is unreachable.
 - **FR-007**: As the first application of this capability, the managed components'
   declared versions MUST be upgraded to their latest stable upstream releases.
 - **FR-008**: New behavior MUST be covered by automated tests that run without a
-  container runtime, including the declaration→generated-build wiring and the
-  no-duplicate-version invariant.
+  container runtime, covering the declaration→generated-build-input wiring and the
+  no-duplicate-version invariant; the end-to-end check that a built image actually
+  runs the declared version MUST be provided as an opt-in container-runtime
+  (Docker-e2e) test, not part of the default suite.
 - **FR-009**: A version change MUST be a reviewable diff localized to the single
   declaration plus its generated outputs, and user-facing changes MUST be recorded
   in the project changelog and version surfaces.
@@ -170,8 +202,9 @@ gracefully to "unknown" when upstream cannot be reached.
   name, declared version, upstream identity used to determine the latest version,
   and role in the image.
 - **Version Declaration**: the single authoritative configuration location where a
-  component's desired version is set; the input from which all derived build
-  artifacts are generated.
+  component's desired version is set — the agent configuration's existing `docker:`
+  block, extended with per-component version fields; the input from which all
+  derived build artifacts (and the host-side launcher copies) are generated.
 - **Outdated Report**: a per-component summary of declared version, latest
   available version, and status (current / outdated / unknown / unmanaged).
 
@@ -183,7 +216,8 @@ gracefully to "unknown" when upstream cannot be reached.
   one location and running the standard build; the resulting container reports
   that exact version via `claude --version`.
 - **SC-002**: No managed toolchain version value appears in more than one
-  authoritative source (zero duplicate-pin findings on inspection).
+  authoritative source (zero duplicate-pin findings on inspection), including the
+  host-side launcher copies.
 - **SC-003**: An operator can determine, in under one minute and with a single
   command, which managed components are behind their latest upstream release.
 - **SC-004**: After the initial upgrade, all five managed components run their
@@ -196,7 +230,12 @@ gracefully to "unknown" when upstream cannot be reached.
 ## Assumptions
 
 - The agent's existing single-source-of-truth configuration (`agent.yml`) is the
-  declared place for managed versions, consistent with the project constitution.
+  declared place for managed versions — specifically its existing `docker:` block,
+  extended with per-component version fields — consistent with the project
+  constitution.
+- Continuous-integration version pins (e.g. the CI-installed `yq`/`bats`) are out
+  of scope; the single-source-of-truth covers the image toolchain and the
+  host-side launcher copies of those same tools.
 - Upgrades are operator-initiated; unattended/automatic application of upgrades is
   out of scope.
 - The floating runtime-installed layer (MCP servers, plugins) is out of scope for
@@ -205,5 +244,6 @@ gracefully to "unknown" when upstream cannot be reached.
   registry-published image is pulled.
 - "Latest stable" means the newest non-prerelease upstream release at the time the
   upgrade is implemented.
-- The outdated-check reads upstream release information on demand and treats the
-  network as optional (best-effort), never as a hard dependency of building.
+- The outdated-check reads upstream release information on demand via a live,
+  best-effort lookup and treats the network as optional, never as a hard
+  dependency of building.
