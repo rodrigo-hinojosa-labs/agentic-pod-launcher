@@ -129,3 +129,25 @@ YML
   [[ "$output" == *".user.timezone"* ]]
   [[ "$output" == *"channel must be one of"* ]]
 }
+
+@test "agent_yml_validate: valid toolchain channel passes" {
+  _write_valid_yml
+  yq -i '.docker.toolchain_channels.claude_code = "pinned"' "$TMP_TEST_DIR/agent.yml"
+  run agent_yml_validate "$TMP_TEST_DIR/agent.yml"
+  [ "$status" -eq 0 ]
+}
+
+@test "agent_yml_validate: invalid toolchain channel → reported" {
+  _write_valid_yml
+  yq -i '.docker.toolchain_channels.claude_code = "bleeding"' "$TMP_TEST_DIR/agent.yml"
+  run agent_yml_validate "$TMP_TEST_DIR/agent.yml"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"toolchain_channels"* ]]
+  [[ "$output" == *"bleeding"* ]]
+}
+
+@test "agent_yml_validate: absent toolchain_channels still validates (legacy-safe)" {
+  _write_valid_yml
+  run agent_yml_validate "$TMP_TEST_DIR/agent.yml"
+  [ "$status" -eq 0 ]
+}

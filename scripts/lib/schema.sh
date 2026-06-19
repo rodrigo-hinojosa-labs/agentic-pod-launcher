@@ -51,6 +51,11 @@ _SCHEMA_REQUIRED_LEAVES=(
 # polices the *value* once it's populated.
 _SCHEMA_ENUMS=(
   '.notifications.channel=none,log,telegram'
+  '.docker.toolchain_channels.claude_code=stable,latest,pinned'
+  '.docker.toolchain_channels.alpine=stable,latest,pinned'
+  '.docker.toolchain_channels.uv=stable,latest,pinned'
+  '.docker.toolchain_channels.bun=stable,latest,pinned'
+  '.docker.toolchain_channels.gum=stable,latest,pinned'
 )
 
 # Boolean fields. Same idea as enums but specifically restricted to
