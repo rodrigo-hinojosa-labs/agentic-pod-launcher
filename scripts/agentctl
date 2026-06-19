@@ -381,6 +381,15 @@ cmd_doctor() {
       _doctor_warn "Launcher version not stamped (legacy agent.yml)" \
         "Run ./setup.sh --regenerate from the launcher repo to stamp meta.launcher_version"
     fi
+
+    # 5c. Recorded image toolchain (no network; `agentctl versions --check`
+    #     compares against upstream).
+    local _cc _base
+    _cc=$(yq -r '.docker.claude_code_version // ""' "$yml" 2>/dev/null)
+    _base=$(yq -r '.docker.base_image // ""' "$yml" 2>/dev/null)
+    if [ -n "$_cc" ]; then
+      _doctor_pass "Toolchain: claude-code ${_cc}, ${_base} (agentctl versions --check for upstream)"
+    fi
   fi
 
   # 6. .env present and 0600 (host-side)
@@ -575,6 +584,7 @@ Observability:
   logs --stderr            tail of telegram-mcp-stderr.log (forensic)
   status                   heartbeatctl status (pretty)
   mcp [list]               claude mcp list
+  versions [--check]       recorded toolchain versions (+ --check upstream, --upgrade, --json)
 
 Heartbeat (proxy to in-container heartbeatctl):
   heartbeat <sub> [args]   passes through; e.g. `heartbeat pause`, `heartbeat set-interval 5m`
@@ -689,6 +699,152 @@ cmd_stop() { cmd_compose down; }
 cmd_restart() { cmd_compose restart; }
 cmd_ps() { cmd_compose ps; }
 
+# ── versions: recorded toolchain versions + upstream check/upgrade ──────
+_versions_find_yml() {
+  local p
+  for p in "./agent.yml" "$(dirname "$0")/../agent.yml"; do
+    [ -f "$p" ] && { printf '%s\n' "$p"; return 0; }
+  done
+  return 1
+}
+
+_versions_source_lib() {
+  local d p
+  d="$(cd "$(dirname "$0")" && pwd)"
+  for p in "$d/lib/versions.sh" "$d/../scripts/lib/versions.sh"; do
+    if [ -f "$p" ]; then
+      # shellcheck disable=SC1090
+      source "$p"
+      return 0
+    fi
+  done
+  return 1
+}
+
+_versions_default_channel() {
+  case "$1" in
+    claude_code) printf '%s' "${AGENTIC_CHANNEL_CLAUDE_CODE:-stable}" ;;
+    *)           printf '%s' "latest" ;;
+  esac
+}
+
+# recorded version for a component (alpine reads docker.base_image sans prefix)
+_versions_recorded() {
+  local yml="$1" comp="$2"
+  if [ "$comp" = "alpine" ]; then
+    yq -r '.docker.base_image // ""' "$yml" 2>/dev/null | sed 's/^alpine://'
+  else
+    yq -r ".docker.${comp}_version // \"\"" "$yml" 2>/dev/null
+  fi
+}
+
+_versions_channel() {
+  local yml="$1" comp="$2" ch
+  ch=$(yq -r ".docker.toolchain_channels.${comp} // \"\"" "$yml" 2>/dev/null)
+  if [ -z "$ch" ] || [ "$ch" = "null" ]; then ch=$(_versions_default_channel "$comp"); fi
+  printf '%s' "$ch"
+}
+
+_versions_upgrade() {
+  local yml="$1" comp ch recorded resolved changed=0
+  cp "$yml" "$yml.prev"
+  for comp in claude_code alpine uv bun gum; do
+    ch=$(_versions_channel "$yml" "$comp")
+    if [ "$ch" = "pinned" ]; then echo "  $comp: pinned (skipped)"; continue; fi
+    if ! resolved=$(versions_resolve "$comp" 2>/dev/null); then
+      echo "  $comp: ⚠ unknown (kept)"; continue
+    fi
+    recorded=$(_versions_recorded "$yml" "$comp")
+    if [ "$recorded" != "$resolved" ]; then
+      if [ "$comp" = "alpine" ]; then
+        yq -i ".docker.base_image = \"alpine:${resolved}\"" "$yml"
+      else
+        yq -i ".docker.${comp}_version = \"${resolved}\"" "$yml"
+      fi
+      echo "  $comp: ${recorded:-?} -> ${resolved}"; changed=1
+    else
+      echo "  $comp: ${recorded} (current)"
+    fi
+  done
+  if [ "$changed" -eq 1 ]; then
+    echo "> agent.yml updated (prev saved to agent.yml.prev)."
+    echo "  Run ./setup.sh --regenerate && docker compose build to apply."
+  else
+    echo "> Everything already at the latest recorded versions."
+    rm -f "$yml.prev"
+  fi
+}
+
+cmd_versions() {
+  local do_check=false do_json=false do_upgrade=false arg
+  for arg in "$@"; do
+    case "$arg" in
+      --check)   do_check=true ;;
+      --json)    do_json=true ;;
+      --upgrade) do_upgrade=true ;;
+      -h|--help)
+        cat <<'V_EOF'
+Usage: agentctl versions [--check] [--json] [--upgrade]
+  (default)   list recorded toolchain versions + channels
+  --check     also query upstream (best-effort) and flag outdated
+  --json      machine-readable output
+  --upgrade   re-resolve non-pinned channels and record into agent.yml
+V_EOF
+        return 0 ;;
+      *) echo "agentctl versions: unknown option '$arg'" >&2; return 1 ;;
+    esac
+  done
+
+  local yml
+  yml=$(_versions_find_yml) || { echo "agentctl versions: agent.yml not found" >&2; return 1; }
+  _versions_source_lib || { echo "agentctl versions: scripts/lib/versions.sh not found" >&2; return 1; }
+
+  if $do_upgrade; then _versions_upgrade "$yml"; return 0; fi
+
+  local comps="claude_code alpine uv bun gum"
+  local comp recorded channel latest status
+
+  if $do_json; then
+    local first=1
+    printf '['
+    for comp in $comps; do
+      recorded=$(_versions_recorded "$yml" "$comp")
+      channel=$(_versions_channel "$yml" "$comp")
+      [ "$first" -eq 1 ] || printf ','
+      first=0
+      if $do_check; then
+        if latest=$(versions_resolve "$comp" 2>/dev/null); then
+          [ "$recorded" = "$latest" ] && status=current || status=outdated
+        else latest=unknown; status=unknown; fi
+        printf '{"component":"%s","recorded":"%s","channel":"%s","latest":"%s","status":"%s"}' \
+          "$comp" "$recorded" "$channel" "$latest" "$status"
+      else
+        printf '{"component":"%s","recorded":"%s","channel":"%s"}' "$comp" "$recorded" "$channel"
+      fi
+    done
+    printf ']\n'
+    return 0
+  fi
+
+  if $do_check; then
+    printf '%-13s %-10s %-8s %-10s %s\n' component recorded channel latest status
+  else
+    printf '%-13s %-10s %s\n' component recorded channel
+  fi
+  for comp in $comps; do
+    recorded=$(_versions_recorded "$yml" "$comp")
+    channel=$(_versions_channel "$yml" "$comp")
+    if $do_check; then
+      if latest=$(versions_resolve "$comp" 2>/dev/null); then
+        [ "$recorded" = "$latest" ] && status=current || status=outdated
+      else latest=unknown; status=unknown; fi
+      printf '%-13s %-10s %-8s %-10s %s\n' "$comp" "$recorded" "$channel" "$latest" "$status"
+    else
+      printf '%-13s %-10s %s\n' "$comp" "$recorded" "$channel"
+    fi
+  done
+}
+
 main() {
   local sub="${1:-help}"
   shift || true
@@ -702,6 +858,7 @@ main() {
     status) cmd_status "$@" ;;
     heartbeat) cmd_heartbeat "$@" ;;
     mcp) cmd_mcp "$@" ;;
+    versions) cmd_versions "$@" ;;
     up) cmd_up ;;
     start) cmd_start ;;
     stop) cmd_stop ;;
