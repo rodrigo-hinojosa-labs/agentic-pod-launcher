@@ -42,6 +42,37 @@ run_docker_wizard() {
   [ "$(yq '.docker.gid' "$dest/agent.yml")" = "$(id -g)" ]
 }
 
+@test "wizard resolves and records toolchain versions into agent.yml + compose" {
+  mkdir -p "$TMP_TEST_DIR/installer"
+  local dest="$TMP_TEST_DIR/docker-versions"
+  run run_docker_wizard "$dest"
+  [ "$status" -eq 0 ]
+  # Suite runs offline (helper.bash) → resolver records the documented floor
+  # (the latest-stable values).
+  [ "$(yq -r '.docker.claude_code_version' "$dest/agent.yml")" = "2.1.170" ]
+  [ "$(yq -r '.docker.uv_version' "$dest/agent.yml")" = "0.11.22" ]
+  [ "$(yq -r '.docker.bun_version' "$dest/agent.yml")" = "1.3.14" ]
+  [ "$(yq -r '.docker.gum_version' "$dest/agent.yml")" = "0.17.0" ]
+  [ "$(yq -r '.docker.base_image' "$dest/agent.yml")" = "alpine:3.24.1" ]
+  # ...and they flow through into the compose build args.
+  grep -q 'CLAUDE_CODE_VERSION: "2.1.170"' "$dest/docker-compose.yml"
+  grep -q 'BASE_IMAGE: "alpine:3.24.1"' "$dest/docker-compose.yml"
+}
+
+@test "--regenerate backfills missing toolchain versions for a legacy agent.yml" {
+  mkdir -p "$TMP_TEST_DIR/installer"
+  local dest="$TMP_TEST_DIR/docker-backfill"
+  run run_docker_wizard "$dest"
+  [ "$status" -eq 0 ]
+  # Simulate a legacy agent.yml predating this feature (no version field).
+  yq -i 'del(.docker.claude_code_version)' "$dest/agent.yml"
+  [ "$(yq -r '.docker.claude_code_version // "MISSING"' "$dest/agent.yml")" = "MISSING" ]
+  cd "$dest"
+  run ./setup.sh --regenerate
+  [ "$status" -eq 0 ]
+  [ "$(yq -r '.docker.claude_code_version' "$dest/agent.yml")" = "2.1.170" ]
+}
+
 @test "--docker scaffold copies docker/ directory into destination" {
   mkdir -p "$TMP_TEST_DIR/installer"
   local dest="$TMP_TEST_DIR/docker-scaffold"

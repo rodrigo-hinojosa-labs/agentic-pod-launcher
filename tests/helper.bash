@@ -3,6 +3,13 @@
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# Default toolchain-version resolution to OFFLINE across the suite: every
+# scaffold (setup.sh) would otherwise make best-effort upstream calls, which
+# is slow and non-deterministic. versions_resolve then returns the documented
+# floor (the recorded latest-stable). tests/versions.bats opts out per-test to
+# exercise the real fetch+parse path.
+export AGENTIC_VERSIONS_OFFLINE=1
+
 setup_tmp_dir() {
   TMP_TEST_DIR=$(mktemp -d)
   export TMP_TEST_DIR

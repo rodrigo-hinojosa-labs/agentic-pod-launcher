@@ -53,6 +53,20 @@ _versions_fetch() {
 #   alpine      -> latest-stable release version
 versions_resolve() {
   local component="${1:?versions_resolve: need component}" raw="" out=""
+  local floor_var="AGENTIC_FLOOR_$(printf '%s' "$component" | tr '[:lower:]' '[:upper:]')"
+
+  case "$component" in
+    claude_code|uv|bun|gum|alpine) ;;
+    *) echo "versions_resolve: unknown component: $component" >&2; return 2 ;;
+  esac
+
+  # Forced offline (offline scaffold / deterministic tests): use the floor
+  # and never touch the network.
+  if [ -n "${AGENTIC_VERSIONS_OFFLINE:-}" ]; then
+    printf '%s' "${!floor_var:-}"
+    return 0
+  fi
+
   case "$component" in
     claude_code)
       raw=$(_versions_fetch "https://registry.npmjs.org/@anthropic-ai/claude-code") \
@@ -69,9 +83,6 @@ versions_resolve() {
     alpine)
       raw=$(_versions_fetch "https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64/latest-releases.yaml") \
         && out=$(printf '%s' "$raw" | sed -n 's/^[[:space:]]*version:[[:space:]]*//p' | head -1) ;;
-    *)
-      echo "versions_resolve: unknown component: $component" >&2
-      return 2 ;;
   esac
 
   if [ -n "$out" ] && [ "$out" != "null" ]; then
@@ -80,7 +91,6 @@ versions_resolve() {
   fi
 
   # Offline / parse failure: fall back to the documented floor.
-  local floor_var="AGENTIC_FLOOR_$(printf '%s' "$component" | tr '[:lower:]' '[:upper:]')"
   printf '%s' "${!floor_var:-}"
   return 1
 }

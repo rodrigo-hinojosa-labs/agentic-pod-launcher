@@ -7,6 +7,10 @@ load helper
 
 setup() {
   setup_tmp_dir
+  # versions.bats exercises the REAL resolver (fetch+parse), so opt out of
+  # the suite-wide offline default (helper.bash); individual tests that want
+  # the offline path set AGENTIC_VERSIONS_OFFLINE explicitly.
+  export AGENTIC_VERSIONS_OFFLINE=""
 }
 
 teardown() { teardown_tmp_dir; }
@@ -86,6 +90,16 @@ _stub_fetch_ok() {
   run versions_resolve uv
   [ "$status" -ne 0 ]
   [ -n "$output" ]
+}
+
+@test "AGENTIC_VERSIONS_OFFLINE returns the floor and never queries upstream" {
+  load_lib versions
+  # If the resolver wrongly fetched, it would return 9.9.9 from this stub.
+  _versions_fetch() { printf '%s' '{"dist-tags":{"stable":"9.9.9"},"tag_name":"9.9.9"}'; }
+  AGENTIC_VERSIONS_OFFLINE=1 run versions_resolve claude_code
+  [ "$output" = "2.1.170" ]
+  AGENTIC_VERSIONS_OFFLINE=1 run versions_resolve uv
+  [ "$output" = "0.11.22" ]
 }
 
 @test "versions_resolve rejects an unknown component" {

@@ -9,6 +9,7 @@ source "$SCRIPT_DIR/scripts/lib/render.sh"
 source "$SCRIPT_DIR/scripts/lib/plugin-catalog.sh"
 source "$SCRIPT_DIR/scripts/lib/mcp-catalog.sh"
 source "$SCRIPT_DIR/scripts/lib/schema.sh"
+source "$SCRIPT_DIR/scripts/lib/versions.sh"
 
 # Launcher version, surfaced in agent.yml::meta and `agentctl doctor` so
 # scaffolded workspaces can advertise which launcher rev produced them.
@@ -151,7 +152,9 @@ ensure_gum() {
   fi
 
   # 3. Auto-download from GitHub releases.
-  local version="0.14.5"
+  # Single-sourced from scripts/lib/versions.sh so the host gum and the
+  # image-baked gum can't drift (a bats invariant enforces it).
+  local version="${AGENTIC_FLOOR_GUM:-0.14.5}"
   local os arch
   os=$(uname -s | tr '[:upper:]' '[:lower:]')
   arch=$(uname -m)
@@ -908,10 +911,31 @@ ATLASSIAN_${upper}_TOKEN=${ws_token}
 
   # ── Build YAML fragments before the heredoc ─────────
   local atlassian_yaml plugins_yaml
+  # Resolve-and-record: resolve each toolchain channel to a concrete latest
+  # stable version and bake it into agent.yml's docker: block (the per-agent
+  # source of truth the build reads). Best-effort; offline falls back to the
+  # documented floor in scripts/lib/versions.sh.
+  echo "▸ Resolving latest stable toolchain versions..." >&2
+  local _v_alpine _v_claude _v_uv _v_bun _v_gum
+  _v_alpine=$(versions_resolve alpine) || true
+  _v_claude=$(versions_resolve claude_code) || true
+  _v_uv=$(versions_resolve uv) || true
+  _v_bun=$(versions_resolve bun) || true
+  _v_gum=$(versions_resolve gum) || true
   local docker_yaml="  image_tag: \"agentic-pod:latest\"
   uid: $(id -u)
   gid: $(id -g)
-  base_image: \"alpine:3.20\""
+  base_image: \"alpine:${_v_alpine}\"
+  claude_code_version: \"${_v_claude}\"
+  uv_version: \"${_v_uv}\"
+  bun_version: \"${_v_bun}\"
+  gum_version: \"${_v_gum}\"
+  toolchain_channels:
+    claude_code: \"${AGENTIC_CHANNEL_CLAUDE_CODE}\"
+    alpine: \"${AGENTIC_CHANNEL_ALPINE}\"
+    uv: \"${AGENTIC_CHANNEL_UV}\"
+    bun: \"${AGENTIC_CHANNEL_BUN}\"
+    gum: \"${AGENTIC_CHANNEL_GUM}\""
   if [ -n "$atlassian_entries" ]; then
     atlassian_yaml="  atlassian:
 $atlassian_entries"
@@ -1663,6 +1687,26 @@ regenerate() {
     _now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
     yq -i ".meta.launcher_version = \"$LAUNCHER_VERSION\"" "$agent_yml"
     yq -i ".meta.regenerated_at = \"$_now\"" "$agent_yml"
+
+    # Backfill missing toolchain versions for legacy agents (scaffolded
+    # before this feature). Only MISSING fields are filled, so a plain
+    # --regenerate stays deterministic (existing recorded versions are left
+    # untouched; moving them forward is the explicit `agentctl versions
+    # --upgrade`). Best-effort; offline falls back to the documented floor.
+    local _comp _existing _resolved
+    for _comp in claude_code uv bun gum; do
+      _existing=$(yq -r ".docker.${_comp}_version // \"\"" "$agent_yml")
+      if [ -z "$_existing" ] || [ "$_existing" = "null" ]; then
+        _resolved=$(versions_resolve "$_comp") || true
+        [ -n "$_resolved" ] && yq -i ".docker.${_comp}_version = \"$_resolved\"" "$agent_yml"
+      fi
+    done
+    local _base
+    _base=$(yq -r '.docker.base_image // ""' "$agent_yml")
+    if [ -z "$_base" ] || [ "$_base" = "null" ]; then
+      local _a; _a=$(versions_resolve alpine) || true
+      [ -n "$_a" ] && yq -i ".docker.base_image = \"alpine:$_a\"" "$agent_yml"
+    fi
   fi
 
   echo "▸ Loading context from agent.yml"

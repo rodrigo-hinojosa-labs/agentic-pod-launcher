@@ -89,9 +89,10 @@ teardown() { teardown_tmp_dir; }
   [[ "$content" == *'${HEARTBEAT_CRON}'* ]]
 }
 
-@test "Dockerfile builds from alpine:3.20 base" {
+@test "Dockerfile builds from a build-arg-driven base image" {
   content=$(< "$REPO_ROOT/docker/Dockerfile")
-  [[ "$content" == *"FROM alpine:3.20"* ]]
+  [[ "$content" == *"ARG BASE_IMAGE=alpine:3.24.1"* ]]
+  [[ "$content" == *'FROM ${BASE_IMAGE}'* ]]
 }
 
 @test "Dockerfile accepts UID/GID build args and creates agent user" {
