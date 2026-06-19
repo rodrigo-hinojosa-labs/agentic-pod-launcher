@@ -14,15 +14,22 @@ _log_qa() {
   printf '  › %s: %s\n' "$1" "$2" >&2
 }
 
-# _abort_if_interrupted RC  → exit the wizard cleanly when gum catches Ctrl+C.
-# gum returns 130 on SIGINT (the standard convention) and 2 when the user
-# hits Esc in gum choose. Either one means "I want out", not "accept
-# default and keep going". We print a one-line note and exit so the whole
-# wizard stops instead of silently advancing question by question.
+# _abort_if_interrupted RC [WIDGET]  → exit the wizard cleanly on abort.
+# gum returns 130 on SIGINT (Ctrl+C) for every widget. For `gum input`
+# and `gum choose`, Esc returns 2 on gum <0.15 and 1 on gum >=0.15 — both
+# mean "I want out". For `gum confirm`, rc=1 is the legitimate "no"
+# answer, so ONLY 130 aborts there. WIDGET defaults to input (so any
+# input/choose/password call is covered without an explicit argument).
 _abort_if_interrupted() {
-  local rc="$1"
-  if [ "$rc" -eq 130 ] || [ "$rc" -eq 2 ]; then
-    printf '\n✗ Wizard aborted (Ctrl+C). No files were written.\n' >&2
+  local rc="$1" widget="${2:-input}" abort=0
+  case "$widget" in
+    confirm)
+      [ "$rc" -eq 130 ] && abort=1 ;;
+    *)  # input / choose / password
+      { [ "$rc" -eq 130 ] || [ "$rc" -eq 2 ] || [ "$rc" -eq 1 ]; } && abort=1 ;;
+  esac
+  if [ "$abort" -eq 1 ]; then
+    printf '\n✗ Wizard aborted. No files were written.\n' >&2
     exit 130
   fi
 }
@@ -67,7 +74,7 @@ ask_yn() {
   fi
   local rc=0
   "$GUM" confirm "$prompt" $default_flag || rc=$?
-  _abort_if_interrupted "$rc"
+  _abort_if_interrupted "$rc" confirm
   if [ "$rc" -eq 0 ]; then
     _log_qa "$prompt" "yes"
     echo "true"
