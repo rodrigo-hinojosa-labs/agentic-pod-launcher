@@ -113,7 +113,7 @@ versions and caveats are in [research.md](./research.md).
 - [x] T024 [P] Update docs: `README.md`, `docs/getting-started.md`, `docs/architecture.md` for the channel/resolve-and-record upgrade workflow + `agentctl versions`; mirror into `modules/next-steps.{en,es}.tpl` if operator-facing.
 - [x] T025 [P] `CHANGELOG.md` entry (under a new version) + bump `VERSION` (user-facing change per Principle VI).
 - [x] T026 [P] `shellcheck -S error` clean on `scripts/lib/versions.sh`, `scripts/agentctl`, `setup.sh`, `scripts/lib/wizard-gum.sh`.
-- [ ] T027 Run full default suite `bats tests/` (no Docker) green, then `DOCKER_E2E=1 bats tests/docker-e2e-heartbeat.bats` (Alpine 3.24/busybox/crond) — the gating verification.
+- [x] T027 Run full default suite `bats tests/` (no Docker) green, then `DOCKER_E2E=1 bats tests/docker-e2e-heartbeat.bats` (Alpine 3.24/busybox/crond) — the gating verification.
 - [ ] T028 E2E re-verify the high-risk caveats (research.md): Telegram `reply` path under Claude Code 2.1.170 (acceptEdits 2.1.160 change with `permissions.defaultMode=auto`), and the Python-3.14 patch scripts (`apply_telegram_typing_patch.py`, `fetch-github-key`).
 
 ---

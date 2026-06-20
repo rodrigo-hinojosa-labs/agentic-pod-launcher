@@ -33,18 +33,20 @@ teardown() {
 
 @test "fresh scaffold → container boot → cron tick → runs.jsonl has an entry" {
   # 1) prepare a workspace with agent.yml + all source dirs copied.
-  # base_image (and the docker.*_version fields) are intentionally omitted
-  # from the docker: map: --regenerate backfills them to the resolver floor,
-  # so this gating crond/busybox smoke always boots on the current latest-
-  # stable Alpine (3.24.1+) instead of a pinned-stale base. See setup.sh
-  # regenerate backfill.
+  # base_image is set to the current resolver floor (Alpine 3.24.1) so this
+  # gating crond/busybox smoke boots on the latest-stable base, not the old
+  # 3.20. It must be present: schema validation requires .docker.base_image
+  # and runs before --regenerate's backfill. The docker.*_version fields ARE
+  # omitted on purpose — those are not schema-required and --regenerate
+  # backfills them to the floor. Keep alpine in sync with versions.sh (smoke
+  # only needs Alpine >= 3.24).
   mkdir -p "$DEST"
   cat > "$DEST/agent.yml" <<YML
 version: 1
 agent: {name: $AGENT_NAME, display_name: "e2e 🧪", role: "test", vibe: "terse"}
 user: {name: "Tester", nickname: "Tester", timezone: "UTC", email: "t@e.x", language: "en"}
 deployment: {host: "test", workspace: "$DEST", install_service: false, claude_cli: "claude"}
-docker: {image_tag: "agent-admin:e2e", uid: $(id -u), gid: $(id -g), state_volume: "${AGENT_NAME}-state"}
+docker: {image_tag: "agent-admin:e2e", uid: $(id -u), gid: $(id -g), state_volume: "${AGENT_NAME}-state", base_image: "alpine:3.24.1"}
 claude: {config_dir: "/home/agent/.claude", profile_new: true}
 notifications: {channel: none}
 features:
@@ -64,14 +66,24 @@ YML
   chmod 0600 "$DEST/.env"
 
   # 4) install a claude stub that heartbeat.sh will find on PATH.
-  # Writing HEARTBEAT_DONE immediately (what heartbeat.sh's tmux launcher
-  # expects on success) short-circuits the session wait.
+  # The stub must serve TWO distinct invocation paths or the container
+  # crash-loops:
+  #   - heartbeat.sh runs `claude --print ...` (non-interactive): echo and
+  #     exit 0 so heartbeat.sh records status=ok and writes HEARTBEAT_DONE.
+  #   - start_services.sh launches a BARE `claude` for the interactive tmux
+  #     session and treats an immediately-dead session as fatal (exit 1 →
+  #     Docker restart). A real claude would sit in its TUI awaiting input, so
+  #     the stub must BLOCK on this path to keep the session alive; exiting 0
+  #     here is what made the watchdog burn its crash budget before the first
+  #     cron tick could write runs.jsonl.
   mkdir -p "$DEST/bin"
   cat > "$DEST/bin/claude" <<'CL'
 #!/bin/bash
-# e2e stub — echoes the prompt and exits 0 so heartbeat.sh records status=ok
-printf 'STUB_CLAUDE: %s\n' "$*"
-exit 0
+# e2e stub — see docker-e2e-heartbeat.bats step 4 for why this branches.
+case " $* " in
+  *" --print "*) printf 'STUB_CLAUDE: %s\n' "$*"; exit 0 ;;
+  *)             exec sleep 86400 ;;
+esac
 CL
   chmod +x "$DEST/bin/claude"
 

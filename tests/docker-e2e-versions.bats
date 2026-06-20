@@ -97,7 +97,10 @@ ENV
 
   # One throwaway container with the entrypoint overridden (no boot, no
   # watchdog, no credentials needed) — probe every baked tool at once.
-  run docker compose run --rm -T --entrypoint sh verbot -c '
+  # Run as `agent`: under the least-privilege model (cap_drop: ALL, no
+  # CAP_DAC_OVERRIDE) root cannot read the agent-owned /opt/uv cache, so
+  # `uv tool list` errors as root — same reason every docker exec uses -u agent.
+  run docker compose run --rm -T --user agent --entrypoint sh verbot -c '
     echo "CLAUDE=$(claude --version 2>&1)"
     echo "UV=$(uv --version 2>&1)"
     echo "BUN=$(bun --version 2>&1)"
