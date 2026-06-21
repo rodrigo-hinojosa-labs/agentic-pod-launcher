@@ -216,3 +216,74 @@ setup() {
   [ "$status" -eq 1 ]
   [[ "$output" == *"does not exist"* ]]
 }
+
+# ── normalize_destination_path (Story D) ────────────────────
+
+@test "normalize_destination_path expands a leading ~/ to \$HOME" {
+  run normalize_destination_path "~/agents/foo"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$HOME/agents/foo" ]
+}
+
+@test "normalize_destination_path expands a bare ~ to \$HOME" {
+  run normalize_destination_path "~"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$HOME" ]
+}
+
+@test "normalize_destination_path leaves an absolute path unchanged" {
+  run normalize_destination_path "/Users/me/agents/x"
+  [ "$status" -eq 0 ]
+  [ "$output" = "/Users/me/agents/x" ]
+}
+
+@test "normalize_destination_path leaves a mid-path ~ untouched (only a leading ~ expands)" {
+  run normalize_destination_path "/mid/~/path"
+  [ "$status" -eq 0 ]
+  [ "$output" = "/mid/~/path" ]
+}
+
+# ── validate_destination_path (Story D) ─────────────────────
+
+@test "validate_destination_path accepts an absolute path" {
+  validate_destination_path "/Users/me/agents/myagent"
+}
+
+@test "validate_destination_path rejects a relative path" {
+  run validate_destination_path "agents/myagent"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"absolute"* ]]
+}
+
+@test "validate_destination_path rejects a mid-path ~" {
+  run validate_destination_path "/mid/~/path"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"~"* ]]
+}
+
+@test "validate_destination_path rejects path traversal" {
+  run validate_destination_path "/Users/me/../../etc/x"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *".."* ]]
+}
+
+@test "validate_destination_path warns (but accepts) a /home path on macOS" {
+  uname() { echo "Darwin"; }
+  run validate_destination_path "/home/me/agents/x"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"/Users"* ]]
+}
+
+@test "validate_destination_path does not warn on a /home path on Linux" {
+  uname() { echo "Linux"; }
+  run validate_destination_path "/home/me/agents/x"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"/Users"* ]]
+}
+
+@test "validate_destination_path accepts a /Users path on macOS with no warning" {
+  uname() { echo "Darwin"; }
+  run validate_destination_path "/Users/me/agents/x"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"/Users"* ]]
+}

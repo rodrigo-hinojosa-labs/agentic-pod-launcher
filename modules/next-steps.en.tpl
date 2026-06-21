@@ -145,7 +145,7 @@ Before anything else:
 ./scripts/agentctl doctor
 ```
 
-Runs 12 checks in dependency order (Docker daemon → container → health → agent.yml → tmux → crond → Telegram plugin → heartbeat → vault → patches) and reports `✓` / `⚠` / `✗` per subsystem with an actionable hint when something fails. The fastest way to know what's broken without running 8 commands.
+Runs 12 checks in dependency order (Docker daemon → container → health → agent.yml → tmux → crond → Telegram plugin → heartbeat → vault → patches) and reports `✓` / `⚠` / `✗` per subsystem with an actionable hint when something fails. The fastest way to know what's broken without running 8 commands. It also lists any plugin the supervisor failed to install, each with a copy-paste retry command.
 
 ### The agent stops responding on Telegram ("ghosting")
 
@@ -209,7 +209,7 @@ Two distinct causes, both handled by `agentctl attach` instead of the raw comman
 
 Two usual causes:
 
-1. **Plugin not installed yet** — on first boot claude launches with `--channels` but the plugin cache isn't populated. Run `docker compose restart` after `/login` so the watchdog installs the plugin and re-launches. Inside tmux, `/mcp` shows each server's status: look for `✔ connected`.
+1. **Plugin not installed yet** — on first boot claude launches before `/login`, so plugins can't install. After you `/login`, the watchdog detects it and auto-installs the plugins + re-launches with `--channels` — no manual restart needed. Inside tmux, `/mcp` shows each server's status: look for `✔ connected`. If one stays failed, `agentctl doctor` lists it with a retry command.
 2. **`bun` missing from the image** — the plugin MCP server runs on bun. The launcher's image installs it; if you built a custom image without bun, confirm:
 
 ```bash

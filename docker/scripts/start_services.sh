@@ -36,6 +36,16 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [start_services] $*" >&2; }
 [ -f /opt/agent-admin/scripts/lib/backup_identity.sh ] \
   && source /opt/agent-admin/scripts/lib/backup_identity.sh
 
+# Plugin-install retry + failure tracking (Story C). Image path first; fall
+# back to the repo-relative path so host bats tests that source this script get
+# retry_plugin_install_bounded / _plugin_*_failure too.
+# shellcheck source=/dev/null
+if [ -f /opt/agent-admin/scripts/lib/plugin-install.sh ]; then
+  source /opt/agent-admin/scripts/lib/plugin-install.sh
+elif [ -f "$(dirname "${BASH_SOURCE[0]}")/lib/plugin-install.sh" ]; then
+  source "$(dirname "${BASH_SOURCE[0]}")/lib/plugin-install.sh"
+fi
+
 # seed_vault_if_needed — at first boot, copy the skeleton into the per-agent
 # vault dir if vault.enabled + vault.seed_skeleton and the target is empty.
 # Honors vault.force_reseed: when true, the existing vault is moved aside to
@@ -176,6 +186,7 @@ ensure_plugin_installed_one() {
   if [ -d "$cache" ] && [ -f "$cache/.installed-ok" ]; then
     apply_plugin_post_hooks "$spec" "$cache"
     _trigger_identity_backup "post-plugin-check"
+    if command -v _plugin_clear_failure >/dev/null 2>&1; then _plugin_clear_failure "$spec"; fi
     return 0
   fi
   if [ -d "$cache" ]; then
@@ -183,6 +194,26 @@ ensure_plugin_installed_one() {
     rm -rf "$cache"
   fi
   log "attempting to install plugin: $spec"
+
+  # Story C: bounded retry + distinct not-auth/failed outcomes + a sanitized
+  # residual-failure record surfaced by `agentctl doctor` and NEXT_STEPS. Falls
+  # back to the legacy single-attempt path when the lib isn't sourced.
+  if command -v retry_plugin_install_bounded >/dev/null 2>&1; then
+    local reason rc
+    reason=$(retry_plugin_install_bounded "$spec") && rc=0 || rc=$?
+    case "$rc" in
+      0)
+        [ -d "$cache" ] && : > "$cache/.installed-ok"
+        apply_plugin_post_hooks "$spec" "$cache"
+        _trigger_identity_backup "post-plugin-install"
+        _plugin_clear_failure "$spec"
+        return 0 ;;
+      2) return 1 ;;                                   # not authenticated — expected skip
+      *) _plugin_record_failure "$spec" "$reason"; return 1 ;;
+    esac
+  fi
+
+  # Legacy fallback (plugin-install lib unavailable).
   if CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR_VAL" claude plugin install "$spec" >/dev/null 2>&1; then
     log "plugin installed: $spec"
     [ -d "$cache" ] && : > "$cache/.installed-ok"
@@ -723,6 +754,18 @@ _check_auth_banner() {
   fi
 }
 
+# _identity_backup_fork_configured → 0 if agent.yml carries a scaffold.fork.url
+# (a backup target exists), non-zero otherwise. Mirrors heartbeatctl::_bi_run's
+# fork-presence guard so a fork-less agent never attempts a backup. The
+# agent.yml path is overridable for host tests (cf. AUTH_BANNER_AGENT_YML_OVERRIDE).
+_identity_backup_fork_configured() {
+  local agent_yml="${IDENTITY_BACKUP_AGENT_YML_OVERRIDE:-/workspace/agent.yml}"
+  local fork_url
+  fork_url=$(yq '.scaffold.fork.url // ""' "$agent_yml" 2>/dev/null)
+  [ "$fork_url" = "null" ] && fork_url=""
+  [ -n "$fork_url" ]
+}
+
 # Backup-identity: every 60s, compare identity hash vs last-backup hash.
 # Fires the primitive when they differ. Throttled to avoid bursts.
 _last_backup_check=0
@@ -733,6 +776,11 @@ _check_identity_backup() {
     return 0
   fi
   _last_backup_check=$now
+
+  # Fork-less agents have nowhere to back up to — skip the hash check and the
+  # per-tick trigger entirely so the supervisor log stays quiet (FR-G1). This
+  # must come before any hashing or _trigger_identity_backup call.
+  _identity_backup_fork_configured || return 0
 
   if [ -f /opt/agent-admin/scripts/lib/backup_identity.sh ]; then
     # shellcheck source=/dev/null
@@ -757,6 +805,38 @@ _check_identity_backup() {
   fi
 }
 
+# ── Auth-flip detection (Story A) ─────────────────────────
+# After /login, claude writes the OAuth credential file. In the bare-claude
+# (Case A) state the session is alive and channel_plugin_alive returns OK
+# (no channel marker), so the watchdog `continue`s forever and never respawns
+# — meaning the post-login plugin install + --channels attach never happen
+# unless the operator manually /exits. This detects the absent->present
+# credential flip and kicks the session so the watchdog respawns it (which
+# re-runs ensure_all_plugins_installed + re-decides next_tmux_cmd). File
+# existence only — NO tmux-pane scraping (CLAUDE.md forbids it).
+_auth_marker_file() {
+  echo "${AUTH_MARKER_OVERRIDE:-$CLAUDE_CONFIG_DIR_VAL/.credentials.json}"
+}
+
+# -1 = baseline not yet established; the first tick only records state so an
+# agent that boots already-authenticated is never needlessly kicked.
+_prev_auth_present=-1
+_check_auth_flip() {
+  local present=0
+  if [ -f "$(_auth_marker_file)" ]; then present=1; fi
+
+  if [ "$_prev_auth_present" -eq -1 ]; then
+    _prev_auth_present=$present
+    return 0
+  fi
+
+  if [ "$_prev_auth_present" -eq 0 ] && [ "$present" -eq 1 ]; then
+    log "auth credential appeared (/login complete) — kicking session to install plugins + attach channel"
+    tmux kill-session -t "$SESSION" 2>/dev/null || true
+  fi
+  _prev_auth_present=$present
+}
+
 # ── 6. Watchdog ───────────────────────────────────────────
 # Poll every 2s so the re-attach gap between Claude dying (/exit) and the
 # next tmux session coming up is barely noticeable. Cheap check — just
@@ -777,6 +857,12 @@ _run_watchdog() {
     # emits a warning via the configured notifier — orthogonal to the
     # heartbeat-based detection (which has up to 30 min latency).
     _check_auth_banner
+
+    # Story A: detect the unauthenticated->authenticated credential flip
+    # (operator completed /login) and kick the session so the watchdog
+    # respawns it — installing plugins + attaching --channels without a
+    # manual /exit or restart. File-existence only; no tmux-pane scraping.
+    _check_auth_flip
 
     if session_alive && channel_plugin_alive; then
       continue

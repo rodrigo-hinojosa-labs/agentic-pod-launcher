@@ -65,6 +65,15 @@ _SCHEMA_BOOLEANS=(
   '.features.heartbeat.enabled'
 )
 
+# Optional string leaves: absent is fine (not required), but if the key is
+# present it must be a non-empty string. yq prints "null" for an absent path,
+# so we can tell "absent" (skip) from "present but empty" (error). role_file
+# (Story I) is the first such leaf — its on-disk existence is checked later by
+# render.sh, here we only guard the YAML shape.
+_SCHEMA_OPTIONAL_NONEMPTY=(
+  '.agent.role_file'
+)
+
 # Internal: read a yq value, normalise null/empty to empty string.
 _schema_get() {
   local file="$1" path="$2"
@@ -122,6 +131,16 @@ agent_yml_validate() {
       true|false) ;;
       *)          errors+=("${bool_path} must be a YAML boolean (true|false), got: ${val}") ;;
     esac
+  done
+
+  # Optional non-empty strings: read raw (not via _schema_get, whose `// ""`
+  # collapses absent and empty). yq prints "null" for an absent path, so we
+  # only flag a key that is present yet empty.
+  local opt_path opt_val
+  for opt_path in "${_SCHEMA_OPTIONAL_NONEMPTY[@]}"; do
+    opt_val=$(yq -r "$opt_path" "$file" 2>/dev/null)
+    [ "$opt_val" = "null" ] && continue
+    [ -z "$opt_val" ] && errors+=("${opt_path}, if set, must be a non-empty string")
   done
 
   if [ ${#errors[@]} -gt 0 ]; then

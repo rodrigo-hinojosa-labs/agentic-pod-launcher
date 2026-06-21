@@ -90,3 +90,81 @@ TPL
   [[ "$result" == *'BUN_VERSION: "1.3.14"'* ]]
   [[ "$result" == *'GUM_VERSION: "0.17.0"'* ]]
 }
+
+# ── Story I: role_file → AGENT_ROLE_MULTILINE ──
+
+@test "render_load_context exports AGENT_ROLE_MULTILINE from agent.role_file (verbatim)" {
+  local persona="$BATS_TEST_TMPDIR/persona.md"
+  printf 'Line one.\n\nLine two with **markdown** and an apostrophe'\''s tail.\n' > "$persona"
+  local yml="$BATS_TEST_TMPDIR/role.yml"
+  cat > "$yml" <<YML
+agent:
+  name: pbot
+  role: "one-liner"
+  role_file: "$persona"
+YML
+  render_load_context "$yml"
+  [ "$AGENT_ROLE_MULTILINE" = "$(cat "$persona")" ]
+  [ "$AGENT_ROLE_MULTILINE_ENABLED" = "true" ]
+}
+
+@test "render_load_context resolves a workspace-relative role_file against the agent.yml dir" {
+  mkdir -p "$BATS_TEST_TMPDIR/personas"
+  printf 'RELMARKER relative persona.\n' > "$BATS_TEST_TMPDIR/personas/pbot.md"
+  local yml="$BATS_TEST_TMPDIR/role.yml"
+  cat > "$yml" <<'YML'
+agent:
+  name: pbot
+  role: "one-liner"
+  role_file: "personas/pbot.md"
+YML
+  render_load_context "$yml"
+  [ "$AGENT_ROLE_MULTILINE_ENABLED" = "true" ]
+  grep -q "RELMARKER" <<< "$AGENT_ROLE_MULTILINE"
+}
+
+@test "render_load_context leaves the one-line role path intact when role_file is unset" {
+  local yml="$BATS_TEST_TMPDIR/role.yml"
+  cat > "$yml" <<'YML'
+agent:
+  name: pbot
+  role: "just a one-liner"
+YML
+  render_load_context "$yml"
+  [ -z "${AGENT_ROLE_MULTILINE:-}" ]
+  [ "${AGENT_ROLE_MULTILINE_ENABLED:-false}" != "true" ]
+  [ "$AGENT_ROLE" = "just a one-liner" ]
+}
+
+@test "render_load_context fails loud when role_file path is missing" {
+  local yml="$BATS_TEST_TMPDIR/role.yml"
+  cat > "$yml" <<'YML'
+agent:
+  name: pbot
+  role: "one-liner"
+  role_file: "does/not/exist.md"
+YML
+  run render_load_context "$yml"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"role_file not found"* ]]
+}
+
+@test "claude-md.tpl injects the multiline persona into the Identity section" {
+  local persona="$BATS_TEST_TMPDIR/persona.md"
+  printf 'PERSONAMARKER first paragraph.\n\nSecond paragraph.\n' > "$persona"
+  local yml="$BATS_TEST_TMPDIR/role.yml"
+  cat > "$yml" <<YML
+agent:
+  name: pbot
+  display_name: "PBot"
+  role: "one-liner"
+  role_file: "$persona"
+  vibe: "v"
+YML
+  render_load_context "$yml"
+  result=$(render_template "$REPO_ROOT/modules/claude-md.tpl")
+  # grep (a regular command) is caught by bats even mid-test; a failing
+  # intermediate [[ ]] is silently ignored, so avoid it for the load-bearing
+  # assertion.
+  grep -q "PERSONAMARKER" <<< "$result"
+}

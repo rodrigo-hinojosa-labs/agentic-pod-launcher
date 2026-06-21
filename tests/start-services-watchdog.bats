@@ -156,3 +156,43 @@ STUB
   sleep 1
   [ ! -f "$BATS_TEST_TMPDIR/called" ]
 }
+
+# ── Story G: fork-less agents must not run the identity-backup check ──
+
+@test "_identity_backup_fork_configured is false for a fork-less agent.yml" {
+  cat > "$TMP_TEST_DIR/agent.yml" <<'YML'
+scaffold:
+  fork:
+    url: ""
+YML
+  export IDENTITY_BACKUP_AGENT_YML_OVERRIDE="$TMP_TEST_DIR/agent.yml"
+  run _identity_backup_fork_configured
+  [ "$status" -eq 1 ]
+}
+
+@test "_identity_backup_fork_configured is true when agent.yml carries a fork url" {
+  cat > "$TMP_TEST_DIR/agent.yml" <<'YML'
+scaffold:
+  fork:
+    url: "https://github.com/me/my-agent.git"
+YML
+  export IDENTITY_BACKUP_AGENT_YML_OVERRIDE="$TMP_TEST_DIR/agent.yml"
+  run _identity_backup_fork_configured
+  [ "$status" -eq 0 ]
+}
+
+@test "_check_identity_backup skips the trigger and stays silent for a fork-less agent" {
+  cat > "$TMP_TEST_DIR/agent.yml" <<'YML'
+scaffold:
+  fork:
+    url: ""
+YML
+  export IDENTITY_BACKUP_AGENT_YML_OVERRIDE="$TMP_TEST_DIR/agent.yml"
+  # Stub the trigger (bash function in the same file → redefine it).
+  _trigger_identity_backup() { echo called >> "$BATS_TEST_TMPDIR/trigger_called"; }
+  _last_backup_check=0
+  run _check_identity_backup
+  [ "$status" -eq 0 ]
+  [ ! -f "$BATS_TEST_TMPDIR/trigger_called" ]
+  [[ "$output" != *"identity backup"* ]]
+}

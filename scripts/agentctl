@@ -118,6 +118,26 @@ _doctor_fail() {
 }
 _doctor_skip() { echo "  ⊝ $1 (skipped — $2)"; }
 
+# Story C: surface plugins the supervisor failed to install. Reads the
+# bind-mounted state file (host-side; no exec needed) and prints a copy-paste
+# retry command per residual failure (FR-C3).
+_doctor_check_plugin_failures() {
+  local ws="${1:-${WORKSPACE:-}}"
+  local file="$ws/.state/plugin-install-failures.jsonl"
+  if [ ! -s "$file" ]; then
+    _doctor_pass "Plugins: no install failures recorded"
+    return 0
+  fi
+  local spec found=0
+  while IFS= read -r spec; do
+    [ -z "$spec" ] && continue
+    found=1
+    _doctor_fail "Plugin failed to install: $spec" "./scripts/agentctl run claude plugin install $spec"
+  done < <(jq -r '.spec // empty' "$file" 2>/dev/null | sort -u)
+  [ "$found" -eq 1 ] || _doctor_pass "Plugins: no install failures recorded"
+  return 0
+}
+
 # Convert an ISO 8601 UTC timestamp ("2026-05-02T03:30:00Z") to epoch
 # seconds. Tries GNU date (Linux) first, then BSD date (macOS).
 # Empty/invalid input → empty stdout.
@@ -515,6 +535,12 @@ cmd_doctor() {
     _check_backup_freshness "$agent" config "$config_max"
   fi
 
+  # 15b. Plugin install failures (Story C) — surface any plugin the supervisor
+  # could not install (bounded retry exhausted), each with a retry command.
+  if [ -n "$WORKSPACE" ]; then
+    _doctor_check_plugin_failures "$WORKSPACE"
+  fi
+
   # 16-18. Token health — read state files written by the hourly
   # check_token_health.sh cron and surface auth failures (token expired
   # or revoked) before the user notices via a broken Claude tool call.
@@ -871,4 +897,9 @@ main() {
   esac
 }
 
-main "$@"
+# Tests source this script (AGENTCTL_NO_RUN=1, or `source` where BASH_SOURCE
+# != $0) to exercise individual functions. The guard keeps sourcing
+# side-effect-free, mirroring docker/scripts/start_services.sh.
+if [ "${AGENTCTL_NO_RUN:-0}" != "1" ] && [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  main "$@"
+fi

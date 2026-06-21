@@ -144,19 +144,23 @@ con cada PR):
                                     TEMPLATE_URL, FORK_PAT]
   5. Heartbeat notif (1 + sub):     NOTIFY_CHANNEL [si telegram: NOTIFY_BOT_TOKEN
                                     + auto-discover prompt = "n" + NOTIFY_CHAT_ID]
-  6. MCP Atlassian (1 + loop si y): ATLASSIAN_ENABLED [si y: por cada workspace
+  6. MCPs catálogo (6 opc, alfa):   MCPS_AWS_ENABLED, MCPS_FIRECRAWL_ENABLED,
+                                    MCPS_GOOGLE_CALENDAR_ENABLED, MCPS_PLAYWRIGHT_ENABLED,
+                                    MCPS_TIME_ENABLED, MCPS_TREE_SITTER_ENABLED
+                                    [cada "y" puede pedir 0-2 secretos según el MCP]
+  7. MCP Atlassian (1 + loop si y): ATLASSIAN_ENABLED [si y: por cada workspace
                                     name|url|email|token + "n" para terminar loop]
-  7. MCP GitHub (1 + sub si y):     GITHUB_MCP_ENABLED [si y: GITHUB_MCP_EMAIL,
+  8. MCP GitHub (1 + sub si y):     GITHUB_MCP_ENABLED [si y: GITHUB_MCP_EMAIL,
                                     GITHUB_MCP_PAT]
-  8. Heartbeat schedule (1 + sub):  HEARTBEAT_ENABLED [si y: HEARTBEAT_INTERVAL,
+  9. Heartbeat schedule (1 + sub):  HEARTBEAT_ENABLED [si y: HEARTBEAT_INTERVAL,
                                     HEARTBEAT_PROMPT]
-  9. Principles (1):                USE_DEFAULT_PRINCIPLES
- 10. Vault (1 + 3 sub si y):        VAULT_ENABLED [si y: VAULT_SEED_SKELETON,
+ 10. Principles (1):                USE_DEFAULT_PRINCIPLES
+ 11. Vault (1 + 3 sub si y):        VAULT_ENABLED [si y: VAULT_SEED_SKELETON,
                                     VAULT_MCP_ENABLED, VAULT_QMD_ENABLED]
- 11. Optional plugins (5, alfa):    PLUGIN_CODE_SIMPLIFIER, PLUGIN_COMMIT_COMMANDS,
+ 12. Optional plugins (5, alfa):    PLUGIN_CODE_SIMPLIFIER, PLUGIN_COMMIT_COMMANDS,
                                     PLUGIN_GITHUB, PLUGIN_SKILL_CREATOR,
                                     PLUGIN_SUPERPOWERS
- 12. Review action (1):             "proceed"   ← literal, sin comillas en el printf
+ 13. Review action (1):             "proceed"   ← literal, sin comillas en el printf
 
 EJECUCIÓN:
 13. Pipea ese stdin a `./setup.sh --destination $DESTINATION` y captura

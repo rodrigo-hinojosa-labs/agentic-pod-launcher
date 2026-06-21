@@ -103,3 +103,15 @@ teardown() { teardown_tmp_dir; }
   [ "$status" -eq 0 ]
   [ -f .mcp.json ]
 }
+
+@test "--regenerate injects the role_file persona into CLAUDE.md (survives, content re-read)" {
+  cd "$TMP_TEST_DIR"
+  mkdir -p personas
+  printf 'PERSONA_REGEN_MARKER multi-paragraph persona.\n\nSecond paragraph.\n' > personas/regen-bot.md
+  yq -i '.agent.role_file = "personas/regen-bot.md"' agent.yml
+  echo 'n' | ./setup.sh --regenerate
+  # role_file path persists in agent.yml (single source of truth)…
+  grep -q 'role_file:' agent.yml
+  # …and its content is re-read into the rendered CLAUDE.md (FR-I1/FR-X1).
+  grep -q "PERSONA_REGEN_MARKER" CLAUDE.md
+}
