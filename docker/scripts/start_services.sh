@@ -754,6 +754,18 @@ _check_auth_banner() {
   fi
 }
 
+# _identity_backup_fork_configured → 0 if agent.yml carries a scaffold.fork.url
+# (a backup target exists), non-zero otherwise. Mirrors heartbeatctl::_bi_run's
+# fork-presence guard so a fork-less agent never attempts a backup. The
+# agent.yml path is overridable for host tests (cf. AUTH_BANNER_AGENT_YML_OVERRIDE).
+_identity_backup_fork_configured() {
+  local agent_yml="${IDENTITY_BACKUP_AGENT_YML_OVERRIDE:-/workspace/agent.yml}"
+  local fork_url
+  fork_url=$(yq '.scaffold.fork.url // ""' "$agent_yml" 2>/dev/null)
+  [ "$fork_url" = "null" ] && fork_url=""
+  [ -n "$fork_url" ]
+}
+
 # Backup-identity: every 60s, compare identity hash vs last-backup hash.
 # Fires the primitive when they differ. Throttled to avoid bursts.
 _last_backup_check=0
@@ -764,6 +776,11 @@ _check_identity_backup() {
     return 0
   fi
   _last_backup_check=$now
+
+  # Fork-less agents have nowhere to back up to — skip the hash check and the
+  # per-tick trigger entirely so the supervisor log stays quiet (FR-G1). This
+  # must come before any hashing or _trigger_identity_backup call.
+  _identity_backup_fork_configured || return 0
 
   if [ -f /opt/agent-admin/scripts/lib/backup_identity.sh ]; then
     # shellcheck source=/dev/null

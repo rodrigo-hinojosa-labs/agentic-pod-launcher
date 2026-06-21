@@ -12,7 +12,7 @@ parallel with each other. Likewise D and E both edit `scripts/lib/wizard-validat
 
 ## Phase 1: Setup
 
-- [ ] T001 Run `bats tests/` and record the baseline (green except the known env-dependent `#105`); this is the red/green reference for the feature.
+- [x] T001 Run `bats tests/` and record the baseline (green except the known env-dependent `#105`); this is the red/green reference for the feature.
 
 ## Phase 2: Foundational
 
@@ -69,25 +69,25 @@ in `tests/helper.bash`). Proceed directly to user stories.
 
 ### Tests for US3 (write first, confirm RED)
 
-- [ ] T015 [P] [US3] Add a red case to `tests/start-services-watchdog.bats`: source with `START_SERVICES_NO_RUN=1`; agent.yml fixture WITHOUT `scaffold.fork.url`; stub `_trigger_identity_backup`; assert `_check_identity_backup` does NOT call it and logs nothing. Confirm it FAILS.
-- [ ] T016 [P] [US3] Write red host test `tests/wizard-container-refresh.bats`: capture the `claude --print` refresh prompt HEREDOC from `docker/scripts/wizard-container.sh` WITHOUT executing `claude`; assert it contains "preserve ALL" / "scan … section headers" / "do not edit or reorder". Confirm it FAILS.
-- [ ] T017 [P] [US3] Write red test in `tests/render.bats` + add a `role_file` field to fixture `tests/fixtures/sample-agent-with-vault.yml`: with `role_file` set, `render_load_context` exports `AGENT_ROLE_MULTILINE` == file content; the template injects it; a missing `role_file` path makes render fail loud. **Also add a `tests/regenerate.bats` case** asserting `role_file` survives `./setup.sh --regenerate` (field preserved, content re-read) — covers FR-X1 for the new field. Confirm it FAILS.
+- [x] T015 [P] [US3] Add a red case to `tests/start-services-watchdog.bats`: source with `START_SERVICES_NO_RUN=1`; agent.yml fixture WITHOUT `scaffold.fork.url`; stub `_trigger_identity_backup`; assert `_check_identity_backup` does NOT call it and logs nothing. Confirm it FAILS.
+- [x] T016 [P] [US3] Write red host test `tests/wizard-container-refresh.bats`: capture the `claude --print` refresh prompt HEREDOC from `docker/scripts/wizard-container.sh` WITHOUT executing `claude`; assert it contains "preserve ALL" / "scan … section headers" / "do not edit or reorder". Confirm it FAILS.
+- [x] T017 [P] [US3] Write red test in `tests/render.bats` + add a `role_file` field to fixture `tests/fixtures/sample-agent-with-vault.yml`: with `role_file` set, `render_load_context` exports `AGENT_ROLE_MULTILINE` == file content; the template injects it; a missing `role_file` path makes render fail loud. **Also add a `tests/regenerate.bats` case** asserting `role_file` survives `./setup.sh --regenerate` (field preserved, content re-read) — covers FR-X1 for the new field. Confirm it FAILS.
 
 ### Implementation for US3
 
-- [ ] T018 [P] [US3] Add a fork-presence early-exit guard at the top of `_check_identity_backup` (`docker/scripts/start_services.sh` 729-758): read `.scaffold.fork.url`; if empty/null, `return 0` before hashing/logging (mirror `heartbeatctl::_bi_run`). GREEN T015.
-- [ ] T019 [P] [US3] Rewrite the `claude --print` prompt in `docker/scripts/wizard-container.sh` (56-76): preserve ALL existing `## ` sections verbatim, only ADD missing command/architecture/test sections, Edit-not-Write, no-op if complete; keep the 90s timeout + skip-on-error. GREEN T016.
-- [ ] T020 [P] [US3] Implement `role_file`: `--role-file PATH` flag in `setup.sh::parse_args` (350-373) + write `role_file:` in the agent.yml heredoc (986-1001); if the file is outside the destination workspace, copy it in (`personas/<name>.md`) and store the relative path (FR-I2); `scripts/lib/render.sh` reads it → `AGENT_ROLE_MULTILINE` (fail loud if set-but-missing); `modules/claude-md.tpl` (7-11) conditional inject; `scripts/lib/schema.sh` optional leaf. GREEN T017.
-- [ ] T021 [US3] Add the opt-in `DOCKER_E2E=1` test `tests/docker-e2e-claude-md-refresh.bats`: scaffold, inject `## Marker`, boot (triggers the refresh), assert `## Marker` survives byte-for-byte and a commands section is added. (After T019.)
+- [x] T018 [P] [US3] Add a fork-presence early-exit guard at the top of `_check_identity_backup` (`docker/scripts/start_services.sh` 729-758): read `.scaffold.fork.url`; if empty/null, `return 0` before hashing/logging (mirror `heartbeatctl::_bi_run`). GREEN T015.
+- [x] T019 [P] [US3] Rewrite the `claude --print` prompt in `docker/scripts/wizard-container.sh` (56-76): preserve ALL existing `## ` sections verbatim, only ADD missing command/architecture/test sections, Edit-not-Write, no-op if complete; keep the 90s timeout + skip-on-error. GREEN T016.
+- [x] T020 [P] [US3] Implement `role_file`: `--role-file PATH` flag in `setup.sh::parse_args` (350-373) + write `role_file:` in the agent.yml heredoc (986-1001); if the file is outside the destination workspace, copy it in (`personas/<name>.md`) and store the relative path (FR-I2); `scripts/lib/render.sh` reads it → `AGENT_ROLE_MULTILINE` (fail loud if set-but-missing); `modules/claude-md.tpl` (7-11) conditional inject; `scripts/lib/schema.sh` optional leaf. GREEN T017.
+- [x] T021 [US3] Add the opt-in `DOCKER_E2E=1` test `tests/docker-e2e-claude-md-refresh.bats`: scaffold, inject `## Marker`, boot (triggers the refresh), assert `## Marker` survives byte-for-byte and a commands section is added. (After T019.)
 
 **Checkpoint**: US3 green; `bats tests/` green with no Docker; H's DOCKER_E2E test green opt-in.
 
 ## Phase 6: Polish & Cross-Cutting
 
-- [ ] T022 [P] Add `CHANGELOG.md` `[Unreleased]` entries (Fixed/Added) covering the 9 stories (A–I).
-- [ ] T023 [P] Bump `VERSION` (**MINOR** — new backward-compatible user surface: `--role-file`, fork warning, name-normalize confirm, doctor failed-plugins); confirm `agentctl doctor` surfaces the new `meta.launcher_version`.
-- [ ] T024 Run `shellcheck -S error` on all touched shell (`setup.sh`, `scripts/lib/{wizard,wizard-validators,render,schema}.sh`, `docker/scripts/{start_services,wizard-container}.sh`, `docker/scripts/lib/plugin-install.sh`, `scripts/agentctl`); fix findings.
-- [ ] T025 Run the full default suite `bats tests/` — all green, no regressions (the ~195 existing + the new files). Then `DOCKER_E2E=1 bats tests/docker-e2e-claude-md-refresh.bats`.
+- [x] T022 [P] Add `CHANGELOG.md` `[Unreleased]` entries (Fixed/Added) covering the 9 stories (A–I).
+- [x] T023 [P] Bump `VERSION` (**MINOR** — new backward-compatible user surface: `--role-file`, fork warning, name-normalize confirm, doctor failed-plugins); confirm `agentctl doctor` surfaces the new `meta.launcher_version`.
+- [x] T024 Run `shellcheck -S error` on all touched shell (`setup.sh`, `scripts/lib/{wizard,wizard-validators,render,schema}.sh`, `docker/scripts/{start_services,wizard-container}.sh`, `docker/scripts/lib/plugin-install.sh`, `scripts/agentctl`); fix findings.
+- [x] T025 Run the full default suite `bats tests/` — all green, no regressions (the ~195 existing + the new files). Then `DOCKER_E2E=1 bats tests/docker-e2e-claude-md-refresh.bats`.
 
 ## Dependencies & Execution Order
 

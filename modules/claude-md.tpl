@@ -7,7 +7,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Identity
 
 - **Name:** {{AGENT_DISPLAY_NAME}}
-- **Role:** {{AGENT_ROLE}}
+{{#unless AGENT_ROLE_MULTILINE_ENABLED}}- **Role:** {{AGENT_ROLE}}{{/unless}}{{#if AGENT_ROLE_MULTILINE_ENABLED}}- **Role:**
+
+{{AGENT_ROLE_MULTILINE}}{{/if}}
 - **Vibe:** {{AGENT_VIBE}}
 - **Host:** {{DEPLOYMENT_HOST}}
 - **Workspace:** {{DEPLOYMENT_WORKSPACE}}

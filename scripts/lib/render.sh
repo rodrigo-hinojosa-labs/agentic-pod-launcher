@@ -30,6 +30,35 @@ render_load_context() {
     varname=$(printf '%s' "$key" | tr '.' '_' | tr '[:lower:]' '[:upper:]')
     export "${varname}=${value}"
   done < <(yq '.. | select(tag != "!!map" and tag != "!!seq") | (path | join(".")) + "=" + (. | tostring)' "$file" 2>/dev/null)
+
+  # Story I: an optional agent.role_file injects a multi-line persona verbatim
+  # into CLAUDE.md (## Identity) in place of the one-line {{AGENT_ROLE}}. Read
+  # the field fresh from this file (not the flattened AGENT_ROLE_FILE, which
+  # could be stale from a prior load), resolve a relative path against the
+  # agent.yml directory, and read its content into AGENT_ROLE_MULTILINE. The
+  # template gates on AGENT_ROLE_MULTILINE_ENABLED ("true"/"false") because the
+  # engine's {{#if}} tests literal string "true", not non-emptiness. A role_file
+  # that is set but missing/unreadable fails loud — never a silent empty persona.
+  local role_file role_path
+  role_file=$(yq '.agent.role_file // ""' "$file" 2>/dev/null)
+  [ "$role_file" = "null" ] && role_file=""
+  if [ -n "$role_file" ]; then
+    role_path="$role_file"
+    case "$role_path" in
+      /*) ;;                                          # absolute — use as-is
+      *)  role_path="$(dirname "$file")/$role_path" ;; # relative to agent.yml
+    esac
+    if [ ! -f "$role_path" ]; then
+      echo "render_load_context: role_file not found: $role_path" >&2
+      return 1
+    fi
+    AGENT_ROLE_MULTILINE="$(< "$role_path")"
+    export AGENT_ROLE_MULTILINE
+    export AGENT_ROLE_MULTILINE_ENABLED="true"
+  else
+    export AGENT_ROLE_MULTILINE=""
+    export AGENT_ROLE_MULTILINE_ENABLED="false"
+  fi
 }
 
 # _render_each CONTENT YAML_FILE → stdout

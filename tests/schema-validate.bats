@@ -151,3 +151,19 @@ YML
   run agent_yml_validate "$TMP_TEST_DIR/agent.yml"
   [ "$status" -eq 0 ]
 }
+
+@test "agent_yml_validate: role_file present and non-empty validates" {
+  _write_valid_yml
+  yq -i '.agent.role_file = "personas/validbot.md"' "$TMP_TEST_DIR/agent.yml"
+  run agent_yml_validate "$TMP_TEST_DIR/agent.yml"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "agent_yml_validate: role_file present but empty → reported" {
+  _write_valid_yml
+  yq -i '.agent.role_file = ""' "$TMP_TEST_DIR/agent.yml"
+  run agent_yml_validate "$TMP_TEST_DIR/agent.yml"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"role_file"* ]]
+}
