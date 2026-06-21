@@ -78,6 +78,14 @@
   **0.17.0**.
 
 ### Fixed
+- **`.state/` bind-mount guard** (`agentctl up` + `agentctl doctor`): on macOS a
+  transient Docker Desktop file-sharing glitch (or a fresh clone) could leave the
+  workspace `.state/` absent, so `docker compose up` mounted a phantom empty
+  `/home/agent` and the container booted **`healthy` over a broken bind-mount** —
+  `/login` could not persist and the vault never seeded. `agentctl up` now
+  pre-creates `.state/` (idempotent, only inside a real workspace) before composing
+  up, and `agentctl doctor` **fails** when `.state/` is missing (warns when present
+  but not writable) instead of letting the agent ghost silently.
 - `scripts/lib/wizard-gum.sh`: gum ≥0.15 changed the Esc exit code for
   `input`/`choose` from 2 to 1; the wizard abort check is now widget-scoped so Esc
   aborts input/choose while `gum confirm`'s legitimate "no" (rc 1) still works.

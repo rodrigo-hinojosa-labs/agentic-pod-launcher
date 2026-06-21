@@ -518,11 +518,28 @@ cmd_doctor() {
     _doctor_skip "Telegram plugin patches" "notifications.channel=$notif_channel"
   fi
 
+  # Resolve the workspace bind-mount source once; the .state guard, backup
+  # freshness, plugin-failure, and token-health checks below all read from it.
+  WORKSPACE=$(_resolve_workspace "$agent")
+
+  # 12b. State bind-mount source — .state/ must exist and be writable, else
+  # /home/agent is a phantom mount and /login can't persist (the container
+  # still reports "healthy"). Host-side counterpart to the entrypoint's macOS
+  # bind-mount pre-creation workarounds; cmd_up auto-creates it before up.
+  if [ -n "$WORKSPACE" ]; then
+    if [ ! -d "$WORKSPACE/.state" ]; then
+      _doctor_fail "State dir .state/ missing" "agentctl up recreates it (or: mkdir -p '$WORKSPACE/.state' && agentctl restart)"
+    elif [ ! -w "$WORKSPACE/.state" ]; then
+      _doctor_warn "State dir .state/ not writable" "fix ownership of '$WORKSPACE/.state' to your host user"
+    else
+      _doctor_pass "State dir .state/ present + writable"
+    fi
+  fi
+
   # 13-15. Backup freshness — read the state files from the bind-mounted
   # workspace and warn when last_push is stale or never happened. The
   # thresholds default to 2× the expected cadence (identity 48h, vault
   # 25h, config 8d). Override via env vars for one-off invocations.
-  WORKSPACE=$(_resolve_workspace "$agent")
   if [ -z "$WORKSPACE" ] || [ ! -d "$WORKSPACE/scripts/heartbeat" ]; then
     _doctor_skip "Backup freshness" "could not locate workspace bind-mount"
   else
@@ -719,7 +736,19 @@ cmd_compose() {
   exec docker compose "$@"
 }
 
-cmd_up() { cmd_compose up -d; }
+cmd_up() {
+  # .state/ is the bind-mount source for /home/agent. If it's missing (a
+  # transient Docker Desktop file-sharing glitch on macOS, or a fresh clone),
+  # `docker compose up` mounts a phantom empty dir and the container boots
+  # "healthy" over a broken mount — /login then can't persist. Pre-create it
+  # (idempotent) so the mount has real backing. Guarded on docker-compose.yml
+  # so we only ever touch a real workspace, never scatter a stray .state/.
+  if [ -f "./docker-compose.yml" ] && [ ! -d "./.state" ]; then
+    echo "agentctl: .state/ missing — creating it before up (bind-mount source for /home/agent)." >&2
+    mkdir -p "./.state"
+  fi
+  cmd_compose up -d
+}
 cmd_start() { cmd_up; }
 cmd_stop() { cmd_compose down; }
 cmd_restart() { cmd_compose restart; }
