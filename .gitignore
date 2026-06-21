@@ -27,8 +27,8 @@ node_modules/
 *.tmp
 *.swp
 
-# Claude Code repo config — track shared commands/skills, ignore user-local settings
-/.claude/settings.json
+# Claude Code repo config — track shared settings/commands/skills/agents,
+# ignore only user-local overrides
 /.claude/settings.local.json
 
 # Git worktrees
