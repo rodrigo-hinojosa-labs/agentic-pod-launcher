@@ -10,6 +10,7 @@ source "$SCRIPT_DIR/scripts/lib/plugin-catalog.sh"
 source "$SCRIPT_DIR/scripts/lib/mcp-catalog.sh"
 source "$SCRIPT_DIR/scripts/lib/schema.sh"
 source "$SCRIPT_DIR/scripts/lib/versions.sh"
+source "$SCRIPT_DIR/scripts/lib/fork.sh"
 
 # Launcher version, surfaced in agent.yml::meta and `agentctl doctor` so
 # scaffolded workspaces can advertise which launcher rev produced them.
@@ -487,6 +488,19 @@ run_wizard() {
     template_url=$(ask "Template repo URL" "$template_url")
     echo "  PAT needs 'repo' scope (and 'delete_repo' if you'll use --delete-fork)."
     fork_token=$(ask_secret "GitHub Personal Access Token for fork")
+
+    # Story B: a fork of a PUBLIC template can't be private (GitHub 422). Probe
+    # the template's visibility and, on a public+private conflict, warn and let
+    # the operator choose; in a non-interactive run, default to disable-fork
+    # rather than silently expose data (FR-B4). Fail loud if the probe fails.
+    local _fork_decision
+    if ! _fork_decision=$(fork_resolve_visibility "$template_url" "$fork_enabled" "$fork_private" "$fork_token"); then
+      echo "  ✗ Could not determine the template repo's visibility (gh api failed)." >&2
+      echo "    Refusing to create a fork blind — check the template URL / token and retry." >&2
+      exit 1
+    fi
+    fork_enabled="${_fork_decision%% *}"
+    fork_private="${_fork_decision##* }"
   fi
   echo ""
 
