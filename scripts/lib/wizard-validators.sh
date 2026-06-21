@@ -91,6 +91,22 @@ validate_agent_name() {
   return 0
 }
 
+# normalize_agent_name VAL → echo VAL mapped toward a valid DNS label:
+# lowercased, spaces turned into hyphens, runs of hyphens collapsed to one,
+# and leading/trailing hyphens trimmed ("Rodri Cenco Admin" → "rodri-cenco-
+# admin"). Pure transform, always returns 0; the result is still gated by
+# validate_agent_name (which rejects any remaining invalid character) so the
+# caller surfaces a clear error instead of failing later in docker build.
+normalize_agent_name() {
+  local v="$1"
+  v=$(printf '%s' "$v" | tr '[:upper:]' '[:lower:]')
+  v="${v// /-}"                       # spaces → hyphens
+  v=$(printf '%s' "$v" | tr -s '-')   # collapse runs of hyphens
+  v="${v#-}"                          # trim a leading hyphen
+  v="${v%-}"                          # trim a trailing hyphen
+  printf '%s\n' "$v"
+}
+
 # validate_url VAL → 0 if value parses as an http(s) URL. We allow http://
 # for localhost / private development; production agents will use https.
 # Rejects schemes other than http/https, bare hosts without scheme, and
@@ -142,6 +158,48 @@ validate_workspace_path() {
   if [ ! -w "$parent" ]; then
     echo "  ✗ Parent directory '$parent' is not writable" >&2
     return 1
+  fi
+  return 0
+}
+
+# normalize_destination_path VAL → echo VAL with a leading ~ expanded to
+# $HOME (a bare ~ becomes $HOME; ~/x becomes $HOME/x). A ~ anywhere else is
+# left untouched so validate_destination_path can reject it. Pure transform,
+# always returns 0 — validation is validate_destination_path's job. The "~/"
+# pattern is quoted in the ${#} word to suppress tilde expansion (an
+# unquoted ~/ there would expand to $HOME/ before the strip).
+normalize_destination_path() {
+  local v="$1" rest
+  case "$v" in
+    "~")   printf '%s\n' "$HOME" ;;
+    "~/"*) rest="${v#"~/"}"; printf '%s\n' "$HOME/$rest" ;;
+    *)     printf '%s\n' "$v" ;;
+  esac
+}
+
+# validate_destination_path VAL → 0 if VAL is an absolute path with no
+# embedded '~' or '..'. Unlike validate_workspace_path it does NOT require the
+# parent to exist: the destination is created by the scaffold and may be
+# several levels deep (e.g. the default <installer>/agents/<name> whose
+# 'agents/' parent need not exist yet). On macOS a /home/... path is accepted
+# but warns that the home directory lives under /Users/. Run the value through
+# normalize_destination_path first to expand a leading ~.
+validate_destination_path() {
+  local v="$1"
+  if [[ "$v" != /* ]]; then
+    echo "  ✗ Destination must be an absolute path (got '$v')" >&2
+    return 1
+  fi
+  if [[ "$v" == *"~"* ]]; then
+    echo "  ✗ Destination may not contain '~' except as a leading shortcut (got '$v')" >&2
+    return 1
+  fi
+  if [[ "$v" == *".."* ]]; then
+    echo "  ✗ Destination should not contain '..'" >&2
+    return 1
+  fi
+  if [ "$(uname -s)" = "Darwin" ] && [[ "$v" == /home/* ]]; then
+    echo "  ⚠ On macOS the home directory is under /Users/, not /home/ — did you mean a path under /Users/?" >&2
   fi
   return 0
 }

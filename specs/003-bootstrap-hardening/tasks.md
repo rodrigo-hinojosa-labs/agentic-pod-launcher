@@ -49,15 +49,15 @@ in `tests/helper.bash`). Proceed directly to user stories.
 
 ### Tests for US2 (write first, confirm RED)
 
-- [ ] T009 [P] [US2] Add red cases to `tests/wizard-validators.bats` for `validate_destination_path`: non-absolute reject, leading `~` expand, mid-path `~` reject, `/home/...` on Darwin warn, `/Users/...` accept. Confirm they FAIL.
-- [ ] T010 [P] [US2] Write red test `tests/agent-name-normalization.bats` for `normalize_agent_name`: "Rodri Cenco Admin"→"rodri-cenco-admin", "my  --  agent"→"my-agent", " -leading"→"leading"; idempotent on an already-normalized name. Confirm it FAILS.
-- [ ] T011 [P] [US2] Add a red case to `tests/quickstart-doc.bats`: source `scripts/lib/mcp-catalog.sh`; for each `mcp_catalog_list optional` id, assert it appears (as `MCPS_<ID>`) in the wizard-order section of BOTH `docs/agentic-quickstart.es.md` and `.en.md`. Confirm it FAILS.
+- [x] T009 [P] [US2] Add red cases to `tests/wizard-validators.bats` for `validate_destination_path`: non-absolute reject, leading `~` expand, mid-path `~` reject, `/home/...` on Darwin warn, `/Users/...` accept. Confirm they FAIL.
+- [x] T010 [P] [US2] Write red test `tests/agent-name-normalization.bats` for `normalize_agent_name`: "Rodri Cenco Admin"→"rodri-cenco-admin", "my  --  agent"→"my-agent", " -leading"→"leading"; idempotent on an already-normalized name. Confirm it FAILS.
+- [x] T011 [P] [US2] Add a red case to `tests/quickstart-doc.bats`: source `scripts/lib/mcp-catalog.sh`; for each `mcp_catalog_list optional` id, assert it appears (as `MCPS_<ID>`) in the wizard-order section of BOTH `docs/agentic-quickstart.es.md` and `.en.md`. Confirm it FAILS.
 
 ### Implementation for US2
 
-- [ ] T012 [US2] Implement `validate_destination_path()` in `scripts/lib/wizard-validators.sh` (mirror `validate_workspace_path`); wire `ask_validated` into the `setup.sh` destination prompt (~446), the review edit action (~894), and the `scaffold_destination` pre-check (~1547). GREEN T009.
-- [ ] T013 [US2] Extract `normalize_agent_name()` into `scripts/lib/wizard-validators.sh`; replace the `tr` pipeline in `setup.sh` (399-408) with it + show raw/normalized + `ask_yn` confirm. (After T012 — same files.) GREEN T010.
-- [ ] T014 [P] [US2] Update `docs/agentic-quickstart.es.md` and `docs/agentic-quickstart.en.md`: insert the 6 optional catalog-MCP prompts (aws, firecrawl, google-calendar, playwright, time, tree-sitter) as the step between heartbeat-notif and Atlassian. GREEN T011.
+- [x] T012 [US2] Implement `validate_destination_path()` in `scripts/lib/wizard-validators.sh` (mirror `validate_workspace_path`); wire `ask_validated` into the `setup.sh` destination prompt (~446), the review edit action (~894), and the `scaffold_destination` pre-check (~1547). GREEN T009.
+- [x] T013 [US2] Extract `normalize_agent_name()` into `scripts/lib/wizard-validators.sh`; replace the `tr` pipeline in `setup.sh` (399-408) with it + show raw/normalized + `ask_yn` confirm. (After T012 — same files.) GREEN T010.
+- [x] T014 [P] [US2] Update `docs/agentic-quickstart.es.md` and `docs/agentic-quickstart.en.md`: insert the 6 optional catalog-MCP prompts (aws, firecrawl, google-calendar, playwright, time, tree-sitter) as the step between heartbeat-notif and Atlassian. GREEN T011.
 
 **Checkpoint**: US2 green; existing suite no regressions.
 

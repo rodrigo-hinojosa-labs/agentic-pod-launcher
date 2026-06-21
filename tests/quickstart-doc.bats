@@ -170,8 +170,39 @@ load helper
     case "$fn" in
       validate_email|validate_telegram_token|validate_timezone| \
       validate_cron_or_interval|validate_agent_name|validate_url| \
-      validate_uid_gid|validate_workspace_path) ;;
+      validate_uid_gid|validate_workspace_path|validate_destination_path) ;;
       *) echo "Unknown validator in lib (update test): $fn" >&2; return 1 ;;
     esac
   done < <(grep -oE '^validate_[a-z_]+' "$lib")
+}
+
+@test "quickstart-doc: optional catalog MCPs are documented in both docs" {
+  # Story F: the wizard asks an ask_yn for every optional catalog MCP
+  # (mcp_catalog_list optional). The documented wizard order must name each
+  # one by its MCPS_<ID> gate variable, in BOTH locales — so a future catalog
+  # addition that nobody documented is caught before release. The catalog is
+  # the source of truth; the docs mirror it.
+  local es="$REPO_ROOT/docs/agentic-quickstart.es.md"
+  local en="$REPO_ROOT/docs/agentic-quickstart.en.md"
+  [ -f "$es" ]
+  [ -f "$en" ]
+
+  export MCP_CATALOG_DIR="$REPO_ROOT/modules/mcps"
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/scripts/lib/mcp-catalog.sh"
+
+  local id stem
+  for id in $(mcp_catalog_list optional); do
+    stem="MCPS_$(printf '%s' "$id" | tr '[:lower:]-' '[:upper:]_')"
+    if ! grep -qF "$stem" "$es"; then
+      echo "ES quickstart doc missing optional catalog MCP: $stem (id=$id)" >&2
+      echo "Add it to the wizard-order section of docs/agentic-quickstart.es.md" >&2
+      return 1
+    fi
+    if ! grep -qF "$stem" "$en"; then
+      echo "EN quickstart doc missing optional catalog MCP: $stem (id=$id)" >&2
+      echo "Add it to the wizard-order section of docs/agentic-quickstart.en.md" >&2
+      return 1
+    fi
+  done
 }

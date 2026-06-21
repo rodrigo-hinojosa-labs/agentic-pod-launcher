@@ -391,17 +391,21 @@ run_wizard() {
   # ── 1. Identity ─────────────────────────────────────
   echo "▸ Agent identity"
   local agent_name agent_display agent_role agent_vibe
-  # Lowercase + strip spaces first so the user's "My Agent" still passes
-  # validation as "my-agent" (typed for them by the normalizer). The
-  # validator then enforces hyphens-only / 1..63 chars / no leading-trailing
-  # hyphen / no double-hyphen — surfacing a clear error instead of failing
-  # silently in `docker compose build` later.
+  # Normalize the raw input toward a valid DNS label (lowercase, spaces→
+  # hyphens, collapse/trim hyphens) so the user's "My Agent" becomes
+  # "my-agent". When normalization changes the value we show the result and
+  # ask for confirmation; the validator then enforces the remaining rules,
+  # surfacing a clear error instead of failing silently in `docker compose
+  # build` later.
   local _raw_input
   while true; do
     _raw_input=$(ask "Agent name (lowercase, no spaces)" "my-agent")
-    agent_name=$(echo "$_raw_input" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+    agent_name=$(normalize_agent_name "$_raw_input")
     if [ "$agent_name" != "$_raw_input" ]; then
       echo "  ↳ normalized to: $agent_name"
+      if [ "$(ask_yn "Use '$agent_name'?" "y")" != "true" ]; then
+        continue
+      fi
     fi
     if validate_agent_name "$agent_name"; then
       break
@@ -436,15 +440,31 @@ run_wizard() {
   echo "  Host machine: $deploy_host (used only for fork branch naming;"
   echo "  the agent itself runs inside the container)"
   if [ -n "$DESTINATION" ]; then
-    deploy_ws="$DESTINATION"
+    # Non-interactive: validate the flag up front and fail loud — a bad
+    # --destination can't be re-prompted, so a silent accept would scaffold
+    # to a nonsense path.
+    deploy_ws=$(normalize_destination_path "$DESTINATION")
+    if ! validate_destination_path "$deploy_ws"; then
+      echo "  ✗ Invalid --destination: $DESTINATION" >&2
+      exit 1
+    fi
     echo "  Agent destination directory: $deploy_ws (from --destination flag)"
   else
     # Default: <parent-of-installer>/agents/<agent_name> — groups agents
     # under a single sibling "agents/" folder next to the installer clone.
-    local installer_parent default_dest
+    local installer_parent default_dest _raw_dest
     installer_parent=$(dirname "$SCRIPT_DIR")
     default_dest="${installer_parent}/agents/${agent_name}"
-    deploy_ws=$(ask "Agent destination directory" "$default_dest")
+    while true; do
+      _raw_dest=$(ask "Agent destination directory" "$default_dest")
+      deploy_ws=$(normalize_destination_path "$_raw_dest")
+      if [ "$deploy_ws" != "$_raw_dest" ]; then
+        echo "  ↳ expanded to: $deploy_ws"
+      fi
+      if validate_destination_path "$deploy_ws"; then
+        break
+      fi
+    done
   fi
   if [ "$(uname -s)" != "Linux" ]; then
     deploy_svc=false
@@ -895,7 +915,12 @@ ATLASSIAN_${upper}_TOKEN=${ws_token}
         local field
         field=$(ask "Edit which field number?" "1")
         case "$field" in
-          1) agent_name=$(ask "Agent name (lowercase, no spaces)" "$agent_name") ;;
+          1) while true; do
+                local _ed_name
+                _ed_name=$(ask "Agent name (lowercase, no spaces)" "$agent_name")
+                agent_name=$(normalize_agent_name "$_ed_name")
+                validate_agent_name "$agent_name" && break
+              done ;;
           2) agent_display=$(ask "Display name (with emoji)" "$agent_display") ;;
           3) agent_role=$(ask "Role description" "$agent_role") ;;
           4) agent_vibe=$(ask "Vibe / personality (one line)" "$agent_vibe") ;;
@@ -905,7 +930,12 @@ ATLASSIAN_${upper}_TOKEN=${ws_token}
           8) user_email=$(ask "Primary email" "$user_email") ;;
           9) user_lang=$(ask_choice "Preferred language" "$user_lang" "es en mixed") ;;
           10) deploy_host=$(ask "Host machine name" "$deploy_host") ;;
-          11) deploy_ws=$(ask "Agent destination directory" "$deploy_ws") ;;
+          11) while true; do
+                local _ed_raw
+                _ed_raw=$(ask "Agent destination directory" "$deploy_ws")
+                deploy_ws=$(normalize_destination_path "$_ed_raw")
+                validate_destination_path "$deploy_ws" && break
+              done ;;
           12) deploy_svc=$(ask_yn "Install as system service?" "$([ "$deploy_svc" = true ] && echo y || echo n)") ;;
           13) notify_channel=$(ask_choice "Heartbeat notification channel" "$notify_channel" "none log telegram") ;;
           14) hb_enabled=$(ask_yn "Enable heartbeat?" "$([ "$hb_enabled" = true ] && echo y || echo n)") ;;
@@ -1572,6 +1602,15 @@ scaffold_destination() {
   if [ "$dest" = "$src_dir" ]; then
     echo "▸ Destination equals current directory: running in-place"
     return 0
+  fi
+
+  # Fail-loud backstop: a hand-edited agent.yml (the regenerate/restore paths
+  # read the workspace directly) could carry a malformed destination —
+  # relative, an embedded ~, or '..'. The wizard validates at input time; this
+  # guards the paths that bypass it.
+  if ! validate_destination_path "$dest"; then
+    echo "ERROR: deployment.workspace in agent.yml is not a valid destination: $dest" >&2
+    exit 1
   fi
 
   # Safety: never scaffold to $HOME itself
