@@ -211,3 +211,66 @@ SHIM
   AGENT_NAME=specific-name run "$AGENTCTL" doctor
   echo "$output" | grep -q "diagnosing specific-name"
 }
+
+# ─── .state bind-mount source guard (cmd_up) + doctor check ──────────────
+# Root cause: a missing .state/ (a transient Docker Desktop file-sharing
+# glitch on macOS, or a fresh clone) makes `docker compose up` mount a
+# phantom empty /home/agent — the container boots "healthy" but /login can't
+# persist. cmd_up pre-creates .state before up; doctor surfaces a missing or
+# non-writable one instead of letting the agent ghost silently.
+
+@test "agentctl up pre-creates .state when missing" {
+  cd "$TMP_TEST_DIR"
+  printf 'services: {}\n' > docker-compose.yml
+  rm -rf .state
+  AGENT_NAME=test run "$AGENTCTL" up
+  [ "$status" -eq 0 ]
+  [ -d "$TMP_TEST_DIR/.state" ]
+}
+
+@test "agentctl up leaves an existing .state untouched" {
+  cd "$TMP_TEST_DIR"
+  printf 'services: {}\n' > docker-compose.yml
+  mkdir -p .state
+  printf 'keep\n' > .state/sentinel
+  AGENT_NAME=test run "$AGENTCTL" up
+  [ "$status" -eq 0 ]
+  [ -f "$TMP_TEST_DIR/.state/sentinel" ]
+}
+
+@test "agentctl up still runs 'docker compose up -d' after the guard" {
+  cd "$TMP_TEST_DIR"
+  printf 'services: {}\n' > docker-compose.yml
+  rm -rf .state
+  AGENT_NAME=test run "$AGENTCTL" up
+  [ "$status" -eq 0 ]
+  grep -q "^compose$" "$TMP_TEST_DIR/recorded"
+  grep -q "^up$" "$TMP_TEST_DIR/recorded"
+  grep -q "^-d$" "$TMP_TEST_DIR/recorded"
+}
+
+@test "agentctl up does not create .state outside a workspace (no compose file)" {
+  cd "$TMP_TEST_DIR"
+  rm -f docker-compose.yml
+  rm -rf .state
+  AGENT_NAME=test run "$AGENTCTL" up
+  [ ! -d "$TMP_TEST_DIR/.state" ]
+}
+
+@test "agentctl doctor: fails when .state is missing" {
+  cd "$TMP_TEST_DIR"
+  _install_docker_shim
+  printf 'agent:\n  name: test\n' > agent.yml
+  rm -rf .state
+  AGENT_NAME=test run "$AGENTCTL" doctor
+  echo "$output" | grep -q "State dir"
+}
+
+@test "agentctl doctor: passes when .state is present and writable" {
+  cd "$TMP_TEST_DIR"
+  _install_docker_shim
+  printf 'agent:\n  name: test\n' > agent.yml
+  mkdir -p .state
+  AGENT_NAME=test run "$AGENTCTL" doctor
+  echo "$output" | grep -q "State dir .state/ present"
+}
