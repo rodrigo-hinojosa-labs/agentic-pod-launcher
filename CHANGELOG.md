@@ -3,6 +3,49 @@
 ## [Unreleased]
 
 ### Added
+- **Bootstrap hardening** (`003-bootstrap-hardening`): fail-loud / validate / sync
+  fixes across the scaffold→boot→login→plugins→channel path (9 stories, 3 tiers,
+  specced with GitHub Spec Kit under `specs/003-bootstrap-hardening/`).
+  - **(A)** After `/login`, the supervisor watchdog detects the auth-credential
+    flip (appearance of `~/.claude/.credentials.json`) and **actively kicks** the
+    tmux session, so plugins install and the channel attaches with no manual
+    `docker restart` and without the operator having to `/exit`.
+  - **(B)** `setup.sh` probes the template repo visibility and warns — before
+    creating anything — when a public template would yield a public fork after a
+    private fork was requested; the operator chooses proceed-public or
+    disable-fork. Non-interactive runs default to **disable-fork** (never a
+    surprise-public fork). New `scripts/lib/fork.sh`.
+  - **(C)** Bounded plugin-install retry (3 attempts, short fixed backoff). A
+    residual failure is recorded to `.state/plugin-install-failures.jsonl` with
+    the error text truncated to its first line and token-scrubbed, and is surfaced
+    by `agentctl doctor` with a copy-paste retry command (distinct from an
+    expected "not authenticated" skip). New `docker/scripts/lib/plugin-install.sh`.
+  - **(D)** Destination paths are validated up front: a non-absolute path, a `~`
+    anywhere but position 0, and `..` are rejected; a leading `~` is expanded; a
+    `/home/…` path on macOS warns that the home dir is under `/Users/`.
+    `validate_destination_path` + `normalize_destination_path` in
+    `scripts/lib/wizard-validators.sh`.
+  - **(E)** Agent-name normalization maps spaces→hyphens, collapses consecutive
+    hyphens, and trims leading/trailing hyphens, then confirms the normalized
+    value before it is used for filenames/branches/the container name.
+  - **(F)** A host test fails when the agentic-quickstart wizard-order docs drift
+    from the canonical prompt sequence; the 6 optional catalog MCPs (aws,
+    firecrawl, google-calendar, playwright, time, tree-sitter) are now documented
+    in both locales.
+  - **(G)** Fork-less agents no longer spam a per-tick "identity backup
+    triggered" line: the watchdog skips the identity-backup hash check entirely
+    when `agent.yml` has no `scaffold.fork.url` (mirrors `heartbeatctl::_bi_run`).
+  - **(H)** The in-container CLAUDE.md refresh now preserves every pre-existing
+    `##` section header verbatim and only ADDS missing command/architecture/test
+    sections — an operator-injected section survives byte-for-byte; the prompt no
+    longer names a fixed section list. The refresh logic is now a sourceable
+    `refresh_claude_md` function (host-testable) in `docker/scripts/wizard-container.sh`.
+  - **(I)** Optional multi-line persona via `agent.yml` `agent.role_file`,
+    populated by a `--role-file PATH` wizard flag. The renderer reads the file and
+    injects it verbatim into CLAUDE.md's `## Identity` (in place of the one-line
+    role), re-reading the content on every `--regenerate`. Persona files supplied
+    from outside the workspace are copied in (`personas/<name>.md`) so they travel
+    with clone / backup / `--restore-from-fork`.
 - **Reproducible in-container dependency upgrades** (`001-deps-upgrade`). The
   image toolchain — Claude Code, the Alpine base, `uv`, `bun`, `gum` — tracks the
   latest stable of the moment from a single declared place that the documented
