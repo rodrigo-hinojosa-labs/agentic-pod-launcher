@@ -59,15 +59,15 @@
       }
     }{{/each}}{{#if MCPS_GITHUB_ENABLED}},
     "github": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "command": "github-mcp-server",
+      "args": ["stdio"],
       "env": {
         "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PAT}"
       }
     }{{/if}}{{#if VAULT_MCP_ENABLED}},
     "vault": {
       "command": "npx",
-      "args": ["-y", "@bitbonsai/mcpvault@latest", "/home/agent/.vault"],
+      "args": ["-y", "@bitbonsai/mcpvault@0.12.0", "/home/agent/.vault"],
       "env": {}
     }{{/if}}{{#if VAULT_QMD_ENABLED}},
     "qmd": {

@@ -130,9 +130,11 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3`. Already-p
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
-Active spec-kit feature: **003-bootstrap-hardening** — fail-loud/validate/sync fixes to the
-scaffold→boot→login→plugins→channel bootstrap (9 stories across 3 tiers).
-Plan: `specs/003-bootstrap-hardening/plan.md` · Spec: `specs/003-bootstrap-hardening/spec.md` ·
-Constitution: `.specify/memory/constitution.md`.
-Prior: 001-deps-upgrade (PR #55, merged), 002-fix-schema-bool (branch).
+Active spec-kit feature: **004-macos-bootstrap-hardening** — three image-baked fixes so a
+from-scratch macOS scaffold reaches a fully-functional agent: P1 pre-warm npx MCPs off the
+VirtioFS bind-mount (uv `/opt` pattern), P2 non-blocking post-login plugin-install retry
+(~120s, crash-budget safe), P3 GitHub MCP → official `github-mcp-server` Go binary.
+Plan: `specs/004-macos-bootstrap-hardening/plan.md` · Spec: `specs/004-macos-bootstrap-hardening/spec.md` ·
+Research: `specs/004-macos-bootstrap-hardening/research.md` · Constitution: `.specify/memory/constitution.md`.
+Prior: 001-deps-upgrade (PR #55), 002-fix-schema-bool, 003-bootstrap-hardening (PR #56), .state guard (PR #58) — all merged.
 <!-- SPECKIT END -->

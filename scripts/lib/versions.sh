@@ -35,6 +35,17 @@ AGENTIC_FLOOR_UV="0.11.22"
 AGENTIC_FLOOR_BUN="1.3.14"
 AGENTIC_FLOOR_GUM="0.17.0"
 
+# Image-baked MCP servers (feature 004-macos-bootstrap-hardening). These are
+# HARD pins, not channel-resolved like the toolchain above: each is baked into
+# the image OFF the .state bind-mount (npm pre-warm into /opt/npm-cache for the
+# two npm packages; a static Go binary in /usr/local/bin for github-mcp-server)
+# to dodge the macOS VirtioFS small-file pathology that fails npx MCP handshakes.
+# The Dockerfile ARG defaults MUST equal these — a bats drift-guard enforces it.
+# Bump deliberately (re-confirm against the npm registry / GitHub releases).
+AGENTIC_FLOOR_MCP_FILESYSTEM="2026.1.14"
+AGENTIC_FLOOR_MCP_VAULT="0.12.0"
+AGENTIC_FLOOR_GH_MCP="1.4.0"
+
 # _versions_fetch URL -> stdout
 # Best-effort HTTP GET (curl). Dependency-injection seam: tests override
 # this to return fixture payloads with no live network. Returns non-zero
