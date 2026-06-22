@@ -151,7 +151,7 @@ PY
   run jq -e '.mcpServers.vault' "$DEST/.mcp.json"
   [ "$status" -eq 0 ]
   [ "$(jq -r '.mcpServers.vault.command' "$DEST/.mcp.json")" = "npx" ]
-  [ "$(jq -r '.mcpServers.vault.args[1]' "$DEST/.mcp.json")" = "@bitbonsai/mcpvault@latest" ]
+  [ "$(jq -r '.mcpServers.vault.args[1]' "$DEST/.mcp.json")" = "@bitbonsai/mcpvault@0.12.0" ]
   [ "$(jq -r '.mcpServers.vault.args[2]' "$DEST/.mcp.json")" = "/home/agent/.vault" ]
 
   # 12) idempotency: a second boot must NOT re-seed an existing vault.
@@ -169,4 +169,63 @@ PY
   done
   run in_container grep -q "user-content-marker" /home/agent/.vault/raw_sources/user-note.md
   [ "$status" -eq 0 ]
+}
+
+# Feature 004 US1 — the default npx MCP packages are warmed into the image's
+# off-bind-mount cache (/opt/npm-cache), so a fresh container resolves them
+# with NO network — curing the macOS VirtioFS small-file pathology (errno -35).
+@test "npm pre-warm: default npx MCP specs resolve offline from /opt/npm-cache" {
+  mkdir -p "$DEST"
+  cat > "$DEST/agent.yml" <<YML
+version: 1
+agent: {name: $AGENT_NAME, display_name: "warm e2e 🔥", role: "test", vibe: "terse"}
+user: {name: "Tester", nickname: "Tester", timezone: "UTC", email: "t@e.x", language: "en"}
+deployment: {host: "test", workspace: "$DEST", install_service: false, claude_cli: "claude"}
+docker: {image_tag: "agent-admin:warm-e2e", uid: $(id -u), gid: $(id -g), state_volume: "${AGENT_NAME}-state", base_image: "alpine:3.24.1"}
+claude: {config_dir: "/home/agent/.claude", profile_new: true}
+notifications: {channel: none}
+features:
+  heartbeat: {enabled: true, interval: "30m", timeout: 30, retries: 0, default_prompt: "echo pong"}
+mcps: {defaults: [], atlassian: [], github: {enabled: false, email: ""}}
+vault:
+  enabled: true
+  path: .state/.vault
+  seed_skeleton: true
+  initial_sources: []
+  mcp: {enabled: true, server: vault}
+  schema: {frontmatter_required: true, log_format: "## [{date}] {op} | {title}"}
+plugins: []
+YML
+  cp -R "$REPO_ROOT/modules" "$REPO_ROOT/scripts" "$REPO_ROOT/docker" "$DEST/"
+  cp "$REPO_ROOT/setup.sh" "$DEST/"
+  chmod +x "$DEST/setup.sh"
+  (cd "$DEST" && ./setup.sh --regenerate --non-interactive)
+  touch "$DEST/.env"; chmod 0600 "$DEST/.env"
+
+  (cd "$DEST" && docker compose build)
+
+  # Probe inside the built image. `npm exec --offline` forces resolution from
+  # the cache with NO registry hit — so RC=0 proves the pinned spec is warm in
+  # /opt/npm-cache (an empty cache would make --offline fail). `-- true`
+  # populates/uses _npx without launching the stdio server (which would hang).
+  # (`docker compose run` has no --network flag — --offline is the offline gate.)
+  probe() {
+    # Override the image ENTRYPOINT (tini→entrypoint.sh→watchdog) so the probe
+    # command runs instead of the supervisor.
+    cd "$DEST" && docker compose run --rm --entrypoint sh -u agent "$AGENT_NAME" \
+      -lc "npm exec --offline --prefer-offline -y --package='$1' -- true 2>&1; echo RC=\$?"
+  }
+  run probe "@modelcontextprotocol/server-filesystem@2026.1.14"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"RC=0"* ]]
+  [[ "$output" != *"errno -35"* ]]
+  run probe "@bitbonsai/mcpvault@0.12.0"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"RC=0"* ]]
+  [[ "$output" != *"errno -35"* ]]
+
+  # And the warm cache lives off the bind-mount, not under /home/agent.
+  run bash -c "cd '$DEST' && docker compose run --rm --entrypoint sh -u agent '$AGENT_NAME' \
+      -lc 'test -d /opt/npm-cache && echo CACHE_OK'"
+  [[ "$output" == *"CACHE_OK"* ]]
 }

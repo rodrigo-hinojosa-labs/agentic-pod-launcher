@@ -30,6 +30,13 @@ teardown() { teardown_tmp_dir; }
   [ "$AGENTIC_CHANNEL_GUM" = "latest" ]
 }
 
+@test "versions.sh defines the feature-004 image-baked MCP pins" {
+  load_lib versions
+  [ -n "$AGENTIC_FLOOR_MCP_FILESYSTEM" ] \
+    && [ -n "$AGENTIC_FLOOR_MCP_VAULT" ] \
+    && [ -n "$AGENTIC_FLOOR_GH_MCP" ]
+}
+
 # Stub the injected HTTP fetch with representative upstream payloads.
 _stub_fetch_ok() {
   _versions_fetch() {
@@ -124,6 +131,11 @@ _stub_fetch_ok() {
   grep -Eq "^ARG UV_VERSION=${AGENTIC_FLOOR_UV}\$" "$df"
   grep -Eq "^ARG BUN_VERSION=${AGENTIC_FLOOR_BUN}\$" "$df"
   grep -Eq "^ARG CLAUDE_CODE_VERSION=${AGENTIC_FLOOR_CLAUDE_CODE}\$" "$df"
+  # Feature 004: the two npm MCP pre-warm pins (github binary pin is asserted
+  # in docker-npm-prewarm.bats alongside its download stanza). Chained so a
+  # single missing/mismatched ARG fails the test (bats intermediate-cmd quirk).
+  grep -Eq "^ARG MCP_FILESYSTEM_VERSION=${AGENTIC_FLOOR_MCP_FILESYSTEM}\$" "$df" \
+    && grep -Eq "^ARG MCP_VAULT_VERSION=${AGENTIC_FLOOR_MCP_VAULT}\$" "$df"
 }
 
 @test "Dockerfile sets UV_PYTHON_PREFERENCE=only-system (uv 0.8.0 guard)" {

@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+### Fixed
+- **macOS bootstrap hardening** (`004-macos-bootstrap-hardening`): three image-baked
+  fixes so a from-scratch macOS (Docker Desktop / VirtioFS bind-mount) scaffold
+  reaches a fully functional agent with no manual repair, even though the container
+  already reports `healthy`. Specced with GitHub Spec Kit under
+  `specs/004-macos-bootstrap-hardening/`.
+  - **(P1)** npx-based MCP servers (`filesystem`, `vault`) now connect on macOS. The
+    Node package-runner cache is relocated off the `/home/agent` `.state` bind-mount
+    to an image path (`NPM_CONFIG_CACHE=/opt/npm-cache` + `PREFER_OFFLINE`) AND the
+    default packages are pre-warmed into it at build time — mirroring the existing uv
+    `/opt` pattern — so they no longer hit the VirtioFS small-file pathology
+    (`errno -35` / `ENOTEMPTY`) nor download inside Claude's MCP handshake window. The
+    `vault` spec is pinned so the runtime `npx` resolves the warmed version.
+  - **(P2)** After `/login`, declared plugins now install on their own. The watchdog
+    keeps retrying the post-login plugin install (non-blocking, ~120s budget) until
+    every plugin carries its `.installed-ok` sentinel, then kicks once to attach the
+    channel — instead of the single post-flip attempt that raced the auth-ready
+    moment and gave up, leaving plugins uninstalled until a manual `plugin install`.
+    On budget exhaustion it terminates and records the residual failure for
+    `agentctl doctor` (never loops unbounded).
+  - **(P3)** The GitHub MCP now runs GitHub's official `github-mcp-server` Go binary
+    (statically linked, baked into `/usr/local/bin`, invoked `github-mcp-server stdio`)
+    instead of the deprecated `@modelcontextprotocol/server-github` npx package. The
+    `GITHUB_PAT` / `GITHUB_PERSONAL_ACCESS_TOKEN` wiring is unchanged. Survives
+    `./setup.sh --regenerate`.
+
 ### Added
 - **Bootstrap hardening** (`003-bootstrap-hardening`): fail-loud / validate / sync
   fixes across the scaffold→boot→login→plugins→channel path (9 stories, 3 tiers,

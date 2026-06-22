@@ -161,6 +161,13 @@ WINDOW=300
 # and exits the watchdog when MAX_CRASHES still fit in the trailing window.
 CRASH_TIMES=""
 
+# Post-login plugin-install budget (feature 004/US2). After the /login
+# credential flip the watchdog keeps retrying plugin install each tick until
+# every plugin carries its .installed-ok sentinel OR this many seconds elapse —
+# instead of the single post-flip attempt that races the auth-ready moment and
+# gives up. Overridable (small value in tests).
+PLUGIN_POSTLOGIN_BUDGET="${PLUGIN_POSTLOGIN_BUDGET:-120}"
+
 # ── 3. Plugin auto-install ────────────────────────────────
 # `claude plugin install` requires an authenticated profile. On first boot
 # (before the user runs /login inside tmux) it will fail — that's fine; we
@@ -821,6 +828,10 @@ _auth_marker_file() {
 # -1 = baseline not yet established; the first tick only records state so an
 # agent that boots already-authenticated is never needlessly kicked.
 _prev_auth_present=-1
+# Post-login plugin-install retry deadline (unix ts). 0 = not armed. Armed by
+# _check_auth_flip on the credential flip; cleared by _post_login_plugin_retry
+# on completion or budget exhaustion.
+_post_login_deadline=0
 _check_auth_flip() {
   local present=0
   if [ -f "$(_auth_marker_file)" ]; then present=1; fi
@@ -832,9 +843,59 @@ _check_auth_flip() {
 
   if [ "$_prev_auth_present" -eq 0 ] && [ "$present" -eq 1 ]; then
     log "auth credential appeared (/login complete) — kicking session to install plugins + attach channel"
+    # Arm the post-login retry budget so the watchdog keeps trying the install
+    # past this single kick until the profile is operative (FR-003/FR-005).
+    _post_login_deadline=$(( $(date +%s) + PLUGIN_POSTLOGIN_BUDGET ))
     tmux kill-session -t "$SESSION" 2>/dev/null || true
   fi
   _prev_auth_present=$present
+}
+
+# _all_plugins_installed — 0 only when every catalog plugin carries its
+# .installed-ok sentinel. Drives _post_login_plugin_retry's completion check.
+# Falls back to the required channel plugin's readiness when the catalog lib
+# isn't loaded (host tests / minimal images).
+_all_plugins_installed() {
+  if command -v plugin_catalog_specs >/dev/null 2>&1; then
+    local spec cache
+    while IFS= read -r spec; do
+      [ -z "$spec" ] && continue
+      cache=$(plugin_cache_dir_for "$spec")
+      { [ -d "$cache" ] && [ -f "$cache/.installed-ok" ]; } || return 1
+    done < <(plugin_catalog_specs /workspace/agent.yml)
+    return 0
+  fi
+  _channel_plugin_ready
+}
+
+# _post_login_plugin_retry — non-blocking, tick-based post-login install retry
+# (feature 004/US2). Called once per watchdog tick. While the deadline is armed
+# and not every plugin is installed, it re-runs the idempotent install (each
+# attempt returns in ~1s, so the 2s poll is not starved). On completion it kicks
+# the session exactly once (so the respawn attaches --channels) and clears the
+# deadline; on budget exhaustion it clears the deadline WITHOUT re-kicking
+# (residual failures were already recorded by ensure_plugin_installed_one for
+# `agentctl doctor`). No per-tick re-kick → the crash budget (5/300s) is safe.
+_post_login_plugin_retry() {
+  [ "${_post_login_deadline:-0}" -eq 0 ] && return 0
+
+  if _all_plugins_installed; then
+    log "post-login: all plugins installed — kicking session once to attach --channels"
+    tmux kill-session -t "$SESSION" 2>/dev/null || true
+    _post_login_deadline=0
+    return 0
+  fi
+
+  local now
+  now=$(date +%s)
+  if [ "$now" -ge "$_post_login_deadline" ]; then
+    log "post-login: plugin-install budget (${PLUGIN_POSTLOGIN_BUDGET}s) exhausted — residual failures left for agentctl doctor"
+    _post_login_deadline=0
+    return 0
+  fi
+
+  ensure_all_plugins_installed || true
+  return 0
 }
 
 # ── 6. Watchdog ───────────────────────────────────────────
@@ -863,6 +924,12 @@ _run_watchdog() {
     # respawns it — installing plugins + attaching --channels without a
     # manual /exit or restart. File-existence only; no tmux-pane scraping.
     _check_auth_flip
+
+    # Feature 004/US2: keep retrying the post-login plugin install (bounded by
+    # PLUGIN_POSTLOGIN_BUDGET) until every plugin carries .installed-ok, then
+    # kick once so the respawn attaches --channels. Non-blocking (one pass per
+    # tick); no per-tick re-kick, so the crash budget stays untouched.
+    _post_login_plugin_retry
 
     if session_alive && channel_plugin_alive; then
       continue

@@ -122,12 +122,64 @@ RUN set -eux; \
     apk del .bun-unpack; \
     bun --version
 
+# Install GitHub's official github-mcp-server Go binary (feature 004/US3),
+# replacing the deprecated `npx @modelcontextprotocol/server-github`. The Linux
+# release assets are STATICALLY linked (verified `file` → "statically linked"),
+# so they run on Alpine/musl with no extra apk packages — exactly like the
+# gum/uv/bun blocks. Baked into /usr/local/bin (outside /home/agent, so the
+# .state bind-mount can't shadow it) and invoked `github-mcp-server stdio`,
+# authenticating via GITHUB_PERSONAL_ACCESS_TOKEN. Pinned via ARG (tracked in
+# scripts/lib/versions.sh; a bats drift-guard enforces ARG==floor). Checksum
+# verified before use.
+ARG GH_MCP_VERSION=1.4.0
+RUN set -eux; \
+    arch=$(uname -m); \
+    case "$arch" in \
+      x86_64) gh_arch="x86_64" ;; \
+      aarch64) gh_arch="arm64" ;; \
+      *) echo "unsupported arch: $arch" >&2; exit 1 ;; \
+    esac; \
+    cd /tmp; \
+    base="https://github.com/github/github-mcp-server/releases/download/v${GH_MCP_VERSION}"; \
+    curl -fsSL -O "${base}/github-mcp-server_Linux_${gh_arch}.tar.gz"; \
+    curl -fsSL -O "${base}/github-mcp-server_${GH_MCP_VERSION}_checksums.txt"; \
+    grep "github-mcp-server_Linux_${gh_arch}.tar.gz" "github-mcp-server_${GH_MCP_VERSION}_checksums.txt" | sha256sum -c -; \
+    tar -xzf "github-mcp-server_Linux_${gh_arch}.tar.gz" github-mcp-server; \
+    mv github-mcp-server /usr/local/bin/github-mcp-server; \
+    chmod +x /usr/local/bin/github-mcp-server; \
+    rm -f "github-mcp-server_Linux_${gh_arch}.tar.gz" "github-mcp-server_${GH_MCP_VERSION}_checksums.txt"; \
+    github-mcp-server --version
+
 # Install Claude Code CLI globally so both root (for first-run chown) and
 # the `agent` user can invoke it. Pinned via build arg so rebuilds are
 # reproducible — override with `docker build --build-arg CLAUDE_CODE_VERSION=...`
 # or pass through compose's `build.args` to track upstream releases.
 ARG CLAUDE_CODE_VERSION=2.1.170
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
+
+# Pre-warm the npm-based MCP servers the template wires via npx (filesystem,
+# vault). Same rationale as the uv /opt block above: a download inside Claude's
+# MCP handshake window times out, and on macOS Docker Desktop the npm cache's
+# thousands of small-file create/rename/rmdir ops fail outright on the VirtioFS
+# bind-mount that backs /home/agent (errno -35 / ENOTEMPTY). NPM_CONFIG_CACHE
+# moves BOTH the content cache (_cacache) and the npx install dir (_npx) to
+# /opt/npm-cache — off the bind-mount — and PREFER_OFFLINE lets the runtime npx
+# resolve the warmed version with no registry round-trip. `npm exec -- true`
+# downloads each package without launching its stdio server (which would hang
+# the build); `|| true` keeps the warm fail-soft. Pinned via ARG (tracked in
+# scripts/lib/versions.sh; a bats drift-guard enforces ARG==floor) so the
+# runtime spec matches the warmed spec — a version mismatch silently defeats
+# the warm hit. Numeric chown like the uv block (the agent user does not exist
+# yet). These ENV vars are inherited by every container process.
+ARG MCP_FILESYSTEM_VERSION=2026.1.14
+ARG MCP_VAULT_VERSION=0.12.0
+ENV NPM_CONFIG_CACHE=/opt/npm-cache \
+    NPM_CONFIG_PREFER_OFFLINE=true
+RUN set -eux; \
+    mkdir -p /opt/npm-cache; \
+    npm exec -y --package="@modelcontextprotocol/server-filesystem@${MCP_FILESYSTEM_VERSION}" -- true || true; \
+    npm exec -y --package="@bitbonsai/mcpvault@${MCP_VAULT_VERSION}" -- true || true; \
+    chown -R ${UID}:${GID} /opt/npm-cache
 
 # Create the non-root agent user matching host UID/GID.
 # Release pre-existing groups/users that already hold the target GID/UID
