@@ -117,6 +117,26 @@ YML
   [[ "$output" == *"heartbeat.enabled must be a YAML boolean"* ]]
 }
 
+# 005-fix-schema-false: a required boolean leaf set to its valid `false` value
+# must validate — it is PRESENT, not missing. Regression: `yq '$path // ""'`
+# collapsed a present `false` to "" so the required-leaf check wrongly flagged
+# it as a missing field, blocking --regenerate for any feature-disabled agent.
+@test "agent_yml_validate: required boolean leaf set to false validates (not 'missing')" {
+  _write_valid_yml
+  yq -i '.features.heartbeat.enabled = false' "$TMP_TEST_DIR/agent.yml"
+  run agent_yml_validate "$TMP_TEST_DIR/agent.yml"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "agent_yml_validate: genuinely absent required boolean leaf still reported missing" {
+  _write_valid_yml
+  yq -i 'del(.features.heartbeat.enabled)' "$TMP_TEST_DIR/agent.yml"
+  run agent_yml_validate "$TMP_TEST_DIR/agent.yml"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"missing required field: .features.heartbeat.enabled"* ]]
+}
+
 @test "agent_yml_validate: aggregates multiple errors in one run" {
   _write_valid_yml
   yq -i 'del(.user.email) | del(.user.timezone) | .notifications.channel = "bogus"' \

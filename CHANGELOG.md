@@ -3,6 +3,16 @@
 ## [Unreleased]
 
 ### Fixed
+- **Schema validation accepts a present boolean `false`** (`005-fix-schema-false`):
+  `agent_yml_validate` no longer rejects a valid `agent.yml` whose required boolean
+  leaf is set to `false` (e.g. `features.heartbeat.enabled: false`) with "missing
+  required field" — which blocked `./setup.sh --regenerate` for any agent that
+  disables a feature. Root cause: `_schema_get` read via `yq "$path // \"\""`, and
+  yq's `//` alternative operator collapses a present `false` to `""`, so the
+  required-leaf check saw it as absent. Now reads raw and normalizes only a literal
+  `null` to empty, so a present `false` survives while genuinely-absent/`null` leaves
+  are still flagged. Re-applies the orphaned `002-fix-schema-bool` that never reached
+  `main`.
 - **macOS bootstrap hardening** (`004-macos-bootstrap-hardening`): three image-baked
   fixes so a from-scratch macOS (Docker Desktop / VirtioFS bind-mount) scaffold
   reaches a fully functional agent with no manual repair, even though the container

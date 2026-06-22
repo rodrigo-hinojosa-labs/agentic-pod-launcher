@@ -74,11 +74,15 @@ _SCHEMA_OPTIONAL_NONEMPTY=(
   '.agent.role_file'
 )
 
-# Internal: read a yq value, normalise null/empty to empty string.
+# Internal: read a yq value, normalise a missing (null) value to empty string.
+# Read raw — NOT via `path // ""`, whose yq alternative operator collapses a
+# present boolean `false` to "" (making a required `enabled: false` look
+# missing). The explicit null check below handles the absent case; a present
+# `false` survives as the string "false".
 _schema_get() {
   local file="$1" path="$2"
   local val
-  val=$(yq -r "$path // \"\"" "$file" 2>/dev/null)
+  val=$(yq -r "$path" "$file" 2>/dev/null)
   [ "$val" = "null" ] && val=""
   printf '%s' "$val"
 }
