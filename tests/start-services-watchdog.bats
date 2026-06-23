@@ -220,6 +220,7 @@ YML
 @test "next_tmux_cmd: with OAuth token and channel NOT ready, does NOT emit bare-claude /login" {
   # Stub boot deps so only the Case-A guard is exercised.
   pre_accept_extra_marketplaces() { :; }
+  ensure_official_marketplace() { :; }
   ensure_all_plugins_installed() { :; }
   _channel_plugin_ready() { return 1; }   # plugin not installed yet
   has_telegram_token() { return 1; }       # would route to Case B (wizard) past Case A
@@ -235,6 +236,7 @@ YML
 
 @test "next_tmux_cmd: WITHOUT OAuth token and channel NOT ready, keeps bare-claude (Case A regression guard)" {
   pre_accept_extra_marketplaces() { :; }
+  ensure_official_marketplace() { :; }
   ensure_all_plugins_installed() { :; }
   _channel_plugin_ready() { return 1; }
   has_telegram_token() { return 1; }
@@ -243,4 +245,75 @@ YML
   run next_tmux_cmd
   [ "$status" -eq 0 ]
   [ "$output" = "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR_VAL claude" ]
+}
+
+# ── 006-headless-bootstrap US2: official marketplace registration ──
+# Under headless token auth there is no interactive onboarding to seed the
+# official marketplace, so the supervisor must register it idempotently before
+# installing @claude-plugins-official plugins.
+
+_stub_claude_marketplace() {
+  # $1 = what `marketplace list` prints (e.g. the official name or "none")
+  mkdir -p "$TMP_TEST_DIR/bin"
+  cat > "$TMP_TEST_DIR/bin/claude" <<STUB
+#!/bin/bash
+case "\$*" in
+  *"marketplace list"*) printf '%s\n' "$1" ;;
+  *"marketplace add"*)  echo "\$*" >> "$TMP_TEST_DIR/mkt-add.log"; ${2:-exit 0} ;;
+esac
+exit 0
+STUB
+  chmod +x "$TMP_TEST_DIR/bin/claude"
+}
+
+@test "ensure_official_marketplace registers the official marketplace when absent" {
+  _stub_claude_marketplace "No marketplaces configured"
+  PATH="$TMP_TEST_DIR/bin:$PATH" ensure_official_marketplace
+  grep -q "marketplace add anthropics/claude-plugins-official --scope user" \
+    "$TMP_TEST_DIR/mkt-add.log"
+}
+
+@test "ensure_official_marketplace is a no-op when already registered (idempotent)" {
+  _stub_claude_marketplace "  claude-plugins-official"
+  PATH="$TMP_TEST_DIR/bin:$PATH" ensure_official_marketplace
+  [ ! -f "$TMP_TEST_DIR/mkt-add.log" ]
+}
+
+@test "ensure_official_marketplace is fail-silent when the add fails (clone error)" {
+  _stub_claude_marketplace "" "echo 'clone failed' >&2; exit 1"
+  PATH="$TMP_TEST_DIR/bin:$PATH" run ensure_official_marketplace
+  [ "$status" -eq 0 ]
+}
+
+# ── 006-headless-bootstrap US3: onboarding pre-seed (headless TUI not blocked) ──
+# Onboarding state (theme + per-project trust) lives in ~/.claude/.claude.json
+# (NOT settings.json). Pre-seeding it stops the first-run theme picker / trust
+# dialog from blocking the headless tmux session.
+
+@test "pre_seed_onboarding creates .claude.json with onboarding keys when absent" {
+  export CLAUDE_CONFIG_DIR_VAL="$TMP_TEST_DIR/.claude"
+  export WORKDIR="/workspace"
+  pre_seed_onboarding
+  [ "$(jq -r '.hasCompletedOnboarding' "$CLAUDE_CONFIG_DIR_VAL/.claude.json")" = "true" ]
+  [ "$(jq -r '.theme' "$CLAUDE_CONFIG_DIR_VAL/.claude.json")" = "dark" ]
+  [ "$(jq -r '.projects["/workspace"].hasTrustDialogAccepted' "$CLAUDE_CONFIG_DIR_VAL/.claude.json")" = "true" ]
+}
+
+@test "pre_seed_onboarding is idempotent and preserves existing theme + keys" {
+  export CLAUDE_CONFIG_DIR_VAL="$TMP_TEST_DIR/.claude"
+  export WORKDIR="/workspace"
+  mkdir -p "$CLAUDE_CONFIG_DIR_VAL"
+  echo '{"theme":"light","userID":"abc"}' > "$CLAUDE_CONFIG_DIR_VAL/.claude.json"
+  pre_seed_onboarding
+  pre_seed_onboarding   # second run = no-op
+  [ "$(jq -r '.userID' "$CLAUDE_CONFIG_DIR_VAL/.claude.json")" = "abc" ]
+  [ "$(jq -r '.theme' "$CLAUDE_CONFIG_DIR_VAL/.claude.json")" = "light" ]
+  [ "$(jq -r '.hasCompletedOnboarding' "$CLAUDE_CONFIG_DIR_VAL/.claude.json")" = "true" ]
+}
+
+@test "pre_accept_bypass_permissions creates settings.json with headless defaults when absent" {
+  rm -f "$HOME/.claude/settings.json"
+  pre_accept_bypass_permissions
+  [ "$(jq -r '.skipDangerousModePermissionPrompt' "$HOME/.claude/settings.json")" = "true" ]
+  [ "$(jq -r '.permissions.defaultMode' "$HOME/.claude/settings.json")" = "auto" ]
 }

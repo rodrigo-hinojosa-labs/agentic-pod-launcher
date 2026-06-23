@@ -23,6 +23,7 @@ n=\$(cat "$TMP_TEST_DIR/attempts" 2>/dev/null || echo 0); n=\$((n+1)); echo "\$n
 case "\${CLAUDE_STUB_MODE:-ok}" in
   ok)   exit 0 ;;
   auth) echo "Error: Not authenticated. Please run /login" >&2; exit 1 ;;
+  no-marketplace) echo 'Error: Plugin "telegram" not found in marketplace "claude-plugins-official". Your local copy may be out of date' >&2; exit 1 ;;
   fail) echo "Error: network blip" >&2; exit 1 ;;
   fail-then-ok) if [ "\$n" -lt "\${CLAUDE_STUB_SUCCEED_AT:-2}" ]; then echo "transient" >&2; exit 1; else exit 0; fi ;;
   secret) echo "fatal: install failed with token ghp_ABCDEF1234567890SECRET in URL" >&2; exit 1 ;;
@@ -48,6 +49,17 @@ teardown() { teardown_tmp_dir; }
   run retry_plugin_install_bounded "telegram@x" 3
   [ "$status" -eq 2 ]
   [ "$(cat "$TMP_TEST_DIR/attempts")" -eq 1 ]   # no retry on auth-skip
+}
+
+# 006-headless-bootstrap US4: a "marketplace not found" error is a transient
+# skip (the marketplace gets registered by ensure_official_marketplace), NOT a
+# failure to retry 3x, and NOT to be conflated with "not authenticated".
+@test "retry_plugin_install_bounded returns 2 and does NOT retry when the marketplace is not registered" {
+  export CLAUDE_STUB_MODE=no-marketplace
+  run retry_plugin_install_bounded "telegram@x" 3
+  [ "$status" -eq 2 ]
+  [ "$(cat "$TMP_TEST_DIR/attempts")" -eq 1 ]   # no retry — deterministic, not transient network
+  [[ "$output" != *"not authenticated"* ]]
 }
 
 @test "retry_plugin_install_bounded retries up to max then returns 1 (failed)" {

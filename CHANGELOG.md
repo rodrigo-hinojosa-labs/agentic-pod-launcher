@@ -2,6 +2,39 @@
 
 ## [Unreleased]
 
+### Added
+- **Headless bootstrap** (`006-headless-bootstrap`): a scaffolded agent boots
+  fully operational WITHOUT interactive `/login`, which does not persist in the
+  headless container — VirtioFS cache incoherence on the `~/.claude` bind-mount
+  drops the credential, so `/login` completes server-side ("Login successful")
+  but reverts to "Not logged in" on every boot. Specced with GitHub Spec Kit
+  under `specs/006-headless-bootstrap/`.
+  - **(US1)** Headless auth via `CLAUDE_CODE_OAUTH_TOKEN` (from `claude
+    setup-token`) placed in `.env`, which docker-compose injects via `env_file`
+    — no dependency on `~/.claude` persistence. The supervisor recognizes the
+    token (`has_oauth_token`): `next_tmux_cmd` never falls back to the
+    bare-claude `/login` path when a token is present, and `_check_auth_flip`
+    treats the agent as already-authenticated (no spurious session kick from a
+    stray `.credentials.json`). The generated `.env` and `.env.example` carry a
+    `CLAUDE_CODE_OAUTH_TOKEN=` placeholder; the token stays out of `agent.yml`.
+    NEXT_STEPS (en/es) document the headless path as recommended, `/login` as
+    fallback.
+  - **(US2)** The official marketplace `anthropics/claude-plugins-official` is
+    registered idempotently at boot (`ensure_official_marketplace`) before
+    installing plugins — headless token auth skips the interactive onboarding
+    that used to seed it, so without this no `@claude-plugins-official` plugin
+    (incl. the Telegram channel) could install.
+  - **(US3)** First-run onboarding (theme picker + per-directory trust) is
+    pre-seeded in `~/.claude/.claude.json` (`pre_seed_onboarding`), and
+    `settings.json` is now created when absent, so the headless TUI session
+    isn't blocked before the first launch.
+  - **(US4)** The watchdog log distinguishes "marketplace not found" from "not
+    authenticated" (`retry_plugin_install_bounded`), instead of the catch-all
+    that conflated the two and burned the retry budget.
+  - The token lives only in `.env` (0600, and encrypted `.env.age` in identity
+    backup); relocating `~/.claude` to a named volume is out of scope (it would
+    re-introduce the `down -v` login-wipe that PR #3 removed).
+
 ### Fixed
 - **Schema validation accepts a present boolean `false`** (`005-fix-schema-false`):
   `agent_yml_validate` no longer rejects a valid `agent.yml` whose required boolean

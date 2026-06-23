@@ -23,7 +23,8 @@ _plugin_sanitize_error() {
 }
 
 # retry_plugin_install_bounded SPEC [MAX]
-#   0 = installed · 2 = skipped (not authenticated, no retry) · 1 = failed.
+#   0 = installed · 2 = skipped (not authenticated OR marketplace not registered
+#   yet — transient, no retry) · 1 = failed.
 # On failure (1) prints a sanitized one-line reason to stdout for the caller to
 # record. Logs each outcome distinctly (no more ambiguous "not auth OR failed").
 retry_plugin_install_bounded() {
@@ -37,6 +38,10 @@ retry_plugin_install_bounded() {
     fi
     if printf '%s' "$err" | grep -qiE 'not authenticated|please run /login|unauthorized|http 401|authentication_error'; then
       _plog "plugin install skipped: not authenticated — $spec"
+      return 2
+    fi
+    if printf '%s' "$err" | grep -qiE 'no marketplaces configured|not found in marketplace|unknown marketplace|marketplace .*not found'; then
+      _plog "plugin install skipped: marketplace not registered yet — $spec"
       return 2
     fi
     _plog "plugin install failed (attempt $attempt/$max): $spec"
