@@ -217,6 +217,7 @@ COPY scripts/lib/backup_identity.sh /opt/agent-admin/scripts/lib/backup_identity
 COPY scripts/lib/backup_vault.sh    /opt/agent-admin/scripts/lib/backup_vault.sh
 COPY scripts/lib/backup_config.sh   /opt/agent-admin/scripts/lib/backup_config.sh
 COPY scripts/lib/token_health.sh    /opt/agent-admin/scripts/lib/token_health.sh
+COPY scripts/lib/plugin-install.sh /opt/agent-admin/scripts/lib/plugin-install.sh
 COPY scripts/check_token_health.sh  /opt/agent-admin/scripts/check_token_health.sh
 RUN chmod +x /opt/agent-admin/scripts/heartbeatctl \
               /opt/agent-admin/scripts/check_token_health.sh \

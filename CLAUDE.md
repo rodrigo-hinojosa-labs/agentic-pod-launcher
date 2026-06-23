@@ -130,18 +130,20 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3`. Already-p
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
-Active spec-kit feature: **007-fix-mcp-test-drift** — return the default `bats` suite to fully
-green by aligning 6 stale MCP-contract assertions to the intentional render shipped in PR #59.
-`modules/mcp-json.tpl` is correct (github → native image-baked `github-mcp-server` args `["stdio"]`;
-vault → pinned `@bitbonsai/mcpvault@0.12.0`, sourced from `AGENTIC_FLOOR_MCP_VAULT` in
-`scripts/lib/versions.sh`); the tests froze the pre-#59 contract (`npx` / `@latest`) and fail on
-main (668 tests, 6 failing). Test-only change: edit `tests/mcp-json.bats` (320/321/324/328) and
-`tests/regenerate.bats` (367/397) — NO template/runtime edits — plus CHANGELOG + VERSION
-0.4.0→0.4.1. Out of scope: parameterizing the vault version in the template (pre-existing
-duplicate-pin debt, Principle VI).
-Plan: `specs/007-fix-mcp-test-drift/plan.md` · Spec: `specs/007-fix-mcp-test-drift/spec.md` ·
-Research: `specs/007-fix-mcp-test-drift/research.md` · Constitution: `.specify/memory/constitution.md`.
+Active spec-kit feature: **008-fix-postlogin-plugin-install** — repair the supervisor's post-login
+plugin auto-install path and return the DOCKER_E2E suite to green (1/11 failing). Three chained
+defects found during full E2E validation: (US1) `ensure_official_marketplace` (006) runs
+`claude plugin marketplace list | grep`, but the e2e stub (from 004) only handles `plugin install`
+→ falls to `sleep 86400` → the pipe hangs boot before the watchdog starts; (US2) that call has no
+timeout, so a hung `claude` bricks boot with no recovery — harden with `timeout` + degrade
+(Principle IV); (US3) `docker/scripts/lib/plugin-install.sh` (defines `retry_plugin_install_bounded`)
+reaches the workspace via the wholesale `docker/` copy but the Dockerfile never `COPY`s it →
+bounded retry (004 US2) + marketplace-not-found log (006 US4) are dead code → add the one missing
+COPY line (mirror_catalog_to_docker is NOT involved — the lib is image-only). Test-first host-side
+for US2/US3; final validation rebuilds the image + DOCKER_E2E. CHANGELOG + VERSION 0.4.1→0.4.2.
+Plan: `specs/008-fix-postlogin-plugin-install/plan.md` · Spec: `specs/008-fix-postlogin-plugin-install/spec.md` ·
+Research: `specs/008-fix-postlogin-plugin-install/research.md` · Constitution: `.specify/memory/constitution.md`.
 Prior: 001-deps-upgrade (PR #55), 002-fix-schema-bool, 003-bootstrap-hardening (PR #56),
 004-macos-bootstrap-hardening (PR #59), 005-fix-schema-false (PR #60),
-006-headless-bootstrap (PR #61) — all merged.
+006-headless-bootstrap (PR #61), 007-fix-mcp-test-drift (PR #62) — all merged.
 <!-- SPECKIT END -->

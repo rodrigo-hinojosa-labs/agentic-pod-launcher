@@ -85,6 +85,21 @@ run_docker_wizard() {
   [ -f "$dest/docker/scripts/start_services.sh" ]
 }
 
+@test "Dockerfile COPYs plugin-install.sh so the bounded-retry lib ships in the image" {
+  # US3 (008-fix-postlogin-plugin-install): docker/scripts/lib/plugin-install.sh
+  # (defines retry_plugin_install_bounded) is image-only and reaches the build
+  # context via the wholesale docker/ copy, but the Dockerfile must COPY it into
+  # the image or the supervisor falls back to the legacy single-attempt path.
+  grep -qE '^COPY[[:space:]]+scripts/lib/plugin-install\.sh[[:space:]]+/opt/agent-admin/scripts/lib/plugin-install\.sh' \
+    "$REPO_ROOT/docker/Dockerfile"
+  # And the lib must be present in the scaffolded build context.
+  mkdir -p "$TMP_TEST_DIR/installer"
+  local dest="$TMP_TEST_DIR/docker-plugin-install"
+  run run_docker_wizard "$dest"
+  [ "$status" -eq 0 ]
+  [ -f "$dest/docker/scripts/lib/plugin-install.sh" ]
+}
+
 @test "--docker scaffold writes docker-compose.yml at workspace root" {
   mkdir -p "$TMP_TEST_DIR/installer"
   local dest="$TMP_TEST_DIR/docker-compose-out"

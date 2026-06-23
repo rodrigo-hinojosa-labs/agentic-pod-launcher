@@ -36,6 +36,30 @@
     re-introduce the `down -v` login-wipe that PR #3 removed).
 
 ### Fixed
+- **Post-login plugin auto-install path** (`008-fix-postlogin-plugin-install`):
+  full DOCKER_E2E validation after #61/#62 surfaced `docker-e2e-postlogin`
+  failing (channel plugin never auto-installed after the credential flip). Three
+  chained defects, root-caused with runtime evidence (hung container process
+  tree) + static analysis:
+  - **(US1)** Feature 006's `ensure_official_marketplace` runs
+    `claude plugin marketplace list | grep` in the boot path; the e2e `claude`
+    stub (from 004) only handled `plugin install` and fell through to
+    `exec sleep 86400`, so the pipe hung the supervisor before tmux/the watchdog
+    ever started → 0 installs. The stub now handles the whole `plugin` family
+    (`marketplace list/add`, `plugin list`) non-blocking; only the interactive
+    session sleeps.
+  - **(US2)** Hardened `ensure_official_marketplace` to bound its `claude` calls
+    with `timeout` (configurable via `MARKETPLACE_CMD_TIMEOUT`, degrades to a
+    direct call if `timeout` is absent), so a wedged CLI can never hang the boot
+    before the watchdog can recover it (Principle IV).
+  - **(US3)** `docker/scripts/lib/plugin-install.sh` (defines
+    `retry_plugin_install_bounded`) reached the workspace via the wholesale
+    `docker/` copy but the Dockerfile never `COPY`d it into the image, so the
+    bounded retry (004 US2) and the marketplace-not-found classification (006
+    US4) were dead code and the supervisor used the legacy single-attempt path.
+    Added the missing `COPY` line (the lib is image-only — `mirror_catalog_to_docker`
+    is not involved). Test-first host-side for US2/US3; validated with a rebuild
+    + the full DOCKER_E2E suite. Specced under `specs/008-fix-postlogin-plugin-install/`.
 - **MCP render-contract test drift** (`007-fix-mcp-test-drift`): the default
   `bats` suite was at 668 tests / 6 failing on `main` because six assertions
   still encoded the pre-#59 MCP contract. PR #59 deliberately migrated the

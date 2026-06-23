@@ -80,6 +80,18 @@ if [ "$1" = "plugin" ] && [ "$2" = "install" ]; then
   mkdir -p "$cache"; : > "$cache/.installed-ok"
   exit 0
 fi
+# Feature 006's ensure_official_marketplace runs `plugin marketplace list | grep`
+# in the boot path BEFORE tmux; the bounded-retry path may run `plugin list`.
+# These must return fast and non-blocking — only the interactive session sleeps,
+# else the pipe hangs the supervisor before the watchdog ever starts.
+if [ "$1" = "plugin" ] && [ "$2" = "marketplace" ]; then
+  # `list` prints nothing (not registered → supervisor proceeds to `add`);
+  # `add` succeeds. Both exit 0 immediately.
+  exit 0
+fi
+if [ "$1" = "plugin" ] && [ "$2" = "list" ]; then
+  exit 0
+fi
 exec sleep 86400
 CL
   chmod +x "$DEST/bin/claude"

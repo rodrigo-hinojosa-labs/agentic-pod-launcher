@@ -487,16 +487,27 @@ pre_accept_extra_marketplaces() {
 # the VirtioFS bind-mount must never block or crash the watchdog tick.
 ensure_official_marketplace() {
   command -v claude >/dev/null 2>&1 || return 0
-  if CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR_VAL" claude plugin marketplace list 2>/dev/null \
+  # Bound each claude call so a wedged CLI can't block the boot path before the
+  # watchdog starts (Principle IV: degrade gracefully, never hang the
+  # supervisor). `timeout` ships in the Alpine image (busybox); if it's somehow
+  # absent we degrade to a direct call rather than break the boot. Configurable
+  # via MARKETPLACE_CMD_TIMEOUT for tests.
+  local _to=""
+  if command -v timeout >/dev/null 2>&1; then
+    _to="timeout ${MARKETPLACE_CMD_TIMEOUT:-12}"
+  fi
+  # shellcheck disable=SC2086  # $_to must word-split into `timeout N` (or empty)
+  if CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR_VAL" $_to claude plugin marketplace list 2>/dev/null \
        | grep -q "$OFFICIAL_MARKETPLACE_NAME"; then
     return 0   # already registered
   fi
   log "registering official marketplace: $OFFICIAL_MARKETPLACE_SOURCE"
+  # shellcheck disable=SC2086  # $_to must word-split into `timeout N` (or empty)
   if CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR_VAL" \
-       claude plugin marketplace add "$OFFICIAL_MARKETPLACE_SOURCE" --scope user >/dev/null 2>&1; then
+       $_to claude plugin marketplace add "$OFFICIAL_MARKETPLACE_SOURCE" --scope user >/dev/null 2>&1; then
     log "official marketplace registered: $OFFICIAL_MARKETPLACE_NAME"
   else
-    log "WARN: official marketplace registration failed (will retry next tick)"
+    log "WARN: official marketplace registration failed or timed out (will retry next tick)"
   fi
   return 0
 }
