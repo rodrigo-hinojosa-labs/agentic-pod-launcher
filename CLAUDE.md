@@ -130,16 +130,18 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3`. Already-p
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
-Active spec-kit feature: **006-headless-bootstrap** — boot a scaffolded agent fully operational
-WITHOUT interactive `/login` (which doesn't persist under VirtioFS `~/.claude` cache incoherence).
-Headless auth via `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) in `.env` (env_file-wired);
-supervisor recognizes the token (`has_oauth_token` guard in `next_tmux_cmd`/`_check_auth_flip`);
-register the official marketplace `anthropics/claude-plugins-official` idempotently at boot so
-plugins/channel install; pre-seed onboarding (theme/trust) so the headless TUI doesn't block;
-distinguish "marketplace not found" from "not authenticated" in the watchdog log. Token stays in
-`.env` only (never `agent.yml`). Named-volume for `~/.claude` is OUT of scope (PR #3 regression).
-Plan: `specs/006-headless-bootstrap/plan.md` · Spec: `specs/006-headless-bootstrap/spec.md` ·
-Research: `specs/006-headless-bootstrap/research.md` · Constitution: `.specify/memory/constitution.md`.
+Active spec-kit feature: **007-fix-mcp-test-drift** — return the default `bats` suite to fully
+green by aligning 6 stale MCP-contract assertions to the intentional render shipped in PR #59.
+`modules/mcp-json.tpl` is correct (github → native image-baked `github-mcp-server` args `["stdio"]`;
+vault → pinned `@bitbonsai/mcpvault@0.12.0`, sourced from `AGENTIC_FLOOR_MCP_VAULT` in
+`scripts/lib/versions.sh`); the tests froze the pre-#59 contract (`npx` / `@latest`) and fail on
+main (668 tests, 6 failing). Test-only change: edit `tests/mcp-json.bats` (320/321/324/328) and
+`tests/regenerate.bats` (367/397) — NO template/runtime edits — plus CHANGELOG + VERSION
+0.4.0→0.4.1. Out of scope: parameterizing the vault version in the template (pre-existing
+duplicate-pin debt, Principle VI).
+Plan: `specs/007-fix-mcp-test-drift/plan.md` · Spec: `specs/007-fix-mcp-test-drift/spec.md` ·
+Research: `specs/007-fix-mcp-test-drift/research.md` · Constitution: `.specify/memory/constitution.md`.
 Prior: 001-deps-upgrade (PR #55), 002-fix-schema-bool, 003-bootstrap-hardening (PR #56),
-004-macos-bootstrap-hardening (PR #59), 005-fix-schema-false (PR #60) — all merged.
+004-macos-bootstrap-hardening (PR #59), 005-fix-schema-false (PR #60),
+006-headless-bootstrap (PR #61) — all merged.
 <!-- SPECKIT END -->

@@ -92,7 +92,7 @@ teardown() { teardown_tmp_dir; }
   [ -f .mcp.json ]
   [ -f CLAUDE.md ]
   jq -e '.mcpServers.vault' .mcp.json > /dev/null
-  [ "$(jq -r '.mcpServers.vault.args[1]' .mcp.json)" = "@bitbonsai/mcpvault@latest" ]
+  [ "$(jq -r '.mcpServers.vault.args[1]' .mcp.json)" = "@bitbonsai/mcpvault@0.12.0" ]
   grep -q "Vault" CLAUDE.md
   grep -q "Karpathy" CLAUDE.md
 }
