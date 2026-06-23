@@ -85,7 +85,8 @@ EOF
   render_load_context "$TMP_TEST_DIR/agent.yml"
   result=$(render_template "$REPO_ROOT/modules/mcp-json.tpl")
   echo "$result" | jq . > /dev/null
-  [ "$(echo "$result" | jq -r '.mcpServers.github.command')" = "npx" ]
+  [ "$(echo "$result" | jq -r '.mcpServers.github.command')" = "github-mcp-server" ]
+  [ "$(echo "$result" | jq -r '.mcpServers.github.args[0]')" = "stdio" ]
 }
 
 @test ".mcp.json has vault MCP when vault.mcp.enabled is true" {
@@ -107,7 +108,7 @@ EOF
   echo "$result" | jq . > /dev/null
   [ "$(echo "$result" | jq -r '.mcpServers.vault.command')" = "npx" ]
   [ "$(echo "$result" | jq -r '.mcpServers.vault.args[0]')" = "-y" ]
-  [ "$(echo "$result" | jq -r '.mcpServers.vault.args[1]')" = "@bitbonsai/mcpvault@latest" ]
+  [ "$(echo "$result" | jq -r '.mcpServers.vault.args[1]')" = "@bitbonsai/mcpvault@0.12.0" ]
   [ "$(echo "$result" | jq -r '.mcpServers.vault.args[2]')" = "/home/agent/.vault" ]
   [ "$(echo "$result" | jq -r '.mcpServers.vault.env')" = "{}" ]
 }
@@ -169,7 +170,7 @@ EOF
   result=$(render_template "$REPO_ROOT/modules/mcp-json.tpl")
   echo "$result" | jq . > /dev/null
   [ "$(echo "$result" | jq -r '.mcpServers["atlassian-work"].command')" = "uvx" ]
-  [ "$(echo "$result" | jq -r '.mcpServers.github.command')" = "npx" ]
+  [ "$(echo "$result" | jq -r '.mcpServers.github.command')" = "github-mcp-server" ]
   [ "$(echo "$result" | jq -r '.mcpServers.vault.command')" = "npx" ]
 }
 
@@ -252,7 +253,7 @@ EOF
   result=$(render_template "$REPO_ROOT/modules/mcp-json.tpl")
   echo "$result" | jq . > /dev/null
   [ "$(echo "$result" | jq -r '.mcpServers["atlassian-work"].command')" = "uvx" ]
-  [ "$(echo "$result" | jq -r '.mcpServers.github.command')" = "npx" ]
+  [ "$(echo "$result" | jq -r '.mcpServers.github.command')" = "github-mcp-server" ]
   [ "$(echo "$result" | jq -r '.mcpServers.vault.command')" = "npx" ]
   [ "$(echo "$result" | jq -r '.mcpServers.qmd.command')" = "bunx" ]
 }

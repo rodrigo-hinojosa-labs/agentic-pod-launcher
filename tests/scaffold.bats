@@ -151,7 +151,7 @@ EOF
   [ "$(yq -r '.vault.qmd.enabled' "$dest/agent.yml")" = "false" ]
   [ "$(yq -r '.vault.path' "$dest/agent.yml")" = ".state/.vault" ]
   [ "$(jq -r '.mcpServers.vault.command' "$dest/.mcp.json")" = "npx" ]
-  [ "$(jq -r '.mcpServers.vault.args[1]' "$dest/.mcp.json")" = "@bitbonsai/mcpvault@latest" ]
+  [ "$(jq -r '.mcpServers.vault.args[1]' "$dest/.mcp.json")" = "@bitbonsai/mcpvault@0.12.0" ]
   [ "$(jq -r '.mcpServers.vault.args[2]' "$dest/.mcp.json")" = "/home/agent/.vault" ]
   [ "$(jq -r '.mcpServers.qmd // "absent"' "$dest/.mcp.json")" = "absent" ]
   grep -q "Vault" "$dest/CLAUDE.md"

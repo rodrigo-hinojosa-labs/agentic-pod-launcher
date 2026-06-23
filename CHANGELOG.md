@@ -36,6 +36,19 @@
     re-introduce the `down -v` login-wipe that PR #3 removed).
 
 ### Fixed
+- **MCP render-contract test drift** (`007-fix-mcp-test-drift`): the default
+  `bats` suite was at 668 tests / 6 failing on `main` because six assertions
+  still encoded the pre-#59 MCP contract. PR #59 deliberately migrated the
+  `github` MCP from `npx @modelcontextprotocol/server-github` to the native
+  image-baked `github-mcp-server` (args `["stdio"]`) and pinned the `vault` MCP
+  from `@bitbonsai/mcpvault@latest` to `@bitbonsai/mcpvault@0.12.0` (sourced from
+  `AGENTIC_FLOOR_MCP_VAULT` in `scripts/lib/versions.sh`); the templates were
+  correct, the assertions were stale. Aligned the assertions in
+  `tests/mcp-json.bats` (github + vault), `tests/regenerate.bats` and
+  `tests/scaffold.bats` to the shipped contract — test-only, no template/runtime
+  change — returning the suite to fully green. Out of scope: collapsing the
+  duplicated `0.12.0` literal (template vs `versions.sh`) into a single source
+  (pre-existing Principle VI debt). Specced under `specs/007-fix-mcp-test-drift/`.
 - **Schema validation accepts a present boolean `false`** (`005-fix-schema-false`):
   `agent_yml_validate` no longer rejects a valid `agent.yml` whose required boolean
   leaf is set to `false` (e.g. `features.heartbeat.enabled: false`) with "missing
