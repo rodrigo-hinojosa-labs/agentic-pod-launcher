@@ -20,9 +20,29 @@ The container starts and the supervisor launches Claude Code inside a detached t
 
 Detach without killing the container: `Ctrl-b d` (standard tmux binding).
 
-## 2. Log in to Claude (one-time)
+## 2. Authenticate Claude (one-time)
 
-Inside the tmux session:
+### Headless token (recommended)
+
+On macOS the interactive `/login` credential does not persist — VirtioFS cache
+incoherence on the `~/.claude` bind-mount drops it, so Claude reverts to
+"Not logged in" on every boot. Use a long-lived token instead: generate it once
+on the **host** and put it in `.env` BEFORE `docker compose up`.
+
+```bash
+claude setup-token            # on the HOST; authorize OAuth, paste the code IN THE TERMINAL
+#   → it prints a long-lived token: sk-ant-oat01-…
+$EDITOR {{DEPLOYMENT_WORKSPACE}}/.env   # set CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-…
+docker compose up -d          # the agent boots already authenticated — no /login
+```
+
+The token lives only in `.env` (0600, gitignored) — never in `agent.yml`. With
+identity backup in partial mode (no SSH recipient) the `.env` is backed up in
+plaintext to the fork, so prefer a configured recipient when using a token.
+
+### Interactive /login (fallback)
+
+If you skip the token, log in inside the tmux session:
 
 1. Pick a theme (Enter accepts the default) and confirm trust on `/workspace`.
 2. Run `/login`, open the URL in your browser, authorize, paste the code back. Credentials land in `{{DEPLOYMENT_WORKSPACE}}/.state/` (bind-mounted to the container's `/home/agent`) and survive rebuilds.

@@ -27,6 +27,8 @@ exit 0
 STUB
   chmod +x "$TMP_TEST_DIR/bin/tmux"
   export PATH="$TMP_TEST_DIR/bin:$PATH"
+  # Default the existing (no-token) cases to the file-based auth-flip path.
+  unset CLAUDE_CODE_OAUTH_TOKEN
   # shellcheck source=/dev/null
   source "$REPO_ROOT/docker/scripts/start_services.sh"
 }
@@ -69,4 +71,18 @@ _kick_count() {
   _check_auth_flip            # present->present -> no kick
   _check_auth_flip
   [ "$(_kick_count)" -eq 1 ]
+}
+
+# 006-headless-bootstrap US1: env-token auth writes no .credentials.json, so a
+# spurious absent->present flip (e.g. a stray interactive /login) must NOT kick
+# the session when CLAUDE_CODE_OAUTH_TOKEN is present.
+@test "_check_auth_flip does not kick when CLAUDE_CODE_OAUTH_TOKEN is set (env-token auth)" {
+  export CLAUDE_CODE_OAUTH_TOKEN="sk-ant-oat01-deadbeef"
+  rm -f "$AUTH_MARKER_OVERRIDE"
+  _check_auth_flip            # baseline: token present → treated as already-authed
+  : > "$AUTH_MARKER_OVERRIDE"  # a credentials.json materializes anyway
+  _check_auth_flip            # must NOT kick
+  _check_auth_flip
+  # Assert LAST (a non-final assert can be masked); setup() unsets the token.
+  [ "$(_kick_count)" -eq 0 ]
 }

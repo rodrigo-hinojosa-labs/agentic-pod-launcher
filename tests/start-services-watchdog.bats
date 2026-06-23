@@ -15,6 +15,9 @@ setup() {
   export WORKDIR="$TMP_TEST_DIR"
   export HOME="$TMP_TEST_DIR/home"
   mkdir -p "$HOME"
+  # Isolate the token-aware boot tests from any CLAUDE_CODE_OAUTH_TOKEN in
+  # the host env so absence-of-token cases stay deterministic.
+  unset CLAUDE_CODE_OAUTH_TOKEN
   # shellcheck source=/dev/null
   source "$REPO_ROOT/docker/scripts/start_services.sh"
 }
@@ -195,4 +198,49 @@ YML
   [ "$status" -eq 0 ]
   [ ! -f "$BATS_TEST_TMPDIR/trigger_called" ]
   [[ "$output" != *"identity backup"* ]]
+}
+
+# ── 006-headless-bootstrap US1: token-aware boot decision ──
+# CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) authenticates claude via
+# the environment, so the supervisor must NOT fall back to the bare-claude
+# /login path when a token is present.
+
+@test "has_oauth_token is true with CLAUDE_CODE_OAUTH_TOKEN set, false when unset/empty" {
+  export CLAUDE_CODE_OAUTH_TOKEN="sk-ant-oat01-deadbeef"
+  run has_oauth_token
+  [ "$status" -eq 0 ]
+  export CLAUDE_CODE_OAUTH_TOKEN=""
+  run has_oauth_token
+  [ "$status" -ne 0 ]
+  unset CLAUDE_CODE_OAUTH_TOKEN
+  run has_oauth_token
+  [ "$status" -ne 0 ]
+}
+
+@test "next_tmux_cmd: with OAuth token and channel NOT ready, does NOT emit bare-claude /login" {
+  # Stub boot deps so only the Case-A guard is exercised.
+  pre_accept_extra_marketplaces() { :; }
+  ensure_all_plugins_installed() { :; }
+  _channel_plugin_ready() { return 1; }   # plugin not installed yet
+  has_telegram_token() { return 1; }       # would route to Case B (wizard) past Case A
+  log() { :; }
+  export CLAUDE_CODE_OAUTH_TOKEN="sk-ant-oat01-deadbeef"
+  run next_tmux_cmd
+  [ "$status" -eq 0 ]
+  # Must NOT be the bare-claude /login fallback (Case A).
+  [ "$output" != "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR_VAL claude" ]
+  # Routed past Case A → Case B wizard (no telegram token present).
+  [[ "$output" == *"wizard-container.sh"* ]]
+}
+
+@test "next_tmux_cmd: WITHOUT OAuth token and channel NOT ready, keeps bare-claude (Case A regression guard)" {
+  pre_accept_extra_marketplaces() { :; }
+  ensure_all_plugins_installed() { :; }
+  _channel_plugin_ready() { return 1; }
+  has_telegram_token() { return 1; }
+  log() { :; }
+  unset CLAUDE_CODE_OAUTH_TOKEN
+  run next_tmux_cmd
+  [ "$status" -eq 0 ]
+  [ "$output" = "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR_VAL claude" ]
 }

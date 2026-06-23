@@ -20,9 +20,29 @@ El contenedor arranca y el supervisor lanza Claude Code dentro de una sesión tm
 
 Para salir sin matar el contenedor: `Ctrl-b d` (atajo estándar de tmux).
 
-## 2. Login en Claude (una sola vez)
+## 2. Autenticar Claude (una sola vez)
 
-Dentro de la sesión tmux:
+### Token headless (recomendado)
+
+En macOS la credencial del `/login` interactivo no persiste — la incoherencia de
+cache de VirtioFS sobre el bind-mount `~/.claude` la descarta, así que Claude
+vuelve a "Not logged in" en cada arranque. Usa un token de larga duración:
+genéralo una vez en el **host** y ponlo en `.env` ANTES de `docker compose up`.
+
+```bash
+claude setup-token            # en el HOST; autoriza OAuth, pega el código EN LA TERMINAL
+#   → imprime un token de larga duración: sk-ant-oat01-…
+$EDITOR {{DEPLOYMENT_WORKSPACE}}/.env   # define CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-…
+docker compose up -d          # el agente arranca ya autenticado — sin /login
+```
+
+El token vive solo en `.env` (0600, gitignored) — nunca en `agent.yml`. Con el
+backup de identidad en modo parcial (sin recipient SSH) el `.env` se respalda en
+texto plano al fork, así que prefiere un recipient configurado si usas token.
+
+### /login interactivo (fallback)
+
+Si omites el token, haz login dentro de la sesión tmux:
 
 1. Elige un tema (Enter acepta el default) y confirma trust en `/workspace`.
 2. Corre `/login`, abre la URL en el navegador, autoriza, pega el código de vuelta. Las credenciales viven en `{{DEPLOYMENT_WORKSPACE}}/.state/` (bind-mounted al `/home/agent` del contenedor) y sobreviven rebuilds.

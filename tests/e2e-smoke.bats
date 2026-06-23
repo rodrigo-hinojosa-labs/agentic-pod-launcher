@@ -67,6 +67,9 @@ teardown() { teardown_tmp_dir; }
   [ ! -f agent.yml ]
   [ -f "$dest/agent.yml" ]
   [ -f "$dest/.env" ]
+  # 006-headless-bootstrap: the generated .env advertises the headless-auth
+  # token placeholder so the operator can paste a `claude setup-token` token.
+  grep -q '^CLAUDE_CODE_OAUTH_TOKEN=' "$dest/.env"
 
   # Content checks for agent.yml
   [ "$(yq '.agent.name' "$dest/agent.yml")" = "e2e-bot" ]

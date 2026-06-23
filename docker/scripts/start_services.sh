@@ -364,6 +364,14 @@ has_telegram_token() {
   [ -n "$val" ]
 }
 
+# Whether the container env carries a non-empty CLAUDE_CODE_OAUTH_TOKEN (from
+# `claude setup-token`, delivered via docker-compose env_file). When present,
+# claude authenticates from the environment, so the supervisor must not fall
+# back to the bare-claude /login path. NEVER echo the value (secret hygiene).
+has_oauth_token() {
+  [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]
+}
+
 # Pre-configure the user's Claude settings for headless operation:
 #   - skipDangerousModePermissionPrompt=true — dismiss the one-time
 #     `--dangerously-skip-permissions` warning dialog so the first launch
@@ -450,9 +458,12 @@ next_tmux_cmd() {
   pre_accept_extra_marketplaces
   ensure_all_plugins_installed
 
-  if ! _channel_plugin_ready; then
-    # Case A: channel plugin not yet usable (no /login, or install failed).
-    # Fall back to bare claude so the user can authenticate.
+  if ! _channel_plugin_ready && ! has_oauth_token; then
+    # Case A: channel plugin not yet usable (no /login, or install failed) AND
+    # no headless token. Fall back to bare claude so the user can /login.
+    # With CLAUDE_CODE_OAUTH_TOKEN present, claude is already authenticated, so
+    # we never park at a /login prompt — drop through to Case B/C and let
+    # ensure_all_plugins_installed keep retrying on subsequent respawns.
     echo "$base"
     return
   fi
@@ -833,6 +844,10 @@ _prev_auth_present=-1
 # on completion or budget exhaustion.
 _post_login_deadline=0
 _check_auth_flip() {
+  # Env-token auth (CLAUDE_CODE_OAUTH_TOKEN) writes no .credentials.json, so the
+  # agent is already authenticated at baseline — pin _prev_auth_present so the
+  # absent->present file flip can never fire a spurious kill-session.
+  if has_oauth_token; then _prev_auth_present=1; return 0; fi
   local present=0
   if [ -f "$(_auth_marker_file)" ]; then present=1; fi
 

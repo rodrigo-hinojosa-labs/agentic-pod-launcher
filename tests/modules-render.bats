@@ -51,6 +51,16 @@ teardown() { teardown_tmp_dir; }
   [[ "$result" != *"GITHUB_PAT="* ]]
 }
 
+# 006-headless-bootstrap US1: the headless-auth token must be discoverable in
+# the rendered .env skeleton (always, unconditionally) and never with a value.
+@test "env-example exposes CLAUDE_CODE_OAUTH_TOKEN (headless auth) with no value" {
+  result=$(render_template "$REPO_ROOT/modules/env-example.tpl")
+  # grep-based (a failing intermediate [[ ]] does NOT fail a bats test here):
+  # the variable must be present and never carry a baked value.
+  printf '%s' "$result" | grep -q 'CLAUDE_CODE_OAUTH_TOKEN=' \
+    && ! printf '%s' "$result" | grep -q 'CLAUDE_CODE_OAUTH_TOKEN=sk-'
+}
+
 @test "systemd.service has workspace and docker compose" {
   result=$(render_template "$REPO_ROOT/modules/systemd.service.tpl")
   [[ "$result" == *"WorkingDirectory=/home/a/wk"* ]]
