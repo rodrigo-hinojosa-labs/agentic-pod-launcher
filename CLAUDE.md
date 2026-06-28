@@ -130,20 +130,26 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3`. Already-p
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
-Active spec-kit feature: **008-fix-postlogin-plugin-install** — repair the supervisor's post-login
-plugin auto-install path and return the DOCKER_E2E suite to green (1/11 failing). Three chained
-defects found during full E2E validation: (US1) `ensure_official_marketplace` (006) runs
-`claude plugin marketplace list | grep`, but the e2e stub (from 004) only handles `plugin install`
-→ falls to `sleep 86400` → the pipe hangs boot before the watchdog starts; (US2) that call has no
-timeout, so a hung `claude` bricks boot with no recovery — harden with `timeout` + degrade
-(Principle IV); (US3) `docker/scripts/lib/plugin-install.sh` (defines `retry_plugin_install_bounded`)
-reaches the workspace via the wholesale `docker/` copy but the Dockerfile never `COPY`s it →
-bounded retry (004 US2) + marketplace-not-found log (006 US4) are dead code → add the one missing
-COPY line (mirror_catalog_to_docker is NOT involved — the lib is image-only). Test-first host-side
-for US2/US3; final validation rebuilds the image + DOCKER_E2E. CHANGELOG + VERSION 0.4.1→0.4.2.
-Plan: `specs/008-fix-postlogin-plugin-install/plan.md` · Spec: `specs/008-fix-postlogin-plugin-install/spec.md` ·
-Research: `specs/008-fix-postlogin-plugin-install/research.md` · Constitution: `.specify/memory/constitution.md`.
+Active spec-kit feature: **009-fix-extra-marketplace-install** — install at boot the plugins that
+live in a THIRD-PARTY marketplace (not `@claude-plugins-official`). Found during the 2026-06-23
+declarative re-scaffold of rodri-cenco-admin: 5/6 plugins auto-installed but `claude-mem@thedotmack`
+did not. Root cause (confirmed in code + runtime log): registration asymmetry — the official
+marketplace is registered with `claude plugin marketplace add` AND confirmed via `marketplace list`
+(`ensure_official_marketplace`, with the 008 timeout), but third-party marketplaces are only merged
+into `settings.json` `.extraKnownMarketplaces` by `pre_accept_extra_marketplaces` (no `add`, no
+confirm) → the immediate `plugin install claude-mem@thedotmack` errors "marketplace not found" →
+`retry_plugin_install_bounded` returns 2 (skip, no retry) → and since the steady-state tmux session
+never respawns, `ensure_all_plugins_installed` never re-runs → the plugin is permanently absent.
+Fix (research D1–D3): add `ensure_extra_marketplaces` (mirror of `ensure_official_marketplace`:
+`marketplace add <repo>` + confirm + bounded `timeout`, idempotent, fail-silent), chained in
+`next_tmux_cmd` before the install loop. US1 install third-party plugin at boot · US2 degrade
+gracefully (Principle IV) · US3 add DOCKER_E2E coverage for the third-party path (today only
+`@claude-plugins-official` is exercised, which hid the bug). Test-first host-side
+(`tests/start-services-extra-marketplace.bats`, sourcing pattern of 008) + e2e extension. CHANGELOG +
+VERSION 0.4.2→0.4.3. No changes to setup.sh/modules/scripts/lib.
+Plan: `specs/009-fix-extra-marketplace-install/plan.md` · Spec: `specs/009-fix-extra-marketplace-install/spec.md` ·
+Research: `specs/009-fix-extra-marketplace-install/research.md` · Constitution: `.specify/memory/constitution.md`.
 Prior: 001-deps-upgrade (PR #55), 002-fix-schema-bool, 003-bootstrap-hardening (PR #56),
-004-macos-bootstrap-hardening (PR #59), 005-fix-schema-false (PR #60),
-006-headless-bootstrap (PR #61), 007-fix-mcp-test-drift (PR #62) — all merged.
+004-macos-bootstrap-hardening (PR #59), 005-fix-schema-false (PR #60), 006-headless-bootstrap (PR #61),
+007-fix-mcp-test-drift (PR #62), 008-fix-postlogin-plugin-install (PR #63) — all merged.
 <!-- SPECKIT END -->

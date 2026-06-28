@@ -26,7 +26,7 @@ teardown() {
   teardown_tmp_dir
 }
 
-@test "post-login: channel plugin auto-installs after the credential flip, none before" {
+@test "post-login: official + third-party marketplace plugins auto-install after the credential flip, none before" {
   mkdir -p "$DEST"
   cat > "$DEST/agent.yml" <<YML
 version: 1
@@ -40,7 +40,7 @@ features:
   heartbeat: {enabled: true, interval: "30m", timeout: 30, retries: 0, default_prompt: "echo pong"}
 mcps: {defaults: [], atlassian: [], github: {enabled: false, email: ""}}
 vault: {enabled: false}
-plugins: ["telegram@claude-plugins-official"]
+plugins: ["telegram@claude-plugins-official", "claude-mem@thedotmack"]
 YML
   cp -R "$REPO_ROOT/modules" "$REPO_ROOT/scripts" "$REPO_ROOT/docker" "$DEST/"
   cp "$REPO_ROOT/setup.sh" "$DEST/"
@@ -63,33 +63,46 @@ if 'PLUGIN_POSTLOGIN_BUDGET' not in txt:
 open(path, 'w').write(txt)
 PY
 
-  # claude stub: `plugin install <spec>` succeeds ONLY once the (mocked)
-  # credential file exists — modeling the auth-ready lag. Bare `claude` sleeps
-  # so the watchdog sees a live tmux session.
+  # claude stub. Models BOTH the auth-ready lag (install needs creds) AND
+  # marketplace resolution (009): a marketplace is "resolved" only after
+  # `marketplace add` — the official one is seeded as always-known, but a
+  # THIRD-PARTY one (thedotmack) becomes known only once ensure_extra_marketplaces
+  # runs its `marketplace add`. `plugin install foo@<mkt>` from an UNRESOLVED
+  # marketplace fails "not found" — so without the 009 fix, claude-mem@thedotmack
+  # never installs. Bare `claude` sleeps so the watchdog sees a live tmux session.
   mkdir -p "$DEST/bin"
   cat > "$DEST/bin/claude" <<'CL'
 #!/bin/bash
 CREDS="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json"
-if [ "$1" = "plugin" ] && [ "$2" = "install" ]; then
-  spec="$3"
-  if [ ! -f "$CREDS" ]; then
-    echo "Error: Not authenticated. Please run /login" >&2; exit 1
-  fi
-  name="${spec%@*}"; mkt="${spec#*@}"
-  cache="$HOME/.claude/plugins/cache/$mkt/$name"
-  mkdir -p "$cache"; : > "$cache/.installed-ok"
+MKTS="$HOME/.claude/.mkts"           # one marker file per RESOLVED marketplace
+mkdir -p "$MKTS" 2>/dev/null
+: > "$MKTS/claude-plugins-official"  # official is always known
+if [ "$1" = "plugin" ] && [ "$2" = "marketplace" ] && [ "$3" = "add" ]; then
+  case "$4" in
+    *claude-plugins-official) key=claude-plugins-official ;;
+    thedotmack/claude-mem)    key=thedotmack ;;
+    *)                        key="${4%%/*}" ;;
+  esac
+  : > "$MKTS/$key"
   exit 0
 fi
-# Feature 006's ensure_official_marketplace runs `plugin marketplace list | grep`
-# in the boot path BEFORE tmux; the bounded-retry path may run `plugin list`.
-# These must return fast and non-blocking — only the interactive session sleeps,
-# else the pipe hangs the supervisor before the watchdog ever starts.
-if [ "$1" = "plugin" ] && [ "$2" = "marketplace" ]; then
-  # `list` prints nothing (not registered → supervisor proceeds to `add`);
-  # `add` succeeds. Both exit 0 immediately.
+if [ "$1" = "plugin" ] && [ "$2" = "marketplace" ] && [ "$3" = "list" ]; then
+  ls "$MKTS" 2>/dev/null    # one key per line; ensure_*_marketplace greps this
   exit 0
 fi
 if [ "$1" = "plugin" ] && [ "$2" = "list" ]; then
+  exit 0
+fi
+if [ "$1" = "plugin" ] && [ "$2" = "install" ]; then
+  spec="$3"; name="${spec%@*}"; mkt="${spec#*@}"
+  if [ ! -f "$CREDS" ]; then
+    echo "Error: Not authenticated. Please run /login" >&2; exit 1
+  fi
+  if [ ! -f "$MKTS/$mkt" ]; then
+    echo "Error: $name not found in marketplace $mkt" >&2; exit 1
+  fi
+  cache="$HOME/.claude/plugins/cache/$mkt/$name"
+  mkdir -p "$cache"; : > "$cache/.installed-ok"
   exit 0
 fi
 exec sleep 86400
@@ -100,24 +113,32 @@ CL
   (cd "$DEST" && docker compose up -d)
 
   in_container() { (cd "$DEST" && docker compose exec -T -u agent "$AGENT_NAME" "$@"); }
-  local cache="/home/agent/.claude/plugins/cache/claude-plugins-official/telegram"
+  local cache_tg="/home/agent/.claude/plugins/cache/claude-plugins-official/telegram"
+  local cache_cm="/home/agent/.claude/plugins/cache/thedotmack/claude-mem"
 
-  # 1) settle unauthenticated for ~15s — the sentinel must NOT appear yet.
+  # 1) settle unauthenticated for ~15s — NEITHER sentinel may appear yet.
   sleep 15
-  run in_container test -f "$cache/.installed-ok"
+  run in_container test -f "$cache_tg/.installed-ok"
+  [ "$status" -ne 0 ]
+  run in_container test -f "$cache_cm/.installed-ok"
   [ "$status" -ne 0 ]
 
   # 2) simulate the /login credential flip (the parent dir may not exist yet).
   in_container sh -c 'mkdir -p /home/agent/.claude && touch /home/agent/.claude/.credentials.json'
 
-  # 3) within the budget, the watchdog's post-login retry must install it.
-  local deadline=$(( $(date +%s) + 90 )) installed=0
+  # 3) within the budget, the watchdog's post-login retry must install BOTH the
+  #    official channel plugin AND the third-party one — the latter only succeeds
+  #    if ensure_extra_marketplaces registered its marketplace first (009 fix).
+  local deadline=$(( $(date +%s) + 120 )) tg=0 cm=0
   while [ "$(date +%s)" -lt "$deadline" ]; do
-    if in_container test -f "$cache/.installed-ok" 2>/dev/null; then installed=1; break; fi
+    [ "$tg" -eq 1 ] || { in_container test -f "$cache_tg/.installed-ok" 2>/dev/null && tg=1; }
+    [ "$cm" -eq 1 ] || { in_container test -f "$cache_cm/.installed-ok" 2>/dev/null && cm=1; }
+    [ "$tg" -eq 1 ] && [ "$cm" -eq 1 ] && break
     sleep 3
   done
-  if [ "$installed" -ne 1 ]; then
-    (cd "$DEST" && docker compose logs --tail=80 2>&1) >&2 || true
+  if [ "$tg" -ne 1 ] || [ "$cm" -ne 1 ]; then
+    (cd "$DEST" && docker compose logs --tail=120 2>&1) >&2 || true
   fi
-  [ "$installed" -eq 1 ]
+  [ "$tg" -eq 1 ]
+  [ "$cm" -eq 1 ]
 }
