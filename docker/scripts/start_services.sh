@@ -512,6 +512,56 @@ ensure_official_marketplace() {
   return 0
 }
 
+# ensure_extra_marketplaces — RESOLVE every third-party marketplace declared by
+# the agent's plugins so their plugins install. The official marketplace is
+# registered with `marketplace add` AND confirmed (ensure_official_marketplace),
+# but pre_accept_extra_marketplaces only merges third-party sources into
+# settings.json's extraKnownMarketplaces — no `add`, no confirm — so the
+# immediate `claude plugin install foo@thirdparty` errored "marketplace not
+# found", retry_plugin_install_bounded returned 2 (skip, no retry), and since the
+# steady-state tmux session never respawns the plugin stayed permanently absent.
+# Mirror of ensure_official_marketplace: idempotent (guarded by `marketplace
+# list`), each claude call bounded by `timeout` (degrade to a direct call if
+# absent — busybox ships it, macOS host may not), fail-silent (always return 0;
+# a slow git clone over VirtioFS must never hang the boot before the watchdog).
+ensure_extra_marketplaces() {
+  command -v claude >/dev/null 2>&1 || return 0
+  command -v plugin_catalog_specs >/dev/null 2>&1 || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  local specs mkts_json
+  specs=$(plugin_catalog_specs /workspace/agent.yml | tr '\n' ' ')
+  [ -z "${specs// /}" ] && return 0
+  # shellcheck disable=SC2086  # specs must word-split into separate args
+  mkts_json=$(plugin_catalog_marketplaces_json $specs)
+  { [ -z "$mkts_json" ] || [ "$mkts_json" = "{}" ]; } && return 0
+
+  local _to=""
+  if command -v timeout >/dev/null 2>&1; then
+    _to="timeout ${MARKETPLACE_CMD_TIMEOUT:-12}"
+  fi
+
+  local key repo
+  while IFS= read -r key; do
+    [ -z "$key" ] && continue
+    repo=$(printf '%s' "$mkts_json" | jq -r --arg k "$key" '.[$k].source.repo // ""')
+    [ -z "$repo" ] && continue
+    # shellcheck disable=SC2086  # $_to must word-split into `timeout N` (or empty)
+    if CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR_VAL" $_to claude plugin marketplace list 2>/dev/null \
+         | grep -q "$key"; then
+      continue   # already resolved
+    fi
+    log "registering extra marketplace: $repo"
+    # shellcheck disable=SC2086  # $_to must word-split into `timeout N` (or empty)
+    if CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR_VAL" \
+         $_to claude plugin marketplace add "$repo" --scope user >/dev/null 2>&1; then
+      log "extra marketplace registered: $key"
+    else
+      log "WARN: extra marketplace $key registration failed or timed out (will retry next tick)"
+    fi
+  done < <(printf '%s' "$mkts_json" | jq -r 'keys[]')
+  return 0
+}
+
 # Build the next tmux command based on current state. Three cases:
 #   A. Not authenticated → bare `claude` so the user can `/login`.
 #   B. Authenticated, no Telegram bot token yet → interactive wizard to
@@ -526,6 +576,7 @@ next_tmux_cmd() {
   # install needs auth), but on subsequent respawns it picks up the
   # full catalog (5 defaults + any opt-ins the user selected at scaffold).
   pre_accept_extra_marketplaces
+  ensure_extra_marketplaces
   ensure_official_marketplace
   ensure_all_plugins_installed
 

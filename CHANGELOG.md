@@ -36,6 +36,39 @@
     re-introduce the `down -v` login-wipe that PR #3 removed).
 
 ### Fixed
+- **Third-party marketplace plugin install at boot**
+  (`009-fix-extra-marketplace-install`): a plugin declared in `agent.yml` that
+  lives in a third-party marketplace (e.g. `claude-mem@thedotmack`) was never
+  auto-installed at boot — found during the 2026-06-23 declarative re-scaffold of
+  rodri-cenco-admin (5/6 plugins installed, claude-mem did not). Root cause
+  (runtime log + code): a registration asymmetry. The official marketplace is
+  registered with `claude plugin marketplace add` AND confirmed via
+  `marketplace list` (`ensure_official_marketplace`), but third-party
+  marketplaces were only merged into `settings.json`'s `extraKnownMarketplaces`
+  by `pre_accept_extra_marketplaces` (no `add`, no confirm). So the immediate
+  `claude plugin install claude-mem@thedotmack` errored "marketplace not found",
+  `retry_plugin_install_bounded` returned 2 (skip, no retry), and because the
+  steady-state tmux session never respawns, `ensure_all_plugins_installed` never
+  re-ran → the plugin stayed permanently absent.
+  - **(US1)** New `ensure_extra_marketplaces` in `docker/scripts/start_services.sh`
+    resolves each declared third-party marketplace with a confirmed
+    `claude plugin marketplace add <repo>` (mirror of `ensure_official_marketplace`),
+    chained in `next_tmux_cmd` before the install loop, so the plugin installs at
+    boot with no manual `plugin install`.
+  - **(US2)** Each `claude` call in the new helper is bounded by
+    `timeout ${MARKETPLACE_CMD_TIMEOUT:-12}` (degrades to a direct call if absent)
+    and is idempotent + fail-silent (guarded by `marketplace list`; always
+    returns 0) — a slow git clone over VirtioFS can never hang the boot before
+    the watchdog (Principle IV).
+  - **(US3)** `tests/docker-e2e-postlogin.bats` now declares a third-party plugin
+    and its `claude` stub models marketplace resolution (a plugin only installs
+    once its marketplace was `add`-ed), closing the E2E gap that hid the bug
+    (the suite previously exercised only `@claude-plugins-official`).
+  - Test-first host-side: `tests/start-services-extra-marketplace.bats` (registers
+    when absent, idempotent when resolved, bounded when claude hangs, degrades
+    without `timeout`, no-op without claude). No changes to
+    `setup.sh`/`modules/`/`scripts/lib/` (the marketplace derivation already
+    exists via `plugin_catalog_marketplaces_json`).
 - **Post-login plugin auto-install path** (`008-fix-postlogin-plugin-install`):
   full DOCKER_E2E validation after #61/#62 surfaced `docker-e2e-postlogin`
   failing (channel plugin never auto-installed after the credential flip). Three
