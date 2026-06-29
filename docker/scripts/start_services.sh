@@ -29,6 +29,17 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [start_services] $*" >&2; }
 [ -f /opt/agent-admin/scripts/lib/vault.sh ] \
   && source /opt/agent-admin/scripts/lib/vault.sh
 
+# QMD self-managing RAG helpers (010, image-baked). Provides
+# qmd_setup_if_needed, qmd_reindex, _qmd_enabled, qmd_vault_dir. Sources
+# backup_vault.sh internally. Image path first; repo-relative fallback so host
+# bats tests that source this script get the qmd_* helpers too.
+# shellcheck source=/dev/null
+if [ -f /opt/agent-admin/scripts/lib/qmd_index.sh ]; then
+  source /opt/agent-admin/scripts/lib/qmd_index.sh
+elif [ -f "$(dirname "${BASH_SOURCE[0]}")/lib/qmd_index.sh" ]; then
+  source "$(dirname "${BASH_SOURCE[0]}")/lib/qmd_index.sh"
+fi
+
 # Backup-identity helpers (image-baked). Provides identity_whitelist,
 # identity_hash, identity_prepare_clone, identity_commit_and_push,
 # identity_write_state. Sourced no-op if missing.
@@ -138,6 +149,65 @@ boot_side_effects() {
 
   # Seed the per-agent vault if configured. Idempotent — no-op once seeded.
   seed_vault_if_needed || log "WARN: seed_vault_if_needed failed (non-fatal)"
+
+  # Self-managing RAG (010): first-boot QMD model download + initial index.
+  # Run in the BACKGROUND so the ~300MB download never delays the watchdog
+  # (Principle IV). Each bunx call inside is timeout-bounded; the whole thing
+  # is idempotent (sentinel + index.sqlite) and fail-silent. Only dispatched
+  # when vault.qmd.enabled — zero overhead otherwise.
+  if command -v qmd_setup_if_needed >/dev/null 2>&1 \
+      && command -v _qmd_enabled >/dev/null 2>&1 \
+      && _qmd_enabled /workspace/agent.yml; then
+    ( qmd_setup_if_needed /workspace/agent.yml ) &
+    log "qmd: first-boot setup dispatched (background)"
+  fi
+}
+
+# ── QMD watcher lifecycle (010) ───────────────────────────
+# The inotify watcher (qmd_watch.sh) gives immediate reindex on vault change;
+# the */5 cron line is the backstop. Started at boot when vault.qmd.enabled and
+# respawned by the watchdog poll on a DETERMINISTIC PID-liveness check (NOT the
+# reverted heuristic bridge watchdog — this is just "is the process alive?").
+QMD_WATCH_SCRIPT="${QMD_WATCH_SCRIPT:-/opt/agent-admin/scripts/qmd_watch.sh}"
+
+# Resolve the watcher pidfile LAZILY so it derives from a single source of truth:
+# honor an explicit override (host bats), else build it from WATCHDOG_RUNTIME_DIR
+# — which is assigned in the Config section *below*, so this must run at call-time
+# (after Config), never at source-time. The ${VAR:-...} guard keeps it set -u-safe
+# when the script is merely sourced (host bats) before Config runs.
+_qmd_watch_pidfile() {
+  printf '%s\n' "${QMD_WATCH_PIDFILE:-${WATCHDOG_RUNTIME_DIR:-/tmp/agent-watchdog}/qmd-watch.pid}"
+}
+
+qmd_watch_enabled() {
+  command -v _qmd_enabled >/dev/null 2>&1 || return 1
+  _qmd_enabled /workspace/agent.yml
+}
+
+qmd_watch_alive() {
+  local pidfile pid
+  pidfile=$(_qmd_watch_pidfile)
+  [ -f "$pidfile" ] || return 1
+  pid=$(cat "$pidfile" 2>/dev/null)
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+qmd_watch_start() {
+  qmd_watch_enabled || return 0
+  [ -f "$QMD_WATCH_SCRIPT" ] || { log "qmd watcher script missing: $QMD_WATCH_SCRIPT"; return 0; }
+  local pidfile; pidfile=$(_qmd_watch_pidfile)
+  mkdir -p "$(dirname "$pidfile")" 2>/dev/null || true
+  bash "$QMD_WATCH_SCRIPT" >/dev/null 2>&1 &
+  echo $! > "$pidfile"
+  log "qmd watcher started (pid $(cat "$pidfile" 2>/dev/null))"
+}
+
+# Respawn the watcher if enabled and its PID is dead. Called once per 2s poll.
+qmd_watch_respawn_if_needed() {
+  qmd_watch_enabled || return 0
+  qmd_watch_alive && return 0
+  log "qmd watcher not alive — (re)starting"
+  qmd_watch_start
 }
 
 # ── 2. Config ─────────────────────────────────────────────
@@ -1041,6 +1111,13 @@ _post_login_plugin_retry() {
 # next tmux session coming up is barely noticeable. Cheap check — just
 # `tmux has-session`.
 _run_watchdog() {
+  # Resolve QMD enablement ONCE at boot: enabling/disabling requires a
+  # --regenerate + container restart anyway, and this keeps the per-tick poll
+  # at literally zero extra work for QMD-disabled agents (FR-012 / SC-007).
+  local qmd_on=0
+  if command -v _qmd_enabled >/dev/null 2>&1 && _qmd_enabled /workspace/agent.yml; then
+    qmd_on=1
+  fi
   while true; do
     sleep 2
     if ! pgrep -x crond >/dev/null 2>&1; then
@@ -1068,6 +1145,12 @@ _run_watchdog() {
     # kick once so the respawn attaches --channels. Non-blocking (one pass per
     # tick); no per-tick re-kick, so the crash budget stays untouched.
     _post_login_plugin_retry
+
+    # 010: respawn the QMD inotify watcher if it died (deterministic PID
+    # liveness). Gated on the boot-time qmd_on flag so disabled agents do zero
+    # per-tick work. Independent of the tmux session — does NOT touch the crash
+    # budget.
+    [ "$qmd_on" -eq 1 ] && qmd_watch_respawn_if_needed
 
     if session_alive && channel_plugin_alive; then
       continue
@@ -1101,6 +1184,9 @@ main() {
     log "ERROR: initial tmux session failed to start"
     exit 1
   fi
+
+  # Start the QMD inotify watcher (no-op unless vault.qmd.enabled).
+  qmd_watch_start
 
   _run_watchdog
 }

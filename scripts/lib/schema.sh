@@ -63,6 +63,7 @@ _SCHEMA_ENUMS=(
 # (yq parses "yes" as a string in YAML 1.2 mode).
 _SCHEMA_BOOLEANS=(
   '.features.heartbeat.enabled'
+  '.vault.qmd.enabled'
 )
 
 # Optional string leaves: absent is fine (not required), but if the key is
@@ -72,6 +73,8 @@ _SCHEMA_BOOLEANS=(
 # render.sh, here we only guard the YAML shape.
 _SCHEMA_OPTIONAL_NONEMPTY=(
   '.agent.role_file'
+  '.vault.qmd.version'
+  '.vault.qmd.schedule'
 )
 
 # Internal: read a yq value, normalise a missing (null) value to empty string.
@@ -140,6 +143,12 @@ agent_yml_validate() {
   # Optional non-empty strings: read raw (not via _schema_get, whose `// ""`
   # collapses absent and empty). yq prints "null" for an absent path, so we
   # only flag a key that is present yet empty.
+  #
+  # NOTE: vault.qmd.version is intentionally NOT required-when-enabled here. A
+  # pre-010 workspace that opted into QMD has enabled=true and no version key;
+  # the contract (contracts/agent-yml-schema.md) mandates a GRACEFUL fallback to
+  # 2.5.3 on --regenerate (setup.sh backfills it into agent.yml), not a hard
+  # validation failure that would block the zero-touch upgrade path.
   local opt_path opt_val
   for opt_path in "${_SCHEMA_OPTIONAL_NONEMPTY[@]}"; do
     opt_val=$(yq -r "$opt_path" "$file" 2>/dev/null)

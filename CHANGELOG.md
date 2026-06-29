@@ -3,6 +3,37 @@
 ## [Unreleased]
 
 ### Added
+- **Self-managing RAG** (`010-self-managing-rag`): when `vault.qmd.enabled=true`,
+  the QMD semantic-search engine over the agent's Obsidian vault now sets itself
+  up and stays fresh with zero manual steps (opt-in; zero cost when disabled).
+  Specced with GitHub Spec Kit under `specs/010-self-managing-rag/`.
+  - **(US1)** Auto-setup at boot: `qmd_setup_if_needed`
+    (`docker/scripts/lib/qmd_index.sh`) downloads the embedding model + builds the
+    index on first boot, run **backgrounded + timeout-bounded** from
+    `boot_side_effects` so it never blocks the watchdog (Principle IV). Idempotent
+    by sentinel + `index.sqlite` presence. Model/index live under
+    `~/.cache/qmd/` → durable in `.state` (download at first boot, since the
+    bind-mount shadows a pre-baked home).
+  - **(US2)** Dual-trigger auto-reindex: an inotify watcher
+    (`docker/scripts/qmd_watch.sh`, new `inotify-tools` dependency) with ~15s
+    debounce for immediacy, plus a `*/5` cron backstop line in `heartbeatctl
+    reload` — both route through one `heartbeatctl qmd-reindex` → `qmd_reindex`,
+    which is `flock`-guarded (concurrency-safe) and hash-debounced (reuses
+    `backup_vault.sh::vault_hash`; skips the costly embed when the vault is
+    unchanged). The watcher captures changes from MCPVault, native Write/Edit,
+    and Syncthing; it is respawned by a deterministic PID-liveness check in the
+    2s watchdog poll (NOT the reverted heuristic bridge watchdog). State in
+    `scripts/heartbeat/qmd-index.json`.
+  - **(US3)** Reproducible pin: `@tobilu/qmd` is pinned to **`2.5.3`** (the
+    floating `@latest` is gone), single-sourced via `agent.yml`
+    `vault.qmd.version` (rendered into `.mcp.json` and read by the lib — no
+    duplicate pin, Principle VI). `schema.sh` now validates
+    `vault.qmd.{enabled,version,schedule}`.
+  - NOTE: the previously-assumed `@tobilu/qmd@0.4.4` does not exist on npm; the
+    research phase corrected the pin to the actual latest stable, `2.5.3`.
+    `inotify` under the macOS VirtioFS bind-mount may not deliver host-origin
+    events; the cron backstop covers that. The derived index is intentionally
+    NOT added to `backup/vault` (it is regenerable from the markdown).
 - **Headless bootstrap** (`006-headless-bootstrap`): a scaffolded agent boots
   fully operational WITHOUT interactive `/login`, which does not persist in the
   headless container — VirtioFS cache incoherence on the `~/.claude` bind-mount

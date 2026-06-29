@@ -66,6 +66,8 @@ vault:
     server: vault
   qmd:
     enabled: false
+    version: "2.5.3"
+    schedule: "*/5 * * * *"
   schema:
     frontmatter_required: true
     log_format: "## [{date}] {op} | {title}"

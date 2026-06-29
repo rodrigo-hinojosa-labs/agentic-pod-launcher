@@ -32,12 +32,16 @@ LIB_DIR="${HEARTBEATCTL_LIB_DIR:-/opt/agent-admin/scripts/lib}"
 [ -f "$LIB_DIR/backup_config.sh" ]   && source "$LIB_DIR/backup_config.sh"
 # shellcheck source=/dev/null
 [ -f "$LIB_DIR/token_health.sh" ]    && source "$LIB_DIR/token_health.sh"
+# shellcheck source=/dev/null
+[ -f "$LIB_DIR/qmd_index.sh" ]       && source "$LIB_DIR/qmd_index.sh"
 
 IDENTITY_STATE_DIR="${IDENTITY_STATE_DIR:-$WORKSPACE/.state}"
 IDENTITY_BACKUP_STATE_FILE="$HEARTBEAT_DIR/identity-backup.json"
 VAULT_BACKUP_STATE_FILE="$HEARTBEAT_DIR/vault-backup.json"
 CONFIG_BACKUP_STATE_FILE="$HEARTBEAT_DIR/config-backup.json"
 TOKEN_HEALTH_DIR="$HEARTBEAT_DIR/token-health"
+# qmd_index.sh (sourced above) reads this for the reindex state file.
+QMD_INDEX_STATE_FILE="${QMD_INDEX_STATE_FILE:-$HEARTBEAT_DIR/qmd-index.json}"
 
 cmd_help() {
   cat <<EOF
@@ -87,6 +91,13 @@ Token health:
                           scripts/heartbeat/token-health/. Cron-driven hourly;
                           this subcommand triggers an ad-hoc probe. Warnings
                           (debounced 24h) flow through the configured notifier.
+
+Vault RAG:
+  qmd-reindex   [--dry-run]
+                          Reindex the vault's QMD semantic search if the vault
+                          changed (flock-guarded + hash-debounced). Invoked by
+                          the */5 cron backstop and the inotify watcher
+                          (qmd_watch.sh). Opt-in via vault.qmd.enabled=true.
 
 Exit codes:
   0  success
@@ -233,14 +244,28 @@ CONF
     token_health_line="$th_schedule /opt/agent-admin/scripts/check_token_health.sh >> /workspace/scripts/heartbeat/logs/token-health.log 2>&1"
   fi
 
+  # Optional sixth crontab line: QMD reindex backstop. The inotify watcher
+  # (qmd_watch.sh) handles immediacy; this cron line guarantees freshness if
+  # the watcher died or missed an event. Both call the same flock-guarded
+  # `qmd-reindex`, so they never overlap. Default */5; opt out by
+  # vault.qmd.enabled=false. Override cadence via vault.qmd.schedule.
+  local qmd_reindex_line=""
+  local qmd_enabled qmd_schedule
+  qmd_enabled=$(_yq '.vault.qmd.enabled')
+  qmd_schedule=$(_yq '.vault.qmd.schedule // "*/5 * * * *"')
+  if [ "$qmd_enabled" = "true" ]; then
+    qmd_reindex_line="$qmd_schedule /usr/local/bin/heartbeatctl qmd-reindex >> /workspace/scripts/heartbeat/logs/qmd-reindex.log 2>&1"
+  fi
+
   local tmp_crontab="${CRONTAB_FILE}.tmp"
   if ! cat > "$tmp_crontab" <<CT
-# Cron for in-container agent heartbeat + identity/vault/config backup + token-health. Managed by heartbeatctl.
+# Cron for in-container agent heartbeat + identity/vault/config backup + token-health + qmd reindex. Managed by heartbeatctl.
 $line
 ${backup_line}
 ${vault_backup_line}
 ${config_backup_line}
 ${token_health_line}
+${qmd_reindex_line}
 CT
   then
     rm -f "$tmp_crontab"
@@ -871,6 +896,61 @@ cmd_drop_plugin() {
   echo "heartbeatctl: dropped $spec from agent.yml — run 'heartbeatctl kick-channel' to apply"
 }
 
+# QMD reindex primitive — keep the vault's semantic index fresh. Invoked by
+# both the */5 cron backstop and the inotify watcher (qmd_watch.sh); the
+# underlying qmd_reindex is flock-guarded + hash-debounced so the two callers
+# never overlap and an unchanged vault skips the costly embed. Always exits 0
+# on the run path (a cron tick must never crash). Molded on cmd_backup_vault.
+cmd_qmd_reindex() {
+  local mode="run"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dry-run) mode="dry-run"; shift ;;
+      -h|--help)
+        cat <<EOF
+Usage: heartbeatctl qmd-reindex [flags]
+
+Flags:
+  --dry-run   Report whether the vault changed without running embed.
+  (no flags)  Default: reindex the vault if it changed (flock-guarded).
+EOF
+        return 0 ;;
+      *) echo "qmd-reindex: unknown flag: $1" >&2; return 1 ;;
+    esac
+  done
+
+  if ! command -v qmd_reindex >/dev/null 2>&1; then
+    echo "qmd-reindex: qmd_index.sh not loaded — nothing to do" >&2
+    return 0
+  fi
+
+  case "$mode" in
+    run)     qmd_reindex "$AGENT_YML" ;;
+    dry-run) _qmd_reindex_dry ;;
+  esac
+}
+
+# Dry-run: resolve + hash + report, no embed, no state write.
+_qmd_reindex_dry() {
+  if ! _qmd_enabled "$AGENT_YML"; then
+    echo "qmd-reindex: qmd not enabled in agent.yml"
+    return 0
+  fi
+  local vault_dir current last
+  vault_dir=$(qmd_vault_dir "$AGENT_YML")
+  if [ -z "$vault_dir" ] || [ ! -d "$vault_dir" ]; then
+    echo "qmd-reindex: vault dir unresolved/missing ($vault_dir)"
+    return 0
+  fi
+  current=$(vault_hash "$vault_dir" 2>/dev/null || echo "")
+  last=$(qmd_last_hash "$(qmd_state_file)")
+  if [ -n "$current" ] && [ "$current" = "$last" ]; then
+    echo "qmd-reindex: dry-run — vault unchanged (hash $current), would skip embed"
+  else
+    echo "qmd-reindex: dry-run — would reindex (from ${last:-<none>} to ${current:-<unknown>})"
+  fi
+}
+
 # cmd_token_check — ad-hoc trigger for the token-health probe. Same
 # script as the cron tick, just invoked manually. Useful right after
 # updating .env or when doctor reports a stale state file.
@@ -904,6 +984,7 @@ main() {
     backup-identity) cmd_backup_identity "$@" ;;
     backup-vault)    cmd_backup_vault "$@" ;;
     backup-config)   cmd_backup_config "$@" ;;
+    qmd-reindex)     cmd_qmd_reindex "$@" ;;
     token-check)     cmd_token_check ;;
     set-interval) cmd_set_interval "${1:-}" ;;
     set-prompt)   cmd_set_prompt   "${1:-}" ;;

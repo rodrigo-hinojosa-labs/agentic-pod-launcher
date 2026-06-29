@@ -166,8 +166,9 @@ EOF
   [ -f "$dest/agent.yml" ]
   [ "$(yq -r '.vault.enabled' "$dest/agent.yml")" = "true" ]
   [ "$(yq -r '.vault.qmd.enabled' "$dest/agent.yml")" = "true" ]
+  [ "$(yq -r '.vault.qmd.version' "$dest/agent.yml")" = "2.5.3" ]
   [ "$(jq -r '.mcpServers.qmd.command' "$dest/.mcp.json")" = "bunx" ]
-  [ "$(jq -r '.mcpServers.qmd.args[0]' "$dest/.mcp.json")" = "@tobilu/qmd@latest" ]
+  [ "$(jq -r '.mcpServers.qmd.args[0]' "$dest/.mcp.json")" = "@tobilu/qmd@2.5.3" ]
   [ "$(jq -r '.mcpServers.qmd.args[1]' "$dest/.mcp.json")" = "mcp" ]
 }
 

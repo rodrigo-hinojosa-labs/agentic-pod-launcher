@@ -197,12 +197,13 @@ vault:
     enabled: true
   qmd:
     enabled: true
+    version: "2.5.3"
 EOF
   render_load_context "$TMP_TEST_DIR/agent.yml"
   result=$(render_template "$REPO_ROOT/modules/mcp-json.tpl")
   echo "$result" | jq . > /dev/null
   [ "$(echo "$result" | jq -r '.mcpServers.qmd.command')" = "bunx" ]
-  [ "$(echo "$result" | jq -r '.mcpServers.qmd.args[0]')" = "@tobilu/qmd@latest" ]
+  [ "$(echo "$result" | jq -r '.mcpServers.qmd.args[0]')" = "@tobilu/qmd@2.5.3" ]
   [ "$(echo "$result" | jq -r '.mcpServers.qmd.args[1]')" = "mcp" ]
   [ "$(echo "$result" | jq -r '.mcpServers.qmd.env')" = "{}" ]
 }
@@ -248,6 +249,7 @@ vault:
     enabled: true
   qmd:
     enabled: true
+    version: "2.5.3"
 EOF
   render_load_context "$TMP_TEST_DIR/agent.yml"
   result=$(render_template "$REPO_ROOT/modules/mcp-json.tpl")

@@ -187,3 +187,53 @@ YML
   [ "$status" -eq 1 ]
   [[ "$output" == *"role_file"* ]]
 }
+
+# 010-self-managing-rag: vault.qmd.* validation.
+@test "agent_yml_validate: vault.qmd.enabled bool typo (ture) → reported" {
+  _write_valid_yml
+  yq -i '.vault.qmd.enabled = "ture"' "$TMP_TEST_DIR/agent.yml"
+  run agent_yml_validate "$TMP_TEST_DIR/agent.yml"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"vault.qmd.enabled must be a YAML boolean"* ]]
+}
+
+@test "agent_yml_validate: vault.qmd.enabled=false validates (present, not missing)" {
+  _write_valid_yml
+  yq -i '.vault.qmd.enabled = false' "$TMP_TEST_DIR/agent.yml"
+  run agent_yml_validate "$TMP_TEST_DIR/agent.yml"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "agent_yml_validate: vault.qmd.version present but empty → reported" {
+  _write_valid_yml
+  yq -i '.vault.qmd.version = ""' "$TMP_TEST_DIR/agent.yml"
+  run agent_yml_validate "$TMP_TEST_DIR/agent.yml"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"vault.qmd.version"* ]]
+}
+
+@test "agent_yml_validate: well-formed vault.qmd block validates" {
+  _write_valid_yml
+  yq -i '.vault.enabled = true | .vault.qmd.enabled = true | .vault.qmd.version = "2.5.3" | .vault.qmd.schedule = "*/5 * * * *"' "$TMP_TEST_DIR/agent.yml"
+  run agent_yml_validate "$TMP_TEST_DIR/agent.yml"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "agent_yml_validate: vault.qmd.enabled=true without version validates (regenerate backfills the pin)" {
+  # The pre-010 upgrade path: QMD opted in, no version key yet. Schema must NOT
+  # block this — setup.sh --regenerate backfills vault.qmd.version=2.5.3 so the
+  # rendered pin stays valid (contracts/agent-yml-schema.md). Fail-loud here
+  # would break the documented zero-touch upgrade.
+  _write_valid_yml
+  yq -i '.vault.enabled = true | .vault.qmd.enabled = true' "$TMP_TEST_DIR/agent.yml"
+  run agent_yml_validate "$TMP_TEST_DIR/agent.yml"
+  [ "$status" -eq 0 ]
+}
+
+@test "agent_yml_validate: absent vault.qmd still validates (legacy-safe)" {
+  _write_valid_yml
+  run agent_yml_validate "$TMP_TEST_DIR/agent.yml"
+  [ "$status" -eq 0 ]
+}

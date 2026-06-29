@@ -43,6 +43,7 @@ RUN apk add --no-cache \
       python3 \
       age \
       flock \
+      inotify-tools \
       tzdata
 
 # Install gum from the charmbracelet tap alternative: use the static binary.
@@ -203,11 +204,13 @@ COPY scripts/start_services.sh /opt/agent-admin/scripts/start_services.sh
 COPY scripts/wizard-container.sh /opt/agent-admin/scripts/wizard-container.sh
 COPY scripts/write_container_info.sh /opt/agent-admin/scripts/write_container_info.sh
 COPY scripts/apply_telegram_typing_patch.py /opt/agent-admin/scripts/apply_telegram_typing_patch.py
+COPY scripts/qmd_watch.sh /opt/agent-admin/scripts/qmd_watch.sh
 RUN chmod +x /opt/agent-admin/entrypoint.sh \
              /opt/agent-admin/scripts/start_services.sh \
              /opt/agent-admin/scripts/wizard-container.sh \
              /opt/agent-admin/scripts/write_container_info.sh \
-             /opt/agent-admin/scripts/apply_telegram_typing_patch.py
+             /opt/agent-admin/scripts/apply_telegram_typing_patch.py \
+             /opt/agent-admin/scripts/qmd_watch.sh
 
 # Heartbeat CLI and helper libs (image-baked, stable code).
 COPY scripts/heartbeatctl /opt/agent-admin/scripts/heartbeatctl
@@ -218,6 +221,7 @@ COPY scripts/lib/backup_vault.sh    /opt/agent-admin/scripts/lib/backup_vault.sh
 COPY scripts/lib/backup_config.sh   /opt/agent-admin/scripts/lib/backup_config.sh
 COPY scripts/lib/token_health.sh    /opt/agent-admin/scripts/lib/token_health.sh
 COPY scripts/lib/plugin-install.sh /opt/agent-admin/scripts/lib/plugin-install.sh
+COPY scripts/lib/qmd_index.sh       /opt/agent-admin/scripts/lib/qmd_index.sh
 COPY scripts/check_token_health.sh  /opt/agent-admin/scripts/check_token_health.sh
 RUN chmod +x /opt/agent-admin/scripts/heartbeatctl \
               /opt/agent-admin/scripts/check_token_health.sh \
