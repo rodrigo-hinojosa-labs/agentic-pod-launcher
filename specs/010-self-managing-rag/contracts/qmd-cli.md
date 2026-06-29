@@ -34,7 +34,7 @@ Sources `backup_vault.sh` to reuse `vault_resolve_root` and `vault_hash` (no dup
 
 ### State helpers
 - `qmd_last_hash <state_file>` → `.hash` or empty (mirror `vault_last_hash`).
-- `qmd_write_state <state_file> <hash> <status> <runs>` → atomic write (mirror `vault_write_state`).
+- `qmd_write_state <state_file> <hash> <status>` → atomic write (mirror `vault_write_state`). `runs` is auto-incremented internally from the prior file (3 args, not a caller-supplied counter — avoids a redundant, race-prone parameter; a corrupted prior value resets to 0).
 
 ---
 

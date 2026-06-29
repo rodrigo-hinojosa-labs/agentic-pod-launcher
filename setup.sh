@@ -1123,6 +1123,8 @@ vault:
     server: vault
   qmd:
     enabled: $vault_qmd_enabled
+    version: "2.5.3"
+    schedule: "*/5 * * * *"
   schema:
     frontmatter_required: true
     log_format: "## [{date}] {op} | {title}"
@@ -1794,6 +1796,22 @@ regenerate() {
     if [ -z "$_base" ] || [ "$_base" = "null" ]; then
       local _a; _a=$(versions_resolve alpine) || true
       [ -n "$_a" ] && yq -i ".docker.base_image = \"alpine:$_a\"" "$agent_yml"
+    fi
+
+    # Backfill vault.qmd.version for a pre-010 workspace that opted into QMD
+    # before the pin existed (enabled=true, no version). modules/mcp-json.tpl
+    # renders `@tobilu/qmd@{{VAULT_QMD_VERSION}}` with no inline default, so an
+    # absent key would render a broken `@tobilu/qmd@`. Writing the floor into
+    # agent.yml keeps it the single source of truth (Principle I) and makes the
+    # rendered pin valid (contracts/agent-yml-schema.md). The 2.5.3 floor mirrors
+    # qmd_index.sh::qmd_pkg's runtime default — keep the two in sync.
+    local _qmd_en _qmd_ver
+    _qmd_en=$(yq -r '.vault.qmd.enabled // false' "$agent_yml")
+    if [ "$_qmd_en" = "true" ]; then
+      _qmd_ver=$(yq -r '.vault.qmd.version // ""' "$agent_yml")
+      if [ -z "$_qmd_ver" ] || [ "$_qmd_ver" = "null" ]; then
+        yq -i '.vault.qmd.version = "2.5.3"' "$agent_yml"
+      fi
     fi
   fi
 

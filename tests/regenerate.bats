@@ -97,6 +97,19 @@ teardown() { teardown_tmp_dir; }
   grep -q "Karpathy" CLAUDE.md
 }
 
+@test "--regenerate backfills vault.qmd.version and renders a valid qmd pin (pre-010 upgrade)" {
+  cd "$TMP_TEST_DIR"
+  # Simulate a pre-010 workspace that opted into QMD before the version pin
+  # existed: enabled=true, no version key (mcp-json.tpl would otherwise render a
+  # broken "@tobilu/qmd@"). The regenerate path must backfill the floor so the
+  # pin stays valid (contracts/agent-yml-schema.md; agent.yml as single source).
+  yq -i '.vault.qmd.enabled = true' agent.yml
+  echo 'n' | ./setup.sh --regenerate
+  [ "$(yq -r '.vault.qmd.version' agent.yml)" = "2.5.3" ]
+  [ "$(jq -r '.mcpServers.qmd.args[0]' .mcp.json)" = "@tobilu/qmd@2.5.3" ]
+  [ "$(jq -r '.mcpServers.qmd.args[1]' .mcp.json)" = "mcp" ]
+}
+
 @test "--non-interactive regenerate skips plugin prompt" {
   cd "$TMP_TEST_DIR"
   run ./setup.sh --non-interactive

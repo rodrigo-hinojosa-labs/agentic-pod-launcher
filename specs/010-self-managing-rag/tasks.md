@@ -107,14 +107,14 @@
 
 ### Tests (write first — MUST fail before implementation)
 
-- [ ] T030 [P] [US3] Update `tests/mcp-json.bats` (L205) and `tests/scaffold.bats` (L170): assert `qmd.args[0] == "@tobilu/qmd@2.5.3"` (was `@latest`); keep `args[1] == "mcp"`.
-- [ ] T031 [P] [US3] In `tests/scaffold.bats` (~L168): assert the scaffolded `agent.yml` has `vault.qmd.version == "2.5.3"` and `vault.qmd.schedule == "*/5 * * * *"`.
-- [ ] T032 [P] [US3] In `tests/schema.bats`: add cases — reject `vault.qmd.enabled: ture` (non-boolean); reject `vault.qmd.version: ""` (present-but-empty); accept a well-formed `vault.qmd` block; extend the recognized vault subkey set (L43) with `version schedule` (Scenario G).
+- [X] T030 [P] [US3] `tests/mcp-json.bats` + `tests/scaffold.bats`: assert `qmd.args[0] == "@tobilu/qmd@2.5.3"`; `args[1] == "mcp"`.
+- [X] T031 [P] [US3] `tests/scaffold.bats`: assert scaffolded `agent.yml` has `vault.qmd.version == "2.5.3"` and `vault.qmd.schedule == "*/5 * * * *"`.
+- [X] T032 [P] [US3] `tests/schema-validate.bats`: vault.qmd.* cases — reject `ture` boolean, reject empty version, accept well-formed block, legacy-safe absent, and enabled-without-version validates (regenerate backfills).
 
 ### Implementation (make tests pass)
 
-- [ ] T033 [US3] In `modules/mcp-json.tpl` (L75): change `"@tobilu/qmd@latest"` to `"@tobilu/qmd@{{VAULT_QMD_VERSION}}"` (single-source the pin from `agent.yml`, D2).
-- [ ] T034 [US3] In `scripts/lib/schema.sh`: append `'.vault.qmd.enabled'` to `_SCHEMA_BOOLEANS` and `'.vault.qmd.version' '.vault.qmd.schedule'` to `_SCHEMA_OPTIONAL_NONEMPTY` (contracts/agent-yml-schema.md; do NOT reintroduce the `// ""` `_schema_get` bug fixed in 002/005).
+- [X] T033 [US3] `modules/mcp-json.tpl` (L75): `"@tobilu/qmd@{{VAULT_QMD_VERSION}}"` (single-source the pin from `agent.yml`, D2). Render fallback handled by setup.sh backfill (contracts/agent-yml-schema.md).
+- [X] T034 [US3] `scripts/lib/schema.sh`: `.vault.qmd.enabled` in `_SCHEMA_BOOLEANS`; `.vault.qmd.version` + `.vault.qmd.schedule` in `_SCHEMA_OPTIONAL_NONEMPTY` (no `// ""` `_schema_get` regression).
 
 **Checkpoint**: `bats tests/mcp-json.bats tests/scaffold.bats tests/schema.bats` green.
 
@@ -124,11 +124,11 @@
 
 **Purpose**: prove the integration seams the host suite can't, and finish release discipline.
 
-- [ ] T035 [P] `tests/docker-e2e-qmd.bats` (or fold into an existing e2e file): with a QMD-enabled minimal vault, assert first-boot setup eventually produces `~/.cache/qmd/index.sqlite` + a model dir (poll w/ timeout); a vault write triggers a reindex (watcher path) visible in `logs/qmd-reindex.log` + bumped `runs`; the cron backstop picks up a change with the watcher killed; container still runs `cap_drop: ALL` (Principle II). Mirror compose-run gotchas (pre-create `.state`, `--entrypoint`, declare config). Run `DOCKER_E2E=1 bats tests/docker-e2e-qmd.bats`.
-- [ ] T036 Run the FULL host suite `bats tests/` and `shellcheck -S error` over every touched shell file; fix any regressions (esp. the `@latest`→`2.5.3` assertion drift in pre-existing tests).
-- [ ] T037 [P] Finalize the `CHANGELOG.md` 0.4.4 entry: auto-setup, dual-trigger reindex, `inotify-tools` dep, pin `@tobilu/qmd@2.5.3`, schema validation; note the 0.4.4 version correction.
-- [ ] T038 [P] Update `docs/architecture.md` (the QMD paragraph ~L263) to document auto-setup at boot + the dual-trigger (watcher + cron) reindex and the single-sourced pin.
-- [ ] T039 Rebuild the image and re-run `DOCKER_E2E=1 bats tests/` until green (plan's final validation gate).
+- [X] T035 [P] `tests/docker-e2e-qmd.bats` WRITTEN: QMD-enabled vault → asserts first-boot setup (`index.sqlite` + `.qmd-setup-ok`, polled), cron-path reindex (`heartbeatctl qmd-reindex` → `last_status=indexed`), inotify-under-bind-mount watcher reindex (hard-asserted on Linux, VirtioFS-tolerant on macOS), and `cap_drop: ALL` via `docker inspect`. `bunx` stubbed (real ~300MB model is network-gated, out of scope). NOT YET EXECUTED — pending image build (T039).
+- [X] T036 FULL host suite `bats tests/` = 710 ok / 0 fail / 15 skip; `shellcheck -S error` clean over every touched shell file. Post-adversarial-review fixes included.
+- [X] T037 [P] `CHANGELOG.md` 0.4.4 entry finalized (auto-setup, dual-trigger reindex, `inotify-tools`, pin `@tobilu/qmd@2.5.3`, schema validation, version correction).
+- [X] T038 [P] `docs/architecture.md` QMD paragraph updated: auto-setup (`collection add`+`update`+`embed`) + dual-trigger reindex + single-sourced pin.
+- [ ] T039 Rebuild the image and re-run `DOCKER_E2E=1 bats tests/` until green (plan's final validation gate) — REMAINING.
 
 ---
 
