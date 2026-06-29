@@ -29,7 +29,12 @@
     guided one-time login helper (`./setup.sh --login`) verifies Claude Code
     ≥ 2.1.51, pre-seeds onboarding non-destructively, launches the full-scope
     OAuth login, then applies an idempotent, exact-equality `.claude.json`
-    trust-merge (`scripts/lib/local_trust.sh`) and enables the unit. Plus an
+    trust-merge (`scripts/lib/local_trust.sh`), **installs the staged systemd
+    unit if it isn't in place yet** — the scaffold stages it in the workspace
+    when `sudo -n` is unavailable, so `--login` (the first interactive-sudo
+    context) copies it into the systemd dir instead of leaving a
+    staged-but-inactive unit (regression validated on a sudo-prompt host) — and
+    enables the unit. Plus an
     `EnvironmentFile` (`CLAUDE_CONFIG_DIR` under `.state/.claude`,
     `DISABLE_AUTOUPDATER=1`, no API key) and a kill-switch helper.
   - **(US3)** Healthcheck (systemd timer ~5 min) distinguishing

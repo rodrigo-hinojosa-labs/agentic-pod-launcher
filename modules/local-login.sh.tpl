@@ -65,16 +65,36 @@ fi
 local_merge_trust "$CLAUDE_JSON" "$WORKSPACE"
 echo "  ✓ workspace trust applied for ${WORKSPACE}"
 
-# 5. Enable + start the system unit (system unit → needs sudo). With
-#    Restart=always the ExecCondition keeps it inactive (not failed) until the
-#    credentials exist, so enabling before login is safe too.
-if [ -f "/etc/systemd/system/${UNIT}" ]; then
+# 5. Install (if needed) + enable + start the system unit (system unit → needs
+#    sudo). With Restart=always the ExecCondition keeps it inactive (not failed)
+#    until the credentials exist, so enabling before login is safe too.
+#    SYSTEMD_DIR is overridable for host-side tests (LOGIN_SYSTEMD_DIR);
+#    production default is the real system path.
+SYSTEMD_DIR="${LOGIN_SYSTEMD_DIR:-/etc/systemd/system}"
+UNIT_PATH="${SYSTEMD_DIR}/${UNIT}"
+STAGED_UNIT="${WORKSPACE}/${UNIT}"
+
+# install_service stages the unit in the workspace root when `sudo -n` was
+# unavailable at scaffold time. A fresh --login is the first interactive sudo
+# context, so install the staged copy here instead of leaving the operator with
+# a staged-but-inactive unit (regression validated on a sudo-prompt host).
+if [ ! -f "$UNIT_PATH" ] && [ -f "$STAGED_UNIT" ]; then
+  echo "▸ Installing staged unit ${UNIT} (needs sudo)…"
+  if sudo cp "$STAGED_UNIT" "$UNIT_PATH" && sudo systemctl daemon-reload; then
+    echo "  ✓ ${UNIT} installed under ${SYSTEMD_DIR}"
+  else
+    echo "WARNING: could not install ${UNIT}; copy it manually:" >&2
+    echo "         sudo cp ${STAGED_UNIT} ${UNIT_PATH} && sudo systemctl daemon-reload" >&2
+  fi
+fi
+
+if [ -f "$UNIT_PATH" ]; then
   if sudo systemctl enable --now "$UNIT"; then
     echo "  ✓ ${UNIT} enabled + started"
     echo "  → check it: systemctl status ${UNIT} ; journalctl -u ${UNIT} -f"
   fi
 else
-  echo "WARNING: ${UNIT} is not installed under /etc/systemd/system." >&2
-  echo "         Re-run ./setup.sh (with install_service=true) to install it," >&2
-  echo "         then: sudo systemctl enable --now ${UNIT}" >&2
+  echo "WARNING: ${UNIT} is not installed under ${SYSTEMD_DIR} and no staged copy" >&2
+  echo "         was found at ${STAGED_UNIT}. Re-run ./setup.sh --regenerate to" >&2
+  echo "         re-stage it, then re-run ./setup.sh --login." >&2
 fi
