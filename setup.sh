@@ -395,6 +395,26 @@ run_wizard() {
   echo "   · Ctrl+C aborts the wizard"
   echo ""
 
+  # ── 0. Deployment mode (011) ────────────────────────
+  # Asked FIRST so the two flows stay cleanly separated from the start: the
+  # whole wizard + render branch on this choice. docker (recommended) is the
+  # least-privilege container; local runs directly on the host via systemd.
+  echo "▸ Deployment mode"
+  echo "  • docker  — isolated, least-privilege container (recommended)."
+  echo "  • local   — runs directly on this host via systemd (Linux/systemd only)."
+  local deploy_mode
+  deploy_mode=$(ask_choice "Deployment mode" "docker" "docker local")
+  if [ "$deploy_mode" = "local" ]; then
+    echo ""
+    echo "  ⚠ LOCAL MODE SECURITY WARNING"
+    echo "    The agent runs as YOUR login user and inherits your privileges and"
+    echo "    secrets (files, SSH keys, tokens). There is NO container isolation —"
+    echo "    this breaks the least-privilege model the docker mode enforces."
+    echo "    Whoever controls the claude.ai account controls this host: MFA is"
+    echo "    MANDATORY. Local mode is Linux/systemd only."
+  fi
+  echo ""
+
   # ── 1. Identity ─────────────────────────────────────
   echo "▸ Agent identity"
   local agent_name agent_display agent_role agent_vibe
@@ -491,30 +511,19 @@ run_wizard() {
   fi
   echo ""
 
-  # ── 3.0b Deployment mode (011) ──────────────────────
-  echo "▸ Deployment mode"
-  echo "  • docker  — isolated, least-privilege container (recommended)."
-  echo "  • local   — runs directly on this host via systemd (Linux/systemd only)."
-  deploy_mode=$(ask_choice "Deployment mode" "docker" "docker local")
-  if [ "$deploy_mode" = "local" ]; then
-    echo ""
-    echo "  ⚠ LOCAL MODE SECURITY WARNING"
-    echo "    The agent runs as YOUR login user and inherits your privileges and"
-    echo "    secrets (files, SSH keys, tokens). There is NO container isolation —"
-    echo "    this breaks the least-privilege model the docker mode enforces."
-    echo "    Whoever controls the claude.ai account controls this host: MFA is"
-    echo "    MANDATORY. Local mode is Linux/systemd only."
-    echo ""
-  fi
-  echo ""
-
   # ── 3.1 Claude profile ──────────────────────────────
   echo "▸ Claude profile"
   local claude_config_dir="/home/agent/.claude"
   local claude_profile_new="true"
-  echo "  Profile lives at /home/agent/.claude inside the container"
-  echo "  (isolated on the named state volume — run /login inside tmux once"
-  echo "  after first boot)."
+  if [ "$deploy_mode" = "local" ]; then
+    echo "  Local mode: the agent's Claude config + login live on the host under"
+    echo "  <workspace>/.state/.claude (gitignored). Run the one-time full-scope"
+    echo "  login after scaffolding with: ./setup.sh --login"
+  else
+    echo "  Profile lives at /home/agent/.claude inside the container"
+    echo "  (isolated on the named state volume — run /login inside tmux once"
+    echo "  after first boot)."
+  fi
   echo ""
 
   # ── 3.5 GitHub fork (template sync) ─────────────────

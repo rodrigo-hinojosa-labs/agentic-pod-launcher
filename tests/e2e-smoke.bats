@@ -27,6 +27,7 @@ teardown() { teardown_tmp_dir; }
   # 7. timezone (UTC)
   # 8. email (test@example.com)
   # Prompt order (host auto-detected, workspace from --destination):
+  #  0  deploy_mode         → docker  (011; asked FIRST, all platforms)
   #  1  agent_name          → e2e-bot
   #  2  agent_display       → E2EBot 🤖
   #  3  agent_role          → Test role
@@ -37,7 +38,6 @@ teardown() { teardown_tmp_dir; }
   #  8  user_email          → test@example.com
   #  9  user_lang           → en
   # 10  deploy_svc          → n  (Linux only; macOS skips this prompt)
-  # 10b deploy_mode         → docker  (011; asked on all platforms)
   # 11  fork_enabled        → n
   # 12  notify_channel      → none
   # 13-18  optional MCPs (alphabetical): aws, firecrawl, google-calendar,
@@ -50,12 +50,12 @@ teardown() { teardown_tmp_dir; }
   # 24  use_defaults        → y
   # 25  review              → proceed
   local answers
-  answers=(
+  answers=("docker")   # 011: deployment mode — asked FIRST, all platforms
+  answers+=(
     "e2e-bot" "E2EBot 🤖" "Test role" "Test vibe"
     "Test User" "Test" "UTC" "test@example.com" "en"
   )
   [ "$(uname -s)" = "Linux" ] && answers+=("n")
-  answers+=("docker")   # 011: deployment mode (asked on all platforms)
   # 6 optional MCPs ('n' each) between notify_channel and atlassian.
   answers+=(
     "n" "none"

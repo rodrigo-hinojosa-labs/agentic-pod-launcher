@@ -76,14 +76,14 @@ wizard_answers() {
   done
   [ "$qmd" = "on" ] && vault=on
 
+  # Deployment mode choice (011) — asked FIRST, on all platforms (default docker).
+  printf '%s\n' "$deployment_mode"
   # Identity (4 prompts)
   printf '%s\n%s\n%s\n%s\n' "$name" "$display" "$role" "$vibe"
   # User (5 prompts)
   printf 'Alice\nAlice\nUTC\na@b.com\nen\n'
   # install_service (Linux only — macOS skips the prompt entirely)
   [ "$(uname -s)" = "Linux" ] && printf 'n\n'
-  # Deployment mode choice (011) — asked on all platforms, default docker.
-  printf '%s\n' "$deployment_mode"
   # GitHub fork
   printf 'n\n'
   # Notify channel + telegram extras when applicable. Empty notify_bot
