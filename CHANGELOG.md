@@ -3,6 +3,48 @@
 ## [Unreleased]
 
 ### Added
+- **Local standalone mode** (`011-local-standalone-mode`): a second wizard
+  **deployment mode** (`deployment.mode: docker|local` in `agent.yml`). Docker
+  (recommended) is **byte-identical** to before; local (opt-in, security-warned,
+  **Linux/systemd only**) renders the agent config base directly on the host —
+  no `docker-compose.yml`/Dockerfile — and persists a `claude remote-control`
+  session under systemd. Specced with GitHub Spec Kit under
+  `specs/011-local-standalone-mode/`. **VERSION 0.4.4 → 0.5.0.**
+  - **(US1)** Wizard mode choice (`docker` first/recommended, `local` second with
+    an explicit security warning). `deployment.mode` is the single source of
+    truth — validated by `schema.sh` (enum `docker|local`, optional, legacy-safe),
+    backfilled to `docker` on `--regenerate`, and surfaced as
+    `DEPLOYMENT_MODE_IS_DOCKER` to the render engine. Local scaffolds skip ALL
+    Docker artifacts (no compose, no `docker/` build context); `CLAUDE.md` and
+    `NEXT_STEPS` are mode-aware. A mode switch on `--regenerate` **warns** about
+    the now-orphaned artifacts of the previous mode and never deletes them
+    (FR-005a).
+  - **(US2)** Persistent Remote Control session via a **system** systemd unit
+    (`/etc/systemd/system/agent-<name>.service`): `Type=simple`,
+    `Restart=always`/`RestartSec=10`, restart budget 5/300s, `ExecCondition` on
+    `.credentials.json` (stays inactive — not failed — until login),
+    `WorkingDirectory`=workspace, `EnvironmentFile`, `User`=the operator's login
+    user, `ExecStart=claude remote-control --name <hostname>-<name>
+    --spawn=session --verbose`; **never** `--dangerously-skip-permissions`. A
+    guided one-time login helper (`./setup.sh --login`) verifies Claude Code
+    ≥ 2.1.51, pre-seeds onboarding non-destructively, launches the full-scope
+    OAuth login, then applies an idempotent, exact-equality `.claude.json`
+    trust-merge (`scripts/lib/local_trust.sh`) and enables the unit. Plus an
+    `EnvironmentFile` (`CLAUDE_CONFIG_DIR` under `.state/.claude`,
+    `DISABLE_AUTOUPDATER=1`, no API key) and a kill-switch helper.
+  - **(US3)** Healthcheck (systemd timer ~5 min) distinguishing
+    alive/connected/expired (`systemctl is-active` + journal 401/connection
+    signals + `expiresAt` via `jq`), degrading gracefully without `jq`/creds;
+    optional notify keeps the token off argv (`curl --config -`). `agentctl`
+    degrades honestly in local mode — Docker-only subcommands error with a
+    `systemctl`/`journalctl` hint (never touching docker) and `status`/`doctor`
+    read systemd + the on-disk login.
+  - SECURITY: local mode is a justified, opt-in violation of the least-privilege
+    container model (Principle II) — it runs as the operator's user and inherits
+    their privileges/secrets; the wizard warns explicitly and MFA is mandatory.
+    Secrets (`.credentials.json`, `*.env`) live under `.state/` and are never
+    committed. Linux/systemd integration is validated by a documented manual host
+    gate (not exercisable by DOCKER_E2E on macOS).
 - **Self-managing RAG** (`010-self-managing-rag`): when `vault.qmd.enabled=true`,
   the QMD semantic-search engine over the agent's Obsidian vault now sets itself
   up and stays fresh with zero manual steps (opt-in; zero cost when disabled).

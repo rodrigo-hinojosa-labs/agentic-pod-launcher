@@ -117,6 +117,23 @@ teardown() { teardown_tmp_dir; }
   [ -f .mcp.json ]
 }
 
+@test "--regenerate backfills deployment.mode=docker when absent (legacy workspace)" {
+  cd "$TMP_TEST_DIR"
+  # The seed agent.yml has no deployment.mode (pre-011 workspace). regenerate
+  # must write the explicit default so the mode is deterministic going forward
+  # (mirror of the vault.qmd.version backfill; agent.yml as single source).
+  [ "$(yq -r '.deployment.mode' agent.yml)" = "null" ]
+  echo 'n' | ./setup.sh --regenerate
+  [ "$(yq -r '.deployment.mode' agent.yml)" = "docker" ]
+}
+
+@test "--regenerate preserves an existing deployment.mode" {
+  cd "$TMP_TEST_DIR"
+  yq -i '.deployment.mode = "local"' agent.yml
+  echo 'n' | ./setup.sh --regenerate
+  [ "$(yq -r '.deployment.mode' agent.yml)" = "local" ]
+}
+
 @test "--regenerate injects the role_file persona into CLAUDE.md (survives, content re-read)" {
   cd "$TMP_TEST_DIR"
   mkdir -p personas

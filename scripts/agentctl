@@ -900,9 +900,134 @@ V_EOF
   done
 }
 
+# ── Local mode (011) ─────────────────────────────────────────────────────
+# In local mode there is no container/tmux/crond: agentctl degrades honestly
+# (Principle IV) — Docker-only subcommands fail with a systemctl/journalctl
+# hint instead of an opaque "cannot reach Docker daemon", and status/doctor
+# read systemd + the on-disk login instead of `docker exec`.
+
+# Resolve deployment.mode from agent.yml (cwd, then alongside the script).
+_agentctl_mode() {
+  local probe m
+  for probe in "./agent.yml" "$(dirname "$0")/../agent.yml"; do
+    if [ -f "$probe" ]; then
+      m=$(yq -r '.deployment.mode // "docker"' "$probe" 2>/dev/null)
+      [ -z "$m" ] || [ "$m" = "null" ] && m="docker"
+      printf '%s\n' "$m"
+      return 0
+    fi
+  done
+  printf 'docker\n'
+}
+
+# Resolve the workspace dir for local checks (cwd when agent.yml is here).
+_local_workspace() {
+  if [ -f "./agent.yml" ]; then pwd -P; return 0; fi
+  local probe
+  probe="$(dirname "$0")/../agent.yml"
+  [ -f "$probe" ] && yq -r '.deployment.workspace' "$probe" 2>/dev/null
+}
+
+# Docker-only subcommand under local mode → actionable error, never touch docker.
+_local_docker_only() {
+  local sub="$1" agent unit
+  agent=$(resolve_agent_name 2>/dev/null || echo "<name>")
+  unit="agent-${agent}.service"
+  {
+    echo "agentctl: '$sub' is a Docker-mode command, but this workspace is local (systemd)."
+    echo "  Use systemd instead:"
+    echo "    start / stop : sudo systemctl start|stop ${unit}"
+    echo "    status       : agentctl status   (or: systemctl status ${unit})"
+    echo "    logs         : journalctl -u ${unit} -f"
+    echo "    kill switch  : ./scripts/local/agent-killswitch.sh"
+  } >&2
+}
+
+cmd_local_status() {
+  local agent unit ws
+  agent=$(resolve_agent_name) || exit $?
+  unit="agent-${agent}.service"
+  if systemctl is-active --quiet "$unit"; then
+    echo "● ${unit}: active"
+  else
+    echo "○ ${unit}: not active (systemctl status ${unit})"
+  fi
+  local signal
+  signal=$(journalctl -u "$unit" --since "-10 min" --no-pager 2>/dev/null \
+    | grep -E 'session url|connected|polling' | tail -1 || true)
+  if [ -n "$signal" ]; then
+    echo "  last connection signal: ${signal}"
+  else
+    echo "  no recent connection signal (alive ≠ controllable)"
+  fi
+  ws=$(_local_workspace)
+  local creds="${ws}/.state/.claude/.credentials.json"
+  if [ -r "$creds" ]; then
+    echo "  login: present ($creds)"
+  else
+    echo "  login: missing — run ./setup.sh --login"
+  fi
+}
+
+cmd_local_doctor() {
+  local agent unit ws creds fails=0
+  agent=$(resolve_agent_name) || exit $?
+  unit="agent-${agent}.service"
+  ws=$(_local_workspace)
+  creds="${ws}/.state/.claude/.credentials.json"
+  echo "agentctl doctor (local mode) — diagnosing ${agent}"
+  echo ""
+
+  local raw ver
+  raw=$(claude --version 2>/dev/null || true)
+  ver=$(printf '%s' "$raw" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+  if [ -n "$ver" ]; then _doctor_pass "Claude Code present (${ver})"
+  else _doctor_warn "Claude Code not found on PATH" "install it and ensure 'claude' is on PATH"; fi
+
+  if systemctl is-active --quiet "$unit"; then
+    _doctor_pass "${unit} active"
+  else
+    _doctor_fail "${unit} not active" "sudo systemctl start ${unit} (or run ./setup.sh --login)"
+    fails=1
+  fi
+
+  if journalctl -u "$unit" --since "-10 min" --no-pager 2>/dev/null \
+       | grep -qE 'session url|connected|polling'; then
+    _doctor_pass "Connection signal seen in journal"
+  else
+    _doctor_warn "No recent connection signal" "journalctl -u ${unit} -f and watch for 'session url'/'connected'"
+  fi
+
+  if [ -r "$creds" ]; then
+    local perms
+    perms=$(stat -f '%Lp' "$creds" 2>/dev/null || stat -c '%a' "$creds" 2>/dev/null)
+    if [ "$perms" = "600" ]; then _doctor_pass "Login present (.credentials.json 0600)"
+    else _doctor_warn ".credentials.json perms ${perms} (want 600)" "chmod 600 ${creds}"; fi
+  else
+    _doctor_fail "Login missing (.credentials.json)" "./setup.sh --login"
+    fails=1
+  fi
+
+  echo ""
+  if [ "$fails" -eq 0 ]; then echo "Local checks passed."; exit 0
+  else echo "Local checks found issues (see above)."; exit 2; fi
+}
+
 main() {
   local sub="${1:-help}"
   shift || true
+
+  # Local mode dispatch (011): degrade Docker-only subcommands; status/doctor
+  # read systemd instead of the container.
+  if [ "$(_agentctl_mode)" = "local" ]; then
+    case "$sub" in
+      up|start|stop|restart|ps|attach|shell|run|logs|mcp|heartbeat)
+        _local_docker_only "$sub"; exit 2 ;;
+      status) cmd_local_status "$@"; return $? ;;
+      doctor) cmd_local_doctor "$@"; return $? ;;
+    esac
+  fi
+
   case "$sub" in
     help|--help|-h) cmd_help ;;
     doctor) cmd_doctor "$@" ;;

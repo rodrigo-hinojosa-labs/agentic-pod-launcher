@@ -37,6 +37,7 @@ teardown() { teardown_tmp_dir; }
   #  8  user_email          → test@example.com
   #  9  user_lang           → en
   # 10  deploy_svc          → n  (Linux only; macOS skips this prompt)
+  # 10b deploy_mode         → docker  (011; asked on all platforms)
   # 11  fork_enabled        → n
   # 12  notify_channel      → none
   # 13-18  optional MCPs (alphabetical): aws, firecrawl, google-calendar,
@@ -54,6 +55,7 @@ teardown() { teardown_tmp_dir; }
     "Test User" "Test" "UTC" "test@example.com" "en"
   )
   [ "$(uname -s)" = "Linux" ] && answers+=("n")
+  answers+=("docker")   # 011: deployment mode (asked on all platforms)
   # 6 optional MCPs ('n' each) between notify_channel and atlassian.
   answers+=(
     "n" "none"
@@ -79,6 +81,7 @@ teardown() { teardown_tmp_dir; }
   # deployment.host is auto-detected from hostname; just verify it's non-empty
   [ -n "$(yq '.deployment.host' "$dest/agent.yml")" ]
   [ "$(yq '.notifications.channel' "$dest/agent.yml")" = "none" ]
+  [ "$(yq '.deployment.mode' "$dest/agent.yml")" = "docker" ]
   [ "$(yq '.features.heartbeat.enabled' "$dest/agent.yml")" = "true" ]
   [ "$(yq '.features.heartbeat.interval' "$dest/agent.yml")" = "30m" ]
   [ "$(yq '.features.heartbeat.default_prompt' "$dest/agent.yml")" = "Test prompt" ]

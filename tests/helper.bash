@@ -56,19 +56,21 @@ wizard_answers() {
   local name=test-bot display=TestBot role=r vibe=v
   local vault=off qmd=off superpowers=off
   local notify=none notify_bot="" notify_chat=""
+  local deployment_mode=docker
   local kv
   for kv in "$@"; do
     case "$kv" in
-      name=*)        name="${kv#name=}" ;;
-      display=*)     display="${kv#display=}" ;;
-      role=*)        role="${kv#role=}" ;;
-      vibe=*)        vibe="${kv#vibe=}" ;;
-      vault=*)       vault="${kv#vault=}" ;;
-      qmd=*)         qmd="${kv#qmd=}" ;;
-      superpowers=*) superpowers="${kv#superpowers=}" ;;
-      notify=*)      notify="${kv#notify=}" ;;
-      notify_bot=*)  notify_bot="${kv#notify_bot=}" ;;
-      notify_chat=*) notify_chat="${kv#notify_chat=}" ;;
+      name=*)            name="${kv#name=}" ;;
+      display=*)         display="${kv#display=}" ;;
+      role=*)            role="${kv#role=}" ;;
+      vibe=*)            vibe="${kv#vibe=}" ;;
+      vault=*)           vault="${kv#vault=}" ;;
+      qmd=*)             qmd="${kv#qmd=}" ;;
+      superpowers=*)     superpowers="${kv#superpowers=}" ;;
+      notify=*)          notify="${kv#notify=}" ;;
+      notify_bot=*)      notify_bot="${kv#notify_bot=}" ;;
+      notify_chat=*)     notify_chat="${kv#notify_chat=}" ;;
+      deployment_mode=*) deployment_mode="${kv#deployment_mode=}" ;;
       *) echo "wizard_answers: unknown kv: $kv" >&2; return 1 ;;
     esac
   done
@@ -80,6 +82,8 @@ wizard_answers() {
   printf 'Alice\nAlice\nUTC\na@b.com\nen\n'
   # install_service (Linux only — macOS skips the prompt entirely)
   [ "$(uname -s)" = "Linux" ] && printf 'n\n'
+  # Deployment mode choice (011) — asked on all platforms, default docker.
+  printf '%s\n' "$deployment_mode"
   # GitHub fork
   printf 'n\n'
   # Notify channel + telegram extras when applicable. Empty notify_bot

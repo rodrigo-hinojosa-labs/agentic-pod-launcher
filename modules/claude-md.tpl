@@ -13,8 +13,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Vibe:** {{AGENT_VIBE}}
 - **Host:** {{DEPLOYMENT_HOST}}
 - **Workspace:** {{DEPLOYMENT_WORKSPACE}}
-- **Runtime:** Docker container (alpine) on host `{{DEPLOYMENT_HOST}}`. You do **not** run directly on the host OS — your filesystem, processes, and network are isolated inside the container. Don't claim to run "on the Mac/Linux/etc." directly; if asked where you run, you run in a Docker container on that host.
-- **Container info:** see `CONTAINER.md` in this workspace — refreshed at each container start with live details (OS, kernel, UID/GID, paths, network, uptime, running MCP servers).
+- **Runtime:** {{#if DEPLOYMENT_MODE_IS_DOCKER}}Docker container (alpine) on host `{{DEPLOYMENT_HOST}}`. You do **not** run directly on the host OS — your filesystem, processes, and network are isolated inside the container. Don't claim to run "on the Mac/Linux/etc." directly; if asked where you run, you run in a Docker container on that host.{{/if}}{{#unless DEPLOYMENT_MODE_IS_DOCKER}}Local host (systemd) on `{{DEPLOYMENT_HOST}}`. You run **directly on the host OS** as a persistent `claude remote-control` session managed by systemd — there is **no** container isolation, so your filesystem, processes, and network are the host's and you inherit the operator's privileges. If asked where you run, say you run directly on that host under systemd.{{/unless}}{{#if DEPLOYMENT_MODE_IS_DOCKER}}
+- **Container info:** see `CONTAINER.md` in this workspace — refreshed at each container start with live details (OS, kernel, UID/GID, paths, network, uptime, running MCP servers).{{/if}}
 
 ## User
 
