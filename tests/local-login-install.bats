@@ -138,3 +138,43 @@ teardown() { teardown_tmp_dir; }
   [ "$status" -eq 0 ]
   [ "$(jq -r '.projects["'"$WS"'"].hasTrustDialogAccepted' "$WS/.state/.claude/.claude.json")" = "true" ]
 }
+
+@test "login: installs + enables the staged healthcheck timer/service (US3)" {
+  printf 'STAGED-UNIT\n' > "$WS/agent-locbot.service"
+  # install_service stages the healthcheck units under scripts/local/ when
+  # sudo -n was unavailable at scaffold time.
+  printf 'HC-SVC\n' > "$WS/scripts/local/agent-locbot-healthcheck.service"
+  printf 'HC-TMR\n' > "$WS/scripts/local/agent-locbot-healthcheck.timer"
+  [ ! -f "$LOGIN_SYSTEMD_DIR/agent-locbot-healthcheck.timer" ]
+
+  run "$LOGIN"
+  [ "$status" -eq 0 ]
+
+  [ -f "$LOGIN_SYSTEMD_DIR/agent-locbot-healthcheck.service" ]
+  [ -f "$LOGIN_SYSTEMD_DIR/agent-locbot-healthcheck.timer" ]
+  grep -q 'HC-TMR' "$LOGIN_SYSTEMD_DIR/agent-locbot-healthcheck.timer"
+  grep -q 'enable --now agent-locbot-healthcheck.timer' "$TMP_TEST_DIR/systemctl.log"
+}
+
+@test "login: installs healthcheck even when the main unit is already in place" {
+  # mclaren's exact case: main unit already installed, healthcheck still staged.
+  printf 'INSTALLED\n' > "$LOGIN_SYSTEMD_DIR/agent-locbot.service"
+  printf 'HC-SVC\n' > "$WS/scripts/local/agent-locbot-healthcheck.service"
+  printf 'HC-TMR\n' > "$WS/scripts/local/agent-locbot-healthcheck.timer"
+
+  run "$LOGIN"
+  [ "$status" -eq 0 ]
+  [ -f "$LOGIN_SYSTEMD_DIR/agent-locbot-healthcheck.timer" ]
+  grep -q 'enable --now agent-locbot-healthcheck.timer' "$TMP_TEST_DIR/systemctl.log"
+}
+
+@test "login: does NOT clobber an already-installed healthcheck timer" {
+  printf 'STAGED-UNIT\n' > "$WS/agent-locbot.service"
+  printf 'INSTALLED-TMR\n' > "$LOGIN_SYSTEMD_DIR/agent-locbot-healthcheck.timer"
+  printf 'STAGED-TMR-DIFFERENT\n' > "$WS/scripts/local/agent-locbot-healthcheck.timer"
+
+  run "$LOGIN"
+  [ "$status" -eq 0 ]
+  grep -q 'INSTALLED-TMR' "$LOGIN_SYSTEMD_DIR/agent-locbot-healthcheck.timer"
+  ! grep -q 'STAGED-TMR-DIFFERENT' "$LOGIN_SYSTEMD_DIR/agent-locbot-healthcheck.timer"
+}

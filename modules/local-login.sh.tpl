@@ -98,3 +98,23 @@ else
   echo "         was found at ${STAGED_UNIT}. Re-run ./setup.sh --regenerate to" >&2
   echo "         re-stage it, then re-run ./setup.sh --login." >&2
 fi
+
+# 6. Healthcheck units (US3): install + enable the staged timer/service the
+#    same way as the main unit. install_service stages these under
+#    scripts/local/ when `sudo -n` was unavailable; the main unit and the
+#    healthcheck are staged independently, so a --login that only installed the
+#    session unit left the ~5-min observability timer inactive.
+HC_SVC="agent-${AGENT_NAME}-healthcheck.service"
+HC_TMR="agent-${AGENT_NAME}-healthcheck.timer"
+HC_STAGED_DIR="${WORKSPACE}/scripts/local"
+for _hc in "$HC_SVC" "$HC_TMR"; do
+  if [ ! -f "${SYSTEMD_DIR}/${_hc}" ] && [ -f "${HC_STAGED_DIR}/${_hc}" ]; then
+    sudo cp "${HC_STAGED_DIR}/${_hc}" "${SYSTEMD_DIR}/${_hc}" || true
+  fi
+done
+if [ -f "${SYSTEMD_DIR}/${HC_TMR}" ]; then
+  sudo systemctl daemon-reload || true
+  if sudo systemctl enable --now "$HC_TMR"; then
+    echo "  ✓ ${HC_TMR} enabled (~5 min healthcheck)"
+  fi
+fi

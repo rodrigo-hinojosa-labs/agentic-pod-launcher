@@ -30,11 +30,12 @@
     ≥ 2.1.51, pre-seeds onboarding non-destructively, launches the full-scope
     OAuth login, then applies an idempotent, exact-equality `.claude.json`
     trust-merge (`scripts/lib/local_trust.sh`), **installs the staged systemd
-    unit if it isn't in place yet** — the scaffold stages it in the workspace
-    when `sudo -n` is unavailable, so `--login` (the first interactive-sudo
-    context) copies it into the systemd dir instead of leaving a
-    staged-but-inactive unit (regression validated on a sudo-prompt host) — and
-    enables the unit. Plus an
+    session unit and the healthcheck timer/service if they aren't in place
+    yet** — the scaffold stages them in the workspace when `sudo -n` is
+    unavailable, so `--login` (the first interactive-sudo context) copies them
+    into the systemd dir and enables them instead of leaving a
+    staged-but-inactive unit + an inactive ~5-min healthcheck timer (both
+    regressions validated on a sudo-prompt host). Plus an
     `EnvironmentFile` (`CLAUDE_CONFIG_DIR` under `.state/.claude`,
     `DISABLE_AUTOUPDATER=1`, no API key) and a kill-switch helper.
   - **(US3)** Healthcheck (systemd timer ~5 min) distinguishing
