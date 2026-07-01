@@ -5,7 +5,7 @@
 # tests/local-trust-merge.bats. Pure functions — sourcing has NO side effects
 # (Principle III). Requires: jq.
 #
-# Why two steps, in this order, around the OAuth login:
+# Why these steps, in this order, around the OAuth login:
 #   1. local_seed_onboarding BEFORE login — without hasCompletedOnboarding the
 #      first non-TTY claude invocation re-enters onboarding. Never clobber an
 #      existing value.
@@ -14,6 +14,10 @@
 #      remote-control` exits 1 ("Workspace not trusted") and the unit
 #      restart-loops (gotcha #2). The merge preserves every other key and is
 #      idempotent by EXACT equality, never substring (gotcha #4).
+#   3. local_seed_remote_control AFTER login — the login also resets
+#      remoteDialogSeen; without it `claude remote-control` blocks on an
+#      interactive "Enable Remote Control? (y/n)" prompt under systemd (no TTY),
+#      so the session never becomes controllable (gotcha #7). Never clobber.
 
 # local_seed_onboarding FILE
 #   Ensure hasCompletedOnboarding=true exists in FILE, WITHOUT overwriting an
@@ -28,6 +32,33 @@ local_seed_onboarding() {
   local tmp
   tmp=$(mktemp) || return 1
   if jq '. + {hasCompletedOnboarding: true}' "$file" > "$tmp"; then
+    mv "$tmp" "$file"
+  else
+    rm -f "$tmp"
+    return 1
+  fi
+}
+
+# local_seed_remote_control FILE
+#   Ensure remoteDialogSeen=true exists in FILE, WITHOUT overwriting an existing
+#   value (true OR false). Creates FILE as {} when absent. Idempotent.
+#
+#   Without this, `claude remote-control` prints an interactive
+#   "Enable Remote Control? (y/n)" prompt on first run. Under systemd there is no
+#   TTY to answer it, so the process blocks forever, never registers as
+#   controllable, and the session shows offline in the app (validated on
+#   mclaren). Seeding the flag the login already persists on a manual "y" makes
+#   the unit come up controllable from the very first boot.
+local_seed_remote_control() {
+  local file="${1:?local_seed_remote_control: need .claude.json path}"
+  [ -f "$file" ] || printf '{}\n' > "$file"
+  # Present (any value) → leave untouched.
+  if jq -e 'has("remoteDialogSeen")' "$file" >/dev/null 2>&1; then
+    return 0
+  fi
+  local tmp
+  tmp=$(mktemp) || return 1
+  if jq '. + {remoteDialogSeen: true}' "$file" > "$tmp"; then
     mv "$tmp" "$file"
   else
     rm -f "$tmp"

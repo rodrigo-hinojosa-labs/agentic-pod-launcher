@@ -69,3 +69,29 @@ JSON
   # left as the operator had it (false), not clobbered to true
   [ "$(jq -r '.hasCompletedOnboarding' "$f")" = "false" ]
 }
+
+@test "remote-control pre-seed: sets remoteDialogSeen=true when absent, preserves keys" {
+  local f="$TMP_TEST_DIR/.claude.json"
+  printf '{"someKey":"v"}\n' > "$f"
+  run local_seed_remote_control "$f"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.remoteDialogSeen' "$f")" = "true" ]
+  [ "$(jq -r '.someKey' "$f")" = "v" ]
+}
+
+@test "remote-control pre-seed: does NOT overwrite an existing value" {
+  local f="$TMP_TEST_DIR/.claude.json"
+  printf '{"remoteDialogSeen":false}\n' > "$f"
+  run local_seed_remote_control "$f"
+  [ "$status" -eq 0 ]
+  # left as the operator had it (false), not clobbered
+  [ "$(jq -r '.remoteDialogSeen' "$f")" = "false" ]
+}
+
+@test "remote-control pre-seed: creates the file when absent" {
+  local f="$TMP_TEST_DIR/.claude.json"
+  [ ! -f "$f" ]
+  run local_seed_remote_control "$f"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.remoteDialogSeen' "$f")" = "true" ]
+}

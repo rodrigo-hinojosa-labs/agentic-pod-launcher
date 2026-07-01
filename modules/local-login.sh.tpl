@@ -65,6 +65,12 @@ fi
 local_merge_trust "$CLAUDE_JSON" "$WORKSPACE"
 echo "  ✓ workspace trust applied for ${WORKSPACE}"
 
+# 4b. Pre-accept the "Enable Remote Control? (y/n)" prompt (gotcha #7). The login
+#     resets remoteDialogSeen; without it the systemd unit blocks on the prompt
+#     (no TTY) and never becomes controllable. Non-destructive; runs after login.
+local_seed_remote_control "$CLAUDE_JSON"
+echo "  ✓ remote-control prompt pre-accepted"
+
 # 5. Install (if needed) + enable + start the system unit (system unit → needs
 #    sudo). With Restart=always the ExecCondition keeps it inactive (not failed)
 #    until the credentials exist, so enabling before login is safe too.

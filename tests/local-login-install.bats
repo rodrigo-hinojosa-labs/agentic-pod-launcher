@@ -139,6 +139,13 @@ teardown() { teardown_tmp_dir; }
   [ "$(jq -r '.projects["'"$WS"'"].hasTrustDialogAccepted' "$WS/.state/.claude/.claude.json")" = "true" ]
 }
 
+@test "login: pre-seeds remoteDialogSeen so the unit doesn't hang on the Enable-Remote-Control prompt" {
+  printf 'STAGED-UNIT\n' > "$WS/agent-locbot.service"
+  run "$LOGIN"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.remoteDialogSeen' "$WS/.state/.claude/.claude.json")" = "true" ]
+}
+
 @test "login: installs + enables the staged healthcheck timer/service (US3)" {
   printf 'STAGED-UNIT\n' > "$WS/agent-locbot.service"
   # install_service stages the healthcheck units under scripts/local/ when
