@@ -29,13 +29,28 @@ if ! systemctl is-active --quiet "$UNIT"; then
   _demote DEGRADED "unit not active"
 fi
 
-# 2. Journal signals (last 10 min): auth failure vs. a live connection.
+# 2. Journal auth-failure signal (last 10 min). Absence is fine (a healthy
+#    session is silent); only a PRESENT 401 / "please run /login" is actionable.
 journal=$(journalctl -u "$UNIT" --since "-10 min" --no-pager 2>/dev/null || true)
 if printf '%s\n' "$journal" | grep -qE 'API Error: 401|Please run /login'; then
   _demote DEGRADED "auth error in journal (401 / please run /login)"
 fi
-if ! printf '%s\n' "$journal" | grep -qE 'session url|connected|polling'; then
-  _demote WARN "no connection signal in journal (alive but maybe not controllable)"
+
+# 2b. Connection signal: does the session process hold a LIVE ESTABLISHED TCP
+#     connection to the Remote Control relay (:443)? A healthy --spawn=session is
+#     SILENT in the journal, so grepping it for 'session url|connected|polling'
+#     false-WARNed on every tick even when connected (validated on mclaren). The
+#     live socket owned by the unit's MainPID is the real signal. Degrade to WARN
+#     (never DEGRADED) if ss is unavailable or the PID can't be resolved.
+main_pid=$(systemctl show "$UNIT" -p MainPID --value 2>/dev/null || echo "")
+if command -v ss >/dev/null 2>&1 && printf '%s' "${main_pid:-}" | grep -qE '^[0-9]+$' && [ "${main_pid:-0}" -gt 0 ]; then
+  if ss -tnpH state established 2>/dev/null | grep "pid=${main_pid}," | grep -q ':443'; then
+    :   # live relay connection present — the session is controllable
+  else
+    _demote WARN "no live relay connection (session process has no ESTABLISHED :443)"
+  fi
+else
+  _demote WARN "cannot verify connection (ss unavailable or MainPID unknown)"
 fi
 
 # 3. Credential expiry — needs jq + readable creds; degrade gracefully if not.

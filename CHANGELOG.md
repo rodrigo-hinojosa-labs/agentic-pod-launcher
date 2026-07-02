@@ -42,8 +42,11 @@
     `EnvironmentFile` (`CLAUDE_CONFIG_DIR` under `.state/.claude`,
     `DISABLE_AUTOUPDATER=1`, no API key) and a kill-switch helper.
   - **(US3)** Healthcheck (systemd timer ~5 min) distinguishing
-    alive/connected/expired (`systemctl is-active` + journal 401/connection
-    signals + `expiresAt` via `jq`), degrading gracefully without `jq`/creds;
+    alive/connected/expired (`systemctl is-active`; a live ESTABLISHED `:443`
+    socket owned by the session PID for the *connection* signal — **not** the
+    journal, since a healthy `--spawn=session` is silent and the old journal grep
+    false-WARNed on every tick; journal `401` for auth failure; `expiresAt` via
+    `jq`), degrading gracefully without `jq`/creds/`ss`;
     optional notify keeps the token off argv (`curl --config -`). `agentctl`
     degrades honestly in local mode — Docker-only subcommands error with a
     `systemctl`/`journalctl` hint (never touching docker) and `status`/`doctor`

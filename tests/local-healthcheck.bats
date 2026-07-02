@@ -28,19 +28,38 @@ YML
   render_to_file "$REPO_ROOT/modules/local-healthcheck.sh.tpl" "$TMP_TEST_DIR/hc.sh"
   chmod +x "$TMP_TEST_DIR/hc.sh"
 
-  # Stubs: systemctl is-active honors $STUB_ACTIVE; journalctl echoes $STUB_JOURNAL.
+  # Stubs: systemctl is-active honors $STUB_ACTIVE and reports MainPID via
+  # $STUB_MAINPID; journalctl echoes $STUB_JOURNAL (used only for the 401 check
+  # now); ss echoes $STUB_SS. The connection signal comes from a live
+  # ESTABLISHED :443 socket owned by the session PID, NOT the journal — a healthy
+  # --spawn=session is silent, so the old journal grep false-WARNed every tick.
   mkdir -p "$TMP_TEST_DIR/bin"
   cat > "$TMP_TEST_DIR/bin/systemctl" << 'SH'
 #!/usr/bin/env bash
-case "$*" in *is-active*) exit "${STUB_ACTIVE:-0}" ;; *) exit 0 ;; esac
+case "$*" in
+  *is-active*)     exit "${STUB_ACTIVE:-0}" ;;
+  *show*MainPID*)  echo "${STUB_MAINPID:-1234}" ;;
+  *)               exit 0 ;;
+esac
 SH
   cat > "$TMP_TEST_DIR/bin/journalctl" << 'SH'
 #!/usr/bin/env bash
 printf '%s\n' "${STUB_JOURNAL:-}"
 exit 0
 SH
+  cat > "$TMP_TEST_DIR/bin/ss" << 'SH'
+#!/usr/bin/env bash
+printf '%s\n' "${STUB_SS:-}"
+exit 0
+SH
   chmod +x "$TMP_TEST_DIR/bin/"*
   export PATH="$TMP_TEST_DIR/bin:$PATH"
+
+  # Default: a live relay socket owned by the default MainPID. Most tests are
+  # "connected" and exercise OTHER dimensions; connection-specific tests override
+  # STUB_SS / STUB_MAINPID inline.
+  export STUB_MAINPID=1234
+  export STUB_SS='ESTAB 0 0 10.0.0.2:55000 1.2.3.4:443 users:(("claude",pid=1234,fd=5))'
 
   CREDS_DIR="$TMP_TEST_DIR/.state/.claude"
   mkdir -p "$CREDS_DIR"
@@ -52,19 +71,37 @@ _write_creds() {  # _write_creds <expiresAt-ms>
   printf '{"claudeAiOauth":{"expiresAt":%s}}\n' "$1" > "$CREDS_DIR/.credentials.json"
 }
 
-@test "healthcheck OK: active + connected + valid login → exit 0" {
+@test "healthcheck OK: active + live relay socket + valid login → exit 0 (silent journal)" {
+  # THE regression this fix encodes: the journal is EMPTY (a healthy
+  # --spawn=session emits no 'session url/connected/polling'), yet the live
+  # ESTABLISHED :443 socket proves the session is controllable → OK, not WARN.
   _write_creds 99999999999999
-  STUB_ACTIVE=0 STUB_JOURNAL="session url: https://x connected polling" run "$TMP_TEST_DIR/hc.sh"
+  STUB_ACTIVE=0 STUB_JOURNAL="" run "$TMP_TEST_DIR/hc.sh"
   [ "$status" -eq 0 ]
   [[ "$output" == *"OK"* ]]
 }
 
-@test "healthcheck WARN: active + valid login but no connection signal → exit 1" {
+@test "healthcheck WARN: active + valid login but NO live relay socket → exit 1" {
   _write_creds 99999999999999
-  STUB_ACTIVE=0 STUB_JOURNAL="just some boot noise" run "$TMP_TEST_DIR/hc.sh"
+  STUB_ACTIVE=0 STUB_SS="" run "$TMP_TEST_DIR/hc.sh"
   [ "$status" -eq 1 ]
   [[ "$output" == *"WARN"* ]]
-  [[ "$output" == *"no connection signal"* ]]
+  [[ "$output" == *"no live relay connection"* ]]
+}
+
+@test "healthcheck WARN: a :443 socket exists but not owned by the session PID → exit 1" {
+  _write_creds 99999999999999
+  STUB_ACTIVE=0 STUB_SS='ESTAB 0 0 10.0.0.2:40000 5.6.7.8:443 users:(("other",pid=9999,fd=7))' \
+    run "$TMP_TEST_DIR/hc.sh"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no live relay connection"* ]]
+}
+
+@test "healthcheck graceful: MainPID unknown → WARN cannot verify, no crash" {
+  _write_creds 99999999999999
+  STUB_ACTIVE=0 STUB_MAINPID=0 run "$TMP_TEST_DIR/hc.sh"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"cannot verify connection"* ]]
 }
 
 @test "healthcheck WARN: login expiring within 24h → exit 1" {
