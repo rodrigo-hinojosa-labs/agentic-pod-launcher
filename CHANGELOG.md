@@ -48,6 +48,25 @@
     degrades honestly in local mode — Docker-only subcommands error with a
     `systemctl`/`journalctl` hint (never touching docker) and `status`/`doctor`
     read systemd + the on-disk login.
+  - **(MCP runtimes)** Local mode now makes the workspace MCP servers actually
+    **runnable** on the host. Docker bakes uv/node/bun/`github-mcp-server` into
+    the image; local mode rendered `.mcp.json` but never provisioned them, so
+    every project MCP failed to connect (validated on mclaren:
+    `fetch`/`git`/`filesystem`/`atlassian`/`github` → "✘ Failed to connect" —
+    `uvx`/`npx`/`github-mcp-server` absent from every PATH). Three fixes:
+    **(a)** `.mcp.json` remaps the container paths `git --repository /workspace`
+    and `filesystem /home/agent` to the real `deployment.workspace` in local mode
+    (keyed on `DEPLOYMENT_MODE_IS_DOCKER`; docker byte-identical); **(b)** the
+    session `EnvironmentFile` pins `PATH` at the operator's `~/.local/bin` (the
+    unit otherwise inherits systemd's minimal PATH, which excludes every runtime);
+    **(c)** a new rendered `scripts/local/agent-bootstrap.sh` provisions exactly
+    the runtimes the `.mcp.json` references — uv/uvx (+ warm `uv tool install`),
+    node/npx symlinks (nvm or system), `github-mcp-server` (checksum-verified),
+    bun — into `~/.local/bin`. Idempotent + best-effort (never blocks login), run
+    by `--login` before the unit is enabled; `BOOTSTRAP_DRY_RUN=1` prints the plan
+    for the host-side bats suite. Version pins mirror the Dockerfile
+    (uv 0.11.22 / bun 1.3.14 / github-mcp-server 1.4.0). Vault/qmd container
+    paths in local mode are a follow-up.
   - SECURITY: local mode is a justified, opt-in violation of the least-privilege
     container model (Principle II) — it runs as the operator's user and inherits
     their privileges/secrets; the wizard warns explicitly and MFA is mandatory.

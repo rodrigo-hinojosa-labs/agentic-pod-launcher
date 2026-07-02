@@ -109,3 +109,14 @@ teardown() { teardown_tmp_dir; }
   grep -q '^HOME=/home/op$' "$TMP_TEST_DIR/env"
   ! grep -q 'ANTHROPIC_API_KEY' "$TMP_TEST_DIR/env"
 }
+
+@test "env file: PATH prepends the operator ~/.local/bin so systemd finds uv/npx/github-mcp-server (RC-B)" {
+  # The unit inherits systemd's minimal default PATH (/usr/local/bin:/usr/bin:…),
+  # which excludes the operator's ~/.local/bin, nvm node, etc. Without this line
+  # every MCP runtime spawn fails with ENOENT under the unit (validated on
+  # mclaren). agent-bootstrap.sh funnels all runtimes into ~/.local/bin.
+  render_to_file "$REPO_ROOT/modules/remote-control.env.tpl" "$TMP_TEST_DIR/env"
+  grep -qE '^PATH=/home/op/\.local/bin:' "$TMP_TEST_DIR/env"
+  # still includes the system dirs the unit needs
+  grep -qE '^PATH=[^[:space:]]*:/usr/local/bin:/usr/bin:/bin' "$TMP_TEST_DIR/env"
+}

@@ -2030,6 +2030,7 @@ regenerate() {
     render_to_file "$modules_dir/local-login.sh.tpl"       "$SCRIPT_DIR/scripts/local/agent-login.sh"
     render_to_file "$modules_dir/local-killswitch.sh.tpl"  "$SCRIPT_DIR/scripts/local/agent-killswitch.sh"
     render_to_file "$modules_dir/local-healthcheck.sh.tpl" "$SCRIPT_DIR/scripts/local/agent-healthcheck.sh"
+    render_to_file "$modules_dir/local-bootstrap.sh.tpl"   "$SCRIPT_DIR/scripts/local/agent-bootstrap.sh"
     chmod +x "$SCRIPT_DIR"/scripts/local/*.sh 2>/dev/null || true
     echo "  ✓ local artifacts (.state/remote-control.env, scripts/local/)"
   fi

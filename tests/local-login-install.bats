@@ -146,6 +146,34 @@ teardown() { teardown_tmp_dir; }
   [ "$(jq -r '.remoteDialogSeen' "$WS/.state/.claude/.claude.json")" = "true" ]
 }
 
+@test "login: runs agent-bootstrap.sh (MCP runtimes) before enabling the unit" {
+  printf 'STAGED-UNIT\n' > "$WS/agent-locbot.service"
+  # Stub the bootstrap so we can observe that it ran, and when, relative to the
+  # unit enable. It shares the systemctl.log so line order = execution order.
+  cat > "$WS/scripts/local/agent-bootstrap.sh" << SH
+#!/usr/bin/env bash
+echo "BOOTSTRAP-RAN" >> "$TMP_TEST_DIR/systemctl.log"
+SH
+  chmod +x "$WS/scripts/local/agent-bootstrap.sh"
+
+  run "$LOGIN"
+  [ "$status" -eq 0 ]
+
+  grep -q 'BOOTSTRAP-RAN' "$TMP_TEST_DIR/systemctl.log"
+  # Runtimes must be provisioned BEFORE the unit's first start.
+  boot_line=$(grep -n 'BOOTSTRAP-RAN' "$TMP_TEST_DIR/systemctl.log" | head -1 | cut -d: -f1)
+  enable_line=$(grep -n 'enable --now agent-locbot.service' "$TMP_TEST_DIR/systemctl.log" | head -1 | cut -d: -f1)
+  [ -n "$boot_line" ] && [ -n "$enable_line" ] && [ "$boot_line" -lt "$enable_line" ]
+}
+
+@test "login: absent agent-bootstrap.sh is skipped cleanly (older workspace)" {
+  printf 'STAGED-UNIT\n' > "$WS/agent-locbot.service"
+  [ ! -f "$WS/scripts/local/agent-bootstrap.sh" ]
+  run "$LOGIN"
+  [ "$status" -eq 0 ]
+  grep -q 'enable --now agent-locbot.service' "$TMP_TEST_DIR/systemctl.log"
+}
+
 @test "login: installs + enables the staged healthcheck timer/service (US3)" {
   printf 'STAGED-UNIT\n' > "$WS/agent-locbot.service"
   # install_service stages the healthcheck units under scripts/local/ when

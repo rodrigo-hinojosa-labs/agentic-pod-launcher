@@ -71,6 +71,17 @@ echo "  ✓ workspace trust applied for ${WORKSPACE}"
 local_seed_remote_control "$CLAUDE_JSON"
 echo "  ✓ remote-control prompt pre-accepted"
 
+# 4c. Provision the MCP runtimes the workspace .mcp.json references (uv/uvx,
+#     node/npx symlinks, github-mcp-server, bun) into ~/.local/bin BEFORE the
+#     unit is enabled, so the Remote Control session can spawn its MCP servers on
+#     its very first start. Idempotent + best-effort (the script never fails);
+#     guarded so an older workspace without agent-bootstrap.sh skips cleanly.
+BOOTSTRAP="${SCRIPT_DIR}/agent-bootstrap.sh"
+if [ -x "$BOOTSTRAP" ]; then
+  echo "▸ Provisioning MCP runtimes (agent-bootstrap.sh)…"
+  "$BOOTSTRAP" || true
+fi
+
 # 5. Install (if needed) + enable + start the system unit (system unit → needs
 #    sudo). With Restart=always the ExecCondition keeps it inactive (not failed)
 #    until the credentials exist, so enabling before login is safe too.

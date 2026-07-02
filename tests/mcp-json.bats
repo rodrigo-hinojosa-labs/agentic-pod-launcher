@@ -24,6 +24,10 @@ mcps:
     enabled: false
 EOF
   render_load_context "$TMP_TEST_DIR/agent.yml"
+  # Docker mode is the production default; the mode boolean is always exported by
+  # regenerate() before .mcp.json is rendered. Declare it so the git/filesystem
+  # container paths (/workspace, /home/agent) are asserted for the docker branch.
+  export DEPLOYMENT_MODE_IS_DOCKER=true
   result=$(render_template "$REPO_ROOT/modules/mcp-json.tpl")
   echo "$result" | jq . > /dev/null
   # Always-on (no flag needed in env): fetch, git, filesystem.
@@ -47,6 +51,38 @@ EOF
   [ "$(echo "$result" | jq -r '.mcpServers["atlassian-personal"].env.JIRA_USERNAME')" = '${ATLASSIAN_PERSONAL_JIRA_USERNAME}' ]
   [ "$(echo "$result" | jq -r '.mcpServers["atlassian-personal"].env.JIRA_API_TOKEN')" = '${ATLASSIAN_PERSONAL_TOKEN}' ]
   [ "$(echo "$result" | jq -r '.mcpServers.github // "absent"')" = "absent" ]
+}
+
+@test ".mcp.json (local mode) points git + filesystem at the host workspace, not container paths" {
+  # RC-C: in docker mode git targets /workspace and filesystem /home/agent (the
+  # container mount points). In local mode those paths do not exist on the host —
+  # they must resolve to the real deployment.workspace or the MCPs fail to connect
+  # (validated on mclaren: `git --repository /workspace` → ✘ Failed to connect).
+  cat > "$TMP_TEST_DIR/agent.yml" << 'EOF'
+version: 1
+user:
+  timezone: "UTC"
+deployment:
+  workspace: "/home/op/agents/locbot"
+  mode: local
+mcps:
+  atlassian: []
+  github:
+    enabled: false
+EOF
+  render_load_context "$TMP_TEST_DIR/agent.yml"
+  export DEPLOYMENT_MODE_IS_DOCKER=false
+  result=$(render_template "$REPO_ROOT/modules/mcp-json.tpl")
+  echo "$result" | jq . > /dev/null
+  # git repository + filesystem root are remapped to the host workspace.
+  [ "$(echo "$result" | jq -r '.mcpServers.git.args[2]')" = "/home/op/agents/locbot" ]
+  [ "$(echo "$result" | jq -r '.mcpServers.filesystem.args[2]')" = "/home/op/agents/locbot" ]
+  # container paths must NOT leak into local mode
+  [ "$(echo "$result" | jq -r '.mcpServers.git.args[2]')" != "/workspace" ]
+  [ "$(echo "$result" | jq -r '.mcpServers.filesystem.args[2]')" != "/home/agent" ]
+  # command + package unchanged across modes
+  [ "$(echo "$result" | jq -r '.mcpServers.git.command')" = "uvx" ]
+  [ "$(echo "$result" | jq -r '.mcpServers.filesystem.command')" = "npx" ]
 }
 
 @test ".mcp.json includes optional MCPs when MCPS_*_ENABLED env vars are set" {
