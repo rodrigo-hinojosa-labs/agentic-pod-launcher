@@ -318,6 +318,8 @@ Usage: ./setup.sh [options]
 Options:
   (no flags)           Interactive wizard on first run; regenerate on subsequent runs.
   --regenerate         Re-render derived files from agent.yml (keeps CLAUDE.md).
+  --login              (local mode) Run the guided one-time full-scope OAuth
+                       login + workspace trust + enable the systemd session.
   --force-claude-md    With --regenerate, also overwrite CLAUDE.md.
   --sync-template      Pull template improvements into this fork. Fetches
                        upstream/main, fast-forwards local main, pushes it to
@@ -355,6 +357,7 @@ parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --regenerate) MODE="regenerate"; shift ;;
+      --login) MODE="login"; shift ;;
       --reset) MODE="reset"; shift ;;
       --non-interactive) MODE="non-interactive"; shift ;;
       --force-claude-md) FORCE_CLAUDE_MD=true; shift ;;
@@ -390,6 +393,26 @@ run_wizard() {
   echo "   · defaults are pre-filled — Enter to accept"
   echo "   · Ctrl+U clears the field to type your own"
   echo "   · Ctrl+C aborts the wizard"
+  echo ""
+
+  # ── 0. Deployment mode (011) ────────────────────────
+  # Asked FIRST so the two flows stay cleanly separated from the start: the
+  # whole wizard + render branch on this choice. docker (recommended) is the
+  # least-privilege container; local runs directly on the host via systemd.
+  echo "▸ Deployment mode"
+  echo "  • docker  — isolated, least-privilege container (recommended)."
+  echo "  • local   — runs directly on this host via systemd (Linux/systemd only)."
+  local deploy_mode
+  deploy_mode=$(ask_choice "Deployment mode" "docker" "docker local")
+  if [ "$deploy_mode" = "local" ]; then
+    echo ""
+    echo "  ⚠ LOCAL MODE SECURITY WARNING"
+    echo "    The agent runs as YOUR login user and inherits your privileges and"
+    echo "    secrets (files, SSH keys, tokens). There is NO container isolation —"
+    echo "    this breaks the least-privilege model the docker mode enforces."
+    echo "    Whoever controls the claude.ai account controls this host: MFA is"
+    echo "    MANDATORY. Local mode is Linux/systemd only."
+  fi
   echo ""
 
   # ── 1. Identity ─────────────────────────────────────
@@ -492,9 +515,15 @@ run_wizard() {
   echo "▸ Claude profile"
   local claude_config_dir="/home/agent/.claude"
   local claude_profile_new="true"
-  echo "  Profile lives at /home/agent/.claude inside the container"
-  echo "  (isolated on the named state volume — run /login inside tmux once"
-  echo "  after first boot)."
+  if [ "$deploy_mode" = "local" ]; then
+    echo "  Local mode: the agent's Claude config + login live on the host under"
+    echo "  <workspace>/.state/.claude (gitignored). Run the one-time full-scope"
+    echo "  login after scaffolding with: ./setup.sh --login"
+  else
+    echo "  Profile lives at /home/agent/.claude inside the container"
+    echo "  (isolated on the named state volume — run /login inside tmux once"
+    echo "  after first boot)."
+  fi
   echo ""
 
   # ── 3.5 GitHub fork (template sync) ─────────────────
@@ -1077,6 +1106,7 @@ deployment:
   workspace: "$deploy_ws"
   install_service: $deploy_svc
   claude_cli: "$(detect_claude_cli)"
+  mode: "$deploy_mode"
 
 claude:
   config_dir: "$claude_config_dir"
@@ -1310,6 +1340,16 @@ render_next_steps() {
     export NOTIF_IS_TELEGRAM="true"
   else
     export NOTIF_IS_TELEGRAM="false"
+  fi
+
+  # Deployment mode (011): NEXT_STEPS branches docker vs local. render_next_steps
+  # is its own render path (not regenerate), so derive the flag here too.
+  local _ns_mode
+  _ns_mode=$(yq -r '.deployment.mode // "docker"' "$dest/agent.yml")
+  if [ "$_ns_mode" = "local" ]; then
+    export DEPLOYMENT_MODE_IS_DOCKER=false
+  else
+    export DEPLOYMENT_MODE_IS_DOCKER=true
   fi
 
   render_load_context "$dest/agent.yml"
@@ -1621,6 +1661,11 @@ scaffold_destination() {
   # Expand $HOME / ~
   dest=$(eval echo "$dest")
 
+  # Deployment mode (011): scaffold runs BEFORE regenerate exports DEPLOYMENT_MODE,
+  # so read it straight from agent.yml. Local mode ships NO Docker build context.
+  local _scaffold_mode
+  _scaffold_mode=$(yq -r '.deployment.mode // "docker"' "$agent_yml")
+
   if [ "$IN_PLACE" = true ]; then
     echo "▸ --in-place mode: skipping destination scaffold"
     return 0
@@ -1672,6 +1717,8 @@ scaffold_destination() {
     [ -e "$src_dir/$item" ] && cp "$src_dir/$item" "$dest/"
   done
   for item in modules scripts docker; do
+    # Local mode has no Docker build context — don't carry the docker/ tree.
+    [ "$item" = "docker" ] && [ "$_scaffold_mode" = "local" ] && continue
     [ -d "$src_dir/$item" ] && cp -R "$src_dir/$item" "$dest/"
   done
   # Story I: copy the --role-file persona into the workspace so it travels
@@ -1698,8 +1745,11 @@ scaffold_destination() {
   # Mirror catalog files into docker/ build context. Source-of-truth lives
   # at scripts/lib/plugin-catalog.sh + modules/plugins/. The Dockerfile's
   # build context is ./docker/, so it cannot COPY from outside that tree
-  # — we duplicate inside it. Refreshed on every regenerate.
-  mirror_catalog_to_docker "$dest"
+  # — we duplicate inside it. Refreshed on every regenerate. Skipped for
+  # local mode (no Docker build context).
+  if [ "$_scaffold_mode" != "local" ]; then
+    mirror_catalog_to_docker "$dest"
+  fi
 
   # Pre-create .state/ — bind-mounted to /home/agent inside the container.
   # Host-owner (current user) matches the agent user's UID/GID via the
@@ -1813,10 +1863,53 @@ regenerate() {
         yq -i '.vault.qmd.version = "2.5.3"' "$agent_yml"
       fi
     fi
+
+    # Backfill deployment.mode for a pre-011 workspace (no mode key = docker by
+    # design). Writing the explicit default keeps agent.yml the single source of
+    # truth (Principle I) and makes the docker-vs-local branch deterministic on
+    # every regenerate. An existing value (docker|local) is left untouched.
+    local _dep_mode
+    _dep_mode=$(yq -r '.deployment.mode // ""' "$agent_yml")
+    if [ -z "$_dep_mode" ] || [ "$_dep_mode" = "null" ]; then
+      yq -i '.deployment.mode = "docker"' "$agent_yml"
+    fi
   fi
 
   echo "▸ Loading context from agent.yml"
   render_load_context "$agent_yml"
+
+  # Deployment mode (011): single source of truth in agent.yml. Default docker
+  # (legacy + backfill above). DEPLOYMENT_MODE_IS_DOCKER gates the {{#if}} /
+  # {{#unless}} blocks in the templates and the docker-vs-local render branch.
+  export DEPLOYMENT_MODE
+  DEPLOYMENT_MODE="$(yq -r '.deployment.mode // "docker"' "$agent_yml")"
+  if [ "$DEPLOYMENT_MODE" = "local" ]; then
+    export DEPLOYMENT_MODE_IS_DOCKER=false
+  else
+    export DEPLOYMENT_MODE_IS_DOCKER=true
+  fi
+
+  # Mode-switch warning (FR-005a): detect a prior generation in the OTHER mode by
+  # its on-disk artifacts and warn that they are now orphaned — WITHOUT deleting
+  # them (safe + traceable; the user removes them deliberately).
+  if [ "$DEPLOYMENT_MODE_IS_DOCKER" = true ] && [ -d "$SCRIPT_DIR/scripts/local" ]; then
+    echo ""
+    echo "WARNING: switching to docker mode — these LOCAL-mode artifacts are now"
+    echo "         orphaned and were NOT deleted:"
+    echo "           - scripts/local/ (login, healthcheck, kill-switch helpers)"
+    echo "         A previously installed systemd unit (agent-${AGENT_NAME}.service)"
+    echo "         is also left in place; remove it with 'systemctl disable --now"
+    echo "         agent-${AGENT_NAME}.service' if you no longer want it."
+    echo ""
+  elif [ "$DEPLOYMENT_MODE_IS_DOCKER" != true ] && [ -f "$SCRIPT_DIR/docker-compose.yml" ]; then
+    echo ""
+    echo "WARNING: switching to local mode — these DOCKER-mode artifacts are now"
+    echo "         orphaned and were NOT deleted:"
+    echo "           - docker-compose.yml"
+    echo "           - docker/ (build context + mirrored plugin catalog)"
+    echo "         Remove them manually if you no longer want the docker setup."
+    echo ""
+  fi
 
   # Warn if agent.yml workspace differs from current directory (post-scaffold)
   local yml_workspace
@@ -1898,15 +1991,21 @@ regenerate() {
   render_to_file "$modules_dir/env-example.tpl" "$SCRIPT_DIR/.env.example"
   echo "  ✓ .env.example"
 
-  # Render docker-compose.yml
-  render_to_file "$modules_dir/docker-compose.yml.tpl" "$SCRIPT_DIR/docker-compose.yml"
-  echo "  ✓ docker-compose.yml"
+  # Docker-only artifacts (011): the compose file + the mirrored build context
+  # are rendered ONLY in docker mode. Local mode skips them entirely (no Docker)
+  # — this is the branch that keeps docker mode byte-identical (SC-002) while
+  # local mode produces zero Docker files.
+  if [ "$DEPLOYMENT_MODE_IS_DOCKER" = true ]; then
+    # Render docker-compose.yml
+    render_to_file "$modules_dir/docker-compose.yml.tpl" "$SCRIPT_DIR/docker-compose.yml"
+    echo "  ✓ docker-compose.yml"
 
-  # Mirror plugin catalog into docker/ build context. Picks up descriptor
-  # changes (modules/plugins/<id>.yml) on every regenerate so the next
-  # `docker compose build` bakes the latest set into the image.
-  mirror_catalog_to_docker "$SCRIPT_DIR"
-  echo "  ✓ docker/scripts/lib/plugin-catalog.sh + docker/modules/plugins/"
+    # Mirror plugin catalog into docker/ build context. Picks up descriptor
+    # changes (modules/plugins/<id>.yml) on every regenerate so the next
+    # `docker compose build` bakes the latest set into the image.
+    mirror_catalog_to_docker "$SCRIPT_DIR"
+    echo "  ✓ docker/scripts/lib/plugin-catalog.sh + docker/modules/plugins/"
+  fi
 
   # heartbeat.conf
   if [ "${FEATURES_HEARTBEAT_ENABLED:-false}" = "true" ]; then
@@ -1920,6 +2019,22 @@ regenerate() {
   # scaffolded before this fix.
   [ -d "$SCRIPT_DIR/scripts/heartbeat" ] && mkdir -p "$SCRIPT_DIR/scripts/heartbeat/logs"
 
+  # Local-mode artifacts (011): rendered ONLY when mode=local. The systemd unit
+  # itself is installed by install_service (it needs sudo for a system unit);
+  # here we render the workspace-side pieces (EnvironmentFile + login/kill-switch
+  # helpers). The healthcheck is added by US3.
+  if [ "$DEPLOYMENT_MODE_IS_DOCKER" != true ]; then
+    _export_local_context
+    render_to_file "$modules_dir/remote-control.env.tpl"   "$SCRIPT_DIR/.state/remote-control.env"
+    chmod 0640 "$SCRIPT_DIR/.state/remote-control.env" 2>/dev/null || true
+    render_to_file "$modules_dir/local-login.sh.tpl"       "$SCRIPT_DIR/scripts/local/agent-login.sh"
+    render_to_file "$modules_dir/local-killswitch.sh.tpl"  "$SCRIPT_DIR/scripts/local/agent-killswitch.sh"
+    render_to_file "$modules_dir/local-healthcheck.sh.tpl" "$SCRIPT_DIR/scripts/local/agent-healthcheck.sh"
+    render_to_file "$modules_dir/local-bootstrap.sh.tpl"   "$SCRIPT_DIR/scripts/local/agent-bootstrap.sh"
+    chmod +x "$SCRIPT_DIR"/scripts/local/*.sh 2>/dev/null || true
+    echo "  ✓ local artifacts (.state/remote-control.env, scripts/local/)"
+  fi
+
   if [ "${DEPLOYMENT_INSTALL_SERVICE:-false}" = "true" ]; then
     install_service "$agent_name" "$workspace"
   fi
@@ -1929,14 +2044,29 @@ regenerate() {
   maybe_print_plugin_hints
 }
 
-# Render a system-wide systemd unit that wraps `docker compose up -d`.
-# This requires sudo to install; if the user did not grant it, we print the
-# rendered file and instructions for a manual install.
+# Resolve operator/host context for local-mode render placeholders. In local
+# mode the identity is the CURRENT login user (D6), and these values are derived
+# on the target host at render time (Principle I) — re-resolved on --regenerate.
+# Idempotent; safe to call more than once.
+_export_local_context() {
+  export OPERATOR_USER OPERATOR_HOME HOST_NAME CLAUDE_BIN
+  OPERATOR_USER="$(id -un)"
+  OPERATOR_HOME="$HOME"
+  HOST_NAME="$(hostname)"
+  local _cli="${DEPLOYMENT_CLAUDE_CLI:-claude}"
+  CLAUDE_BIN="$(command -v "$_cli" 2>/dev/null || echo "$_cli")"
+}
+
+# Render + install a system-wide systemd unit. Docker mode wraps `docker compose
+# up -d`; local mode (011) installs the persistent `claude remote-control`
+# session unit. Both go to /etc/systemd/system/agent-<name>.service (A1: local
+# v1 is a SYSTEM unit, no `systemd --user`/linger). Requires sudo to install; if
+# the user did not grant it, we print the rendered file + manual instructions.
 install_service() {
   local agent_name="$1" workspace="$2"
   local modules_dir="$SCRIPT_DIR/modules"
   local unit_file="/etc/systemd/system/agent-${agent_name}.service"
-  local staged
+  local staged tpl
   staged=$(mktemp)
   # Bind $staged into the trap body at set-time (double quotes), not at
   # fire-time (single quotes). With set -u, fire-time expansion blew up
@@ -1944,7 +2074,13 @@ install_service() {
   # already gone out of scope, killing run_wizard before render_next_steps
   # and the initial-commit step.
   trap "rm -f '$staged'" RETURN
-  render_to_file "$modules_dir/systemd.service.tpl" "$staged"
+  if [ "${DEPLOYMENT_MODE_IS_DOCKER:-true}" = true ]; then
+    tpl="$modules_dir/systemd.service.tpl"
+  else
+    _export_local_context
+    tpl="$modules_dir/systemd-remote-control.service.tpl"
+  fi
+  render_to_file "$tpl" "$staged"
 
   if sudo -n true 2>/dev/null; then
     sudo cp "$staged" "$unit_file"
@@ -1956,6 +2092,29 @@ install_service() {
     echo "  ◦ agent-${agent_name}.service staged in workspace (sudo unavailable)"
     echo "    install manually: sudo cp ./agent-${agent_name}.service ${unit_file}"
     echo "                      sudo systemctl daemon-reload && sudo systemctl enable --now agent-${agent_name}.service"
+  fi
+
+  # Local mode also ships a healthcheck timer (US3). Install it alongside the
+  # session unit so the agent is observable out of the box; stage it if no sudo.
+  if [ "${DEPLOYMENT_MODE_IS_DOCKER:-true}" != true ]; then
+    local hc_svc="/etc/systemd/system/agent-${agent_name}-healthcheck.service"
+    local hc_tmr="/etc/systemd/system/agent-${agent_name}-healthcheck.timer"
+    local staged_svc staged_tmr
+    staged_svc=$(mktemp); staged_tmr=$(mktemp)
+    render_to_file "$modules_dir/local-healthcheck.service.tpl" "$staged_svc"
+    render_to_file "$modules_dir/local-healthcheck.timer.tpl"   "$staged_tmr"
+    if sudo -n true 2>/dev/null; then
+      sudo cp "$staged_svc" "$hc_svc"
+      sudo cp "$staged_tmr" "$hc_tmr"
+      sudo systemctl daemon-reload
+      sudo systemctl enable --now "agent-${agent_name}-healthcheck.timer" \
+        && echo "  ✓ healthcheck timer installed + enabled (~5 min)"
+    else
+      cp "$staged_svc" "$SCRIPT_DIR/scripts/local/agent-${agent_name}-healthcheck.service"
+      cp "$staged_tmr" "$SCRIPT_DIR/scripts/local/agent-${agent_name}-healthcheck.timer"
+      echo "  ◦ healthcheck units staged in scripts/local/ (sudo unavailable)"
+    fi
+    rm -f "$staged_svc" "$staged_tmr"
   fi
 }
 
@@ -2206,6 +2365,26 @@ main() {
       fi
       validate_agent_yml_required "$agent_yml" || exit 1
       regenerate
+      ;;
+    login)
+      if [ ! -f "$agent_yml" ]; then
+        echo "ERROR: agent.yml not found; run wizard first" >&2
+        exit 1
+      fi
+      local _login_mode
+      _login_mode=$(yq -r '.deployment.mode // "docker"' "$agent_yml")
+      if [ "$_login_mode" != "local" ]; then
+        echo "ERROR: --login is only for local mode (deployment.mode=local); this" >&2
+        echo "       workspace is '${_login_mode}'. Docker agents log in inside the" >&2
+        echo "       container (see NEXT_STEPS.md)." >&2
+        exit 1
+      fi
+      local _login_helper="$SCRIPT_DIR/scripts/local/agent-login.sh"
+      if [ ! -x "$_login_helper" ]; then
+        echo "ERROR: login helper not found ($_login_helper); run ./setup.sh --regenerate first." >&2
+        exit 1
+      fi
+      "$_login_helper"
       ;;
     uninstall)
       uninstall

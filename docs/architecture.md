@@ -2,6 +2,22 @@
 
 Docker mode runs each agent inside a container with a self-contained workspace on the host: both the editable files and the agent's private state (login, pairing, sessions) live under the same directory, mounted into the container via two bind-mounts. This section describes the layout, process tree, and lifecycle.
 
+## Deployment modes (`deployment.mode`)
+
+The wizard offers two deployment modes, persisted in `agent.yml` as `deployment.mode` (the single source of truth; legacy workspaces without the key are treated — and backfilled — as `docker`):
+
+| | `docker` (recommended, default) | `local` (opt-in, Linux/systemd only) |
+|---|---|---|
+| Runtime | Isolated Alpine container | Directly on the host as the operator's user |
+| Auth | Inference-only token (`CLAUDE_CODE_OAUTH_TOKEN`) | **Full-scope interactive OAuth login** (one-time per host) |
+| Session | `claude --channels` in tmux under a supervisor | `claude remote-control --spawn=session` under a systemd unit |
+| Artifacts | `docker-compose.yml`, `docker/` build context, docker systemd unit | systemd unit + `EnvironmentFile` + login/healthcheck/kill-switch helpers under `scripts/local/` |
+| Isolation | `cap_drop: ALL`, `no-new-privileges`, non-root (Principle II) | **None** — inherits the operator's privileges/secrets |
+
+The config base (`CLAUDE.md`, `.mcp.json`, `scripts/heartbeat/*`, vault, RAG) is rendered the same way in both modes; only the runtime wrapper differs. The branch lives in `setup.sh` (the docker-compose render + catalog mirror are skipped for `local`), so **docker mode stays byte-identical** to before this feature. Switching modes on `--regenerate` warns about the now-orphaned artifacts of the previous mode and never deletes them.
+
+> **Principle II trade-off (local mode).** Local mode is a deliberate, opt-in violation of the least-privilege container model: there is no container, so no `cap_drop`/`no-new-privileges`, and the agent runs as the operator's login user — inheriting their files, SSH keys, and tokens. It exists because Claude Code Remote Control **requires** a full-scope interactive login that ephemeral pods cannot provide. Mitigations: opt-in with an explicit wizard warning; docker mode untouched; never `--dangerously-skip-permissions` (live confirmations stay on); MFA mandatory; secrets confined to gitignored `.state/`. Remote Control persistence (login, trust, unit, healthcheck, kill-switch) is detailed in [`specs/011-local-standalone-mode/`](../specs/011-local-standalone-mode/); supervisor automation (heartbeat scheduling, plugin auto-install, qmd watcher, backups) is **not** ported to systemd in v1.
+
 ## Host / Container / Volume Layout
 
 ```

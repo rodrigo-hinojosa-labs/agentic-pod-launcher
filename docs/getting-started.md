@@ -35,6 +35,36 @@ Output:
 - `/etc/systemd/system/agent-<name>.service` — host unit to manage the container.
 - On-screen instructions for next steps.
 
+The wizard also asks for a **deployment mode**. Pick `docker` (recommended) for everything below. If you choose `local`, see the next section instead — the Docker-specific steps (First Boot, login, Telegram) do not apply.
+
+## Local standalone mode (Linux/systemd)
+
+`local` mode runs the agent **directly on the host** (no container) as a persistent `claude remote-control` session under systemd. It is **Linux/systemd only** and opt-in, with an explicit security warning at the prompt.
+
+**Choose local mode when** you need a Remote Control session you drive from claude.ai/code and the mobile app, tied to a persistent host/user. **Trade-off:** it breaks the container's least-privilege model — the agent runs as your login user and inherits your privileges and secrets, and whoever controls the claude.ai account controls the host (**MFA mandatory**). Prefer `docker` unless you specifically need this.
+
+After scaffolding in local mode, the one-time login is the only manual step:
+
+```bash
+cd ~/agents/<name>
+./setup.sh --login        # verifies Claude Code >= 2.1.51, pre-seeds onboarding,
+                          # launches the full-scope OAuth login, applies workspace
+                          # trust, and enables the systemd session unit
+```
+
+Remote Control requires a **full-scope interactive OAuth login** — the inference-only `claude setup-token` is rejected. On a headless host, tunnel the callback port over SSH (`ssh -L <port>:localhost:<port> host`) and complete the browser flow on your laptop. The login lands in `<workspace>/.state/.claude/.credentials.json` (0600, gitignored).
+
+Operate and verify:
+
+```bash
+systemctl status  agent-<name>.service          # session state
+journalctl -u     agent-<name>.service -f        # look for 'session url' / 'connected'
+./scripts/local/agent-killswitch.sh              # stop (Restart=always: stop does NOT relaunch)
+./scripts/agentctl status                        # systemd-aware status (docker subcommands degrade in local mode)
+```
+
+A healthcheck timer (~5 min) distinguishes alive / connected / expired and can notify on degradation. Because systemd/Linux cannot be exercised by the macOS DOCKER_E2E suite, local mode ships a **manual host verification gate** — see [`specs/011-local-standalone-mode/quickstart.md`](../specs/011-local-standalone-mode/quickstart.md) for the six production-verified checks (version, creds 0600, `is-active` + connection signal, `claude -p READY` without 401, idempotency, kill-9 auto-recovery).
+
 ## First Boot
 
 After scaffolding, start the agent:

@@ -237,3 +237,37 @@ YML
   run agent_yml_validate "$TMP_TEST_DIR/agent.yml"
   [ "$status" -eq 0 ]
 }
+
+# 011-local-standalone-mode: deployment.mode enum (docker|local). Optional +
+# enum-checked: absent is valid (legacy = docker), a present value must be in
+# the enum. NOT added to required-leaves (backfilled on --regenerate).
+@test "agent_yml_validate: deployment.mode=docker validates" {
+  _write_valid_yml
+  yq -i '.deployment.mode = "docker"' "$TMP_TEST_DIR/agent.yml"
+  run agent_yml_validate "$TMP_TEST_DIR/agent.yml"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "agent_yml_validate: deployment.mode=local validates" {
+  _write_valid_yml
+  yq -i '.deployment.mode = "local"' "$TMP_TEST_DIR/agent.yml"
+  run agent_yml_validate "$TMP_TEST_DIR/agent.yml"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "agent_yml_validate: deployment.mode bogus value → reported" {
+  _write_valid_yml
+  yq -i '.deployment.mode = "kubernetes"' "$TMP_TEST_DIR/agent.yml"
+  run agent_yml_validate "$TMP_TEST_DIR/agent.yml"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"deployment.mode must be one of"* ]]
+  [[ "$output" == *"kubernetes"* ]]
+}
+
+@test "agent_yml_validate: absent deployment.mode validates (legacy-safe)" {
+  _write_valid_yml
+  run agent_yml_validate "$TMP_TEST_DIR/agent.yml"
+  [ "$status" -eq 0 ]
+}

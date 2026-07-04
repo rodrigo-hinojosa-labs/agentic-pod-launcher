@@ -1,6 +1,6 @@
-# {{AGENT_DISPLAY_NAME}} — next steps (Docker mode)
+# {{AGENT_DISPLAY_NAME}} — next steps ({{#if DEPLOYMENT_MODE_IS_DOCKER}}Docker mode{{/if}}{{#unless DEPLOYMENT_MODE_IS_DOCKER}}local mode{{/unless}})
 
-Your agent is scaffolded as a Docker container at `{{DEPLOYMENT_WORKSPACE}}`.
+{{#if DEPLOYMENT_MODE_IS_DOCKER}}Your agent is scaffolded as a Docker container at `{{DEPLOYMENT_WORKSPACE}}`.
 
 ## 1. Build and launch
 
@@ -272,3 +272,46 @@ docker exec -u agent {{AGENT_NAME}} heartbeatctl logs         # runs.jsonl
 #### "N MCP servers failed" at launch
 
 Inside the agent run `/mcp` to see each server's state. Focus on the ones that matter: `plugin:telegram:telegram`, `atlassian-*`, `github`, `playwright`. Typical causes: missing env vars in `.env` (Atlassian tokens, GitHub PAT) or missing binaries (`bun`, `uvx`).
+{{/if}}{{#unless DEPLOYMENT_MODE_IS_DOCKER}}Your agent is scaffolded in **local mode** (Linux/systemd) at `{{DEPLOYMENT_WORKSPACE}}` — it runs directly on the host, no Docker container, as a persistent Claude Code Remote Control session under systemd.
+
+> **Security warning.** The agent runs as **your user** and inherits your privileges and secrets (files, SSH keys, tokens). There is no container isolation. Whoever controls the claude.ai account controls this host: **MFA is mandatory**. `--dangerously-skip-permissions` is never used.
+
+## Requirements (Linux host)
+
+- `systemd`, `jq`, `git`, `bash`.
+- Claude Code **>= 2.1.51** (the login helper verifies the version).
+- A claude.ai account on a Remote Control-capable plan (toggle ON for Team/Enterprise).
+- **MFA enabled** on the account.
+
+## 1. Full-scope login (one-time, the only manual step)
+
+```bash
+cd {{DEPLOYMENT_WORKSPACE}}
+./setup.sh --login        # verifies the version, pre-seeds onboarding, launches OAuth,
+                          # applies workspace trust, and enables the systemd session
+```
+
+- It is an interactive OAuth login (the inference-only token from `claude setup-token` does NOT work for Remote Control).
+- Headless: tunnel the callback port over SSH (`ssh -L <port>:localhost:<port> host`) and complete the OAuth in your browser.
+- It leaves `{{DEPLOYMENT_WORKSPACE}}/.state/.claude/.credentials.json` (0600, gitignored) and re-applies trust (the login rewrites `.claude.json`).
+- It is idempotent: re-running it is safe.
+
+## 2. Operation
+
+```bash
+systemctl status  agent-{{AGENT_NAME}}.service          # session state
+journalctl -u     agent-{{AGENT_NAME}}.service -f        # logs (look for 'session url'/'connected')
+./scripts/local/agent-killswitch.sh                     # KILL SWITCH (stop; --disable also disables boot)
+```
+
+You drive the agent from **claude.ai/code** and the mobile app (identity `<hostname>-{{AGENT_NAME}}`). A healthcheck runs on a timer (~5 min) and warns if the login expires or auth fails. Auto-recovery: if the process dies, systemd restarts it in ~10s (`Restart=always`).
+
+## 3. Verification gates (on the host)
+
+1. `claude --version` → >= 2.1.51.
+2. `.credentials.json` present and `0600` after login.
+3. `systemctl is-active agent-{{AGENT_NAME}}.service` = `active` **and** a connection signal in the journal.
+4. `CLAUDE_CONFIG_DIR={{DEPLOYMENT_WORKSPACE}}/.state/.claude claude -p "Reply: READY"` → `READY` with no 401.
+5. Idempotency: re-running `./setup.sh --regenerate` and `--login` changes nothing.
+6. Auto-recovery: `kill -9` the `claude remote-control` process → it restarts in ~10s.
+{{/unless}}

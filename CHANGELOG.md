@@ -3,6 +3,79 @@
 ## [Unreleased]
 
 ### Added
+- **Local standalone mode** (`011-local-standalone-mode`): a second wizard
+  **deployment mode** (`deployment.mode: docker|local` in `agent.yml`). Docker
+  (recommended) is **byte-identical** to before; local (opt-in, security-warned,
+  **Linux/systemd only**) renders the agent config base directly on the host —
+  no `docker-compose.yml`/Dockerfile — and persists a `claude remote-control`
+  session under systemd. Specced with GitHub Spec Kit under
+  `specs/011-local-standalone-mode/`. **VERSION 0.4.4 → 0.5.0.**
+  - **(US1)** Wizard mode choice (`docker` first/recommended, `local` second with
+    an explicit security warning). `deployment.mode` is the single source of
+    truth — validated by `schema.sh` (enum `docker|local`, optional, legacy-safe),
+    backfilled to `docker` on `--regenerate`, and surfaced as
+    `DEPLOYMENT_MODE_IS_DOCKER` to the render engine. Local scaffolds skip ALL
+    Docker artifacts (no compose, no `docker/` build context); `CLAUDE.md` and
+    `NEXT_STEPS` are mode-aware. A mode switch on `--regenerate` **warns** about
+    the now-orphaned artifacts of the previous mode and never deletes them
+    (FR-005a).
+  - **(US2)** Persistent Remote Control session via a **system** systemd unit
+    (`/etc/systemd/system/agent-<name>.service`): `Type=simple`,
+    `Restart=always`/`RestartSec=10`, restart budget 5/300s, `ExecCondition` on
+    `.credentials.json` (stays inactive — not failed — until login),
+    `WorkingDirectory`=workspace, `EnvironmentFile`, `User`=the operator's login
+    user, `ExecStart=claude remote-control --name <hostname>-<name>
+    --spawn=session --verbose`; **never** `--dangerously-skip-permissions`. A
+    guided one-time login helper (`./setup.sh --login`) verifies Claude Code
+    ≥ 2.1.51, pre-seeds onboarding non-destructively, launches the full-scope
+    OAuth login, then applies an idempotent, exact-equality `.claude.json`
+    trust-merge (`scripts/lib/local_trust.sh`), **pre-accepts the "Enable Remote
+    Control? (y/n)" prompt** (seeds `remoteDialogSeen=true`, non-destructively) —
+    without it the headless unit blocks forever on that interactive prompt (no
+    TTY), never registers, and shows offline in the app (gotcha #7, validated on
+    mclaren) — and **installs the staged systemd session unit and the healthcheck
+    timer/service if they aren't in place yet** — the scaffold stages them in the
+    workspace when `sudo -n` is unavailable, so `--login` (the first
+    interactive-sudo context) copies them into the systemd dir and enables them
+    instead of leaving a staged-but-inactive unit + an inactive ~5-min
+    healthcheck timer (both regressions validated on a sudo-prompt host). Plus an
+    `EnvironmentFile` (`CLAUDE_CONFIG_DIR` under `.state/.claude`,
+    `DISABLE_AUTOUPDATER=1`, no API key) and a kill-switch helper.
+  - **(US3)** Healthcheck (systemd timer ~5 min) distinguishing
+    alive/connected/expired (`systemctl is-active`; a live ESTABLISHED `:443`
+    socket owned by the session PID for the *connection* signal — **not** the
+    journal, since a healthy `--spawn=session` is silent and the old journal grep
+    false-WARNed on every tick; journal `401` for auth failure; `expiresAt` via
+    `jq`), degrading gracefully without `jq`/creds/`ss`;
+    optional notify keeps the token off argv (`curl --config -`). `agentctl`
+    degrades honestly in local mode — Docker-only subcommands error with a
+    `systemctl`/`journalctl` hint (never touching docker) and `status`/`doctor`
+    read systemd + the on-disk login.
+  - **(MCP runtimes)** Local mode now makes the workspace MCP servers actually
+    **runnable** on the host. Docker bakes uv/node/bun/`github-mcp-server` into
+    the image; local mode rendered `.mcp.json` but never provisioned them, so
+    every project MCP failed to connect (validated on mclaren:
+    `fetch`/`git`/`filesystem`/`atlassian`/`github` → "✘ Failed to connect" —
+    `uvx`/`npx`/`github-mcp-server` absent from every PATH). Three fixes:
+    **(a)** `.mcp.json` remaps the container paths `git --repository /workspace`
+    and `filesystem /home/agent` to the real `deployment.workspace` in local mode
+    (keyed on `DEPLOYMENT_MODE_IS_DOCKER`; docker byte-identical); **(b)** the
+    session `EnvironmentFile` pins `PATH` at the operator's `~/.local/bin` (the
+    unit otherwise inherits systemd's minimal PATH, which excludes every runtime);
+    **(c)** a new rendered `scripts/local/agent-bootstrap.sh` provisions exactly
+    the runtimes the `.mcp.json` references — uv/uvx (+ warm `uv tool install`),
+    node/npx symlinks (nvm or system), `github-mcp-server` (checksum-verified),
+    bun — into `~/.local/bin`. Idempotent + best-effort (never blocks login), run
+    by `--login` before the unit is enabled; `BOOTSTRAP_DRY_RUN=1` prints the plan
+    for the host-side bats suite. Version pins mirror the Dockerfile
+    (uv 0.11.22 / bun 1.3.14 / github-mcp-server 1.4.0). Vault/qmd container
+    paths in local mode are a follow-up.
+  - SECURITY: local mode is a justified, opt-in violation of the least-privilege
+    container model (Principle II) — it runs as the operator's user and inherits
+    their privileges/secrets; the wizard warns explicitly and MFA is mandatory.
+    Secrets (`.credentials.json`, `*.env`) live under `.state/` and are never
+    committed. Linux/systemd integration is validated by a documented manual host
+    gate (not exercisable by DOCKER_E2E on macOS).
 - **Self-managing RAG** (`010-self-managing-rag`): when `vault.qmd.enabled=true`,
   the QMD semantic-search engine over the agent's Obsidian vault now sets itself
   up and stays fresh with zero manual steps (opt-in; zero cost when disabled).

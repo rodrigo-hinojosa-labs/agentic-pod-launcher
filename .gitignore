@@ -18,8 +18,16 @@
 
 # Agent state (login, pairing, sessions, plugin cache) — bind-mounted to
 # /home/agent inside the container. Contains OAuth tokens and Telegram
-# credentials, must NEVER be committed.
+# credentials, must NEVER be committed. Local mode (011) keeps its secrets
+# here too: .state/remote-control.env, .state/.claude/.credentials.json,
+# .state/healthcheck-notify.env.
 /.state/
+
+# Local mode (011) — derived helpers + staged systemd units, regenerable from
+# agent.yml (not secrets; secrets live under /.state/ above).
+/scripts/local/
+/agent-*.service
+/agent-*.timer
 
 # Tooling
 node_modules/

@@ -37,6 +37,7 @@ run_wizard_with_dest() {
 @test "--in-place skips scaffold (files stay in installer)" {
   cd "$TMP_TEST_DIR/installer"
   run ./setup.sh --in-place <<EOF
+docker
 inp-bot
 InpBot
 r

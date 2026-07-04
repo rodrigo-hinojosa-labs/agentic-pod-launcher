@@ -16,6 +16,7 @@ deployment:
   workspace: "/home/test/agents/dockbot"
   install_service: true
   claude_cli: "claude"
+  mode: docker
 docker:
   image_tag: "agent-admin:latest"
   uid: 1000

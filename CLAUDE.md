@@ -130,34 +130,33 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3`. Already-p
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
-Active spec-kit feature: **010-self-managing-rag** — make the QMD semantic-search engine over the
-agent's Obsidian vault self-managing when `vault.qmd.enabled=true` (opt-in, zero-touch). Three
-problems today (`modules/mcp-json.tpl:72-77`): (a) `bunx @tobilu/qmd@latest mcp` is UNPINNED
-(Principle VI), (b) no auto-setup — the ~300MB embedding model + index never build themselves, (c) no
-auto-reindex — the index goes stale after first boot. Design (research D1–D9, brainstormed + approved):
-**US1** `qmd_setup_if_needed` (new `docker/scripts/lib/qmd_index.sh`) downloads model + builds the index
-at first boot, **backgrounded + timeout-bounded** from `boot_side_effects` (never blocks the watchdog,
-Principle IV), idempotent by sentinel+`index.sqlite`. **US2** dual-trigger reindex: an inotify watcher
-`docker/scripts/qmd_watch.sh` (new apk `inotify-tools`) with ~15s debounce for immediacy + a `*/5` cron
-backstop line in `heartbeatctl cmd_reload` — both call ONE `heartbeatctl qmd-reindex` → `qmd_reindex`
-(flock-guarded via `flock` already in image; hash-debounced reusing `backup_vault.sh::vault_hash`;
-atomic `qmd-index.json`). The watcher captures changes from MCPVault, native Write/Edit, AND Syncthing;
-respawned by a DETERMINISTIC PID-liveness check in the 2s poll (NOT the reverted heuristic bridge
-watchdog). **US3** pin `@tobilu/qmd@2.5.3` single-sourced via `agent.yml` `vault.qmd.version` (rendered
-into the template + read by the lib — no duplicate pin) + `schema.sh` validation for
-`vault.qmd.{enabled,version,schedule}`.
-KEY RESEARCH CORRECTION: the assumed `@tobilu/qmd@0.4.4` DOES NOT EXIST on npm; latest stable is
-**2.5.3** (CLI confirmed: `collection add`/`update`/`embed`/`mcp`; storage `~/.cache/qmd/` → under
-`.state`, persists, model downloads at first boot). Model/index/state live under the durable `.state`
-home; the index is regenerable so it is intentionally NOT added to `backup/vault`. Two new image-baked
-files each need their Dockerfile COPY (008/009 lesson). Test-first host-side
-(qmd-index/setup/watch/reindex-cmd bats + schema/mcp-json/scaffold pin updates) + DOCKER_E2E for
-first-boot setup, inotify-under-bind-mount, and cron backstop. CHANGELOG + VERSION 0.4.3→0.4.4.
-Plan: `specs/010-self-managing-rag/plan.md` · Spec: `specs/010-self-managing-rag/spec.md` ·
-Research: `specs/010-self-managing-rag/research.md` · Contracts: `specs/010-self-managing-rag/contracts/` ·
-Constitution: `.specify/memory/constitution.md`.
+Active spec-kit feature: **011-local-standalone-mode** — second wizard deployment mode
+`deployment.mode: docker|local` in `agent.yml`. `docker` (recommended) stays byte-identical; `local`
+(opt-in, security-warned) renders the agent config base on the HOST (no Docker) and runs a persistent
+`claude remote-control --name <hostname>-<name> --spawn=session --verbose` session via a **systemd** unit
+(`Restart=always`, `ExecCondition` on `.credentials.json`, trusted `WorkingDirectory`, EnvironmentFile with
+`CLAUDE_CONFIG_DIR=<ws>/.state/.claude` + `DISABLE_AUTOUPDATER=1`, no `--dangerously-skip-permissions`).
+Blocker: Remote Control needs a full-scope **interactive** OAuth login (one-time per host/user) — the
+inference-only token doesn't work, no headless path → host/user must be persistent; login is a guided
+manual step (`setup.sh --login`). **Scope v1 = Thin** (clarify): mode choice + config-base render +
+session persistence + guided login + trust-merge + healthcheck(+timer) + kill-switch + security warnings.
+DEFERRED to a follow-up: supervisor automation (heartbeat scheduling, plugin auto-install, qmd watcher,
+backups) — all container/`crond`-coupled today in `docker/scripts/`. Decisions (clarify): identity = the
+operator's **current login user** (inherits their privileges/secrets → max exposure, reinforced warning);
+**1 agent per host** in v1 (structure ready for N); `--regenerate` on mode-switch warns + stops
+regenerating the old set WITHOUT deleting (FR-005a). Constitution: **Principle II is a justified VIOLATION**
+in local mode (no container least-privilege) — opt-in, docker mode untouched, mitigations in Complexity
+Tracking; DOCKER_E2E can't exercise systemd on macOS → host-side bats with stubs + a manual Linux gate.
+Plan: `specs/011-local-standalone-mode/plan.md` · Spec/Research/Data-model/Contracts/Quickstart under
+`specs/011-local-standalone-mode/`. Linux/systemd only (macOS/launchd out of scope). VERSION bump pending.
+
 Prior: 001-deps-upgrade (PR #55), 002-fix-schema-bool, 003-bootstrap-hardening (PR #56),
 004-macos-bootstrap-hardening (PR #59), 005-fix-schema-false (PR #60), 006-headless-bootstrap (PR #61),
 007-fix-mcp-test-drift (PR #62), 008-fix-postlogin-plugin-install (PR #63),
-009-fix-extra-marketplace-install (PR #64) — all merged.
+009-fix-extra-marketplace-install (PR #64),
+010-self-managing-rag (PR #65) — all merged. 010 made QMD (`@tobilu/qmd@2.5.3`, pinned single-source via
+`agent.yml vault.qmd.version`) self-managing when `vault.qmd.enabled=true`: first-boot auto-setup
+(`qmd_setup_if_needed` in `docker/scripts/lib/qmd_index.sh`, backgrounded `collection add`+`update`+`embed`)
+plus dual-trigger reindex (inotify `docker/scripts/qmd_watch.sh` + `*/5` cron, both via `heartbeatctl
+qmd-reindex` → `qmd_reindex`, flock+hash-debounced). VERSION 0.4.4.
 <!-- SPECKIT END -->

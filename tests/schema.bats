@@ -57,7 +57,10 @@ teardown() { teardown_tmp_dir; }
   # setup.sh after render_load_context but before render_to_file. Adding
   # an entry here is a deliberate choice: the var must be set externally,
   # not derived from agent.yml.
-  local known_external=" NOTIFICATIONS_CHANNEL_IS_TELEGRAM PLUGINS_BLOCK NAME "
+  # OPERATOR_USER/OPERATOR_HOME/HOST_NAME/CLAUDE_BIN: resolved on the target
+  # host by setup.sh::_export_local_context for the local-mode artifacts (011).
+  local known_external=" NOTIFICATIONS_CHANNEL_IS_TELEGRAM PLUGINS_BLOCK NAME"
+  known_external="${known_external} OPERATOR_USER OPERATOR_HOME HOST_NAME CLAUDE_BIN "
 
   # Capture the env shape produced by render_load_context with the fixture.
   local before_env after_env produced
@@ -99,7 +102,9 @@ teardown() { teardown_tmp_dir; }
   # Predicates set externally by setup.sh (wizard) or by the regenerate path —
   # not derived from agent.yml scalars by render_load_context. Adding to this
   # list is a deliberate choice: the var must be set elsewhere.
-  local known_external=" NOTIFICATIONS_CHANNEL_IS_TELEGRAM"
+  # DEPLOYMENT_MODE_IS_DOCKER: derived in setup.sh (regenerate + render_next_steps)
+  # from deployment.mode for the docker-vs-local template branch (011).
+  local known_external=" NOTIFICATIONS_CHANNEL_IS_TELEGRAM DEPLOYMENT_MODE_IS_DOCKER"
   # Optional MCP toggles — exported by setup.sh during the wizard (one per
   # opt-in MCP the user enabled) and re-derived under --regenerate from
   # agent.yml.mcps.defaults[]. The fixture above doesn't list any optional

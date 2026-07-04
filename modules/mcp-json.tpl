@@ -6,11 +6,11 @@
     },
     "git": {
       "command": "uvx",
-      "args": ["mcp-server-git", "--repository", "/workspace"]
+      "args": ["mcp-server-git", "--repository", "{{#if DEPLOYMENT_MODE_IS_DOCKER}}/workspace{{/if}}{{#unless DEPLOYMENT_MODE_IS_DOCKER}}{{DEPLOYMENT_WORKSPACE}}{{/unless}}"]
     },
     "filesystem": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/agent"]
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "{{#if DEPLOYMENT_MODE_IS_DOCKER}}/home/agent{{/if}}{{#unless DEPLOYMENT_MODE_IS_DOCKER}}{{DEPLOYMENT_WORKSPACE}}{{/unless}}"]
     }{{#if MCPS_PLAYWRIGHT_ENABLED}},
     "playwright": {
       "command": "npx",

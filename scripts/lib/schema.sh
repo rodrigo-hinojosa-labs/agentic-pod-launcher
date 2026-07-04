@@ -51,6 +51,7 @@ _SCHEMA_REQUIRED_LEAVES=(
 # polices the *value* once it's populated.
 _SCHEMA_ENUMS=(
   '.notifications.channel=none,log,telegram'
+  '.deployment.mode=docker,local'
   '.docker.toolchain_channels.claude_code=stable,latest,pinned'
   '.docker.toolchain_channels.alpine=stable,latest,pinned'
   '.docker.toolchain_channels.uv=stable,latest,pinned'
