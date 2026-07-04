@@ -1919,11 +1919,15 @@ regenerate() {
   # block, so we precompute the resolved path here (template stays dumb). Docker
   # keeps its byte-identical /home/agent/.vault (the pre-existing quirk: docker
   # does not template vault.path in the MCP); local resolves under the workspace.
-  export VAULT_MCP_PATH
+  export VAULT_MCP_PATH GCAL_CREDS_PATH
   if [ "$DEPLOYMENT_MODE_IS_DOCKER" = true ]; then
     VAULT_MCP_PATH="/home/agent/.vault"
+    GCAL_CREDS_PATH="/home/agent/.gcal/gcp-oauth.keys.json"
   else
     VAULT_MCP_PATH="$LOCAL_VAULT_DIR"
+    # google-calendar creds live under .state (durable, workspace-local) — same
+    # rebase rule as the vault; /home/agent/.gcal doesn't exist on the host.
+    GCAL_CREDS_PATH="$SCRIPT_DIR/.state/.gcal/gcp-oauth.keys.json"
   fi
   # 012 (FR-012): systemd OnCalendar for the local qmd/backup timers, converted
   # from the cron schedules in agent.yml (single source). Unsupported cron forms

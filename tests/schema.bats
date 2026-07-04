@@ -63,7 +63,7 @@ teardown() { teardown_tmp_dir; }
   known_external="${known_external} OPERATOR_USER OPERATOR_HOME HOST_NAME CLAUDE_BIN "
   # 012: derived in setup.sh for the local vault MCP arg + vault/qmd entrypoints
   # and the qmd/backup timer OnCalendar values.
-  known_external="${known_external} VAULT_MCP_PATH LOCAL_VAULT_DIR QMD_TIMER_ONCALENDAR BACKUP_TIMER_ONCALENDAR "
+  known_external="${known_external} VAULT_MCP_PATH GCAL_CREDS_PATH LOCAL_VAULT_DIR QMD_TIMER_ONCALENDAR BACKUP_TIMER_ONCALENDAR "
 
   # Capture the env shape produced by render_load_context with the fixture.
   local before_env after_env produced
@@ -110,7 +110,7 @@ teardown() { teardown_tmp_dir; }
   # LOCAL_VAULT_DIR / QMD_TIMER_ONCALENDAR / BACKUP_TIMER_ONCALENDAR: derived in
   # setup.sh for the local-mode vault MCP arg + qmd/backup timer OnCalendar (012).
   local known_external=" NOTIFICATIONS_CHANNEL_IS_TELEGRAM DEPLOYMENT_MODE_IS_DOCKER"
-  known_external="${known_external} LOCAL_VAULT_DIR VAULT_MCP_PATH QMD_TIMER_ONCALENDAR BACKUP_TIMER_ONCALENDAR"
+  known_external="${known_external} LOCAL_VAULT_DIR VAULT_MCP_PATH GCAL_CREDS_PATH QMD_TIMER_ONCALENDAR BACKUP_TIMER_ONCALENDAR"
   # Optional MCP toggles — exported by setup.sh during the wizard (one per
   # opt-in MCP the user enabled) and re-derived under --regenerate from
   # agent.yml.mcps.defaults[]. The fixture above doesn't list any optional

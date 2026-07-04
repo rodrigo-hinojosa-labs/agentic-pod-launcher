@@ -31,7 +31,7 @@
       "command": "npx",
       "args": ["-y", "@cocal/google-calendar-mcp"],
       "env": {
-        "GOOGLE_OAUTH_CREDENTIALS": "/home/agent/.gcal/gcp-oauth.keys.json"
+        "GOOGLE_OAUTH_CREDENTIALS": "{{GCAL_CREDS_PATH}}"
       }
     }{{/if}}{{#if MCPS_AWS_ENABLED}},
     "aws": {

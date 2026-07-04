@@ -943,6 +943,58 @@ _local_docker_only() {
   } >&2
 }
 
+# feature 012 (FR-013): report state of a local companion unit.
+# Prints: active | installed | staged | absent
+_local_unit_state() {
+  local unit="$1" ws="$2"
+  if systemctl is-active --quiet "$unit" 2>/dev/null; then echo "active"
+  elif [ -f "/etc/systemd/system/$unit" ]; then echo "installed (inactive)"
+  elif [ -f "$ws/scripts/local/$unit" ]; then echo "staged (run --login)"
+  else echo "absent"; fi
+}
+
+# feature 012 (FR-013): vault/qmd subsystem lines for `status`. No output when
+# the workspace has no qmd/backup pieces (vault/qmd disabled → silent).
+_local_vault_qmd_status() {
+  local agent="$1" ws="$2"
+  local qmd_here=false bk_here=false
+  { [ -e "$ws/scripts/local/agent-qmd-reindex.sh" ] || [ -f "/etc/systemd/system/agent-${agent}-qmd-reindex.timer" ]; } && qmd_here=true
+  { [ -e "$ws/scripts/local/agent-vault-backup.sh" ] || [ -f "/etc/systemd/system/agent-${agent}-vault-backup.timer" ]; } && bk_here=true
+  [ "$qmd_here" = true ] || [ "$bk_here" = true ] || return 0
+  echo "  vault/RAG:"
+  if [ "$qmd_here" = true ]; then
+    echo "    qmd reindex timer : $(_local_unit_state "agent-${agent}-qmd-reindex.timer" "$ws")"
+    echo "    qmd watcher       : $(_local_unit_state "agent-${agent}-qmd-watch.service" "$ws")"
+    if [ -f "$ws/.state/.cache/qmd/index.sqlite" ]; then echo "    qmd index         : present"
+    else echo "    qmd index         : not built yet"; fi
+  fi
+  if [ "$bk_here" = true ]; then
+    echo "    vault backup timer: $(_local_unit_state "agent-${agent}-vault-backup.timer" "$ws")"
+  fi
+}
+
+# feature 012 (FR-013): vault/qmd checks for `doctor` (index present + last
+# reindex/backup from the state files). Silent when qmd/backup not present.
+_local_vault_qmd_doctor() {
+  local agent="$1" ws="$2"
+  if [ -e "$ws/scripts/local/agent-qmd-reindex.sh" ] || [ -f "$ws/scripts/heartbeat/qmd-index.json" ]; then
+    if [ -f "$ws/.state/.cache/qmd/index.sqlite" ]; then
+      _doctor_pass "QMD index present"
+    else
+      _doctor_warn "QMD index not built yet" "builds on --login or the reindex timer (~5 min)"
+    fi
+    if [ -f "$ws/scripts/heartbeat/qmd-index.json" ] && command -v jq >/dev/null 2>&1; then
+      local lr; lr=$(jq -r '.last_run // ""' "$ws/scripts/heartbeat/qmd-index.json" 2>/dev/null)
+      [ -n "$lr" ] && _doctor_pass "QMD last reindex: ${lr}"
+    fi
+  fi
+  if [ -f "$ws/scripts/heartbeat/vault-backup.json" ] && command -v jq >/dev/null 2>&1; then
+    local lp; lp=$(jq -r '.last_push // ""' "$ws/scripts/heartbeat/vault-backup.json" 2>/dev/null)
+    if [ -n "$lp" ]; then _doctor_pass "Vault backup last push: ${lp}"
+    else _doctor_warn "Vault backup has not pushed yet" "needs a configured fork + a vault change"; fi
+  fi
+}
+
 cmd_local_status() {
   local agent unit ws
   agent=$(resolve_agent_name) || exit $?
@@ -967,6 +1019,7 @@ cmd_local_status() {
   else
     echo "  login: missing — run ./setup.sh --login"
   fi
+  _local_vault_qmd_status "$agent" "$ws"
 }
 
 cmd_local_doctor() {
@@ -1007,6 +1060,8 @@ cmd_local_doctor() {
     _doctor_fail "Login missing (.credentials.json)" "./setup.sh --login"
     fails=1
   fi
+
+  _local_vault_qmd_doctor "$agent" "$ws"
 
   echo ""
   if [ "$fails" -eq 0 ]; then echo "Local checks passed."; exit 0

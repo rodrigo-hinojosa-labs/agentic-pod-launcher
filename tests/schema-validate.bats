@@ -205,6 +205,38 @@ YML
   [ -z "$output" ]
 }
 
+@test "agent_yml_validate: vault.enabled bool typo → reported (012 T031)" {
+  _write_valid_yml
+  yq -i '.vault.enabled = "yep"' "$TMP_TEST_DIR/agent.yml"
+  run agent_yml_validate "$TMP_TEST_DIR/agent.yml"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"vault.enabled must be a YAML boolean"* ]]
+}
+
+@test "agent_yml_validate: vault.mcp.enabled bool typo → reported (012 T031)" {
+  _write_valid_yml
+  yq -i '.vault.mcp.enabled = 1' "$TMP_TEST_DIR/agent.yml"
+  run agent_yml_validate "$TMP_TEST_DIR/agent.yml"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"vault.mcp.enabled must be a YAML boolean"* ]]
+}
+
+@test "agent_yml_validate: vault.path present but empty → reported (012 T031)" {
+  _write_valid_yml
+  yq -i '.vault.path = ""' "$TMP_TEST_DIR/agent.yml"
+  run agent_yml_validate "$TMP_TEST_DIR/agent.yml"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"vault.path"* ]]
+}
+
+@test "agent_yml_validate: vault.enabled/path absent still validates (legacy-safe, 012 T031)" {
+  _write_valid_yml
+  yq -i 'del(.vault)' "$TMP_TEST_DIR/agent.yml"
+  run agent_yml_validate "$TMP_TEST_DIR/agent.yml"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
 @test "agent_yml_validate: vault.qmd.version present but empty → reported" {
   _write_valid_yml
   yq -i '.vault.qmd.version = ""' "$TMP_TEST_DIR/agent.yml"

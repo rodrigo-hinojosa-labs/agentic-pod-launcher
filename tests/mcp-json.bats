@@ -108,6 +108,30 @@ EOF
   unset MCPS_PLAYWRIGHT_ENABLED MCPS_TIME_ENABLED MCPS_FIRECRAWL_ENABLED
 }
 
+@test ".mcp.json google-calendar creds path is mode-resolved (012 T032)" {
+  cat > "$TMP_TEST_DIR/agent.yml" << 'EOF'
+version: 1
+user:
+  timezone: "UTC"
+mcps:
+  atlassian: []
+  github:
+    enabled: false
+EOF
+  render_load_context "$TMP_TEST_DIR/agent.yml"
+  export MCPS_GOOGLE_CALENDAR_ENABLED=true
+  # docker
+  export GCAL_CREDS_PATH="/home/agent/.gcal/gcp-oauth.keys.json"
+  local docker_result; docker_result=$(render_template "$REPO_ROOT/modules/mcp-json.tpl")
+  echo "$docker_result" | jq . > /dev/null
+  [ "$(echo "$docker_result" | jq -r '.mcpServers["google-calendar"].env.GOOGLE_OAUTH_CREDENTIALS')" = "/home/agent/.gcal/gcp-oauth.keys.json" ]
+  # local
+  export GCAL_CREDS_PATH="/home/op/agents/locbot/.state/.gcal/gcp-oauth.keys.json"
+  local local_result; local_result=$(render_template "$REPO_ROOT/modules/mcp-json.tpl")
+  [ "$(echo "$local_result" | jq -r '.mcpServers["google-calendar"].env.GOOGLE_OAUTH_CREDENTIALS')" = "/home/op/agents/locbot/.state/.gcal/gcp-oauth.keys.json" ]
+  unset MCPS_GOOGLE_CALENDAR_ENABLED GCAL_CREDS_PATH
+}
+
 @test ".mcp.json has github when enabled" {
   cat > "$TMP_TEST_DIR/agent.yml" << 'EOF'
 version: 1

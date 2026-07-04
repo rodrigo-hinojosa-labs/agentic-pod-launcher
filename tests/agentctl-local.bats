@@ -92,3 +92,38 @@ teardown() { teardown_tmp_dir; }
   [[ "$output" == *"active"* ]]
   [ ! -f "$DOCKER_MARKER" ]
 }
+
+@test "local status: reports vault/RAG units + index when qmd is present (012 FR-013)" {
+  cd "$TMP_TEST_DIR"
+  mkdir -p scripts/local .state/.cache/qmd
+  : > scripts/local/agent-qmd-reindex.sh
+  : > scripts/local/agent-vault-backup.sh
+  : > .state/.cache/qmd/index.sqlite
+  run ./scripts/agentctl status
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"vault/RAG"* ]]
+  [[ "$output" == *"qmd reindex timer"* ]]
+  [[ "$output" == *"qmd index"* ]]
+  [[ "$output" == *"present"* ]]
+  [[ "$output" == *"vault backup timer"* ]]
+}
+
+@test "local status: NO vault/RAG block when qmd/backup absent (FR-010/FR-013)" {
+  cd "$TMP_TEST_DIR"
+  run ./scripts/agentctl status
+  [ "$status" -eq 0 ]
+  ! [[ "$output" == *"vault/RAG"* ]]
+}
+
+@test "local doctor: reports QMD index + last reindex/backup from state files (FR-013)" {
+  cd "$TMP_TEST_DIR"
+  mkdir -p scripts/local scripts/heartbeat .state/.cache/qmd
+  : > scripts/local/agent-qmd-reindex.sh
+  : > .state/.cache/qmd/index.sqlite
+  printf '{"last_run":"2026-07-04T10:00:00Z","last_status":"embedded"}\n' > scripts/heartbeat/qmd-index.json
+  printf '{"last_push":"2026-07-04T09:00:00Z","last_commit":"abc123"}\n' > scripts/heartbeat/vault-backup.json
+  run ./scripts/agentctl doctor
+  [[ "$output" == *"QMD index present"* ]]
+  [[ "$output" == *"QMD last reindex: 2026-07-04T10:00:00Z"* ]]
+  [[ "$output" == *"Vault backup last push: 2026-07-04T09:00:00Z"* ]]
+}
