@@ -3,6 +3,50 @@
 ## [Unreleased]
 
 ### Added
+- **Vault + RAG parity for local mode** (`012-local-vault-rag`): the vault/QMD
+  subsystem now works in local (systemd) mode, closing feature 011's FR-004
+  spec-vs-code gap and porting the deferred qmd watcher/timers + vault backup to
+  systemd. Docker stays **byte-identical** (SC-003, DOCKER_E2E). Specced with
+  GitHub Spec Kit under `specs/012-local-vault-rag/`. **VERSION 0.5.0 → 0.6.0.**
+  - **(US1)** `setup.sh` seeds the vault skeleton host-side (`_seed_vault_local`,
+    reusing the tested `vault.sh` lib) under `<ws>/<vault.path>` — no
+    `/home/agent` rebase — honoring `seed_skeleton` + `force_reseed` (resets the
+    flag). The vault MCP arg in `.mcp.json` is mode-resolved via a precomputed
+    `VAULT_MCP_PATH` (docker `/home/agent/.vault` byte-identical; local under the
+    workspace) — precomputed because the render engine does not support a mode
+    `{{#if}}` nested inside the `{{#if VAULT_MCP_ENABLED}}` block. Same treatment
+    for the google-calendar creds path (`GCAL_CREDS_PATH`, `.state/.gcal` in local).
+  - **(US2)** QMD RAG pipeline as systemd units: a rendered reindex entrypoint
+    (`scripts/local/agent-qmd-reindex.sh`) with a self-healing double hook
+    (`--login` dispatches a background `--setup-only`; the reindex timer runs
+    `setup-if-needed` then reindex, so a skipped/failed login still gets an index
+    on the first tick); a reindex `service`+`timer`; and an inotify watcher
+    `service` that degrades cleanly without inotify-tools via
+    `ExecCondition=command -v inotifywait` (a failed condition leaves the unit
+    inactive with no restart-loop — a "clean exit" wrapper would loop under
+    `Restart=always` and hit the start limit). QMD storage pinned under
+    `<ws>/.state/.cache/qmd` (workspace-durable, never backed up). Cron schedules
+    from `agent.yml` convert to systemd `OnCalendar` via `scripts/lib/local_schedule.sh`
+    (common forms `*/N`, `M * * * *`, `M H * * *`; unsupported → feature default +
+    warning).
+  - **(US3)** Vault backup as a systemd `timer`+`service` running a rendered
+    entrypoint over the shared `backup_vault.sh` (same hash-idempotency,
+    exclusions, orphan-branch push; resolves the vault under the workspace via the
+    additive `VAULT_ROOT_OVERRIDE`, no `/home/agent` rebase; no-op without a fork).
+    Closes the backup/restore asymmetry (`--restore-from-fork` already worked).
+  - **Lib relocation**: `qmd_index.sh`/`backup_vault.sh` → `scripts/lib/` and
+    `qmd_watch.sh` → `scripts/` become the canonical host-side source, mirrored
+    into `docker/` at scaffold/regenerate (like `vault.sh`); `start_services.sh`
+    and `heartbeatctl` gained repo-relative source fallbacks so host bats still
+    resolve them. Dockerfile `COPY` lines unchanged (they read the mirror).
+  - **(agentctl / FR-013)** `status`/`doctor` report the local vault/qmd units
+    (active/installed/staged/absent), the QMD index presence, and the last
+    reindex/backup from the state files. `--uninstall` now removes ALL local
+    companion units (session + healthcheck + qmd + backup — fixes the earlier
+    healthcheck-survives-uninstall gap); the kill switch also stops qmd units.
+  - **(schema)** `vault.enabled`/`vault.mcp.enabled` validated as booleans and
+    `vault.path`/`vault.backup_schedule` as optional non-empty strings
+    (legacy-safe: absent = valid).
 - **Local standalone mode** (`011-local-standalone-mode`): a second wizard
   **deployment mode** (`deployment.mode: docker|local` in `agent.yml`). Docker
   (recommended) is **byte-identical** to before; local (opt-in, security-warned,

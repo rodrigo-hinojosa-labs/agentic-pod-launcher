@@ -135,3 +135,46 @@ if [ -f "${SYSTEMD_DIR}/${HC_TMR}" ]; then
     echo "  ✓ ${HC_TMR} enabled (~5 min healthcheck)"
   fi
 fi
+
+# 7. QMD RAG units (012/US2): install the staged reindex timer + watcher if
+#    present (only staged when qmd is enabled), then dispatch a background
+#    first-run index build so search is ready soon. The timer also self-heals via
+#    setup-if-needed, so this dispatch is a best-effort head start. File-existence
+#    guarded, so it's a clean no-op when qmd is disabled.
+QMD_RI_SVC="agent-${AGENT_NAME}-qmd-reindex.service"
+QMD_RI_TMR="agent-${AGENT_NAME}-qmd-reindex.timer"
+QMD_WA_SVC="agent-${AGENT_NAME}-qmd-watch.service"
+for _q in "$QMD_RI_SVC" "$QMD_RI_TMR" "$QMD_WA_SVC"; do
+  if [ ! -f "${SYSTEMD_DIR}/${_q}" ] && [ -f "${WORKSPACE}/scripts/local/${_q}" ]; then
+    sudo cp "${WORKSPACE}/scripts/local/${_q}" "${SYSTEMD_DIR}/${_q}" || true
+  fi
+done
+if [ -f "${SYSTEMD_DIR}/${QMD_RI_TMR}" ]; then
+  sudo systemctl daemon-reload || true
+  if sudo systemctl enable --now "$QMD_RI_TMR" "$QMD_WA_SVC"; then
+    echo "  ✓ qmd reindex timer + watcher enabled"
+  fi
+fi
+QMD_ENTRY="${WORKSPACE}/scripts/local/agent-qmd-reindex.sh"
+if [ -x "$QMD_ENTRY" ]; then
+  echo "▸ Building the QMD index in the background (first run)…"
+  nohup "$QMD_ENTRY" --setup-only >/dev/null 2>&1 &
+fi
+
+# 8. Vault backup units (012/US3): install the staged backup timer if present
+#    (only staged when vault is enabled). File-existence guarded → clean no-op
+#    otherwise. The timer needs a configured fork to actually push; without one
+#    the entrypoint is a clean no-op.
+BK_SVC="agent-${AGENT_NAME}-vault-backup.service"
+BK_TMR="agent-${AGENT_NAME}-vault-backup.timer"
+for _b in "$BK_SVC" "$BK_TMR"; do
+  if [ ! -f "${SYSTEMD_DIR}/${_b}" ] && [ -f "${WORKSPACE}/scripts/local/${_b}" ]; then
+    sudo cp "${WORKSPACE}/scripts/local/${_b}" "${SYSTEMD_DIR}/${_b}" || true
+  fi
+done
+if [ -f "${SYSTEMD_DIR}/${BK_TMR}" ]; then
+  sudo systemctl daemon-reload || true
+  if sudo systemctl enable --now "$BK_TMR"; then
+    echo "  ✓ ${BK_TMR} enabled"
+  fi
+fi

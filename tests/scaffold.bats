@@ -184,3 +184,19 @@ EOF
   [ -d "$dest/docker/modules/vault-skeleton/wiki/concepts" ]
   [ -f "$dest/docker/modules/vault-skeleton/_templates/summary.md" ]
 }
+
+@test "scaffold mirrors the relocated qmd/backup libs into docker/ byte-identical (012 T002)" {
+  # feature 012 relocated qmd_index.sh, backup_vault.sh (→ scripts/lib/) and
+  # qmd_watch.sh (→ scripts/). docker scaffold must mirror them into the build
+  # context so the Dockerfile COPY still finds them; byte-identical to the
+  # workspace canonical copy.
+  local dest="$TMP_TEST_DIR/scaffold-qmd-mirror"
+  run run_wizard_with_dest "$dest"
+  [ "$status" -eq 0 ]
+  [ -f "$dest/docker/scripts/lib/qmd_index.sh" ]
+  [ -f "$dest/docker/scripts/lib/backup_vault.sh" ]
+  [ -f "$dest/docker/scripts/qmd_watch.sh" ]
+  cmp -s "$dest/scripts/lib/qmd_index.sh"    "$dest/docker/scripts/lib/qmd_index.sh"
+  cmp -s "$dest/scripts/lib/backup_vault.sh" "$dest/docker/scripts/lib/backup_vault.sh"
+  cmp -s "$dest/scripts/qmd_watch.sh"        "$dest/docker/scripts/qmd_watch.sh"
+}

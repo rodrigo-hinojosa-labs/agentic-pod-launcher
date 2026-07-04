@@ -31,13 +31,17 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [start_services] $*" >&2; }
 
 # QMD self-managing RAG helpers (010, image-baked). Provides
 # qmd_setup_if_needed, qmd_reindex, _qmd_enabled, qmd_vault_dir. Sources
-# backup_vault.sh internally. Image path first; repo-relative fallback so host
-# bats tests that source this script get the qmd_* helpers too.
+# backup_vault.sh internally. Image path first; then the scaffolded-workspace
+# mirror (docker/scripts/lib/); then the launcher-repo canonical location
+# (scripts/lib/ — the libs were relocated there in feature 012, so host bats
+# tests that source this script from the repo still get the qmd_* helpers).
 # shellcheck source=/dev/null
 if [ -f /opt/agent-admin/scripts/lib/qmd_index.sh ]; then
   source /opt/agent-admin/scripts/lib/qmd_index.sh
 elif [ -f "$(dirname "${BASH_SOURCE[0]}")/lib/qmd_index.sh" ]; then
   source "$(dirname "${BASH_SOURCE[0]}")/lib/qmd_index.sh"
+elif [ -f "$(dirname "${BASH_SOURCE[0]}")/../../scripts/lib/qmd_index.sh" ]; then
+  source "$(dirname "${BASH_SOURCE[0]}")/../../scripts/lib/qmd_index.sh"
 fi
 
 # Backup-identity helpers (image-baked). Provides identity_whitelist,

@@ -31,7 +31,7 @@
       "command": "npx",
       "args": ["-y", "@cocal/google-calendar-mcp"],
       "env": {
-        "GOOGLE_OAUTH_CREDENTIALS": "/home/agent/.gcal/gcp-oauth.keys.json"
+        "GOOGLE_OAUTH_CREDENTIALS": "{{GCAL_CREDS_PATH}}"
       }
     }{{/if}}{{#if MCPS_AWS_ENABLED}},
     "aws": {
@@ -67,7 +67,7 @@
     }{{/if}}{{#if VAULT_MCP_ENABLED}},
     "vault": {
       "command": "npx",
-      "args": ["-y", "@bitbonsai/mcpvault@0.12.0", "/home/agent/.vault"],
+      "args": ["-y", "@bitbonsai/mcpvault@0.12.0", "{{VAULT_MCP_PATH}}"],
       "env": {}
     }{{/if}}{{#if VAULT_QMD_ENABLED}},
     "qmd": {

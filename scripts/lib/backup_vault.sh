@@ -18,9 +18,19 @@ _vault_git() {
   fi
 }
 
-# Resolve the in-container vault root from agent.yml.
-# stdout: absolute path under /home/agent. Empty if vault not enabled.
+# Resolve the vault root from agent.yml.
+# stdout: absolute path. Docker: rebased under /home/agent (bind-mount). Local
+# mode (012) sets VAULT_ROOT_OVERRIDE to the real workspace path, which wins
+# outright — no /home/agent rebase, since there is no bind-mount on the host.
+# Empty if vault not enabled (and no override given).
 vault_resolve_root() {
+  # Additive override: local-mode entrypoints export the resolved workspace
+  # vault path. Non-empty → return it verbatim (no rebase). Docker never sets it,
+  # so its rebase contract (fixed by the tests below) is untouched.
+  if [ -n "${VAULT_ROOT_OVERRIDE:-}" ]; then
+    printf '%s\n' "$VAULT_ROOT_OVERRIDE"
+    return 0
+  fi
   local agent_yml="${1:-/workspace/agent.yml}"
   [ -f "$agent_yml" ] || return 0
   local enabled vault_path

@@ -22,7 +22,7 @@ vault:
     version: "2.5.3"
 YAML
   # shellcheck source=/dev/null
-  source "$REPO_ROOT/docker/scripts/lib/qmd_index.sh"
+  source "$REPO_ROOT/scripts/lib/qmd_index.sh"
 }
 
 teardown() { teardown_tmp_dir; }

@@ -130,33 +130,32 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3`. Already-p
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
-Active spec-kit feature: **011-local-standalone-mode** — second wizard deployment mode
-`deployment.mode: docker|local` in `agent.yml`. `docker` (recommended) stays byte-identical; `local`
-(opt-in, security-warned) renders the agent config base on the HOST (no Docker) and runs a persistent
-`claude remote-control --name <hostname>-<name> --spawn=session --verbose` session via a **systemd** unit
-(`Restart=always`, `ExecCondition` on `.credentials.json`, trusted `WorkingDirectory`, EnvironmentFile with
-`CLAUDE_CONFIG_DIR=<ws>/.state/.claude` + `DISABLE_AUTOUPDATER=1`, no `--dangerously-skip-permissions`).
-Blocker: Remote Control needs a full-scope **interactive** OAuth login (one-time per host/user) — the
-inference-only token doesn't work, no headless path → host/user must be persistent; login is a guided
-manual step (`setup.sh --login`). **Scope v1 = Thin** (clarify): mode choice + config-base render +
-session persistence + guided login + trust-merge + healthcheck(+timer) + kill-switch + security warnings.
-DEFERRED to a follow-up: supervisor automation (heartbeat scheduling, plugin auto-install, qmd watcher,
-backups) — all container/`crond`-coupled today in `docker/scripts/`. Decisions (clarify): identity = the
-operator's **current login user** (inherits their privileges/secrets → max exposure, reinforced warning);
-**1 agent per host** in v1 (structure ready for N); `--regenerate` on mode-switch warns + stops
-regenerating the old set WITHOUT deleting (FR-005a). Constitution: **Principle II is a justified VIOLATION**
-in local mode (no container least-privilege) — opt-in, docker mode untouched, mitigations in Complexity
-Tracking; DOCKER_E2E can't exercise systemd on macOS → host-side bats with stubs + a manual Linux gate.
-Plan: `specs/011-local-standalone-mode/plan.md` · Spec/Research/Data-model/Contracts/Quickstart under
-`specs/011-local-standalone-mode/`. Linux/systemd only (macOS/launchd out of scope). VERSION bump pending.
+Active spec-kit feature: **012-local-vault-rag** — vault + RAG parity for local mode.
+Closes 011's FR-004 spec-vs-code gap (local vault never seeded; `.mcp.json` vault arg still
+`/home/agent/.vault`) and ports the deferred qmd watcher/timers + vault backup to systemd.
+Design (plan): relocate `qmd_index.sh`/`backup_vault.sh` → `scripts/lib/` and `qmd_watch.sh` →
+`scripts/` (canonical host-side, mirrored into `<dest>/docker/` at scaffold/regenerate exactly like
+`vault.sh` — NO checked-in copy under `docker/`); additive `VAULT_ROOT_OVERRIDE` env in
+`vault_resolve_root` (docker rebase contract untouched); rendered entrypoints in `scripts/local/`
+(`agent-qmd-reindex.sh --setup-only` for login-background, timer path runs setup-if-needed guard then
+reindex — self-healing double hook); 5 new systemd units gated by `vault.*` flags
+(`qmd-reindex.{service,timer}`, `qmd-watch.service` Restart=always, `vault-backup.{service,timer}`);
+cron→OnCalendar conversion of common forms w/ default+warning fallback (`scripts/lib/local_schedule.sh`,
+FR-012); QMD storage pinned to `<ws>/.state/.cache/qmd` (workspace-durable, never backed up);
+`agentctl status/doctor` report the new units + index freshness (FR-013). Docker byte-identical
+(SC-003, DOCKER_E2E gate). Artifacts: `specs/012-local-vault-rag/{spec,plan,research,data-model,quickstart}.md`
+and `contracts/{lib-relocation,local-qmd-pipeline,local-vault-backup}.md`. VERSION 0.5.0 → 0.6.0 pending.
+Manual Linux gate on mclaren (host currently down).
 
 Prior: 001-deps-upgrade (PR #55), 002-fix-schema-bool, 003-bootstrap-hardening (PR #56),
 004-macos-bootstrap-hardening (PR #59), 005-fix-schema-false (PR #60), 006-headless-bootstrap (PR #61),
 007-fix-mcp-test-drift (PR #62), 008-fix-postlogin-plugin-install (PR #63),
 009-fix-extra-marketplace-install (PR #64),
-010-self-managing-rag (PR #65) — all merged. 010 made QMD (`@tobilu/qmd@2.5.3`, pinned single-source via
-`agent.yml vault.qmd.version`) self-managing when `vault.qmd.enabled=true`: first-boot auto-setup
-(`qmd_setup_if_needed` in `docker/scripts/lib/qmd_index.sh`, backgrounded `collection add`+`update`+`embed`)
-plus dual-trigger reindex (inotify `docker/scripts/qmd_watch.sh` + `*/5` cron, both via `heartbeatctl
-qmd-reindex` → `qmd_reindex`, flock+hash-debounced). VERSION 0.4.4.
+010-self-managing-rag (PR #65), 011-local-standalone-mode (PR #66) — all merged. 011 added the second
+wizard **deployment mode** (`deployment.mode: docker|local`): local renders the agent base on the host and
+persists `claude remote-control --name <host>-<name> --spawn=session` via a systemd unit
+(`Restart=always`, `ExecCondition` on `.credentials.json`, trust-merge + `remoteDialogSeen` pre-seed in
+`--login`, staged-unit install, healthcheck timer w/ TCP :443 connection signal, MCP runtimes via
+`agent-bootstrap.sh` into `~/.local/bin`, unit PATH pinned in `remote-control.env`). Principle II is a
+justified opt-in VIOLATION in local mode; docker stays byte-identical. VERSION 0.5.0.
 <!-- SPECKIT END -->

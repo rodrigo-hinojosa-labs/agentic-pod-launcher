@@ -91,6 +91,13 @@ EOF
   # NO Docker artifacts
   [ ! -f docker-compose.yml ]
   [ ! -f docker/scripts/lib/plugin-catalog.sh ]
+  # relocated qmd/backup libs are NOT mirrored into docker/ in local mode (012 T002)
+  [ ! -f docker/scripts/lib/qmd_index.sh ]
+  [ ! -f docker/scripts/lib/backup_vault.sh ]
+  [ ! -f docker/scripts/qmd_watch.sh ]
+  # ...but the canonical copies still live under scripts/ for host-side use
+  [ -f scripts/lib/qmd_index.sh ]
+  [ -f scripts/qmd_watch.sh ]
   # config base IS present
   [ -f CLAUDE.md ]
   [ -f .mcp.json ]
