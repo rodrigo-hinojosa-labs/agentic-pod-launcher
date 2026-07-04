@@ -213,3 +213,39 @@ SH
   grep -q 'INSTALLED-TMR' "$LOGIN_SYSTEMD_DIR/agent-locbot-healthcheck.timer"
   ! grep -q 'STAGED-TMR-DIFFERENT' "$LOGIN_SYSTEMD_DIR/agent-locbot-healthcheck.timer"
 }
+
+@test "login: installs staged qmd units + enables timer/watcher + dispatches setup (012 T022)" {
+  printf 'STAGED-UNIT\n' > "$WS/agent-locbot.service"
+  # install_service staged the qmd units under scripts/local/ (no sudo at scaffold).
+  printf 'QMD-RI-SVC\n' > "$WS/scripts/local/agent-locbot-qmd-reindex.service"
+  printf 'QMD-RI-TMR\n' > "$WS/scripts/local/agent-locbot-qmd-reindex.timer"
+  printf 'QMD-WA-SVC\n' > "$WS/scripts/local/agent-locbot-qmd-watch.service"
+  # the reindex entrypoint the login dispatches for a first-run index build
+  cat > "$WS/scripts/local/agent-qmd-reindex.sh" << 'SH'
+#!/usr/bin/env bash
+echo "QMD-SETUP-RAN $*" >> "$TMP_QMD_MARKER"
+SH
+  chmod +x "$WS/scripts/local/agent-qmd-reindex.sh"
+  export TMP_QMD_MARKER="$TMP_TEST_DIR/qmd-marker"
+
+  run "$LOGIN"
+  [ "$status" -eq 0 ]
+
+  # staged qmd units copied into the systemd dir
+  [ -f "$LOGIN_SYSTEMD_DIR/agent-locbot-qmd-reindex.timer" ]
+  [ -f "$LOGIN_SYSTEMD_DIR/agent-locbot-qmd-watch.service" ]
+  grep -q 'QMD-RI-TMR' "$LOGIN_SYSTEMD_DIR/agent-locbot-qmd-reindex.timer"
+  # reindex timer + watcher enabled together
+  grep -q 'enable --now agent-locbot-qmd-reindex.timer agent-locbot-qmd-watch.service' "$TMP_TEST_DIR/systemctl.log"
+  # background first-run setup dispatched (synchronous message)
+  echo "$output" | grep -qi 'Building the QMD index'
+}
+
+@test "login: no qmd staged units -> qmd steps are a clean no-op (012)" {
+  printf 'STAGED-UNIT\n' > "$WS/agent-locbot.service"
+  [ ! -f "$WS/scripts/local/agent-qmd-reindex.sh" ]
+  run "$LOGIN"
+  [ "$status" -eq 0 ]
+  ! grep -q 'qmd-reindex.timer' "$TMP_TEST_DIR/systemctl.log"
+  ! echo "$output" | grep -qi 'Building the QMD index'
+}

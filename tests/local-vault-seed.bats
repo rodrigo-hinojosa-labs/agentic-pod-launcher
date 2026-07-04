@@ -76,6 +76,39 @@ _regen() { ( cd "$TMP_TEST_DIR" && echo 'n' | ./setup.sh --regenerate ); }
   [ -f "$TMP_TEST_DIR/.state/notes/wiki/CLAUDE.md" ]
 }
 
+@test "regenerate renders the qmd entrypoint+wrapper and re-renders on a 2nd pass (FR-011/G1)" {
+  cat > "$TMP_TEST_DIR/agent.yml" << YML
+version: 1
+agent: {name: locbot, display_name: "L", role: "r", vibe: "v"}
+user: {name: A, nickname: A, timezone: UTC, email: a@b.com, language: en}
+deployment: {host: rpi5, workspace: "$TMP_TEST_DIR", install_service: false, claude_cli: claude, mode: local}
+docker: {image_tag: "x:latest", uid: 1000, gid: 1000, base_image: "alpine:3.20"}
+notifications: {channel: none}
+features: {heartbeat: {enabled: false, interval: "30m", timeout: 300, retries: 1, default_prompt: "ok"}}
+vault:
+  enabled: true
+  seed_skeleton: true
+  path: .state/.vault
+  qmd: {enabled: true, version: "2.5.3", schedule: "*/5 * * * *"}
+YML
+  _regen
+  [ -x "$TMP_TEST_DIR/scripts/local/agent-qmd-reindex.sh" ]
+  [ -x "$TMP_TEST_DIR/scripts/local/agent-qmd-watch.sh" ]
+  # the entrypoint bakes the workspace-durable cache path
+  grep -q "QMD_CACHE_HOME=\"\${WORKSPACE}/.state/.cache/qmd\"" "$TMP_TEST_DIR/scripts/local/agent-qmd-reindex.sh"
+  # survives regenerate: remove it, regen again, it comes back (FR-011)
+  rm -f "$TMP_TEST_DIR/scripts/local/agent-qmd-reindex.sh"
+  _regen
+  [ -x "$TMP_TEST_DIR/scripts/local/agent-qmd-reindex.sh" ]
+}
+
+@test "regenerate with qmd disabled renders NO qmd entrypoint (cero costo cruzado, FR-010)" {
+  _seed true true      # vault on, qmd absent → disabled
+  _regen
+  [ ! -f "$TMP_TEST_DIR/scripts/local/agent-qmd-reindex.sh" ]
+  [ ! -f "$TMP_TEST_DIR/scripts/local/agent-qmd-watch.sh" ]
+}
+
 @test "force_reseed backs up the old vault, re-seeds, and resets the flag" {
   _seed true true         # seed once (force_reseed=false)
   _regen

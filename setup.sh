@@ -9,6 +9,7 @@ source "$SCRIPT_DIR/scripts/lib/render.sh"
 source "$SCRIPT_DIR/scripts/lib/plugin-catalog.sh"
 source "$SCRIPT_DIR/scripts/lib/mcp-catalog.sh"
 source "$SCRIPT_DIR/scripts/lib/schema.sh"
+source "$SCRIPT_DIR/scripts/lib/local_schedule.sh"
 source "$SCRIPT_DIR/scripts/lib/versions.sh"
 source "$SCRIPT_DIR/scripts/lib/fork.sh"
 
@@ -1924,6 +1925,12 @@ regenerate() {
   else
     VAULT_MCP_PATH="$LOCAL_VAULT_DIR"
   fi
+  # 012 (FR-012): systemd OnCalendar for the local qmd/backup timers, converted
+  # from the cron schedules in agent.yml (single source). Unsupported cron forms
+  # fall back to the feature defaults + a warning (cron_to_systemd_calendar).
+  export QMD_TIMER_ONCALENDAR BACKUP_TIMER_ONCALENDAR
+  QMD_TIMER_ONCALENDAR="$(cron_to_systemd_calendar "$(yq -r '.vault.qmd.schedule // ""' "$agent_yml")" '*-*-* *:0/5:00')"
+  BACKUP_TIMER_ONCALENDAR="$(cron_to_systemd_calendar "$(yq -r '.vault.backup_schedule // ""' "$agent_yml")" '*-*-* *:00:00')"
 
   # Mode-switch warning (FR-005a): detect a prior generation in the OTHER mode by
   # its on-disk artifacts and warn that they are now orphaned — WITHOUT deleting
@@ -2067,6 +2074,16 @@ regenerate() {
     render_to_file "$modules_dir/local-killswitch.sh.tpl"  "$SCRIPT_DIR/scripts/local/agent-killswitch.sh"
     render_to_file "$modules_dir/local-healthcheck.sh.tpl" "$SCRIPT_DIR/scripts/local/agent-healthcheck.sh"
     render_to_file "$modules_dir/local-bootstrap.sh.tpl"   "$SCRIPT_DIR/scripts/local/agent-bootstrap.sh"
+    # US2 (FR-004/005/006): QMD reindex entrypoint + watcher wrapper, rendered
+    # only when qmd is enabled. Their systemd units are installed by install_service.
+    if [ "$(yq -r '.vault.qmd.enabled // false' "$agent_yml")" = "true" ]; then
+      render_to_file "$modules_dir/local-qmd-reindex.sh.tpl" "$SCRIPT_DIR/scripts/local/agent-qmd-reindex.sh"
+      render_to_file "$modules_dir/local-qmd-watch.sh.tpl"   "$SCRIPT_DIR/scripts/local/agent-qmd-watch.sh"
+    fi
+    # US3 (FR-007): vault backup entrypoint, rendered when vault is enabled.
+    if [ "$(yq -r '.vault.enabled // false' "$agent_yml")" = "true" ]; then
+      render_to_file "$modules_dir/local-vault-backup.sh.tpl" "$SCRIPT_DIR/scripts/local/agent-vault-backup.sh"
+    fi
     chmod +x "$SCRIPT_DIR"/scripts/local/*.sh 2>/dev/null || true
     echo "  ✓ local artifacts (.state/remote-control.env, scripts/local/)"
     # US1/FR-001: seed the vault skeleton host-side (docker seeds at container
@@ -2186,6 +2203,57 @@ install_service() {
     fi
     rm -f "$staged_svc" "$staged_tmr"
   fi
+
+  # US2 (012): QMD RAG units — reindex service+timer and the inotify watcher.
+  # Only when qmd is enabled. Same staged-if-no-sudo pattern; --login installs
+  # the staged copies. VAULT_QMD_ENABLED is exported by render_load_context.
+  if [ "${DEPLOYMENT_MODE_IS_DOCKER:-true}" != true ] && [ "${VAULT_QMD_ENABLED:-false}" = "true" ]; then
+    local q_ri_svc="agent-${agent_name}-qmd-reindex.service"
+    local q_ri_tmr="agent-${agent_name}-qmd-reindex.timer"
+    local q_wa_svc="agent-${agent_name}-qmd-watch.service"
+    local s_ri_svc s_ri_tmr s_wa_svc
+    s_ri_svc=$(mktemp); s_ri_tmr=$(mktemp); s_wa_svc=$(mktemp)
+    render_to_file "$modules_dir/local-qmd-reindex.service.tpl" "$s_ri_svc"
+    render_to_file "$modules_dir/local-qmd-reindex.timer.tpl"   "$s_ri_tmr"
+    render_to_file "$modules_dir/local-qmd-watch.service.tpl"   "$s_wa_svc"
+    if sudo -n true 2>/dev/null; then
+      sudo cp "$s_ri_svc" "/etc/systemd/system/$q_ri_svc"
+      sudo cp "$s_ri_tmr" "/etc/systemd/system/$q_ri_tmr"
+      sudo cp "$s_wa_svc" "/etc/systemd/system/$q_wa_svc"
+      sudo systemctl daemon-reload
+      sudo systemctl enable --now "$q_ri_tmr" "$q_wa_svc" \
+        && echo "  ✓ qmd reindex timer + watcher installed + enabled"
+    else
+      cp "$s_ri_svc" "$SCRIPT_DIR/scripts/local/$q_ri_svc"
+      cp "$s_ri_tmr" "$SCRIPT_DIR/scripts/local/$q_ri_tmr"
+      cp "$s_wa_svc" "$SCRIPT_DIR/scripts/local/$q_wa_svc"
+      echo "  ◦ qmd units staged in scripts/local/ (sudo unavailable)"
+    fi
+    rm -f "$s_ri_svc" "$s_ri_tmr" "$s_wa_svc"
+  fi
+
+  # US3 (012): vault backup timer + service, when vault is enabled. Same staged
+  # pattern; --login installs staged copies. VAULT_ENABLED from render_load_context.
+  if [ "${DEPLOYMENT_MODE_IS_DOCKER:-true}" != true ] && [ "${VAULT_ENABLED:-false}" = "true" ]; then
+    local b_svc="agent-${agent_name}-vault-backup.service"
+    local b_tmr="agent-${agent_name}-vault-backup.timer"
+    local s_b_svc s_b_tmr
+    s_b_svc=$(mktemp); s_b_tmr=$(mktemp)
+    render_to_file "$modules_dir/local-vault-backup.service.tpl" "$s_b_svc"
+    render_to_file "$modules_dir/local-vault-backup.timer.tpl"   "$s_b_tmr"
+    if sudo -n true 2>/dev/null; then
+      sudo cp "$s_b_svc" "/etc/systemd/system/$b_svc"
+      sudo cp "$s_b_tmr" "/etc/systemd/system/$b_tmr"
+      sudo systemctl daemon-reload
+      sudo systemctl enable --now "$b_tmr" \
+        && echo "  ✓ vault backup timer installed + enabled"
+    else
+      cp "$s_b_svc" "$SCRIPT_DIR/scripts/local/$b_svc"
+      cp "$s_b_tmr" "$SCRIPT_DIR/scripts/local/$b_tmr"
+      echo "  ◦ vault backup units staged in scripts/local/ (sudo unavailable)"
+    fi
+    rm -f "$s_b_svc" "$s_b_tmr"
+  fi
 }
 
 # Validate that agent.yml has all the fields the rest of setup.sh +
@@ -2303,14 +2371,26 @@ uninstall() {
   else
     echo "  ⚠ docker not on PATH — skipping container teardown"
   fi
-  local unit_file="/etc/systemd/system/agent-${agent_name}.service"
-  if [ -f "$unit_file" ]; then
+  # Remove ALL local companion units, not just the session unit: the healthcheck
+  # (011) and the qmd/backup units (012). Guarded per-unit so absent ones are
+  # skipped. Fixes the earlier gap where the healthcheck timer survived uninstall.
+  local _local_units="agent-${agent_name}.service"
+  _local_units="$_local_units agent-${agent_name}-healthcheck.timer agent-${agent_name}-healthcheck.service"
+  _local_units="$_local_units agent-${agent_name}-qmd-reindex.timer agent-${agent_name}-qmd-reindex.service agent-${agent_name}-qmd-watch.service"
+  _local_units="$_local_units agent-${agent_name}-vault-backup.timer agent-${agent_name}-vault-backup.service"
+  local _any_unit=false _u
+  for _u in $_local_units; do [ -f "/etc/systemd/system/$_u" ] && _any_unit=true; done
+  if [ "$_any_unit" = true ]; then
     if sudo -n true 2>/dev/null; then
-      sudo systemctl disable --now "agent-${agent_name}.service" 2>/dev/null || true
-      sudo rm -f "$unit_file" && echo "  ✓ removed $unit_file" || true
+      for _u in $_local_units; do
+        if [ -f "/etc/systemd/system/$_u" ]; then
+          sudo systemctl disable --now "$_u" 2>/dev/null || true
+          sudo rm -f "/etc/systemd/system/$_u" && echo "  ✓ removed /etc/systemd/system/$_u" || true
+        fi
+      done
       sudo systemctl daemon-reload 2>/dev/null || true
     else
-      echo "  ◦ $unit_file present — remove manually with sudo"
+      echo "  ◦ local systemd units present — remove manually with sudo (agent-${agent_name}*.{service,timer})"
     fi
   fi
   rm -f "$SCRIPT_DIR/docker-compose.yml" && echo "  ✓ docker-compose.yml" || true
