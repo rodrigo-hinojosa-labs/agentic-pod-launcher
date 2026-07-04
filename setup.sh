@@ -1492,6 +1492,11 @@ mirror_catalog_to_docker() {
   local src_vault_skel="$dest/modules/vault-skeleton"
   local src_mcp_lib="$dest/scripts/lib/mcp-catalog.sh"
   local src_mcps="$dest/modules/mcps"
+  # feature 012: qmd/backup libs are canonical host-side (scripts/lib, scripts)
+  # and mirrored into docker/ so the Dockerfile COPY still finds them.
+  local src_qmd_index="$dest/scripts/lib/qmd_index.sh"
+  local src_backup_vault="$dest/scripts/lib/backup_vault.sh"
+  local src_qmd_watch="$dest/scripts/qmd_watch.sh"
   [ -f "$src_lib" ] || return 0
   [ -d "$src_plugins" ] || return 0
   mkdir -p "$dest/docker/scripts/lib" "$dest/docker/modules"
@@ -1500,6 +1505,15 @@ mirror_catalog_to_docker() {
   cp -R "$src_plugins" "$dest/docker/modules/plugins"
   if [ -f "$src_vault_lib" ]; then
     cp "$src_vault_lib" "$dest/docker/scripts/lib/vault.sh"
+  fi
+  if [ -f "$src_qmd_index" ]; then
+    cp "$src_qmd_index" "$dest/docker/scripts/lib/qmd_index.sh"
+  fi
+  if [ -f "$src_backup_vault" ]; then
+    cp "$src_backup_vault" "$dest/docker/scripts/lib/backup_vault.sh"
+  fi
+  if [ -f "$src_qmd_watch" ]; then
+    cp "$src_qmd_watch" "$dest/docker/scripts/qmd_watch.sh"
   fi
   if [ -d "$src_vault_skel" ]; then
     rm -rf "$dest/docker/modules/vault-skeleton"
@@ -1521,6 +1535,12 @@ mirror_catalog_to_docker() {
     || missing="${missing}\n  - docker/scripts/lib/plugin-catalog.sh"
   [ -f "$dest/docker/scripts/lib/vault.sh" ] \
     || missing="${missing}\n  - docker/scripts/lib/vault.sh"
+  [ -f "$dest/docker/scripts/lib/qmd_index.sh" ] \
+    || missing="${missing}\n  - docker/scripts/lib/qmd_index.sh"
+  [ -f "$dest/docker/scripts/lib/backup_vault.sh" ] \
+    || missing="${missing}\n  - docker/scripts/lib/backup_vault.sh"
+  [ -f "$dest/docker/scripts/qmd_watch.sh" ] \
+    || missing="${missing}\n  - docker/scripts/qmd_watch.sh"
   [ -f "$dest/docker/scripts/lib/mcp-catalog.sh" ] \
     || missing="${missing}\n  - docker/scripts/lib/mcp-catalog.sh"
   if [ ! -d "$dest/docker/modules/plugins" ] \
@@ -1889,6 +1909,22 @@ regenerate() {
     export DEPLOYMENT_MODE_IS_DOCKER=true
   fi
 
+  # feature 012: absolute vault dir in the workspace, for the local vault/qmd
+  # entrypoints (US2/US3). Docker mode ignores it.
+  export LOCAL_VAULT_DIR
+  LOCAL_VAULT_DIR="$SCRIPT_DIR/$(yq -r '.vault.path // ".state/.vault"' "$agent_yml")"
+  # Mode-resolved vault path for the vault MCP arg in mcp-json.tpl. The render
+  # engine does NOT support a mode {{#if}} nested inside the {{#if VAULT_MCP_ENABLED}}
+  # block, so we precompute the resolved path here (template stays dumb). Docker
+  # keeps its byte-identical /home/agent/.vault (the pre-existing quirk: docker
+  # does not template vault.path in the MCP); local resolves under the workspace.
+  export VAULT_MCP_PATH
+  if [ "$DEPLOYMENT_MODE_IS_DOCKER" = true ]; then
+    VAULT_MCP_PATH="/home/agent/.vault"
+  else
+    VAULT_MCP_PATH="$LOCAL_VAULT_DIR"
+  fi
+
   # Mode-switch warning (FR-005a): detect a prior generation in the OTHER mode by
   # its on-disk artifacts and warn that they are now orphaned — WITHOUT deleting
   # them (safe + traceable; the user removes them deliberately).
@@ -2033,6 +2069,9 @@ regenerate() {
     render_to_file "$modules_dir/local-bootstrap.sh.tpl"   "$SCRIPT_DIR/scripts/local/agent-bootstrap.sh"
     chmod +x "$SCRIPT_DIR"/scripts/local/*.sh 2>/dev/null || true
     echo "  ✓ local artifacts (.state/remote-control.env, scripts/local/)"
+    # US1/FR-001: seed the vault skeleton host-side (docker seeds at container
+    # boot; local has no boot, so we do it here). Closes 011's FR-004 gap.
+    _seed_vault_local "$agent_yml"
   fi
 
   if [ "${DEPLOYMENT_INSTALL_SERVICE:-false}" = "true" ]; then
@@ -2048,6 +2087,37 @@ regenerate() {
 # mode the identity is the CURRENT login user (D6), and these values are derived
 # on the target host at render time (Principle I) — re-resolved on --regenerate.
 # Idempotent; safe to call more than once.
+# Seed the vault skeleton into the workspace for local mode (US1/FR-001). Mirrors
+# the container's seed_vault_if_needed but resolves the vault under the workspace
+# (LOCAL_VAULT_DIR, no /home/agent rebase), uses the host skeleton, and creates
+# no /home/agent symlink. Idempotent; honors seed_skeleton + force_reseed (resets
+# the flag in agent.yml on a forced reseed, matching the container path).
+_seed_vault_local() {
+  local agent_yml="$1"
+  [ -f "$agent_yml" ] || return 0
+  [ "$(yq -r '.vault.enabled // false' "$agent_yml")" = "true" ] || return 0
+
+  local skeleton="$SCRIPT_DIR/modules/vault-skeleton"
+  local vault_root="$LOCAL_VAULT_DIR" today
+  today="$(date +%Y-%m-%d)"
+  # shellcheck source=/dev/null
+  . "$SCRIPT_DIR/scripts/lib/vault.sh"
+  vault_ensure_paths "$vault_root" || { echo "  WARNING: vault_ensure_paths failed for $vault_root" >&2; return 0; }
+
+  [ "$(yq -r '.vault.seed_skeleton // false' "$agent_yml")" = "true" ] || return 0
+  [ -d "$skeleton" ] || { echo "  WARNING: vault skeleton not found: $skeleton" >&2; return 0; }
+
+  if [ "$(yq -r '.vault.force_reseed // false' "$agent_yml")" = "true" ]; then
+    if vault_backup_and_reseed "$vault_root" "$skeleton" "$today"; then
+      yq -i '.vault.force_reseed = false' "$agent_yml" 2>/dev/null || true
+      echo "  ✓ vault re-seeded (force_reseed) → $vault_root (previous kept at ${vault_root}.backup-*)"
+    fi
+  else
+    vault_seed_if_empty "$vault_root" "$skeleton" "$today" \
+      && echo "  ✓ vault skeleton ready → $vault_root"
+  fi
+}
+
 _export_local_context() {
   export OPERATOR_USER OPERATOR_HOME HOST_NAME CLAUDE_BIN
   OPERATOR_USER="$(id -un)"

@@ -5,7 +5,7 @@
 
 load helper
 
-WATCH="$BATS_TEST_DIRNAME/../docker/scripts/qmd_watch.sh"
+WATCH="$BATS_TEST_DIRNAME/../scripts/qmd_watch.sh"
 
 setup() {
   setup_tmp_dir

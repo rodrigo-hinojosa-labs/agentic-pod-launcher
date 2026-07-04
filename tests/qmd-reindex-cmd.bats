@@ -78,7 +78,7 @@ YAML
   export QMD_INDEX_STATE_FILE="$BATS_TEST_TMPDIR/qmd-index.json"
   # Pre-seed the state with the CURRENT vault hash so the dry-run sees no change.
   # shellcheck source=/dev/null
-  source "$BATS_TEST_DIRNAME/../docker/scripts/lib/qmd_index.sh"
+  source "$BATS_TEST_DIRNAME/../scripts/lib/qmd_index.sh"
   local h; h=$(vault_hash "$QMD_VAULT_DIR")
   qmd_write_state "$QMD_INDEX_STATE_FILE" "$h" "indexed"
   run bash "$HEARTBEATCTL" qmd-reindex --dry-run

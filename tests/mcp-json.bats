@@ -140,6 +140,9 @@ vault:
     enabled: true
 EOF
   render_load_context "$TMP_TEST_DIR/agent.yml"
+  # docker mode resolves the vault MCP arg to /home/agent/.vault (precomputed in
+  # setup.sh; byte-identical to before).
+  export VAULT_MCP_PATH="/home/agent/.vault"
   result=$(render_template "$REPO_ROOT/modules/mcp-json.tpl")
   echo "$result" | jq . > /dev/null
   [ "$(echo "$result" | jq -r '.mcpServers.vault.command')" = "npx" ]
@@ -147,6 +150,30 @@ EOF
   [ "$(echo "$result" | jq -r '.mcpServers.vault.args[1]')" = "@bitbonsai/mcpvault@0.12.0" ]
   [ "$(echo "$result" | jq -r '.mcpServers.vault.args[2]')" = "/home/agent/.vault" ]
   [ "$(echo "$result" | jq -r '.mcpServers.vault.env')" = "{}" ]
+}
+
+@test ".mcp.json (local mode) points the vault MCP at the workspace vault, not /home/agent (012 T009)" {
+  cat > "$TMP_TEST_DIR/agent.yml" << 'EOF'
+version: 1
+user:
+  timezone: "UTC"
+mcps:
+  atlassian: []
+  github:
+    enabled: false
+vault:
+  enabled: true
+  mcp:
+    enabled: true
+EOF
+  render_load_context "$TMP_TEST_DIR/agent.yml"
+  # local mode: setup.sh sets VAULT_MCP_PATH to the resolved workspace vault dir.
+  export VAULT_MCP_PATH="/home/op/agents/locbot/.state/.vault"
+  result=$(render_template "$REPO_ROOT/modules/mcp-json.tpl")
+  echo "$result" | jq . > /dev/null
+  [ "$(echo "$result" | jq -r '.mcpServers.vault.command')" = "npx" ]
+  [ "$(echo "$result" | jq -r '.mcpServers.vault.args[2]')" = "/home/op/agents/locbot/.state/.vault" ]
+  [ "$(echo "$result" | jq -r '.mcpServers.vault.args[2]')" != "/home/agent/.vault" ]
 }
 
 @test ".mcp.json omits vault MCP when vault.mcp.enabled is false" {

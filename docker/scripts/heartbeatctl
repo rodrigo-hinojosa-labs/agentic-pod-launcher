@@ -19,6 +19,11 @@ RUNS_FILE="$HEARTBEAT_DIR/logs/runs.jsonl"
 # it directly (no sync loop needed in test context).
 CRONTAB_FILE="${HEARTBEATCTL_CRONTAB_FILE:-$HEARTBEAT_DIR/.crontab.staging}"
 LIB_DIR="${HEARTBEATCTL_LIB_DIR:-/opt/agent-admin/scripts/lib}"
+# feature 012: qmd_index.sh + backup_vault.sh are canonical under the launcher's
+# scripts/lib/ and only mirrored into docker/ (LIB_DIR) at scaffold/build. In the
+# container LIB_DIR has them; from the launcher repo (host bats) it does not, so
+# fall back to the relocated path so heartbeatctl still gets those helpers.
+_HBCTL_RELOCATED_LIB="$(dirname "${BASH_SOURCE[0]}")/../../scripts/lib"
 
 # shellcheck source=/dev/null
 [ -f "$LIB_DIR/interval.sh" ] && source "$LIB_DIR/interval.sh"
@@ -27,13 +32,23 @@ LIB_DIR="${HEARTBEATCTL_LIB_DIR:-/opt/agent-admin/scripts/lib}"
 # shellcheck source=/dev/null
 [ -f "$LIB_DIR/backup_identity.sh" ] && source "$LIB_DIR/backup_identity.sh"
 # shellcheck source=/dev/null
-[ -f "$LIB_DIR/backup_vault.sh" ]    && source "$LIB_DIR/backup_vault.sh"
+if [ -f "$LIB_DIR/backup_vault.sh" ]; then
+  source "$LIB_DIR/backup_vault.sh"
+elif [ -f "$_HBCTL_RELOCATED_LIB/backup_vault.sh" ]; then
+  # shellcheck source=/dev/null
+  source "$_HBCTL_RELOCATED_LIB/backup_vault.sh"
+fi
 # shellcheck source=/dev/null
 [ -f "$LIB_DIR/backup_config.sh" ]   && source "$LIB_DIR/backup_config.sh"
 # shellcheck source=/dev/null
 [ -f "$LIB_DIR/token_health.sh" ]    && source "$LIB_DIR/token_health.sh"
 # shellcheck source=/dev/null
-[ -f "$LIB_DIR/qmd_index.sh" ]       && source "$LIB_DIR/qmd_index.sh"
+if [ -f "$LIB_DIR/qmd_index.sh" ]; then
+  source "$LIB_DIR/qmd_index.sh"
+elif [ -f "$_HBCTL_RELOCATED_LIB/qmd_index.sh" ]; then
+  # shellcheck source=/dev/null
+  source "$_HBCTL_RELOCATED_LIB/qmd_index.sh"
+fi
 
 IDENTITY_STATE_DIR="${IDENTITY_STATE_DIR:-$WORKSPACE/.state}"
 IDENTITY_BACKUP_STATE_FILE="$HEARTBEAT_DIR/identity-backup.json"

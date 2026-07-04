@@ -2,7 +2,7 @@
 load 'helper'
 
 setup() {
-  LIB="$BATS_TEST_DIRNAME/../docker/scripts/lib/backup_vault.sh"
+  LIB="$BATS_TEST_DIRNAME/../scripts/lib/backup_vault.sh"
   # shellcheck source=/dev/null
   source "$LIB"
 
@@ -133,6 +133,30 @@ YAML
   run vault_resolve_root "$agent_yml"
   [ "$status" -eq 0 ]
   [ "$output" = "/home/agent/notes/personal" ]
+}
+
+@test "vault_resolve_root honors VAULT_ROOT_OVERRIDE (local mode, no /home/agent rebase) (012 T004)" {
+  local agent_yml="$BATS_TEST_TMPDIR/agent.yml"
+  cat > "$agent_yml" <<YAML
+vault:
+  enabled: true
+  path: .state/.vault
+YAML
+  VAULT_ROOT_OVERRIDE="/home/op/agents/bot/.state/.vault" run vault_resolve_root "$agent_yml"
+  [ "$status" -eq 0 ]
+  [ "$output" = "/home/op/agents/bot/.state/.vault" ]
+}
+
+@test "vault_resolve_root override wins even for a non-default vault.path (012 T004)" {
+  local agent_yml="$BATS_TEST_TMPDIR/agent.yml"
+  cat > "$agent_yml" <<YAML
+vault:
+  enabled: true
+  path: .state/notes/personal
+YAML
+  VAULT_ROOT_OVERRIDE="/ws/.state/notes/personal" run vault_resolve_root "$agent_yml"
+  [ "$status" -eq 0 ]
+  [ "$output" = "/ws/.state/notes/personal" ]
 }
 
 @test "vault_resolve_root prints nothing when vault is disabled" {
