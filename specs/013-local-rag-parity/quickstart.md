@@ -17,9 +17,10 @@ DOCKER_E2E=1 bats tests/docker-e2e-vault.bats
 DOCKER_E2E=1 bats tests/docker-e2e-smoke.bats    # flaky conocido en 1er boot — reintentar aislado
 ```
 
-## Gate 3 — Byte-identidad docker (test, no manual)
+## Gate 3 — Byte-identidad de renders no tocados (test, no manual)
 
-Render en modo docker de `.mcp.json` y de las units locales NO tocadas == contrato v0.6.0 (el bloque qmd conserva `"env": {}` exacto).
+- (a) Render en modo **docker**: `.mcp.json` (bloque qmd conserva `"env": {}` exacto) y NEXT_STEPS en/es == contrato v0.6.0.
+- (b) Render en modo **local** de las units NO tocadas (p. ej. `agent-<n>-qmd-watch.service`) == contrato v0.6.0 (solo cambia el wrapper).
 
 ## Gate 4 — mclaren (manual, confirmatorio; cuando el host vuelva)
 
@@ -31,6 +32,7 @@ Workspace `mclaren-admin` (RPi5, Debian trixie, arm64), rama del launcher con 01
 4. **MCP**: `claude mcp list` (config dir del workspace) → `vault` y `qmd` Connected; una búsqueda qmd devuelve contenido del vault.
 5. **Operabilidad**: `agentctl status` muestra last_run; simular error (renombrar bunx) → `agentctl doctor` warn + exit ≥1; `agentctl heartbeat qmd-reindex` ejecuta; kill switch → las 5 units detenidas, sin push al fork en la siguiente hora; restaurar.
 6. **Backup**: con fork configurado, `agentctl heartbeat backup-vault` → rama `backup/vault` actualizada.
+7. **Migración (SC-002)**: `rsync -a` (o `cp -a`) del workspace a una segunda ruta → el primer reindex en el destino es sentinel-hit (sin re-descarga de modelos ~300MB, sin reindexación completa) y una búsqueda qmd devuelve el corpus.
 
 ## Gate 5 — ferrari (manual, post-merge; valida FR-016 en docker real)
 

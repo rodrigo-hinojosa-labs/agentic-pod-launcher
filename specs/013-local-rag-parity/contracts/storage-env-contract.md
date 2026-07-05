@@ -29,3 +29,4 @@ El índice RAG local vive en el workspace y escritor/lector lo resuelven idénti
 3. Render docker de `.mcp.json`: **byte-idéntico** al fixture v0.6.0 (`"env": {}`).
 4. `schema.bats`: `QMD_MCP_ENV` en AMBAS listas `known_external`.
 5. Uninstall local con `--purge`: stub de `$HOME` verifica remoción de `agent-backup/vault-clone` y NO-remoción de `~/.cache/qmd`.
+6. Migración simulada (SC-002, analyze G4): `cp -a` del workspace stubbeado (sentinel + índice fake) a otra ruta → `qmd_setup_if_needed` es no-op por sentinel-hit en el destino; sin paths absolutos del origen embebidos en el estado.
