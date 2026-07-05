@@ -130,32 +130,36 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3`. Already-p
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
-Active spec-kit feature: **012-local-vault-rag** — vault + RAG parity for local mode.
-Closes 011's FR-004 spec-vs-code gap (local vault never seeded; `.mcp.json` vault arg still
-`/home/agent/.vault`) and ports the deferred qmd watcher/timers + vault backup to systemd.
-Design (plan): relocate `qmd_index.sh`/`backup_vault.sh` → `scripts/lib/` and `qmd_watch.sh` →
-`scripts/` (canonical host-side, mirrored into `<dest>/docker/` at scaffold/regenerate exactly like
-`vault.sh` — NO checked-in copy under `docker/`); additive `VAULT_ROOT_OVERRIDE` env in
-`vault_resolve_root` (docker rebase contract untouched); rendered entrypoints in `scripts/local/`
-(`agent-qmd-reindex.sh --setup-only` for login-background, timer path runs setup-if-needed guard then
-reindex — self-healing double hook); 5 new systemd units gated by `vault.*` flags
-(`qmd-reindex.{service,timer}`, `qmd-watch.service` Restart=always, `vault-backup.{service,timer}`);
-cron→OnCalendar conversion of common forms w/ default+warning fallback (`scripts/lib/local_schedule.sh`,
-FR-012); QMD storage pinned to `<ws>/.state/.cache/qmd` (workspace-durable, never backed up);
-`agentctl status/doctor` report the new units + index freshness (FR-013). Docker byte-identical
-(SC-003, DOCKER_E2E gate). Artifacts: `specs/012-local-vault-rag/{spec,plan,research,data-model,quickstart}.md`
-and `contracts/{lib-relocation,local-qmd-pipeline,local-vault-backup}.md`. VERSION 0.5.0 → 0.6.0 pending.
-Manual Linux gate on mclaren (host currently down).
+Active spec-kit feature: **013-local-rag-parity** — RAG agnostic to deployment mode. Plan:
+`specs/013-local-rag-parity/plan.md`. Closes the 30 confirmed gaps from the 2026-07-05 parity audit
+(49 aspects, adversarially verified). Three root causes in local mode: (RC1) the qmd binary reads
+`XDG_CACHE_HOME`/`QMD_CONFIG_DIR` — NOT `QMD_CACHE_HOME` (bash-lib bookkeeping only; verified against
+the npm tarball 2.5.3) → index/models land in `~operator/.cache/qmd`, not `<ws>/.state/.cache/qmd`;
+fix is an ATOMIC writer+reader pair: wrapper exports + granular `"env": {{QMD_MCP_ENV}}` in
+`mcp-json.tpl` (docker renders `{}` byte-identical — fixing only one side leaves the MCP reading a
+silently auto-created EMPTY sqlite). (RC2) the three 012 units lack PATH (systemd default excludes
+`~/.local/bin` bunx + `scripts/vendor/bin` yq) → wrappers self-provide PATH as first action.
+(RC3) watch wrapper misses `QMD_VAULT_DIR`/`VAULT_ROOT_OVERRIDE` → resolves `/home/agent/.vault`,
+start-limit → failed <35s; fix: exports + supervised loop (`while :; do …; sleep 30; done`, unit stays
+`active`, `failed` = real signal). US3 ops parity: kill-switch AUX_UNITS completes
+(+vault-backup.timer +healthcheck.timer — it kept PUSHING to the fork while "killed"), doctor honesty
+(last_status=error → warn, backup staleness 25h, exit codes 0/1/2), manual actions map to direct
+script exec (no systemctl/polkit), healthcheck WARN on watcher failed, NEXT_STEPS journal block,
+persistent `qmd-schedule.fallback` marker. TWO approved docker exceptions (DOCKER_E2E gate): flock in
+`qmd_setup_if_needed` (mirrored lib) and `ln -s bun → bunx` in Dockerfile — research CONFIRMED docker
+qmd never worked against real bunx (e2e stubs it; mcp `command: bunx` + `qmd_index.sh:88,137,215`).
+Artifacts: `specs/013-local-rag-parity/{spec,plan,research,data-model,quickstart}.md`, contracts/
+{storage-env-contract,batch-runtime-env,local-ops-parity,docker-qmd-runtime}.md. VERSION 0.6.0 → 0.7.0
+pending. Gates: host suite, DOCKER_E2E (mandatory), mclaren (confirmatory, host down), ferrari
+(docker qmd validation post-merge).
 
 Prior: 001-deps-upgrade (PR #55), 002-fix-schema-bool, 003-bootstrap-hardening (PR #56),
 004-macos-bootstrap-hardening (PR #59), 005-fix-schema-false (PR #60), 006-headless-bootstrap (PR #61),
 007-fix-mcp-test-drift (PR #62), 008-fix-postlogin-plugin-install (PR #63),
-009-fix-extra-marketplace-install (PR #64),
-010-self-managing-rag (PR #65), 011-local-standalone-mode (PR #66) — all merged. 011 added the second
-wizard **deployment mode** (`deployment.mode: docker|local`): local renders the agent base on the host and
-persists `claude remote-control --name <host>-<name> --spawn=session` via a systemd unit
-(`Restart=always`, `ExecCondition` on `.credentials.json`, trust-merge + `remoteDialogSeen` pre-seed in
-`--login`, staged-unit install, healthcheck timer w/ TCP :443 connection signal, MCP runtimes via
-`agent-bootstrap.sh` into `~/.local/bin`, unit PATH pinned in `remote-control.env`). Principle II is a
-justified opt-in VIOLATION in local mode; docker stays byte-identical. VERSION 0.5.0.
+009-fix-extra-marketplace-install (PR #64), 010-self-managing-rag (PR #65),
+011-local-standalone-mode (PR #66), 012-local-vault-rag (PR #67) — all merged. 011 added the second
+wizard **deployment mode** (`deployment.mode: docker|local`); Principle II is a justified opt-in
+VIOLATION in local mode. 012 ported vault+QMD+backup to local systemd (5 units, lib relocation to
+`scripts/lib/` with docker mirror, cron→OnCalendar via `local_schedule.sh`, `VAULT_ROOT_OVERRIDE`,
+mode-resolved `VAULT_MCP_PATH`/`GCAL_CREDS_PATH`). VERSION 0.6.0.
 <!-- SPECKIT END -->
