@@ -159,6 +159,13 @@ PY
   run in_container sh -c 'command -v inotifywait >/dev/null && echo HAVE_INOTIFY'
   [[ "$output" == *"HAVE_INOTIFY"* ]]
 
+  # 013 FR-016: `bunx` MUST exist in the REAL image (not via the PATH stub the
+  # pipeline uses) — the qmd MCP + qmd_index.sh call it. Assert the absolute path
+  # so the stub can't mask a missing symlink like it did before this feature.
+  run in_container sh -c 'test -x /usr/local/bin/bunx && readlink /usr/local/bin/bunx'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"/usr/local/bin/bun"* ]]
+
   # ── Phase 3: cron-path reindex is deterministic (no inotify dependency) ──────
   # Change the vault, run the EXACT command the cron line runs, assert state.
   in_container sh -c 'echo "# cron note" > /home/agent/.vault/cron-note.md'

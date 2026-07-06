@@ -3,6 +3,56 @@
 ## [Unreleased]
 
 ### Added
+- **RAG agnostic to deployment mode** (`013-local-rag-parity`): closes the 30
+  gaps a multi-agent parity audit (2026-07-05) confirmed between docker and local
+  RAG. The audit pre-ran the never-executed 012 mclaren gate statically and against
+  the real npm package, and found the local RAG chain broken in three root causes —
+  the index built (sometimes) on `--login` day and then never refreshed, with
+  `systemctl` showing everything healthy. **VERSION 0.6.0 → 0.7.0.** Docker stays
+  byte-identical except two audited, DOCKER_E2E-gated fixes (below).
+  - **(RC1/US1) Storage env contract.** The qmd binary honors `XDG_CACHE_HOME`
+    (index+models) and `QMD_CONFIG_DIR` (collections) — NOT `QMD_CACHE_HOME`, which
+    only the bash lib reads (verified against the `@tobilu/qmd@2.5.3` tarball). Local
+    mode wrote the index to `~operator/.cache/qmd`, so a workspace migration lost it
+    and `status`/`doctor` said "not built yet" forever. Fixed as an ATOMIC
+    writer+reader pair: `local-qmd-reindex.sh.tpl` exports both vars (keeping
+    `QMD_CACHE_HOME` so lib and binary converge under `<ws>/.state/.cache/qmd`), and
+    the qmd MCP `env` in `.mcp.json` is a precomputed `{{QMD_MCP_ENV}}` (docker emits
+    `{}` byte-identical; local emits the pin). Fixing only one side would leave the
+    MCP reading a silently EMPTY auto-created sqlite. `--purge`/`--nuke` in local now
+    remove the out-of-workspace vault backup clone cache.
+  - **(RC2/US2) PATH under systemd.** The three 012 units never set PATH; systemd's
+    minimal default excludes `~/.local/bin` (bunx) and `scripts/vendor/bin` (yq), so
+    every reindex tick failed `command -v bunx` and exited 0 "successfully" — the
+    index never refreshed and the vault backup never pushed. The three wrappers now
+    self-provide PATH as their first action (covers the timer, the watcher's dispatch
+    and the `--login` background setup).
+  - **(RC3/US2) Watcher env + resilience.** The watch wrapper missed
+    `QMD_VAULT_DIR`/`VAULT_ROOT_OVERRIDE`, so it resolved `/home/agent/.vault` and the
+    unit hit its start-limit → `failed` permanently in <35s. Now it exports the real
+    workspace vault and runs a supervised loop (`while :; … sleep 30`) so a transient
+    exit is retried in-process and the unit stays `active`; `failed` becomes a real
+    signal (feeds a new healthcheck WARN).
+  - **(US3) Operational honesty.** The kill switch now stops ALL units (it kept
+    pushing to the fork + notifying while "killed"); `agentctl doctor` degrades with
+    exit codes 0/1/2 on `last_status=error`, backup staleness (>25h), and a failed
+    watcher (it printed ✓ before); `agentctl heartbeat qmd-reindex|backup-vault` run
+    the local entrypoints (reindex refuses `--dry-run`; backup passes it through);
+    `status` shows last-run freshness; NEXT_STEPS documents the journal/timer
+    commands; a non-convertible cron schedule persists a consultable
+    `qmd-schedule.fallback` marker; the wizard warns when qmd is on but the service
+    isn't installed.
+  - **(FR-015, docker exception #1) Setup flock.** `qmd_setup_if_needed` serializes
+    under the reindex lock, so the `--login` dispatch and the first timer tick can't
+    both download the ~300MB model. Touches the mirrored lib → DOCKER_E2E gated.
+  - **(FR-016, docker exception #2) `bunx` in the image.** The Dockerfile shipped
+    only `bun`; `qmd_index.sh` and the qmd MCP call `bunx`, and the e2e stubbed it —
+    so **QMD in docker never ran against real binaries** since feature 010. Added
+    `ln -s bun bunx` + a DOCKER_E2E assertion against the real image.
+  - MIGRATION NOTE: local agents scaffolded before 013 have an index/config left in
+    `~operator/.cache/qmd` and `~/.config/qmd`. The index is regenerable — the first
+    post-upgrade setup rebuilds it under `<ws>/.state`; the old dirs can be removed
+    by hand (the launcher never auto-`rm`s in the operator's HOME).
 - **Vault + RAG parity for local mode** (`012-local-vault-rag`): the vault/QMD
   subsystem now works in local (systemd) mode, closing feature 011's FR-004
   spec-vs-code gap and porting the deferred qmd watcher/timers + vault backup to
