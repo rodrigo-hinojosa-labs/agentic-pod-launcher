@@ -104,3 +104,37 @@ EOF
   [ "$status" -eq 0 ]
   [ ! -f "$QMD_CACHE_HOME/.qmd-setup-ok" ]
 }
+
+# _install_bunx_slow — the winner holds the lock long enough for a concurrent
+# call to contend (013 FR-015).
+_install_bunx_slow() {
+  cat > "$TMP_TEST_DIR/bin/bunx" <<EOF
+#!/bin/sh
+echo "\$@" >> "$QMD_STUB_LOG"
+case "\$2" in collection) sleep 1; mkdir -p "$QMD_CACHE_HOME"; : > "$QMD_CACHE_HOME/index.sqlite" ;; esac
+exit 0
+EOF
+  chmod +x "$TMP_TEST_DIR/bin/bunx"
+  export PATH="$TMP_TEST_DIR/bin:$PATH"
+}
+
+@test "qmd_setup_if_needed serializes concurrent setups under flock — only one collection add (013 FR-015/T014)" {
+  command -v flock >/dev/null 2>&1 || skip "flock not available (macOS dev host)"
+  _install_bunx_slow
+  # Two concurrent setups against a fresh cache: the flock winner runs the full
+  # add→update→embed; the loser must skip (no duplicate ~300MB model / re-add).
+  qmd_setup_if_needed "$AGENT_YML" &
+  qmd_setup_if_needed "$AGENT_YML" &
+  wait
+  [ "$(grep -c 'collection add' "$QMD_STUB_LOG")" -eq 1 ]
+}
+
+@test "qmd_setup_if_needed sentinel-hit is a fast path that never reaches the lock (013 FR-015/T014)" {
+  _install_bunx
+  qmd_setup_if_needed "$AGENT_YML"          # build index + sentinel
+  run qmd_setup_if_needed "$AGENT_YML"      # second call: sentinel present
+  [ "$status" -eq 0 ]
+  # takes the pre-lock fast path ("already done"), never the lock path.
+  echo "$output" | grep -q "already done"
+  ! echo "$output" | grep -q "already running"
+}

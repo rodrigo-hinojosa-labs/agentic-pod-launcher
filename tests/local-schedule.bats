@@ -70,3 +70,28 @@ setup() { load_lib local_schedule; }
   [ "$output" != "*-*-* *:05:00" ]
   echo "$output" | grep -q 'DEF'
 }
+
+# 013 (FR-013/D10): the CRON_FALLBACK signal. Called directly (not via `run`, which
+# subshells) so the global is visible. Comparing stdout to the default is ambiguous
+# — "*/5 * * * *" converts EXACTLY to the qmd default — so this flag is the only
+# reliable "did we fall back?" signal for the marker in setup.sh.
+@test "CRON_FALLBACK=0 on exact conversions, incl. */5 (the false-positive case) — 013 T025" {
+  cron_to_systemd_calendar "*/5 * * * *" "*-*-* *:0/5:00" >/dev/null
+  [ "$CRON_FALLBACK" -eq 0 ]
+  cron_to_systemd_calendar "30 3 * * *" "DEF" >/dev/null
+  [ "$CRON_FALLBACK" -eq 0 ]
+  cron_to_systemd_calendar "15 * * * *" "DEF" >/dev/null
+  [ "$CRON_FALLBACK" -eq 0 ]
+}
+
+@test "CRON_FALLBACK=1 on a non-convertible custom cron — 013 T025" {
+  cron_to_systemd_calendar "0 * * * 1-5" "DEF" >/dev/null 2>&1
+  [ "$CRON_FALLBACK" -eq 1 ]
+  cron_to_systemd_calendar "0,30 * * * *" "DEF" >/dev/null 2>&1
+  [ "$CRON_FALLBACK" -eq 1 ]
+}
+
+@test "CRON_FALLBACK=0 on empty (intended default, NOT a fallback) — 013 T025" {
+  cron_to_systemd_calendar "" "DEF" >/dev/null
+  [ "$CRON_FALLBACK" -eq 0 ]
+}

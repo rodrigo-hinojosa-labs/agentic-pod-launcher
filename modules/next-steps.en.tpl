@@ -301,10 +301,26 @@ cd {{DEPLOYMENT_WORKSPACE}}
 ```bash
 systemctl status  agent-{{AGENT_NAME}}.service          # session state
 journalctl -u     agent-{{AGENT_NAME}}.service -f        # logs (look for 'session url'/'connected')
-./scripts/local/agent-killswitch.sh                     # KILL SWITCH (stop; --disable also disables boot)
+./scripts/local/agent-killswitch.sh                     # KILL SWITCH (stops session + qmd + backup + healthcheck)
 ```
+{{#if VAULT_QMD_ENABLED}}
+### RAG (QMD) — freshness & control
 
-You drive the agent from **claude.ai/code** and the mobile app (identity `<hostname>-{{AGENT_NAME}}`). A healthcheck runs on a timer (~5 min) and warns if the login expires or auth fails. Auto-recovery: if the process dies, systemd restarts it in ~10s (`Restart=always`).
+The reindex entrypoints are fail-silent (exit 0); their detail goes to the systemd journal, not a workspace log:
+
+```bash
+journalctl -u agent-{{AGENT_NAME}}-qmd-reindex.service   # scheduled reindex runs
+journalctl -u agent-{{AGENT_NAME}}-qmd-watch.service     # inotify watcher (reindex-on-change)
+systemctl list-timers 'agent-{{AGENT_NAME}}-*'           # every agent timer at a glance
+agentctl heartbeat qmd-reindex                           # force a reindex right now
+```
+{{/if}}{{#if VAULT_ENABLED}}
+```bash
+journalctl -u agent-{{AGENT_NAME}}-vault-backup.service  # vault backup pushes
+agentctl heartbeat backup-vault                          # force a vault backup (add --dry-run to preview)
+```
+{{/if}}
+You drive the agent from **claude.ai/code** and the mobile app (identity `<hostname>-{{AGENT_NAME}}`). A healthcheck runs on a timer (~5 min) and warns if the login expires, auth fails, or the QMD watcher unit is `failed`. Auto-recovery: if the process dies, systemd restarts it in ~10s (`Restart=always`).
 
 ## 3. Verification gates (on the host)
 

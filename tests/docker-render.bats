@@ -275,3 +275,9 @@ teardown() { teardown_tmp_dir; }
   [[ "$rendered" == *"*/2 * * * * /workspace/scripts/heartbeat/heartbeat.sh"* ]]
   [[ "$rendered" != *"* agent /workspace"* ]]
 }
+
+@test "Dockerfile symlinks bunx → bun so QMD runs against real binaries (013 FR-016/T033)" {
+  # Drift-guard (host, no Docker): the bun block ships only `bun`; qmd_index.sh
+  # and the qmd MCP call `bunx`. Without this symlink QMD in docker is broken.
+  grep -q 'ln -sf /usr/local/bin/bun /usr/local/bin/bunx' "$REPO_ROOT/docker/Dockerfile"
+}

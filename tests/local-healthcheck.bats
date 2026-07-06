@@ -37,9 +37,12 @@ YML
   cat > "$TMP_TEST_DIR/bin/systemctl" << 'SH'
 #!/usr/bin/env bash
 case "$*" in
-  *is-active*)     exit "${STUB_ACTIVE:-0}" ;;
-  *show*MainPID*)  echo "${STUB_MAINPID:-1234}" ;;
-  *)               exit 0 ;;
+  *is-active*)          exit "${STUB_ACTIVE:-0}" ;;
+  *show*MainPID*)       echo "${STUB_MAINPID:-1234}" ;;
+  # is-failed --quiet: NOT failed (1) by default; a test sets STUB_WATCH_FAILED=1.
+  *is-failed*qmd-watch*) [ "${STUB_WATCH_FAILED:-0}" = 1 ] && exit 0 || exit 1 ;;
+  *is-failed*)          exit 1 ;;
+  *)                    exit 0 ;;
 esac
 SH
   cat > "$TMP_TEST_DIR/bin/journalctl" << 'SH'
@@ -102,6 +105,25 @@ _write_creds() {  # _write_creds <expiresAt-ms>
   STUB_ACTIVE=0 STUB_MAINPID=0 run "$TMP_TEST_DIR/hc.sh"
   [ "$status" -eq 1 ]
   [[ "$output" == *"cannot verify connection"* ]]
+}
+
+@test "healthcheck WARN: a failed qmd-watch unit → WARN, never DEGRADED (013 FR-011/T023)" {
+  # active + connected + valid login, but the watcher unit is failed. The timer
+  # still backstops freshness, so this is a WARN (exit 1), not DEGRADED (exit 2).
+  _write_creds 99999999999999
+  STUB_ACTIVE=0 STUB_WATCH_FAILED=1 run "$TMP_TEST_DIR/hc.sh"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"WARN"* ]]
+  [[ "$output" == *"watcher failed"* ]]
+  ! [[ "$output" == *"DEGRADED"* ]]
+}
+
+@test "healthcheck: a healthy (non-failed) watcher adds no warning (013 FR-011)" {
+  # default STUB_WATCH_FAILED unset → is-failed returns 1 → no qmd warning.
+  _write_creds 99999999999999
+  STUB_ACTIVE=0 run "$TMP_TEST_DIR/hc.sh"
+  [ "$status" -eq 0 ]
+  ! [[ "$output" == *"watcher failed"* ]]
 }
 
 @test "healthcheck WARN: login expiring within 24h → exit 1" {

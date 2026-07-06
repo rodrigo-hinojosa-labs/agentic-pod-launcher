@@ -119,9 +119,15 @@ RUN set -eux; \
     unzip -q /tmp/bun.zip -d /tmp; \
     mv "/tmp/bun-linux-${bun_arch}-musl/bun" /usr/local/bin/bun; \
     chmod +x /usr/local/bin/bun; \
+    # 013 FR-016: the bun zip ships only `bun`, but qmd_index.sh and the qmd MCP
+    # invoke `bunx` — without this symlink QMD in docker never ran against real
+    # binaries (the e2e stubs bunx, which masked the gap since feature 010). The
+    # local bootstrap already makes the same symlink into ~/.local/bin.
+    ln -sf /usr/local/bin/bun /usr/local/bin/bunx; \
     rm -rf /tmp/bun.zip "/tmp/bun-linux-${bun_arch}-musl"; \
     apk del .bun-unpack; \
-    bun --version
+    bun --version; \
+    bunx --version
 
 # Install GitHub's official github-mcp-server Go binary (feature 004/US3),
 # replacing the deprecated `npx @modelcontextprotocol/server-github`. The Linux

@@ -53,6 +53,18 @@ else
   _demote WARN "cannot verify connection (ss unavailable or MainPID unknown)"
 fi
 
+# 2c. QMD watcher liveness (013 FR-011). Only meaningful when the watcher unit is
+#     installed (qmd enabled). A `failed` watcher means reindex-on-change is dead —
+#     but the reindex timer is the backstop, so this is a WARN, never DEGRADED. The
+#     supervised loop (FR-007) keeps the unit `active` through transient hiccups, so
+#     `failed` here signals a real anomaly worth the operator's attention.
+WATCH_UNIT="agent-${AGENT_NAME}-qmd-watch.service"
+# is-failed is non-zero for an absent/inactive unit (a non-qmd agent), so this is
+# self-gating: only a genuinely `failed` watcher warns — no /etc path check needed.
+if command -v systemctl >/dev/null 2>&1 && systemctl is-failed --quiet "$WATCH_UNIT"; then
+  _demote WARN "qmd watcher failed (start-limit? reindex-on-change down — timer still backstops)"
+fi
+
 # 3. Credential expiry — needs jq + readable creds; degrade gracefully if not.
 if command -v jq >/dev/null 2>&1 && [ -r "$CREDS" ]; then
   now_ms=$(( $(date +%s) * 1000 ))

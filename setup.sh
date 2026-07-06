@@ -1929,12 +1929,53 @@ regenerate() {
     # rebase rule as the vault; /home/agent/.gcal doesn't exist on the host.
     GCAL_CREDS_PATH="$SCRIPT_DIR/.state/.gcal/gcp-oauth.keys.json"
   fi
+  # 013 (RC1/FR-001): the qmd MCP server (the READER) must resolve the SAME index
+  # storage as the reindex writer. The qmd binary honors XDG_CACHE_HOME +
+  # QMD_CONFIG_DIR (verified against the 2.5.3 tarball) — not QMD_CACHE_HOME. We
+  # precompute the env object per mode (the render engine can't nest a mode
+  # {{#if}} inside {{#if VAULT_QMD_ENABLED}}) and render it as `"env": {{QMD_MCP_ENV}}`.
+  # Docker emits exactly `{}` → byte-identical to v0.6.0. Fixing only the writer
+  # (not this) would leave the MCP reading ~operator/.cache/qmd where qmd
+  # auto-creates a silently EMPTY sqlite → RAG permanently blank, no error.
+  export QMD_MCP_ENV
+  if [ "$DEPLOYMENT_MODE_IS_DOCKER" = true ]; then
+    QMD_MCP_ENV="{}"
+  else
+    QMD_MCP_ENV="{\"XDG_CACHE_HOME\": \"$SCRIPT_DIR/.state/.cache\", \"QMD_CONFIG_DIR\": \"$SCRIPT_DIR/.state/.config/qmd\"}"
+  fi
   # 012 (FR-012): systemd OnCalendar for the local qmd/backup timers, converted
   # from the cron schedules in agent.yml (single source). Unsupported cron forms
   # fall back to the feature defaults + a warning (cron_to_systemd_calendar).
   export QMD_TIMER_ONCALENDAR BACKUP_TIMER_ONCALENDAR
-  QMD_TIMER_ONCALENDAR="$(cron_to_systemd_calendar "$(yq -r '.vault.qmd.schedule // ""' "$agent_yml")" '*-*-* *:0/5:00')"
+  # 013 (FR-013/D10): capture the OnCalendar AND the CRON_FALLBACK signal from the
+  # SAME subshell — command substitution runs in a subshell, so the global set
+  # inside cron_to_systemd_calendar would be lost otherwise. The function prints
+  # the OnCalendar on line 1; we append the flag and split. Comparing stdout to
+  # the default is ambiguous ("*/5 * * * *" converts exactly to the default), so
+  # the explicit flag is the only reliable signal.
+  local _qmd_sched _qmd_sched_raw _qmd_fallback
+  _qmd_sched="$(yq -r '.vault.qmd.schedule // ""' "$agent_yml")"
+  _qmd_sched_raw="$(cron_to_systemd_calendar "$_qmd_sched" '*-*-* *:0/5:00'; printf 'FALLBACK=%s' "$CRON_FALLBACK")"
+  QMD_TIMER_ONCALENDAR="${_qmd_sched_raw%%$'\n'FALLBACK=*}"
+  _qmd_fallback="${_qmd_sched_raw##*FALLBACK=}"
   BACKUP_TIMER_ONCALENDAR="$(cron_to_systemd_calendar "$(yq -r '.vault.backup_schedule // ""' "$agent_yml")" '*-*-* *:00:00')"
+
+  # 013 (FR-013/D10): persist a consultable marker when the qmd schedule fell back
+  # to the default (a non-convertible custom cron), so status/doctor can report it
+  # instead of a warning that scrolled past in the regenerate output. Docker mode
+  # removes it unconditionally (a local→docker mode switch must not leave the
+  # marker orphaned — analyze C1). Derived purely by --regenerate (Principle I).
+  local _qmd_fallback_marker="$SCRIPT_DIR/scripts/heartbeat/qmd-schedule.fallback"
+  if [ "$DEPLOYMENT_MODE_IS_DOCKER" = false ] && [ "${_qmd_fallback:-0}" = 1 ]; then
+    mkdir -p "$(dirname "$_qmd_fallback_marker")" 2>/dev/null || true
+    {
+      printf 'original=%s\n' "$_qmd_sched"
+      printf 'applied=%s\n' "$QMD_TIMER_ONCALENDAR"
+      printf 'at=%s\n' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    } > "$_qmd_fallback_marker" 2>/dev/null || true
+  else
+    rm -f "$_qmd_fallback_marker" 2>/dev/null || true
+  fi
 
   # Mode-switch warning (FR-005a): detect a prior generation in the OTHER mode by
   # its on-disk artifacts and warn that they are now orphaned — WITHOUT deleting
@@ -2097,6 +2138,20 @@ regenerate() {
 
   if [ "${DEPLOYMENT_INSTALL_SERVICE:-false}" = "true" ]; then
     install_service "$agent_name" "$workspace"
+  fi
+
+  # 013 (D13/analyze G3): in local mode, if QMD is enabled but the operator
+  # declined to install the systemd service, the RAG has NO automatic trigger —
+  # the reindex timer + watcher aren't installed, so the index never builds or
+  # refreshes on its own. Warn explicitly instead of degrading silently.
+  if [ "$DEPLOYMENT_MODE_IS_DOCKER" = false ] \
+     && [ "${VAULT_QMD_ENABLED:-false}" = "true" ] \
+     && [ "${DEPLOYMENT_INSTALL_SERVICE:-false}" != "true" ]; then
+    echo ""
+    echo "WARNING: QMD (RAG) is enabled but the systemd service was not installed."
+    echo "         The reindex timer + watcher won't run, so the index will not build"
+    echo "         or refresh automatically. Install later with: ./setup.sh --login"
+    echo "         (or run ./scripts/local/agent-qmd-reindex.sh --setup-only by hand)."
   fi
 
   echo ""
@@ -2439,9 +2494,22 @@ uninstall() {
   if [ "$UNINSTALL_PURGE" = true ]; then
     echo ""
     echo "▸ Purging source of truth, secrets, and state"
+    # 013 (FR-004/D12): read the deployment mode BEFORE removing agent.yml. In
+    # local mode the vault backup clone cache lives OUTSIDE the workspace, under
+    # the operator's ~/.cache — a copy of the vault markdown that would survive
+    # --purge/--nuke (data remanence). Docker keeps its clone inside .state
+    # (removed below). The qmd index/config now live under .state too (013 RC1)
+    # and vanish with the workspace; pre-013 legacy residue in ~/.cache/qmd stays
+    # untouched — manual cleanup, never an automatic rm in the operator's $HOME.
+    local _uninst_mode
+    _uninst_mode=$(yq -r '.deployment.mode // "docker"' "$agent_yml" 2>/dev/null || echo docker)
     rm -f "$agent_yml" && echo "  ✓ agent.yml" || true
     rm -f "$env_file" && echo "  ✓ .env" || true
     rm -rf "$SCRIPT_DIR/.state" && echo "  ✓ .state/ (login, pairing, sessions, plugin cache)" || true
+    if [ "$_uninst_mode" = "local" ]; then
+      local _vclone="${VAULT_BACKUP_CACHE_DIR:-$HOME/.cache/agent-backup}/vault-clone"
+      [ -e "$_vclone" ] && rm -rf "$_vclone" && echo "  ✓ ~/.cache/agent-backup/vault-clone (local backup cache)" || true
+    fi
   fi
 
   # ── Nuke: remove the workspace itself (and walk up if empty) ─────

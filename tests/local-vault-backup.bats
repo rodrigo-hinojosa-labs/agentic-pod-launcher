@@ -31,6 +31,7 @@ setup() {
 
   render_load_context "$TMP_TEST_DIR/agent.yml" >/dev/null 2>&1 || true
   export DEPLOYMENT_WORKSPACE="$WS" AGENT_NAME=locbot OPERATOR_USER=op
+  export OPERATOR_HOME="$TMP_TEST_DIR/home"
   export LOCAL_VAULT_DIR="$WS/.state/.vault"
   export BACKUP_TIMER_ONCALENDAR="*-*-* *:00:00"
   ENTRY="$WS/scripts/local/agent-vault-backup.sh"
@@ -50,6 +51,12 @@ scaffold: {fork: {url: "$fork"}}
 vault: {enabled: true, path: .state/.vault}
 YML
   cp "$TMP_TEST_DIR/agent.yml" "$WS/agent.yml"
+}
+
+@test "backup wrapper self-provisions PATH (~/.local/bin + vendor/bin) — 013 RC2/T011" {
+  # Without this, the vault-backup.service inherits systemd's minimal PATH, yq is
+  # unreachable, the fork_url read fails and the backup silently no-ops.
+  grep -q 'export PATH="'"$TMP_TEST_DIR/home"'/.local/bin:${WORKSPACE}/scripts/vendor/bin:$PATH"' "$ENTRY"
 }
 
 @test "first backup pushes a commit to backup/vault (workspace vault, no rebase)" {

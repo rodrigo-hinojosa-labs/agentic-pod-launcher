@@ -12,6 +12,12 @@ WORKSPACE="{{DEPLOYMENT_WORKSPACE}}"
 AGENT_YML="${WORKSPACE}/agent.yml"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# PATH (013 RC2/FR-005): the vault-backup.service inherits systemd's minimal PATH,
+# which excludes the vendored yq (scripts/vendor/bin) and git tooling in
+# ~/.local/bin. Without yq the fork_url read fails and the backup silently no-ops
+# even with a fork configured. Same fix as the qmd wrappers.
+export PATH="{{OPERATOR_HOME}}/.local/bin:${WORKSPACE}/scripts/vendor/bin:$PATH"
+
 export VAULT_ROOT_OVERRIDE="{{LOCAL_VAULT_DIR}}"
 export VAULT_BACKUP_STATE_FILE="${WORKSPACE}/scripts/heartbeat/vault-backup.json"
 export VAULT_BACKUP_CACHE_DIR="${VAULT_BACKUP_CACHE_DIR:-$HOME/.cache/agent-backup}"

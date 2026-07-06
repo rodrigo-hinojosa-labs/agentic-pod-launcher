@@ -76,6 +76,44 @@ teardown() { teardown_tmp_dir; }
   [ ! -f CLAUDE.md ]
 }
 
+@test "--uninstall --purge (local mode) removes the vault backup clone cache but NOT ~/.cache/qmd (013 US1/T005)" {
+  cd "$TMP_TEST_DIR"
+  # Local-mode agent.yml (the docker default from setup() would skip the clone rm).
+  cat > agent.yml << 'EOF'
+version: 1
+agent: {name: locbot, display_name: "L", role: "r", vibe: "v", use_default_principles: true}
+user: {name: A, nickname: A, timezone: UTC, email: a@b.com, language: en}
+deployment: {host: h, workspace: "/tmp/locbot", install_service: false, mode: local}
+notifications: {channel: none}
+features: {heartbeat: {enabled: false, interval: "30m", timeout: 300, retries: 1, default_prompt: "ok"}}
+mcps: {atlassian: [], github: {enabled: false}}
+plugins: []
+EOF
+  local STUB_HOME="$TMP_TEST_DIR/home"
+  mkdir -p "$STUB_HOME/.cache/agent-backup/vault-clone" "$STUB_HOME/.cache/qmd"
+  echo "private note" > "$STUB_HOME/.cache/agent-backup/vault-clone/note.md"
+  echo "index" > "$STUB_HOME/.cache/qmd/index.sqlite"
+
+  HOME="$STUB_HOME" run ./setup.sh --uninstall --purge --yes
+  [ "$status" -eq 0 ]
+  # vault clone (data remanence) removed; legacy qmd cache left untouched.
+  [ ! -e "$STUB_HOME/.cache/agent-backup/vault-clone" ]
+  [ -e "$STUB_HOME/.cache/qmd/index.sqlite" ]
+  [ ! -f agent.yml ]
+}
+
+@test "--uninstall --purge (docker mode) leaves ~/.cache/agent-backup untouched (013 US1)" {
+  cd "$TMP_TEST_DIR"
+  # setup()'s agent.yml is docker mode (no deployment.mode key → default docker).
+  local STUB_HOME="$TMP_TEST_DIR/home"
+  mkdir -p "$STUB_HOME/.cache/agent-backup/vault-clone"
+  echo "x" > "$STUB_HOME/.cache/agent-backup/vault-clone/note.md"
+  HOME="$STUB_HOME" run ./setup.sh --uninstall --purge --yes
+  [ "$status" -eq 0 ]
+  # docker mode must NOT touch the operator HOME cache.
+  [ -e "$STUB_HOME/.cache/agent-backup/vault-clone" ]
+}
+
 @test "--uninstall without agent.yml fails clearly" {
   cd "$TMP_TEST_DIR"
   rm -f agent.yml

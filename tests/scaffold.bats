@@ -200,3 +200,45 @@ EOF
   cmp -s "$dest/scripts/lib/backup_vault.sh" "$dest/docker/scripts/lib/backup_vault.sh"
   cmp -s "$dest/scripts/qmd_watch.sh"        "$dest/docker/scripts/qmd_watch.sh"
 }
+
+# 013 (FR-012/T024): NEXT_STEPS RAG observability block. Render-level tests (the
+# full scaffold is covered above); assert the local block's sibling conditionals
+# and docker byte-identity (the block lives inside {{#unless DEPLOYMENT_MODE_IS_DOCKER}}).
+@test "NEXT_STEPS (local, qmd+vault on): RAG journal block for all three units + list-timers" {
+  load_lib render
+  export DEPLOYMENT_MODE_IS_DOCKER=false VAULT_QMD_ENABLED=true VAULT_ENABLED=true
+  export AGENT_NAME=locbot AGENT_DISPLAY_NAME="LocBot" DEPLOYMENT_WORKSPACE="/tmp/locbot"
+  local out; out=$(render_template "$REPO_ROOT/modules/next-steps.en.tpl")
+  echo "$out" | grep -q 'journalctl -u agent-locbot-qmd-reindex.service'
+  echo "$out" | grep -q 'journalctl -u agent-locbot-qmd-watch.service'
+  echo "$out" | grep -q 'journalctl -u agent-locbot-vault-backup.service'
+  echo "$out" | grep -q "list-timers 'agent-locbot-"
+}
+
+@test "NEXT_STEPS (local, qmd on + vault off): qmd block present, NO vault-backup line" {
+  load_lib render
+  export DEPLOYMENT_MODE_IS_DOCKER=false VAULT_QMD_ENABLED=true VAULT_ENABLED=false
+  export AGENT_NAME=locbot AGENT_DISPLAY_NAME="LocBot" DEPLOYMENT_WORKSPACE="/tmp/locbot"
+  local out; out=$(render_template "$REPO_ROOT/modules/next-steps.en.tpl")
+  echo "$out" | grep -q 'journalctl -u agent-locbot-qmd-reindex.service'
+  ! echo "$out" | grep -q 'agent-locbot-vault-backup.service'
+}
+
+@test "NEXT_STEPS (local, qmd off): no RAG block at all" {
+  load_lib render
+  export DEPLOYMENT_MODE_IS_DOCKER=false VAULT_QMD_ENABLED=false VAULT_ENABLED=false
+  export AGENT_NAME=locbot AGENT_DISPLAY_NAME="LocBot" DEPLOYMENT_WORKSPACE="/tmp/locbot"
+  local out; out=$(render_template "$REPO_ROOT/modules/next-steps.en.tpl")
+  ! echo "$out" | grep -q 'agent-locbot-qmd-reindex.service'
+  ! echo "$out" | grep -q 'RAG (QMD)'
+}
+
+@test "NEXT_STEPS (docker) byte-identity: the RAG block never leaks into docker mode (013 SC-003)" {
+  load_lib render
+  export DEPLOYMENT_MODE_IS_DOCKER=true VAULT_QMD_ENABLED=true VAULT_ENABLED=true
+  export AGENT_NAME=locbot AGENT_DISPLAY_NAME="LocBot" DEPLOYMENT_WORKSPACE="/tmp/locbot"
+  export PLUGINS_BLOCK="" USER_LANGUAGE=en
+  local out; out=$(render_template "$REPO_ROOT/modules/next-steps.en.tpl")
+  ! echo "$out" | grep -q 'agent-locbot-qmd-reindex.service'
+  ! echo "$out" | grep -q 'RAG (QMD) — freshness'
+}
