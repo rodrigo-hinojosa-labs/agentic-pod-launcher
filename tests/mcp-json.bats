@@ -287,12 +287,45 @@ vault:
     version: "2.5.3"
 EOF
   render_load_context "$TMP_TEST_DIR/agent.yml"
+  # docker mode: setup.sh precomputes QMD_MCP_ENV="{}" → byte-identical to v0.6.0.
+  export QMD_MCP_ENV="{}"
   result=$(render_template "$REPO_ROOT/modules/mcp-json.tpl")
   echo "$result" | jq . > /dev/null
   [ "$(echo "$result" | jq -r '.mcpServers.qmd.command')" = "bunx" ]
   [ "$(echo "$result" | jq -r '.mcpServers.qmd.args[0]')" = "@tobilu/qmd@2.5.3" ]
   [ "$(echo "$result" | jq -r '.mcpServers.qmd.args[1]')" = "mcp" ]
   [ "$(echo "$result" | jq -r '.mcpServers.qmd.env')" = "{}" ]
+  unset QMD_MCP_ENV
+}
+
+@test ".mcp.json (local mode) qmd env pins XDG_CACHE_HOME + QMD_CONFIG_DIR under the workspace (013 US1/T003)" {
+  cat > "$TMP_TEST_DIR/agent.yml" << 'EOF'
+version: 1
+user:
+  timezone: "UTC"
+mcps:
+  atlassian: []
+  github:
+    enabled: false
+vault:
+  enabled: true
+  mcp:
+    enabled: true
+  qmd:
+    enabled: true
+    version: "2.5.3"
+EOF
+  render_load_context "$TMP_TEST_DIR/agent.yml"
+  # local mode: setup.sh sets the reader env so the MCP resolves the SAME storage
+  # as the reindex writer (the atomic pair — fixing only one silently empties RAG).
+  export QMD_MCP_ENV='{"XDG_CACHE_HOME": "/home/op/agents/locbot/.state/.cache", "QMD_CONFIG_DIR": "/home/op/agents/locbot/.state/.config/qmd"}'
+  result=$(render_template "$REPO_ROOT/modules/mcp-json.tpl")
+  echo "$result" | jq . > /dev/null
+  [ "$(echo "$result" | jq -r '.mcpServers.qmd.env.XDG_CACHE_HOME')" = "/home/op/agents/locbot/.state/.cache" ]
+  [ "$(echo "$result" | jq -r '.mcpServers.qmd.env.QMD_CONFIG_DIR')" = "/home/op/agents/locbot/.state/.config/qmd" ]
+  # must NOT leak the container/home default
+  [ "$(echo "$result" | jq -r '.mcpServers.qmd.env.XDG_CACHE_HOME')" != "/home/agent/.cache" ]
+  unset QMD_MCP_ENV
 }
 
 @test ".mcp.json omits QMD server when vault.qmd.enabled is false" {
@@ -339,10 +372,12 @@ vault:
     version: "2.5.3"
 EOF
   render_load_context "$TMP_TEST_DIR/agent.yml"
+  export QMD_MCP_ENV="{}"
   result=$(render_template "$REPO_ROOT/modules/mcp-json.tpl")
   echo "$result" | jq . > /dev/null
   [ "$(echo "$result" | jq -r '.mcpServers["atlassian-work"].command')" = "uvx" ]
   [ "$(echo "$result" | jq -r '.mcpServers.github.command')" = "github-mcp-server" ]
   [ "$(echo "$result" | jq -r '.mcpServers.vault.command')" = "npx" ]
   [ "$(echo "$result" | jq -r '.mcpServers.qmd.command')" = "bunx" ]
+  unset QMD_MCP_ENV
 }

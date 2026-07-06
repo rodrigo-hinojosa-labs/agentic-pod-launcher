@@ -16,8 +16,16 @@
 #               "M H * * *"   → "*-*-* HH:MM:00"   (daily at H:M)
 #   Empty CRON_EXPR → DEFAULT, no warning (the "use default" case).
 #   Anything else   → DEFAULT + a WARNING on stderr. Always rc 0.
+#
+# Fallback SIGNAL (013 FR-013): the function also sets the global CRON_FALLBACK to
+# 1 when it had to fall back to DEFAULT (a non-convertible custom cron), else 0.
+# rc/stdout are UNCHANGED — the caller reads this var to persist a marker, since
+# comparing stdout against the default is ambiguous ("*/5 * * * *" converts EXACTLY
+# to the qmd default "*-*-* *:0/5:00", which is NOT a fallback). The empty→default
+# path is the intended "use default", so it leaves CRON_FALLBACK=0.
 cron_to_systemd_calendar() {
   local cron="${1:-}" default="${2:-}"
+  CRON_FALLBACK=0
   # Empty → default, silently (this is the "no schedule set, use default" path).
   if [ -z "$cron" ]; then
     printf '%s\n' "$default"
@@ -57,6 +65,7 @@ cron_to_systemd_calendar() {
 }
 
 _cron_fallback() {
+  CRON_FALLBACK=1
   printf 'WARNING: unsupported cron schedule "%s" — using default OnCalendar "%s"\n' "$1" "$2" >&2
   printf '%s\n' "$2"
 }

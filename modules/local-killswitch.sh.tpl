@@ -10,8 +10,12 @@ set -euo pipefail
 AGENT_NAME="{{AGENT_NAME}}"
 UNIT="agent-${AGENT_NAME}.service"
 # Companion units (present only when their feature is enabled). A kill switch
-# should halt qmd activity too; stopping is best-effort and never errors out.
+# must halt ALL agent activity — otherwise the vault-backup timer keeps pushing to
+# the fork with the operator's credentials and the healthcheck keeps notifying,
+# hours after the operator thought the agent was stopped (013 FR-008). Stopping is
+# best-effort (`|| true`) so hosts missing any unit never error out.
 AUX_UNITS="agent-${AGENT_NAME}-qmd-reindex.timer agent-${AGENT_NAME}-qmd-watch.service"
+AUX_UNITS="$AUX_UNITS agent-${AGENT_NAME}-vault-backup.timer agent-${AGENT_NAME}-healthcheck.timer"
 
 echo "▸ Stopping ${UNIT} (Restart=always: an explicit stop does NOT relaunch)…"
 sudo systemctl stop "$UNIT" && echo "  ✓ stopped"

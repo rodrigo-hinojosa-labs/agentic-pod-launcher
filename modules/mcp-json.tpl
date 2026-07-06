@@ -73,7 +73,7 @@
     "qmd": {
       "command": "bunx",
       "args": ["@tobilu/qmd@{{VAULT_QMD_VERSION}}", "mcp"],
-      "env": {}
+      "env": {{QMD_MCP_ENV}}
     }{{/if}}
   }
 }

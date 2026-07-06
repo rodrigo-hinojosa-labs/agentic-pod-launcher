@@ -125,17 +125,51 @@ qmd_write_state() {
 qmd_setup_if_needed() {
   local agent_yml="${1:-/workspace/agent.yml}"
   _qmd_enabled "$agent_yml" || return 0
-  local cache_root vault_dir sentinel pkg coll
+  local cache_root vault_dir sentinel lock
   cache_root=$(qmd_cache_root)
   vault_dir=$(qmd_vault_dir "$agent_yml")
   [ -n "$vault_dir" ] || { _qmd_log "setup: vault not resolvable — skip"; return 0; }
   sentinel="$cache_root/.qmd-setup-ok"
+  # Fast path: sentinel-hit is an instant no-op that must NOT take the lock (so a
+  # steady-state boot never contends with a running reindex).
   if [ -f "$sentinel" ] && [ -f "$cache_root/index.sqlite" ]; then
     _qmd_log "setup: already done — skip"
     return 0
   fi
-  command -v bunx >/dev/null 2>&1 || { _qmd_log "setup: bunx unavailable — skip"; return 0; }
   mkdir -p "$cache_root" 2>/dev/null || true
+  lock="$cache_root/.reindex.lock"
+
+  # 013 FR-015: serialize setup under the SAME lock as reindex, so the --login
+  # background dispatch and the first timer tick can't both download the ~300MB
+  # model or race `collection add`. The loser skips (exit 91); the next tick's
+  # guard covers the retry. Mirrors qmd_reindex's flock structure exactly.
+  if command -v flock >/dev/null 2>&1; then
+    local rc=0
+    (
+      if ! flock -n 9; then _qmd_log "setup: already running — skip"; exit 91; fi
+      _qmd_setup_locked "$agent_yml" "$cache_root" "$vault_dir" "$sentinel"
+    ) 9>"$lock" || rc=$?
+    [ "$rc" -eq 91 ] && return 0
+    return 0
+  fi
+  # flock absent (macOS dev host): run unlocked; the sentinel + boot cadence keep
+  # the worst case to a redundant embed.
+  _qmd_log "setup: flock unavailable — running unlocked (dev degrade)"
+  _qmd_setup_locked "$agent_yml" "$cache_root" "$vault_dir" "$sentinel"
+  return 0
+}
+
+# Critical section of qmd_setup_if_needed (runs under flock when available).
+_qmd_setup_locked() {
+  local agent_yml="$1" cache_root="$2" vault_dir="$3" sentinel="$4"
+  local pkg coll
+  # Double-checked locking: a concurrent winner may have finished between our
+  # pre-lock sentinel check and acquiring the lock — re-check inside the lock.
+  if [ -f "$sentinel" ] && [ -f "$cache_root/index.sqlite" ]; then
+    _qmd_log "setup: completed by a concurrent run — skip"
+    return 0
+  fi
+  command -v bunx >/dev/null 2>&1 || { _qmd_log "setup: bunx unavailable — skip"; return 0; }
   pkg=$(qmd_pkg "$agent_yml")
   coll="${QMD_COLLECTION_NAME:-vault}"
   # Only `collection add` when there's no index yet. If a prior run was

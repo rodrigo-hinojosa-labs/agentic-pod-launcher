@@ -967,6 +967,16 @@ _local_vault_qmd_status() {
     echo "    qmd watcher       : $(_local_unit_state "agent-${agent}-qmd-watch.service" "$ws")"
     if [ -f "$ws/.state/.cache/qmd/index.sqlite" ]; then echo "    qmd index         : present"
     else echo "    qmd index         : not built yet"; fi
+    # 013 FR-009/FR-013: surface freshness (last run) + a schedule fallback marker.
+    if [ -f "$ws/scripts/heartbeat/qmd-index.json" ] && command -v jq >/dev/null 2>&1; then
+      local st lr
+      st=$(jq -r '.last_status // ""' "$ws/scripts/heartbeat/qmd-index.json" 2>/dev/null)
+      lr=$(jq -r '.last_run // ""' "$ws/scripts/heartbeat/qmd-index.json" 2>/dev/null)
+      [ -n "$lr" ] && echo "    qmd last reindex  : ${lr}${st:+ (${st})}"
+    fi
+    if [ -f "$ws/scripts/heartbeat/qmd-schedule.fallback" ]; then
+      echo "    qmd schedule      : fallback in effect (see scripts/heartbeat/qmd-schedule.fallback)"
+    fi
   fi
   if [ "$bk_here" = true ]; then
     echo "    vault backup timer: $(_local_unit_state "agent-${agent}-vault-backup.timer" "$ws")"
@@ -983,15 +993,40 @@ _local_vault_qmd_doctor() {
     else
       _doctor_warn "QMD index not built yet" "builds on --login or the reindex timer (~5 min)"
     fi
+    # 013 FR-009: honest last-run reporting — a reindex that fails EVERY tick used
+    # to print ✓ with a recent timestamp. Degrade to warn when last_status=error.
     if [ -f "$ws/scripts/heartbeat/qmd-index.json" ] && command -v jq >/dev/null 2>&1; then
-      local lr; lr=$(jq -r '.last_run // ""' "$ws/scripts/heartbeat/qmd-index.json" 2>/dev/null)
-      [ -n "$lr" ] && _doctor_pass "QMD last reindex: ${lr}"
+      local lr st
+      lr=$(jq -r '.last_run // ""' "$ws/scripts/heartbeat/qmd-index.json" 2>/dev/null)
+      st=$(jq -r '.last_status // ""' "$ws/scripts/heartbeat/qmd-index.json" 2>/dev/null)
+      if [ "$st" = "error" ]; then
+        _doctor_warn "QMD last reindex errored (${lr:-unknown})" \
+          "journalctl -u agent-${agent}-qmd-reindex.service ; check bunx/yq on the unit PATH"
+      elif [ -n "$lr" ]; then
+        _doctor_pass "QMD last reindex: ${lr}${st:+ (${st})}"
+      fi
+    fi
+    # 013 FR-011/SC-005: a failed watcher unit is the third doctor-degrading
+    # scenario (reindex-on-change dead; the timer still backstops → warn, not fail).
+    # is-failed is non-zero for an absent/inactive unit, so this only fires on a
+    # genuinely failed watcher (and this whole block is already qmd-gated).
+    if command -v systemctl >/dev/null 2>&1 && systemctl is-failed --quiet "agent-${agent}-qmd-watch.service"; then
+      _doctor_warn "QMD watcher unit failed" \
+        "sudo systemctl reset-failed agent-${agent}-qmd-watch.service ; journalctl -u agent-${agent}-qmd-watch.service"
+    fi
+    # 013 FR-013: a non-convertible cron schedule fell back to the feature default.
+    if [ -f "$ws/scripts/heartbeat/qmd-schedule.fallback" ]; then
+      _doctor_warn "QMD schedule not convertible — using the default cadence" \
+        "cat $ws/scripts/heartbeat/qmd-schedule.fallback"
     fi
   fi
-  if [ -f "$ws/scripts/heartbeat/vault-backup.json" ] && command -v jq >/dev/null 2>&1; then
-    local lp; lp=$(jq -r '.last_push // ""' "$ws/scripts/heartbeat/vault-backup.json" 2>/dev/null)
-    if [ -n "$lp" ]; then _doctor_pass "Vault backup last push: ${lp}"
-    else _doctor_warn "Vault backup has not pushed yet" "needs a configured fork + a vault change"; fi
+  # 013 FR-009: vault backup staleness (>25h) — reuse the shared docker check so
+  # a fork whose token was revoked 10 days ago warns instead of printing ✓.
+  if [ -e "$ws/scripts/local/agent-vault-backup.sh" ] || [ -f "$ws/scripts/heartbeat/vault-backup.json" ]; then
+    local _saved_ws="${WORKSPACE:-}"
+    WORKSPACE="$ws"
+    _check_backup_freshness "$agent" vault 25
+    WORKSPACE="$_saved_ws"
   fi
 }
 
@@ -1063,9 +1098,49 @@ cmd_local_doctor() {
 
   _local_vault_qmd_doctor "$agent" "$ws"
 
+  # 013 FR-009: honest exit codes for scripting/monitoring, matching cmd_doctor —
+  # 0 clean / 1 warnings / 2 failures. Previously any number of warnings (QMD in
+  # error, backup stale, watcher failed) exited 0, so `agentctl doctor || alert`
+  # never fired in local mode. `fails` folds into the shared _doctor_fail_count.
   echo ""
-  if [ "$fails" -eq 0 ]; then echo "Local checks passed."; exit 0
-  else echo "Local checks found issues (see above)."; exit 2; fi
+  if [ "$fails" -ne 0 ] || [ "$_doctor_fail_count" -gt 0 ]; then
+    echo "Local checks found $_doctor_fail_count error(s), $_doctor_warn_count warning(s)."
+    exit 2
+  elif [ "$_doctor_warn_count" -gt 0 ]; then
+    echo "Local checks: $_doctor_warn_count warning(s). Re-run after addressing the hints above."
+    exit 1
+  else
+    echo "Local checks passed."
+    exit 0
+  fi
+}
+
+# 013 FR-010: the two heartbeat actions that DO have a local equivalent run the
+# rendered workspace entrypoint directly, as the operator (same user as the units'
+# User=), with no `systemctl start` (which needs root/polkit the sudo-less local
+# flow can't assume). Everything else under `heartbeat` stays Docker-only.
+cmd_local_heartbeat() {
+  local action="${1:-}"; shift || true
+  local ws a; ws=$(_local_workspace)
+  case "$action" in
+    qmd-reindex)
+      local script="$ws/scripts/local/agent-qmd-reindex.sh"
+      [ -x "$script" ] || { echo "agentctl: qmd reindex entrypoint not found ($script) — enable vault.qmd + ./setup.sh --regenerate" >&2; return 2; }
+      # The reindex entrypoint has no --dry-run; refuse it rather than silently run
+      # a REAL reindex under the appearance of a dry run (013 D8/analyze U3).
+      for a in "$@"; do
+        [ "$a" = "--dry-run" ] && { echo "agentctl: 'heartbeat qmd-reindex' does not support --dry-run (it would run a real reindex)." >&2; return 2; }
+      done
+      exec "$script" "$@"
+      ;;
+    backup-vault)
+      local script="$ws/scripts/local/agent-vault-backup.sh"
+      [ -x "$script" ] || { echo "agentctl: vault backup entrypoint not found ($script) — enable vault + ./setup.sh --regenerate" >&2; return 2; }
+      exec "$script" "$@"   # backup-vault DOES support --dry-run — pass it through
+      ;;
+    *)
+      _local_docker_only "heartbeat"; return 2 ;;
+  esac
 }
 
 main() {
@@ -1076,8 +1151,9 @@ main() {
   # read systemd instead of the container.
   if [ "$(_agentctl_mode)" = "local" ]; then
     case "$sub" in
-      up|start|stop|restart|ps|attach|shell|run|logs|mcp|heartbeat)
+      up|start|stop|restart|ps|attach|shell|run|logs|mcp)
         _local_docker_only "$sub"; exit 2 ;;
+      heartbeat) cmd_local_heartbeat "$@"; return $? ;;
       status) cmd_local_status "$@"; return $? ;;
       doctor) cmd_local_doctor "$@"; return $? ;;
     esac

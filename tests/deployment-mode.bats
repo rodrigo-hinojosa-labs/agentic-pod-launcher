@@ -105,6 +105,46 @@ EOF
   jq . .mcp.json > /dev/null
 }
 
+@test "local + qmd enabled + service NOT installed → warns RAG has no auto trigger (013 D13/T041)" {
+  cd "$TMP_TEST_DIR"
+  _seed_agent_yml local
+  yq -i '.vault.qmd.enabled = true | .vault.qmd.version = "2.5.3" | .vault.qmd.schedule = "*/5 * * * *"' agent.yml
+  # install_service is false in the seed → the systemd units won't be installed.
+  run bash -c "echo 'n' | ./setup.sh --regenerate"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"was not installed"* || "$output" == *"will not build"* ]]
+}
+
+@test "local + qmd enabled + qmd OFF → no RAG-trigger warning (013 D13)" {
+  cd "$TMP_TEST_DIR"
+  _seed_agent_yml local
+  # vault on but qmd absent → VAULT_QMD_ENABLED false → no warning.
+  run bash -c "echo 'n' | ./setup.sh --regenerate"
+  [ "$status" -eq 0 ]
+  ! [[ "$output" == *"RAG) is enabled but the systemd service"* ]]
+}
+
+@test "local + qmd + unsupported schedule → writes qmd-schedule.fallback marker (013 FR-013/T031)" {
+  cd "$TMP_TEST_DIR"
+  _seed_agent_yml local
+  yq -i '.vault.qmd.enabled = true | .vault.qmd.version = "2.5.3" | .vault.qmd.schedule = "0 * * * 1-5"' agent.yml
+  run bash -c "echo 'n' | ./setup.sh --regenerate"
+  [ "$status" -eq 0 ]
+  [ -f scripts/heartbeat/qmd-schedule.fallback ]
+  grep -q 'original=0 \* \* \* 1-5' scripts/heartbeat/qmd-schedule.fallback
+  grep -q 'applied=' scripts/heartbeat/qmd-schedule.fallback
+}
+
+@test "local + qmd + */5 schedule → NO fallback marker; a stale one is removed (013 T031/C1)" {
+  cd "$TMP_TEST_DIR"
+  _seed_agent_yml local
+  yq -i '.vault.qmd.enabled = true | .vault.qmd.version = "2.5.3" | .vault.qmd.schedule = "*/5 * * * *"' agent.yml
+  mkdir -p scripts/heartbeat; echo stale > scripts/heartbeat/qmd-schedule.fallback
+  run bash -c "echo 'n' | ./setup.sh --regenerate"
+  [ "$status" -eq 0 ]
+  [ ! -f scripts/heartbeat/qmd-schedule.fallback ]
+}
+
 @test "mode switch docker→local warns about orphaned compose and does NOT delete it (FR-005a/G1)" {
   cd "$TMP_TEST_DIR"
   _seed_agent_yml docker
