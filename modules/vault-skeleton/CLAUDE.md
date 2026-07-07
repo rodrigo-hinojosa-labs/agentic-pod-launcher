@@ -45,6 +45,15 @@ Every file under `wiki/<type>/` must have `type:` in its frontmatter set to one 
 No other types. If something doesn't fit, the right move is usually to make it a `concept`
 or to extend an existing page, not to invent a new type.
 
+## Normalization rules (`wiki/normalization/`)
+
+Separate from the six knowledge types, `wiki/normalization/` holds **writing rules**, not
+knowledge. Each page declares a `canonical` form and the `aliases` (mis-spellings,
+transcription errors) that should resolve to it — e.g. canonical `Cencosud`, aliases
+`[SENCOSUD, Sencosud]`. See `_templates/normalization.md` for the frontmatter. These pages
+are NOT nodes in the six-type system and are never cited as knowledge; they steer how you
+WRITE layer-2 pages and are checked by the deterministic linter (below).
+
 ## Frontmatter spec
 
 Every page in `wiki/` starts with this YAML block (no exceptions):
@@ -86,6 +95,11 @@ When the human says "ingest <url|file|note>" or attaches a new source:
 2. **Write a summary page.** Create `wiki/summaries/<slug>.md` from `_templates/summary.md`.
    Capture the source's main thesis, key claims, examples, caveats. Link to the raw source via
    the `sources:` array.
+2.5. **Normalize terminology.** Read `wiki/normalization/` (or the `canonical_of` map in
+   `.graph/backlinks.json` if fresh). Write EVERY layer-2 page — this summary and all pages
+   below — using canonical forms; keep the raw source VERBATIM (layer 1 is immutable). If the
+   source contains a recurring mis-transcription not yet declared (e.g. `SENCOSUD` for
+   `Cencosud`), propose creating a `wiki/normalization/` page for it.
 3. **Identify load-bearing entities and concepts.** For each one not yet in the wiki, create
    the page. For each one already there, update it: add the new claim, link the new summary,
    bump `updated:`, refine `status:` if the new source supersedes a prior one.
@@ -103,6 +117,12 @@ When the human asks a question:
 
 1. **Search the wiki first.** Use `search_notes`, `Glob`, or `Grep` over `wiki/`. Prefer pages
    with `status: active` and recent `updated:` dates.
+1.5. **Expand via the graph.** After locating seed pages, read `.graph/backlinks.json` and pull
+   their 1-hop neighbors — `backlinks`, `related_out`, `co_sourced` (pages citing the same
+   source) and `canonical_of` (aliases resolving here) — before synthesizing. A variant
+   mention (e.g. `SENCOSUD`) resolves to the canonical page via `canonical_of`. Cite the
+   neighbor pages you actually used. (The graph is regenerated on a schedule and by
+   `agentctl heartbeat wiki-graph`; if `.graph/` is absent or stale, fall back to plain search.)
 2. **Read the relevant pages end-to-end.** Don't quote chunks out of context.
 3. **Cite.** When you assert something from the wiki, link the page: `[[concepts/foo]]`. When
    you cite a raw source, give its path: `raw_sources/articles/foo.md`.
@@ -116,6 +136,14 @@ When the human asks a question:
 ## Operation: maintaining the wiki (lint)
 
 Run periodically (and before any "wiki health" check from the human).
+
+> A **deterministic linter** already runs on a schedule (and on demand via
+> `agentctl heartbeat wiki-graph`). It covers the STRUCTURAL dimension without an LLM —
+> orphans, broken wikilinks, frontmatter violations, `index.md` drift, stale pages and
+> alias occurrences — and writes `.graph/findings.json` (read counts with
+> `jq .findings .graph/findings.json`, or `agentctl status`). It NEVER edits the wiki; you
+> apply the fixes. So the agentic lint below focuses on what a script can't judge:
+> SEMANTIC contradictions between pages and genuinely missing pages.
 
 0. **If chat-driven, ack first.** Send `Lint del vault en curso, ~2–5 min según tamaño. Te paso el reporte al terminar.` then proceed.
 

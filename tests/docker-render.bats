@@ -281,3 +281,17 @@ teardown() { teardown_tmp_dir; }
   # and the qmd MCP call `bunx`. Without this symlink QMD in docker is broken.
   grep -q 'ln -sf /usr/local/bin/bun /usr/local/bin/bunx' "$REPO_ROOT/docker/Dockerfile"
 }
+
+@test "Dockerfile COPYs the wiki-graph lib + vault-deltas (014/T017)" {
+  # The wiki_graph.sh lib and the schema-delta dir are mirrored into docker/ by
+  # setup.sh::mirror_catalog_to_docker; the wholesale copy is not enough — each
+  # needs its explicit COPY line (repo gotcha). heartbeatctl sources the lib and
+  # start_services.sh reads the deltas for the additive upgrade.
+  grep -q 'COPY scripts/lib/wiki_graph.sh' "$REPO_ROOT/docker/Dockerfile"
+  grep -q 'COPY modules/vault-deltas/' "$REPO_ROOT/docker/Dockerfile"
+}
+
+@test "setup.sh mirrors wiki_graph.sh + vault-deltas into docker/ (014/T017)" {
+  grep -q 'docker/scripts/lib/wiki_graph.sh' "$REPO_ROOT/setup.sh"
+  grep -q 'docker/modules/vault-deltas' "$REPO_ROOT/setup.sh"
+}

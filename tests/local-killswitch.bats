@@ -26,6 +26,11 @@ teardown() { teardown_tmp_dir; }
   grep -q 'agent-${AGENT_NAME}-healthcheck.timer' "$k"
 }
 
+@test "kill switch AUX_UNITS includes the wiki-graph timer (014/T021)" {
+  render_to_file "$REPO_ROOT/modules/local-killswitch.sh.tpl" "$TMP_TEST_DIR/kill.sh"
+  grep -q 'agent-${AGENT_NAME}-wiki-graph.timer' "$TMP_TEST_DIR/kill.sh"
+}
+
 @test "kill switch stops each AUX unit best-effort (|| true, never errors out)" {
   render_to_file "$REPO_ROOT/modules/local-killswitch.sh.tpl" "$TMP_TEST_DIR/kill.sh"
   # the stop loop must tolerate a missing unit (hosts without qmd/backup enabled)

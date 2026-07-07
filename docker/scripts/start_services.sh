@@ -112,6 +112,14 @@ seed_vault_if_needed() {
       vault_seed_if_empty "$vault_root" /opt/agent-admin/modules/vault-skeleton \
         && log "vault: skeleton ready at $vault_root"
     fi
+    # 014 (FR-016/017): additive upgrade — add new structures (wiki/normalization/)
+    # + the schema delta to an ALREADY-populated vault WITHOUT overwriting or
+    # touching CLAUDE.md. Runs every boot; the lib's hidden-marker sentinel +
+    # fresh-scaffold guard make it a clean no-op on a just-seeded or up-to-date vault.
+    if command -v vault_seed_missing >/dev/null 2>&1 && [ -d /opt/agent-admin/modules/vault-deltas ]; then
+      vault_seed_missing "$vault_root" /opt/agent-admin/modules/vault-skeleton /opt/agent-admin/modules/vault-deltas \
+        && log "vault: additive upgrade checked ($vault_root)"
+    fi
   fi
 
   if [ -d "$vault_root" ] && [ ! -e /home/agent/vault ]; then

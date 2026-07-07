@@ -16,6 +16,7 @@ UNIT="agent-${AGENT_NAME}.service"
 # best-effort (`|| true`) so hosts missing any unit never error out.
 AUX_UNITS="agent-${AGENT_NAME}-qmd-reindex.timer agent-${AGENT_NAME}-qmd-watch.service"
 AUX_UNITS="$AUX_UNITS agent-${AGENT_NAME}-vault-backup.timer agent-${AGENT_NAME}-healthcheck.timer"
+AUX_UNITS="$AUX_UNITS agent-${AGENT_NAME}-wiki-graph.timer"
 
 echo "▸ Stopping ${UNIT} (Restart=always: an explicit stop does NOT relaunch)…"
 sudo systemctl stop "$UNIT" && echo "  ✓ stopped"

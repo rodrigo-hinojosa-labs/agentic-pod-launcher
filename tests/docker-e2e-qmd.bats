@@ -200,6 +200,43 @@ PY
     [ "$watcher_fired" -eq 1 ] || echo "note: inotify did not deliver under VirtioFS on $(uname -s) — seam covered in Linux CI"
   fi
 
+  # ── Phase 4.5: wiki-graph (014) — cron line, manual run, cross-mode parity ───
+  # 4.5a: the wiki-graph cron line reaches /etc/crontabs/agent (default-on w/ vault).
+  local wg_deadline=$(( $(date +%s) + 60 )) wg_line=""
+  while [ "$(date +%s)" -lt "$wg_deadline" ]; do
+    wg_line=$(in_container sh -c 'grep -F "heartbeatctl wiki-graph" /etc/crontabs/agent 2>/dev/null' | grep -vE '^#' | tr -d '\r')
+    [ -n "$wg_line" ] && break
+    sleep 3
+  done
+  [ -n "$wg_line" ]
+  [[ "$wg_line" == *"20 */6"* ]]
+
+  # 4.5b: the additive upgrade ran at boot on a FRESH-seeded vault → no spurious
+  # delta (the fresh-scaffold guard holds in the real container). The upgrade log
+  # line marks a real (populated) upgrade only — a clean seed leaves none.
+  run in_container sh -c 'test -f /home/agent/.vault/wiki/normalization/.gitkeep && echo HAVE_NORM'
+  [[ "$output" == *"HAVE_NORM"* ]]
+  run in_container sh -c 'test -f /home/agent/.vault/_templates/.schema-updates-0.8.0.applied && echo HAS_DELTA || echo NO_DELTA'
+  [[ "$output" == *"NO_DELTA"* ]]
+
+  # 4.5c: cross-mode parity (M1/SC-003) — overlay the SAME vault-graph fixture the
+  # host suite uses, run the runner, and assert the counts match the host oracle
+  # exactly. This proves docker awk/jq produces identical findings to the host.
+  cp -R "$REPO_ROOT/tests/fixtures/vault-graph/." "$DEST/.state/.vault/"
+  touch "$DEST/.state/.vault/raw_sources/articles/base.md"   # stale: source newer than updated:
+  run in_container /usr/local/bin/heartbeatctl wiki-graph
+  [ "$status" -eq 0 ]
+  run in_container sh -c 'test -f /home/agent/.vault/.graph/graph.json && test -f /home/agent/.vault/.graph/findings.json && echo OK'
+  [[ "$output" == *"OK"* ]]
+  # .graph/ holds ONLY non-.md artifacts (backup + qmd exclusion invariant, L1)
+  run in_container sh -c 'find /home/agent/.vault/.graph -name "*.md" | wc -l | tr -d " "'
+  [ "$output" = "0" ]
+  # exact counts == host oracle (SC-001 inventory)
+  run in_container sh -c 'jq -c ".counts | {nodes,orphans,broken_links,frontmatter_violations,index_drift,stale,alias_occurrences}" /workspace/scripts/heartbeat/wiki-graph.json'
+  [[ "$output" == '{"nodes":7,"orphans":1,"broken_links":1,"frontmatter_violations":1,"index_drift":2,"stale":1,"alias_occurrences":1}' ]]
+  run in_container sh -c 'jq -r .last_status /workspace/scripts/heartbeat/wiki-graph.json'
+  [ "$output" = "ok" ]
+
   # ── Phase 5: least privilege intact (Principle II, NON-NEGOTIABLE) ───────────
   local cid
   cid=$(cd "$DEST" && docker compose ps -q "$AGENT_NAME")

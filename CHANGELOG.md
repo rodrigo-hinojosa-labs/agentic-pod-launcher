@@ -3,6 +3,39 @@
 ## [Unreleased]
 
 ### Added
+- **Wiki-graph RAG: derived knowledge graph + normalization + deterministic
+  maintenance** (`014-wiki-graph-rag`): brings the Karpathy "LLM Wiki" pattern to
+  its next level, deployment-agnostic (docker & local alike, on 013's parity).
+  **VERSION 0.7.0 → 0.8.0.** Docker stays byte-identical except the mirrored lib +
+  new crontab line + additive-upgrade boot hook (DOCKER_E2E-gated).
+  - **(US1) Deterministic graph + structural lint.** A new mirrored lib
+    `scripts/lib/wiki_graph.sh` derives a graph from the WHOLE wiki without an LLM
+    and without ever editing it: awk extracts per-file (the strict frontmatter-subset
+    parser IS the validator), jq aggregates globally into
+    `<vault>/.graph/{graph,backlinks,findings}.json` (JSON only, so the backup `*.md`
+    filter and the qmd mask exclude them by construction). Findings: orphans, broken
+    wikilinks, frontmatter violations, `index.md` drift, stale pages, alias
+    occurrences. State file `wiki-graph.json`; flock OUTSIDE the vault (Syncthing).
+    Quoted/`[[wikilinked]]` frontmatter values are unwrapped; `index.md` example
+    tokens in comments/backticks are excluded so a clean skeleton reports zero.
+  - **(US2) Normalization layer.** `wiki/normalization/` declares canonical forms +
+    aliases (e.g. `Cencosud` ← `SENCOSUD`) with its own frontmatter, outside the six
+    knowledge types. The vault schema gains an ingest "normalize" step and a
+    graph-aware query step; the linter reports alias occurrences (informational —
+    aliases inside `[[wikilinks]]` and code fences don't count).
+  - **(US3/US4) Graph-aware retrieval + mode-agnostic maintenance.** Manual
+    `agentctl heartbeat wiki-graph` (both modes); scheduled via a docker crontab line
+    and a local systemd wrapper+unit+timer built with all 013 lessons day-1 (PATH
+    first, vault env, fail-silent with honest doctor). Default cadence `20 */6`
+    (`local_schedule.sh` gained the `M */N` cron form). Kill-switch stops the timer,
+    healthcheck WARNs on a failed unit, `agentctl status` shows freshness + counts,
+    `agentctl doctor` degrades (WARN on integrity findings/error, FAIL on a dead
+    runner; orphans/stale/alias only inform) with exit codes 0/1/2.
+  - **(US5) Additive upgrade for existing vaults.** `vault_seed_missing` adds only the
+    new structures to a populated vault — never overwrites, never touches the vault's
+    co-evolved `CLAUDE.md`; the schema delta ships as `_templates/schema-updates-0.8.0.md`
+    + a `log.md` entry, gated by a HIDDEN `.applied` marker (not the deletable delta),
+    so the docker boot hook never re-deposits it. Deployable to ferrari/mclaren.
 - **RAG agnostic to deployment mode** (`013-local-rag-parity`): closes the 30
   gaps a multi-agent parity audit (2026-07-05) confirmed between docker and local
   RAG. The audit pre-ran the never-executed 012 mclaren gate statically and against

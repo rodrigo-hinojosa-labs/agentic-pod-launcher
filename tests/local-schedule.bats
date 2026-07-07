@@ -44,6 +44,22 @@ setup() { load_lib local_schedule; }
   [ "$output" = "*-*-* 12:00:00" ]
 }
 
+# 014: M */N (fixed minute + step hour) — the wiki-graph default 20 */6.
+@test "20 */6 * * * -> every 6 hours at minute 20 (no fallback)" {
+  run cron_to_systemd_calendar "20 */6 * * *" "DEF"
+  [ "$output" = "*-*-* 0/6:20:00" ]
+}
+
+@test "CRON_FALLBACK=0 for the wiki-graph default 20 */6 (now first-class) — 014" {
+  cron_to_systemd_calendar "20 */6 * * *" "DEF" >/dev/null
+  [ "$CRON_FALLBACK" -eq 0 ]
+}
+
+@test "5 */2 * * * -> every 2 hours at minute 05 (zero-padded)" {
+  run cron_to_systemd_calendar "5 */2 * * *" "DEF"
+  [ "$output" = "*-*-* 0/2:05:00" ]
+}
+
 @test "unsupported day-of-week -> default + warning on stderr" {
   run cron_to_systemd_calendar "0 * * * 1-5" "*-*-* *:00:00"
   [ "$status" -eq 0 ]

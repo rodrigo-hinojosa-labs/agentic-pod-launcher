@@ -178,3 +178,26 @@ if [ -f "${SYSTEMD_DIR}/${BK_TMR}" ]; then
     echo "  ✓ ${BK_TMR} enabled"
   fi
 fi
+
+# 9. Wiki-graph units (014): install the staged derive+lint timer if present
+#    (only staged when the vault is on and wiki_graph isn't disabled). File-
+#    existence guarded → clean no-op otherwise. Then dispatch a background first
+#    run so .graph/ is ready soon; the timer self-heals thereafter.
+WG_SVC="agent-${AGENT_NAME}-wiki-graph.service"
+WG_TMR="agent-${AGENT_NAME}-wiki-graph.timer"
+for _w in "$WG_SVC" "$WG_TMR"; do
+  if [ ! -f "${SYSTEMD_DIR}/${_w}" ] && [ -f "${WORKSPACE}/scripts/local/${_w}" ]; then
+    sudo cp "${WORKSPACE}/scripts/local/${_w}" "${SYSTEMD_DIR}/${_w}" || true
+  fi
+done
+if [ -f "${SYSTEMD_DIR}/${WG_TMR}" ]; then
+  sudo systemctl daemon-reload || true
+  if sudo systemctl enable --now "$WG_TMR"; then
+    echo "  ✓ ${WG_TMR} enabled (~6h wiki-graph derive+lint)"
+  fi
+fi
+WG_ENTRY="${WORKSPACE}/scripts/local/agent-wiki-graph.sh"
+if [ -x "$WG_ENTRY" ]; then
+  echo "▸ Deriving the wiki graph in the background (first run)…"
+  nohup "$WG_ENTRY" >/dev/null 2>&1 &
+fi

@@ -1498,6 +1498,10 @@ mirror_catalog_to_docker() {
   local src_qmd_index="$dest/scripts/lib/qmd_index.sh"
   local src_backup_vault="$dest/scripts/lib/backup_vault.sh"
   local src_qmd_watch="$dest/scripts/qmd_watch.sh"
+  # feature 014: the wiki-graph runner lib + the schema-delta dir for the additive
+  # upgrade, mirrored so the Dockerfile COPY finds them.
+  local src_wiki_graph="$dest/scripts/lib/wiki_graph.sh"
+  local src_vault_deltas="$dest/modules/vault-deltas"
   [ -f "$src_lib" ] || return 0
   [ -d "$src_plugins" ] || return 0
   mkdir -p "$dest/docker/scripts/lib" "$dest/docker/modules"
@@ -1512,6 +1516,13 @@ mirror_catalog_to_docker() {
   fi
   if [ -f "$src_backup_vault" ]; then
     cp "$src_backup_vault" "$dest/docker/scripts/lib/backup_vault.sh"
+  fi
+  if [ -f "$src_wiki_graph" ]; then
+    cp "$src_wiki_graph" "$dest/docker/scripts/lib/wiki_graph.sh"
+  fi
+  if [ -d "$src_vault_deltas" ]; then
+    rm -rf "$dest/docker/modules/vault-deltas"
+    cp -R "$src_vault_deltas" "$dest/docker/modules/vault-deltas"
   fi
   if [ -f "$src_qmd_watch" ]; then
     cp "$src_qmd_watch" "$dest/docker/scripts/qmd_watch.sh"
@@ -1977,6 +1988,37 @@ regenerate() {
     rm -f "$_qmd_fallback_marker" 2>/dev/null || true
   fi
 
+  # 014 (FR-012/D4): wiki-graph runner enable flag + schedule + local OnCalendar.
+  # enabled: default-true when the vault is on; only an explicit `false` disables.
+  # schedule default 20 */6 * * * — offset :20 to dodge the vault-backup :00 and
+  # identity/config 03:30 estampida (research R11). The default value lives HERE
+  # (analyze M7: schema.sh only validates shape), plus yq `//` fallbacks below.
+  export WIKI_GRAPH_ENABLED WIKI_GRAPH_SCHEDULE WIKI_GRAPH_TIMER_ONCALENDAR
+  local _wg_en_raw
+  _wg_en_raw="$(yq -r '.vault.wiki_graph.enabled' "$agent_yml" 2>/dev/null)"
+  if [ "${VAULT_ENABLED:-false}" = true ] && [ "$_wg_en_raw" != false ]; then
+    WIKI_GRAPH_ENABLED=true
+  else
+    WIKI_GRAPH_ENABLED=false
+  fi
+  WIKI_GRAPH_SCHEDULE="$(yq -r '.vault.wiki_graph.schedule // "20 */6 * * *"' "$agent_yml")"
+  { [ -z "$WIKI_GRAPH_SCHEDULE" ] || [ "$WIKI_GRAPH_SCHEDULE" = null ]; } && WIKI_GRAPH_SCHEDULE="20 */6 * * *"
+  local _wg_sched_raw _wg_fallback
+  _wg_sched_raw="$(cron_to_systemd_calendar "$WIKI_GRAPH_SCHEDULE" '*-*-* 0/6:20:00'; printf 'FALLBACK=%s' "$CRON_FALLBACK")"
+  WIKI_GRAPH_TIMER_ONCALENDAR="${_wg_sched_raw%%$'\n'FALLBACK=*}"
+  _wg_fallback="${_wg_sched_raw##*FALLBACK=}"
+  local _wg_fallback_marker="$SCRIPT_DIR/scripts/heartbeat/wiki-graph-schedule.fallback"
+  if [ "$DEPLOYMENT_MODE_IS_DOCKER" = false ] && [ "${_wg_fallback:-0}" = 1 ]; then
+    mkdir -p "$(dirname "$_wg_fallback_marker")" 2>/dev/null || true
+    {
+      printf 'original=%s\n' "$WIKI_GRAPH_SCHEDULE"
+      printf 'applied=%s\n' "$WIKI_GRAPH_TIMER_ONCALENDAR"
+      printf 'at=%s\n' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    } > "$_wg_fallback_marker" 2>/dev/null || true
+  else
+    rm -f "$_wg_fallback_marker" 2>/dev/null || true
+  fi
+
   # Mode-switch warning (FR-005a): detect a prior generation in the OTHER mode by
   # its on-disk artifacts and warn that they are now orphaned — WITHOUT deleting
   # them (safe + traceable; the user removes them deliberately).
@@ -2128,6 +2170,11 @@ regenerate() {
     # US3 (FR-007): vault backup entrypoint, rendered when vault is enabled.
     if [ "$(yq -r '.vault.enabled // false' "$agent_yml")" = "true" ]; then
       render_to_file "$modules_dir/local-vault-backup.sh.tpl" "$SCRIPT_DIR/scripts/local/agent-vault-backup.sh"
+      # 014 (FR-012/013): wiki-graph runner entrypoint — default-on when the vault
+      # is on (opt out via vault.wiki_graph.enabled=false, i.e. WIKI_GRAPH_ENABLED).
+      if [ "${WIKI_GRAPH_ENABLED:-false}" = "true" ]; then
+        render_to_file "$modules_dir/local-wiki-graph.sh.tpl" "$SCRIPT_DIR/scripts/local/agent-wiki-graph.sh"
+      fi
     fi
     chmod +x "$SCRIPT_DIR"/scripts/local/*.sh 2>/dev/null || true
     echo "  ✓ local artifacts (.state/remote-control.env, scripts/local/)"
@@ -2191,6 +2238,15 @@ _seed_vault_local() {
   else
     vault_seed_if_empty "$vault_root" "$skeleton" "$today" \
       && echo "  ✓ vault skeleton ready → $vault_root"
+  fi
+  # 014 (FR-016/017): additive upgrade for an ALREADY-populated vault — add
+  # wiki/normalization/ + the schema delta without overwriting or touching the
+  # vault's CLAUDE.md. Clean no-op on a fresh seed (fresh-scaffold guard in the
+  # lib). Runs on scaffold and every --regenerate.
+  local deltas="$SCRIPT_DIR/modules/vault-deltas"
+  if command -v vault_seed_missing >/dev/null 2>&1 && [ -d "$deltas" ]; then
+    vault_seed_missing "$vault_root" "$skeleton" "$deltas" "$today" \
+      && echo "  ✓ vault additive upgrade checked → $vault_root"
   fi
 }
 
@@ -2312,6 +2368,30 @@ install_service() {
       echo "  ◦ vault backup units staged in scripts/local/ (sudo unavailable)"
     fi
     rm -f "$s_b_svc" "$s_b_tmr"
+  fi
+
+  # 014 (FR-012): wiki-graph derive+lint timer + service — default-on when the
+  # vault is on (WIKI_GRAPH_ENABLED). Same staged-if-no-sudo pattern; --login
+  # installs staged copies. All 013 lessons live in the wrapper, not the unit.
+  if [ "${DEPLOYMENT_MODE_IS_DOCKER:-true}" != true ] && [ "${WIKI_GRAPH_ENABLED:-false}" = "true" ]; then
+    local wg_svc="agent-${agent_name}-wiki-graph.service"
+    local wg_tmr="agent-${agent_name}-wiki-graph.timer"
+    local s_wg_svc s_wg_tmr
+    s_wg_svc=$(mktemp); s_wg_tmr=$(mktemp)
+    render_to_file "$modules_dir/local-wiki-graph.service.tpl" "$s_wg_svc"
+    render_to_file "$modules_dir/local-wiki-graph.timer.tpl"   "$s_wg_tmr"
+    if sudo -n true 2>/dev/null; then
+      sudo cp "$s_wg_svc" "/etc/systemd/system/$wg_svc"
+      sudo cp "$s_wg_tmr" "/etc/systemd/system/$wg_tmr"
+      sudo systemctl daemon-reload
+      sudo systemctl enable --now "$wg_tmr" \
+        && echo "  ✓ wiki-graph timer installed + enabled"
+    else
+      cp "$s_wg_svc" "$SCRIPT_DIR/scripts/local/$wg_svc"
+      cp "$s_wg_tmr" "$SCRIPT_DIR/scripts/local/$wg_tmr"
+      echo "  ◦ wiki-graph units staged in scripts/local/ (sudo unavailable)"
+    fi
+    rm -f "$s_wg_svc" "$s_wg_tmr"
   fi
 }
 
@@ -2437,6 +2517,7 @@ uninstall() {
   _local_units="$_local_units agent-${agent_name}-healthcheck.timer agent-${agent_name}-healthcheck.service"
   _local_units="$_local_units agent-${agent_name}-qmd-reindex.timer agent-${agent_name}-qmd-reindex.service agent-${agent_name}-qmd-watch.service"
   _local_units="$_local_units agent-${agent_name}-vault-backup.timer agent-${agent_name}-vault-backup.service"
+  _local_units="$_local_units agent-${agent_name}-wiki-graph.timer agent-${agent_name}-wiki-graph.service"
   local _any_unit=false _u
   for _u in $_local_units; do [ -f "/etc/systemd/system/$_u" ] && _any_unit=true; done
   if [ "$_any_unit" = true ]; then
