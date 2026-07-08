@@ -35,3 +35,8 @@ the drift.
 ## Synthesis
 
 <!-- Cross-cutting integration of multiple overviews/concepts. The wiki's meta-pages. -->
+
+## Normalization
+
+<!-- Canonical-form rules (writing rules, NOT knowledge pages). Format:
+     `- [[normalization/<slug>]] — <canonical> <- <aliases>` -->

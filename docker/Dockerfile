@@ -228,6 +228,7 @@ COPY scripts/lib/backup_config.sh   /opt/agent-admin/scripts/lib/backup_config.s
 COPY scripts/lib/token_health.sh    /opt/agent-admin/scripts/lib/token_health.sh
 COPY scripts/lib/plugin-install.sh /opt/agent-admin/scripts/lib/plugin-install.sh
 COPY scripts/lib/qmd_index.sh       /opt/agent-admin/scripts/lib/qmd_index.sh
+COPY scripts/lib/wiki_graph.sh      /opt/agent-admin/scripts/lib/wiki_graph.sh
 COPY scripts/check_token_health.sh  /opt/agent-admin/scripts/check_token_health.sh
 RUN chmod +x /opt/agent-admin/scripts/heartbeatctl \
               /opt/agent-admin/scripts/check_token_health.sh \
@@ -246,6 +247,10 @@ COPY modules/plugins/ /opt/agent-admin/modules/plugins/
 # is empty). vault.sh is sourced by start_services.sh for boot-time seed.
 COPY scripts/lib/vault.sh /opt/agent-admin/scripts/lib/vault.sh
 COPY modules/vault-skeleton/ /opt/agent-admin/modules/vault-skeleton/
+# feature 014: schema-delta dir for the additive upgrade of pre-populated vaults
+# (start_services.sh::seed_vault_if_needed → vault_seed_missing). Mirrored into
+# docker/ by setup.sh::mirror_catalog_to_docker before the build.
+COPY modules/vault-deltas/ /opt/agent-admin/modules/vault-deltas/
 
 # MCP catalog. Same mirroring scheme as plugin-catalog.sh — descriptors
 # at modules/mcps/<id>.yml power the wizard prompts and identify which

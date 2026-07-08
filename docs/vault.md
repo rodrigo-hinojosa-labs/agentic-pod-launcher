@@ -174,6 +174,35 @@ Run periodically. The LLM scans for:
 Outputs a report at `wiki/synthesis/lint-<date>.md`. Doesn't make destructive changes —
 surfaces findings for you to act on.
 
+## Normalization + the derived graph (feature 014)
+
+Two additions turn the wiki from a folder of files into a navigable, self-checking graph —
+deployment-agnostic (docker & local alike).
+
+**`wiki/normalization/`** holds *writing rules*, not knowledge. Each page declares a
+`canonical` form and its `aliases` (mis-spellings, transcription errors) with its own
+frontmatter — e.g. canonical `Cencosud`, aliases `[SENCOSUD, Sencosud]`. See
+`_templates/normalization.md`. During ingest the agent normalizes terminology to the
+canonical form (the raw source stays verbatim — layer 1 is immutable). These pages are NOT
+one of the six knowledge types and are never cited as knowledge.
+
+**The derived graph** (`<vault>/.graph/`) is regenerated deterministically — without an LLM —
+by a scheduled runner (`~6h` by default) and on demand with `agentctl heartbeat wiki-graph`:
+
+- `graph.json` — nodes (typed pages) + edges (`[[wikilinks]]`, `related:`, `sources:`,
+  `alias→canonical`).
+- `backlinks.json` — per page: `backlinks`, `related_out`, `co_sourced`, `canonical_of`. The
+  query protocol reads this for 1-hop neighbors before synthesizing.
+- `findings.json` — structural lint: orphans, broken wikilinks, frontmatter violations,
+  `index.md` drift, stale pages, alias occurrences.
+
+The `.graph/` artifacts are JSON only, so they are excluded from the vault backup and the qmd
+index by construction, and are always regenerable (never backed up). The runner NEVER edits
+the wiki — it reports; you (or the agent) fix. `agentctl status` shows freshness + counts;
+`agentctl doctor` warns on integrity findings and fails on a dead runner. Existing vaults get
+`wiki/normalization/` and the schema updates added automatically on the next boot/regenerate
+without overwriting anything (see `_templates/schema-updates-*.md` + the `log.md` entry).
+
 ## Coexistence with auto-memoria and claude-mem
 
 | Layer | Use it for |

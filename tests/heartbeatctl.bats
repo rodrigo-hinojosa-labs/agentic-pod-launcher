@@ -293,3 +293,58 @@ JS
   [ "$status" -eq 0 ]
   [[ "$output" == *"drop-plugin"* ]]
 }
+
+# --- 014: wiki-graph subcommand + cron line ---------------------------------
+
+@test "reload adds the wiki-graph cron line when the vault is enabled (014/T020)" {
+  cat >> "$WORKSPACE/agent.yml" <<'YML'
+vault:
+  enabled: true
+  wiki_graph:
+    schedule: "20 */6 * * *"
+YML
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" reload
+  [ "$status" -eq 0 ]
+  grep -qE '^20 \*/6 \* \* \* /usr/local/bin/heartbeatctl wiki-graph' "$HEARTBEATCTL_CRONTAB_FILE"
+}
+
+@test "reload omits the wiki-graph line when vault.wiki_graph.enabled=false (014)" {
+  cat >> "$WORKSPACE/agent.yml" <<'YML'
+vault:
+  enabled: true
+  wiki_graph:
+    enabled: false
+YML
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" reload
+  [ "$status" -eq 0 ]
+  ! grep -qE '^[^#].*wiki-graph' "$HEARTBEATCTL_CRONTAB_FILE"
+}
+
+@test "reload omits the wiki-graph line when the vault is disabled (014)" {
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" reload
+  [ "$status" -eq 0 ]
+  ! grep -qE '^[^#].*wiki-graph' "$HEARTBEATCTL_CRONTAB_FILE"
+}
+
+@test "wiki-graph subcommand derives the graph + writes ok state (014/T016)" {
+  command -v jq >/dev/null 2>&1 || skip "jq required"
+  cat >> "$WORKSPACE/agent.yml" <<'YML'
+vault:
+  enabled: true
+YML
+  cp -R "$REPO_ROOT/tests/fixtures/vault-graph" "$WORKSPACE/vault"
+  run env WIKI_GRAPH_VAULT_DIR="$WORKSPACE/vault" \
+      WIKI_GRAPH_STATE_FILE="$WORKSPACE/scripts/heartbeat/wiki-graph.json" \
+      WIKI_GRAPH_LOCK="$WORKSPACE/scripts/heartbeat/.wiki-graph.lock" \
+      bash "$REPO_ROOT/docker/scripts/heartbeatctl" wiki-graph
+  [ "$status" -eq 0 ]
+  [ -f "$WORKSPACE/vault/.graph/graph.json" ]
+  [ "$(jq -r .last_status "$WORKSPACE/scripts/heartbeat/wiki-graph.json")" = "ok" ]
+  [[ "$output" == *"wiki-graph: ok"* ]]
+}
+
+@test "wiki-graph appears in help (014)" {
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"wiki-graph"* ]]
+}

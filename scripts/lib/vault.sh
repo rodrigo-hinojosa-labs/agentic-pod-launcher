@@ -49,6 +49,68 @@ vault_seed_if_empty() {
   fi
 }
 
+# vault_seed_missing TARGET_DIR SKELETON_DIR DELTAS_DIR [TODAY]
+# Additive upgrade of a PRE-POPULATED vault (feature 014): add ONLY the structures
+# a newer launcher introduced, WITHOUT overwriting any existing file and WITHOUT
+# touching TARGET/CLAUDE.md (the agent's co-evolved layer-3 schema). The new schema
+# sections are delivered as a delta doc under _templates/ plus a log.md entry that
+# tells the agent to integrate them.
+#
+# Idempotency sentinel is a HIDDEN marker (_templates/.schema-updates-0.8.0.applied),
+# NOT the delta .md itself (analyze C1): the agent may delete the delta after
+# integrating it, and the docker boot runs this on EVERY start — keying off the
+# deletable .md would re-deposit it and duplicate the log entry every boot.
+#
+# Fresh-scaffold guard: deposit the delta ONLY if a structure was actually missing
+# OR the wiki already has real pages (a populated vault). A fresh 0.8.0 seed has the
+# new structures already and an empty wiki → clean no-op, no delta, no log entry.
+#
+# Fail-silent (always return 0). No-op when TARGET is empty/absent (that path goes
+# through vault_seed_if_empty; the caller invokes both in order).
+vault_seed_missing() {
+  local target="$1" skeleton="$2" deltas="$3" today="${4:-$(date +%Y-%m-%d)}"
+  [ -n "$target" ] || { echo "vault_seed_missing: missing target" >&2; return 0; }
+  [ -n "$skeleton" ] || { echo "vault_seed_missing: missing skeleton" >&2; return 0; }
+  [ -d "$target" ] && [ -n "$(ls -A "$target" 2>/dev/null)" ] || return 0
+
+  local changed=0
+
+  # 1) NEW directories this launcher version introduces (explicit list — never a
+  #    skeleton walk, which would resurrect dirs the operator deleted on purpose).
+  if [ ! -d "$target/wiki/normalization" ]; then
+    if mkdir -p "$target/wiki/normalization" 2>/dev/null; then
+      : > "$target/wiki/normalization/.gitkeep" 2>/dev/null || true
+      changed=1
+    fi
+  fi
+  # 2) NEW template, only when absent (never overwrite an operator/agent edit).
+  if [ ! -f "$target/_templates/normalization.md" ] && [ -f "$skeleton/_templates/normalization.md" ]; then
+    mkdir -p "$target/_templates" 2>/dev/null || true
+    cp "$skeleton/_templates/normalization.md" "$target/_templates/normalization.md" 2>/dev/null && changed=1
+  fi
+
+  # 3) schema delta — gated by the HIDDEN marker (C1), never TARGET/CLAUDE.md.
+  local marker="$target/_templates/.schema-updates-0.8.0.applied"
+  local delta_src="$deltas/schema-updates-0.8.0.md"
+  if [ ! -f "$marker" ] && [ -n "$deltas" ] && [ -f "$delta_src" ]; then
+    local has_pages=0
+    if [ -d "$target/wiki" ] && find "$target/wiki" -type f -name '*.md' 2>/dev/null | head -1 | grep -q .; then
+      has_pages=1
+    fi
+    if [ "$changed" -eq 1 ] || [ "$has_pages" -eq 1 ]; then
+      mkdir -p "$target/_templates" 2>/dev/null || true
+      if cp "$delta_src" "$target/_templates/schema-updates-0.8.0.md" 2>/dev/null; then
+        : > "$marker" 2>/dev/null || true
+        if [ -f "$target/log.md" ]; then
+          printf '\n## [%s] upgrade | schema updates 0.8.0 — read _templates/schema-updates-0.8.0.md and integrate into CLAUDE.md\n' \
+            "$today" >> "$target/log.md" 2>/dev/null || true
+        fi
+      fi
+    fi
+  fi
+  return 0
+}
+
 # vault_backup_and_reseed TARGET_DIR SKELETON_DIR [TODAY] [TIMESTAMP]
 # Move TARGET_DIR (with its contents) to TARGET_DIR.backup-<TIMESTAMP> and
 # re-seed from SKELETON_DIR. Used when agent.yml.vault.force_reseed=true to

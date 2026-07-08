@@ -11,9 +11,10 @@
 # hand-edited exotic cron degrades visibly instead of producing an invalid timer.
 
 # cron_to_systemd_calendar CRON_EXPR DEFAULT_ONCALENDAR → stdout: OnCalendar
-#   Supported:  "*/N * * * *" → "*-*-* *:0/N:00"   (every N minutes)
-#               "M * * * *"   → "*-*-* *:MM:00"    (hourly at minute M)
-#               "M H * * *"   → "*-*-* HH:MM:00"   (daily at H:M)
+#   Supported:  "*/N * * * *" → "*-*-* *:0/N:00"    (every N minutes)
+#               "M * * * *"   → "*-*-* *:MM:00"     (hourly at minute M)
+#               "M */N * * *" → "*-*-* 0/N:MM:00"   (every N hours at minute M)
+#               "M H * * *"   → "*-*-* HH:MM:00"    (daily at H:M)
 #   Empty CRON_EXPR → DEFAULT, no warning (the "use default" case).
 #   Anything else   → DEFAULT + a WARNING on stderr. Always rc 0.
 #
@@ -53,6 +54,11 @@ cron_to_systemd_calendar() {
   # M * * * *  → hourly at minute M
   if [[ "$min" =~ $re_num ]] && [ "$hr" = "*" ]; then
     printf '*-*-* *:%02d:00\n' "$((10#$min))"
+    return 0
+  fi
+  # M */N * * *  → every N hours at minute M (e.g. the wiki-graph default 20 */6)
+  if [[ "$min" =~ $re_num ]] && [[ "$hr" =~ $re_step ]]; then
+    printf '*-*-* 0/%s:%02d:00\n' "${BASH_REMATCH[1]}" "$((10#$min))"
     return 0
   fi
   # M H * * *  → daily at H:M

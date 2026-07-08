@@ -156,6 +156,73 @@ teardown() { teardown_tmp_dir; }
   [[ "$output" == *"watcher"* && "$output" == *"failed"* ]]
 }
 
+# --- 014: wiki-graph status/doctor/heartbeat ---------------------------------
+
+@test "local status: reports the wiki-graph block (timer + counts) when present (014/T023)" {
+  cd "$TMP_TEST_DIR"
+  mkdir -p scripts/local scripts/heartbeat
+  : > scripts/local/agent-wiki-graph.sh
+  local now; now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  printf '{"last_run":"%s","last_status":"ok","counts":{"nodes":7,"broken_links":0,"frontmatter_violations":0,"index_drift":0,"orphans":1,"alias_occurrences":1}}\n' "$now" > scripts/heartbeat/wiki-graph.json
+  run ./scripts/agentctl status
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"wiki-graph timer"* ]]
+  [[ "$output" == *"wiki-graph counts"* ]]
+}
+
+@test "local doctor: wiki-graph integrity findings degrade to WARN exit 1 (014/Q5)" {
+  cd "$TMP_TEST_DIR"
+  mkdir -p scripts/local scripts/heartbeat
+  : > scripts/local/agent-wiki-graph.sh
+  local now; now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  printf '{"last_run":"%s","last_status":"ok","counts":{"broken_links":2,"frontmatter_violations":0,"index_drift":1,"orphans":0}}\n' "$now" > scripts/heartbeat/wiki-graph.json
+  run ./scripts/agentctl doctor
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"wiki-graph integrity"* ]]
+  [[ "$output" == *"broken_links=2"* ]]
+}
+
+@test "local doctor: wiki-graph last_status=error → WARN exit 1 (014/Q5)" {
+  cd "$TMP_TEST_DIR"
+  mkdir -p scripts/local scripts/heartbeat
+  : > scripts/local/agent-wiki-graph.sh
+  local now; now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  printf '{"last_run":"%s","last_status":"error","counts":{"broken_links":0,"frontmatter_violations":0,"index_drift":0}}\n' "$now" > scripts/heartbeat/wiki-graph.json
+  run ./scripts/agentctl doctor
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"wiki-graph last run errored"* ]]
+}
+
+@test "local doctor: orphans/alias only inform — clean integrity does NOT degrade (014/Q5)" {
+  cd "$TMP_TEST_DIR"
+  mkdir -p scripts/local scripts/heartbeat
+  : > scripts/local/agent-wiki-graph.sh
+  local now; now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  printf '{"last_run":"%s","last_status":"ok","counts":{"broken_links":0,"frontmatter_violations":0,"index_drift":0,"orphans":5,"alias_occurrences":3}}\n' "$now" > scripts/heartbeat/wiki-graph.json
+  run ./scripts/agentctl doctor
+  # orphans/alias are informational → no wiki-graph WARN from this block
+  ! [[ "$output" == *"wiki-graph integrity"* ]]
+  [[ "$output" == *"wiki-graph last run"* ]]
+}
+
+@test "local doctor: a dead wiki-graph runner (old last_run) → FAIL exit 2 (014/Q5)" {
+  cd "$TMP_TEST_DIR"
+  mkdir -p scripts/local scripts/heartbeat
+  : > scripts/local/agent-wiki-graph.sh
+  # 2000-01-01 is far older than 2× the default 6h interval → dead runner
+  printf '{"last_run":"2000-01-01T00:00:00Z","last_status":"ok","counts":{"broken_links":0,"frontmatter_violations":0,"index_drift":0}}\n' > scripts/heartbeat/wiki-graph.json
+  run ./scripts/agentctl doctor
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"wiki-graph runner appears dead"* ]]
+}
+
+@test "local heartbeat wiki-graph: missing entrypoint → exit 2 with a hint (014/T014)" {
+  cd "$TMP_TEST_DIR"
+  run ./scripts/agentctl heartbeat wiki-graph
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"wiki-graph entrypoint not found"* ]]
+}
+
 @test "local doctor: stale vault backup (>25h) warns with exit 1 (013 FR-009)" {
   cd "$TMP_TEST_DIR"
   mkdir -p scripts/local scripts/heartbeat

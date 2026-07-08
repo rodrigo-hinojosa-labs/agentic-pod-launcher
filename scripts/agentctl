@@ -148,6 +148,21 @@ _epoch_from_iso() {
   date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$ts" +%s 2>/dev/null || true
 }
 
+# 014 (M6): expected interval in HOURS derived from a cron schedule, for the
+# wiki-graph freshness threshold. Reads the HOUR field: `*/N` → N hours (even with
+# a fixed minute, e.g. the default `20 */6` → 6); a comma-list of hours → 24/count;
+# `*` hour with `*/M` minute → 1 (sub-hourly floor); anything else → 24.
+_wg_interval_hours() {
+  local sched="$1" min hr _rest
+  read -r min hr _rest <<< "$sched"
+  if printf '%s' "$hr" | grep -qE '^\*/[0-9]+$'; then printf '%s\n' "${hr#*/}"; return 0; fi
+  if printf '%s' "$hr" | grep -qE '^[0-9]+(,[0-9]+)+$'; then
+    local n; n=$(printf '%s' "$hr" | tr ',' '\n' | grep -c .); [ "${n:-0}" -gt 0 ] && { printf '%s\n' "$(( 24 / n ))"; return 0; }
+  fi
+  if [ "$hr" = "*" ] && printf '%s' "$min" | grep -qE '^\*/[0-9]+$'; then printf '1\n'; return 0; fi
+  printf '24\n'
+}
+
 # Render a delta in seconds as a human-readable string ("47s", "12m",
 # "23h", "4d"). Coarse-grained on purpose — doctor output is meant to be
 # scannable.
@@ -957,10 +972,11 @@ _local_unit_state() {
 # the workspace has no qmd/backup pieces (vault/qmd disabled → silent).
 _local_vault_qmd_status() {
   local agent="$1" ws="$2"
-  local qmd_here=false bk_here=false
+  local qmd_here=false bk_here=false wg_here=false
   { [ -e "$ws/scripts/local/agent-qmd-reindex.sh" ] || [ -f "/etc/systemd/system/agent-${agent}-qmd-reindex.timer" ]; } && qmd_here=true
   { [ -e "$ws/scripts/local/agent-vault-backup.sh" ] || [ -f "/etc/systemd/system/agent-${agent}-vault-backup.timer" ]; } && bk_here=true
-  [ "$qmd_here" = true ] || [ "$bk_here" = true ] || return 0
+  { [ -e "$ws/scripts/local/agent-wiki-graph.sh" ] || [ -f "/etc/systemd/system/agent-${agent}-wiki-graph.timer" ] || [ -f "$ws/scripts/heartbeat/wiki-graph.json" ]; } && wg_here=true
+  [ "$qmd_here" = true ] || [ "$bk_here" = true ] || [ "$wg_here" = true ] || return 0
   echo "  vault/RAG:"
   if [ "$qmd_here" = true ]; then
     echo "    qmd reindex timer : $(_local_unit_state "agent-${agent}-qmd-reindex.timer" "$ws")"
@@ -980,6 +996,23 @@ _local_vault_qmd_status() {
   fi
   if [ "$bk_here" = true ]; then
     echo "    vault backup timer: $(_local_unit_state "agent-${agent}-vault-backup.timer" "$ws")"
+  fi
+  if [ "$wg_here" = true ]; then
+    echo "    wiki-graph timer  : $(_local_unit_state "agent-${agent}-wiki-graph.timer" "$ws")"
+    # 014 FR-014: freshness (last run) + finding counts + schedule fallback marker.
+    if [ -f "$ws/scripts/heartbeat/wiki-graph.json" ] && command -v jq >/dev/null 2>&1; then
+      local wst wlr wc
+      wst=$(jq -r '.last_status // ""' "$ws/scripts/heartbeat/wiki-graph.json" 2>/dev/null)
+      wlr=$(jq -r '.last_run // ""' "$ws/scripts/heartbeat/wiki-graph.json" 2>/dev/null)
+      wc=$(jq -r '.counts // {} | "broken=\(.broken_links) fm=\(.frontmatter_violations) drift=\(.index_drift) orphans=\(.orphans) alias=\(.alias_occurrences)"' "$ws/scripts/heartbeat/wiki-graph.json" 2>/dev/null)
+      [ -n "$wlr" ] && echo "    wiki-graph run    : ${wlr}${wst:+ (${wst})}"
+      [ -n "$wc" ] && echo "    wiki-graph counts : ${wc}"
+    else
+      echo "    wiki-graph        : not derived yet"
+    fi
+    if [ -f "$ws/scripts/heartbeat/wiki-graph-schedule.fallback" ]; then
+      echo "    wiki-graph sched  : fallback in effect (see scripts/heartbeat/wiki-graph-schedule.fallback)"
+    fi
   fi
 }
 
@@ -1027,6 +1060,44 @@ _local_vault_qmd_doctor() {
     WORKSPACE="$ws"
     _check_backup_freshness "$agent" vault 25
     WORKSPACE="$_saved_ws"
+  fi
+  # 014 (FR-014, contract Q5): wiki-graph health. Integrity findings degrade to
+  # WARN (broken_links/frontmatter_violations/index_drift); orphans/stale/alias
+  # only inform (surfaced in status, not here). A dead runner (state older than 2×
+  # the schedule interval) is FAIL; last_status=error is WARN.
+  if [ -e "$ws/scripts/local/agent-wiki-graph.sh" ] || [ -f "$ws/scripts/heartbeat/wiki-graph.json" ]; then
+    local wsf="$ws/scripts/heartbeat/wiki-graph.json"
+    if [ ! -f "$wsf" ]; then
+      _doctor_warn "wiki-graph not derived yet" "agentctl heartbeat wiki-graph (or wait for the timer)"
+    elif command -v jq >/dev/null 2>&1; then
+      local wst wlr broken fmv drift sched interval_h then now
+      wst=$(jq -r '.last_status // ""' "$wsf" 2>/dev/null)
+      wlr=$(jq -r '.last_run // ""' "$wsf" 2>/dev/null)
+      broken=$(jq -r '.counts.broken_links // 0' "$wsf" 2>/dev/null)
+      fmv=$(jq -r '.counts.frontmatter_violations // 0' "$wsf" 2>/dev/null)
+      drift=$(jq -r '.counts.index_drift // 0' "$wsf" 2>/dev/null)
+      sched=$(yq -r '.vault.wiki_graph.schedule // "20 */6 * * *"' "$ws/agent.yml" 2>/dev/null)
+      interval_h=$(_wg_interval_hours "$sched")
+      then=$(_epoch_from_iso "$wlr"); now=$(date +%s)
+      if [ -n "$then" ] && [ "${then:-0}" -gt 0 ] && [ "$(( now - then ))" -gt "$(( interval_h * 2 * 3600 ))" ]; then
+        _doctor_fail "wiki-graph runner appears dead (last run ${wlr}, > 2× the ${interval_h}h interval)" \
+          "journalctl -u agent-${agent}-wiki-graph.service ; agentctl heartbeat wiki-graph"
+      fi
+      if [ "$wst" = "error" ]; then
+        _doctor_warn "wiki-graph last run errored (${wlr:-unknown})" \
+          "journalctl -u agent-${agent}-wiki-graph.service ; check yq on the unit PATH"
+      elif [ -n "$wlr" ]; then
+        _doctor_pass "wiki-graph last run: ${wlr}${wst:+ (${wst})}"
+      fi
+      if [ "${broken:-0}" -gt 0 ] || [ "${fmv:-0}" -gt 0 ] || [ "${drift:-0}" -gt 0 ]; then
+        _doctor_warn "wiki-graph integrity: broken_links=${broken} frontmatter=${fmv} index_drift=${drift}" \
+          "inspect .graph/findings.json in the vault; fix in the wiki, then agentctl heartbeat wiki-graph"
+      fi
+    fi
+    if [ -f "$ws/scripts/heartbeat/wiki-graph-schedule.fallback" ]; then
+      _doctor_warn "wiki-graph schedule not convertible — using the default cadence" \
+        "cat $ws/scripts/heartbeat/wiki-graph-schedule.fallback"
+    fi
   fi
 }
 
@@ -1137,6 +1208,14 @@ cmd_local_heartbeat() {
       local script="$ws/scripts/local/agent-vault-backup.sh"
       [ -x "$script" ] || { echo "agentctl: vault backup entrypoint not found ($script) — enable vault + ./setup.sh --regenerate" >&2; return 2; }
       exec "$script" "$@"   # backup-vault DOES support --dry-run — pass it through
+      ;;
+    wiki-graph)
+      # 014 (FR-011): regenerate the derived graph + structural lint on demand.
+      # Direct exec of the wrapper (no systemctl/polkit); it's idempotent and
+      # never edits the wiki, so no --dry-run guard is needed.
+      local script="$ws/scripts/local/agent-wiki-graph.sh"
+      [ -x "$script" ] || { echo "agentctl: wiki-graph entrypoint not found ($script) — enable vault + ./setup.sh --regenerate" >&2; return 2; }
+      exec "$script" "$@"
       ;;
     *)
       _local_docker_only "heartbeat"; return 2 ;;

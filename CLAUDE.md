@@ -130,36 +130,46 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3`. Already-p
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
-Active spec-kit feature: **013-local-rag-parity** — RAG agnostic to deployment mode. Plan:
-`specs/013-local-rag-parity/plan.md`. Closes the 30 confirmed gaps from the 2026-07-05 parity audit
-(49 aspects, adversarially verified). Three root causes in local mode: (RC1) the qmd binary reads
-`XDG_CACHE_HOME`/`QMD_CONFIG_DIR` — NOT `QMD_CACHE_HOME` (bash-lib bookkeeping only; verified against
-the npm tarball 2.5.3) → index/models land in `~operator/.cache/qmd`, not `<ws>/.state/.cache/qmd`;
-fix is an ATOMIC writer+reader pair: wrapper exports + granular `"env": {{QMD_MCP_ENV}}` in
-`mcp-json.tpl` (docker renders `{}` byte-identical — fixing only one side leaves the MCP reading a
-silently auto-created EMPTY sqlite). (RC2) the three 012 units lack PATH (systemd default excludes
-`~/.local/bin` bunx + `scripts/vendor/bin` yq) → wrappers self-provide PATH as first action.
-(RC3) watch wrapper misses `QMD_VAULT_DIR`/`VAULT_ROOT_OVERRIDE` → resolves `/home/agent/.vault`,
-start-limit → failed <35s; fix: exports + supervised loop (`while :; do …; sleep 30; done`, unit stays
-`active`, `failed` = real signal). US3 ops parity: kill-switch AUX_UNITS completes
-(+vault-backup.timer +healthcheck.timer — it kept PUSHING to the fork while "killed"), doctor honesty
-(last_status=error → warn, backup staleness 25h, exit codes 0/1/2), manual actions map to direct
-script exec (no systemctl/polkit), healthcheck WARN on watcher failed, NEXT_STEPS journal block,
-persistent `qmd-schedule.fallback` marker. TWO approved docker exceptions (DOCKER_E2E gate): flock in
-`qmd_setup_if_needed` (mirrored lib) and `ln -s bun → bunx` in Dockerfile — research CONFIRMED docker
-qmd never worked against real bunx (e2e stubs it; mcp `command: bunx` + `qmd_index.sh:88,137,215`).
-Artifacts: `specs/013-local-rag-parity/{spec,plan,research,data-model,quickstart}.md`, contracts/
-{storage-env-contract,batch-runtime-env,local-ops-parity,docker-qmd-runtime}.md. VERSION 0.6.0 → 0.7.0
-pending. Gates: host suite, DOCKER_E2E (mandatory), mclaren (confirmatory, host down), ferrari
-(docker qmd validation post-merge).
+Active spec-kit feature: **014-wiki-graph-rag** — derived knowledge graph over the whole vault
+wiki + normalization layer + deterministic maintenance, deployment-agnostic (docker & local).
+Plan: `specs/014-wiki-graph-rag/plan.md`. Design source: Karpathy's "LLM Wiki" gist (the 010
+vault skeleton implements its 3 layers; 014 closes the next level: nobody parses the
+`[[wikilinks]]` graph, lint is 100% manual/agentic, terminology drift SENCOSUD→Cencosud grows
+silently). Core: mirrored lib `scripts/lib/wiki_graph.sh` — awk extracts per-file (the strict
+frontmatter-subset parser IS the validator: unparseable → `frontmatter_violation`), jq
+aggregates globally → `<vault>/.graph/{graph,backlinks,findings}.json` (non-`.md` ONLY: the
+backup `*.md` filter at `backup_vault.sh:93` and the qmd mask exclude them by construction),
+state file `wiki-graph.json`, flock OUTSIDE the vault (Syncthing syncs the vault). Clarify
+decisions: normalization = folder-convention with OWN frontmatter (canonical/aliases/
+match_case/entity — the six types stay intact); schema delta for existing vaults via
+`_templates/schema-updates-0.8.0.md` + log.md entry (vault CLAUDE.md NEVER touched); default
+schedule `20 */6 * * *`; doctor contract: integrity degrades (broken_links/frontmatter_
+violations/index_drift → WARN exit 1, dead runner → FAIL exit 2), orphans/stale/alias
+informational only. Scheduling: docker = heartbeatctl staged cron line (pattern
+`qmd_reindex_line`, heartbeatctl:265-272 — NOT crontab.tpl); local = wrapper+unit+timer with
+ALL 013 lessons day-1 (PATH first, vault env, fallback marker, kill-switch AUX_UNITS,
+healthcheck WARN). Additive upgrade `vault_seed_missing` (never overwrites, never touches
+vault CLAUDE.md, delta only for pre-populated vaults) makes it deployable to ferrari/mclaren.
+New render vars `WIKI_GRAPH_ENABLED`/`WIKI_GRAPH_SCHEDULE` hit the 3 known test touchpoints
+(wizard_answers, e2e-smoke array, schema.bats known_external). Artifacts:
+`specs/014-wiki-graph-rag/{spec,plan,research,data-model,quickstart}.md` + contracts/
+{graph-artifacts,normalization-pages,mode-parity-ops,vault-additive-upgrade}.md. VERSION
+0.7.0 → 0.8.0 pending. Gates: host suite, DOCKER_E2E (mandatory: new lib in image + staged
+cron line), manual mclaren/ferrari (stacked with the still-pending 013 confirmatory gates).
 
 Prior: 001-deps-upgrade (PR #55), 002-fix-schema-bool, 003-bootstrap-hardening (PR #56),
 004-macos-bootstrap-hardening (PR #59), 005-fix-schema-false (PR #60), 006-headless-bootstrap (PR #61),
 007-fix-mcp-test-drift (PR #62), 008-fix-postlogin-plugin-install (PR #63),
 009-fix-extra-marketplace-install (PR #64), 010-self-managing-rag (PR #65),
-011-local-standalone-mode (PR #66), 012-local-vault-rag (PR #67) — all merged. 011 added the second
+011-local-standalone-mode (PR #66), 012-local-vault-rag (PR #67), 013-local-rag-parity (PR #68) — all
+merged. 011 added the second
 wizard **deployment mode** (`deployment.mode: docker|local`); Principle II is a justified opt-in
 VIOLATION in local mode. 012 ported vault+QMD+backup to local systemd (5 units, lib relocation to
 `scripts/lib/` with docker mirror, cron→OnCalendar via `local_schedule.sh`, `VAULT_ROOT_OVERRIDE`,
-mode-resolved `VAULT_MCP_PATH`/`GCAL_CREDS_PATH`). VERSION 0.6.0.
+mode-resolved `VAULT_MCP_PATH`/`GCAL_CREDS_PATH`). 013 closed the 30 RAG parity gaps: XDG storage
+pair (`XDG_CACHE_HOME`/`QMD_CONFIG_DIR` under `.state` — the qmd binary never read
+`QMD_CACHE_HOME`), wrapper PATH self-provisioning, watcher vault env + supervised loop, ops
+parity (kill-switch/doctor 0-1-2/manual actions/healthcheck), and docker `bunx` symlink
+(FR-016 — docker qmd never ran against real binaries before). Its hardware gates (mclaren
+confirmatory, ferrari first-time docker qmd) remain PENDING and stack with 014's. VERSION 0.7.0.
 <!-- SPECKIT END -->

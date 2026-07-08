@@ -49,6 +49,13 @@ elif [ -f "$_HBCTL_RELOCATED_LIB/qmd_index.sh" ]; then
   # shellcheck source=/dev/null
   source "$_HBCTL_RELOCATED_LIB/qmd_index.sh"
 fi
+# shellcheck source=/dev/null
+if [ -f "$LIB_DIR/wiki_graph.sh" ]; then
+  source "$LIB_DIR/wiki_graph.sh"
+elif [ -f "$_HBCTL_RELOCATED_LIB/wiki_graph.sh" ]; then
+  # shellcheck source=/dev/null
+  source "$_HBCTL_RELOCATED_LIB/wiki_graph.sh"
+fi
 
 IDENTITY_STATE_DIR="${IDENTITY_STATE_DIR:-$WORKSPACE/.state}"
 IDENTITY_BACKUP_STATE_FILE="$HEARTBEAT_DIR/identity-backup.json"
@@ -57,6 +64,10 @@ CONFIG_BACKUP_STATE_FILE="$HEARTBEAT_DIR/config-backup.json"
 TOKEN_HEALTH_DIR="$HEARTBEAT_DIR/token-health"
 # qmd_index.sh (sourced above) reads this for the reindex state file.
 QMD_INDEX_STATE_FILE="${QMD_INDEX_STATE_FILE:-$HEARTBEAT_DIR/qmd-index.json}"
+# wiki_graph.sh (014, sourced above) reads these for its state file + lock.
+WIKI_GRAPH_STATE_FILE="${WIKI_GRAPH_STATE_FILE:-$HEARTBEAT_DIR/wiki-graph.json}"
+WIKI_GRAPH_LOCK="${WIKI_GRAPH_LOCK:-$HEARTBEAT_DIR/.wiki-graph.lock}"
+export WIKI_GRAPH_STATE_FILE WIKI_GRAPH_LOCK
 
 cmd_help() {
   cat <<EOF
@@ -113,6 +124,10 @@ Vault RAG:
                           changed (flock-guarded + hash-debounced). Invoked by
                           the */5 cron backstop and the inotify watcher
                           (qmd_watch.sh). Opt-in via vault.qmd.enabled=true.
+  wiki-graph              Regenerate the derived wiki graph + structural lint
+                          (.graph/*.json + wiki-graph.json). flock-guarded, never
+                          edits the wiki. Cron backstop + manual action. Opt-out
+                          via vault.wiki_graph.enabled=false.
 
 Exit codes:
   0  success
@@ -272,15 +287,29 @@ CONF
     qmd_reindex_line="$qmd_schedule /usr/local/bin/heartbeatctl qmd-reindex >> /workspace/scripts/heartbeat/logs/qmd-reindex.log 2>&1"
   fi
 
+  # Seventh crontab line: wiki-graph runner backstop (014). Derives the graph +
+  # structural lint. Default-on when the vault is on (opt out via
+  # vault.wiki_graph.enabled=false). Default cadence 20 */6; override via
+  # vault.wiki_graph.schedule. Same flock-guarded command as the manual action.
+  local wiki_graph_line=""
+  local wg_vault_en wg_en wg_schedule
+  wg_vault_en=$(_yq '.vault.enabled')
+  wg_en=$(_yq '.vault.wiki_graph.enabled')
+  wg_schedule=$(_yq '.vault.wiki_graph.schedule // "20 */6 * * *"')
+  if [ "$wg_vault_en" = "true" ] && [ "$wg_en" != "false" ]; then
+    wiki_graph_line="$wg_schedule /usr/local/bin/heartbeatctl wiki-graph >> /workspace/scripts/heartbeat/logs/wiki-graph.log 2>&1"
+  fi
+
   local tmp_crontab="${CRONTAB_FILE}.tmp"
   if ! cat > "$tmp_crontab" <<CT
-# Cron for in-container agent heartbeat + identity/vault/config backup + token-health + qmd reindex. Managed by heartbeatctl.
+# Cron for in-container agent heartbeat + identity/vault/config backup + token-health + qmd reindex + wiki-graph. Managed by heartbeatctl.
 $line
 ${backup_line}
 ${vault_backup_line}
 ${config_backup_line}
 ${token_health_line}
 ${qmd_reindex_line}
+${wiki_graph_line}
 CT
   then
     rm -f "$tmp_crontab"
@@ -966,6 +995,31 @@ _qmd_reindex_dry() {
   fi
 }
 
+# heartbeatctl wiki-graph — 014: regenerate the derived wiki graph + structural
+# lint (flock-guarded, fail-silent). The exact command the cron backstop runs and
+# the manual `agentctl heartbeat wiki-graph` action. Always exits 0.
+cmd_wiki_graph() {
+  case "${1:-}" in
+    -h|--help)
+      cat <<EOF
+Usage: heartbeatctl wiki-graph
+
+Derives <vault>/.graph/{graph,backlinks,findings}.json from the wiki and writes
+the wiki-graph.json state file (freshness + finding counts). flock-guarded; safe
+to run any time. Never edits the wiki.
+EOF
+      return 0 ;;
+  esac
+  if ! command -v wiki_graph_run >/dev/null 2>&1; then
+    echo "wiki-graph: wiki_graph.sh not loaded — nothing to do" >&2
+    return 0
+  fi
+  wiki_graph_run "$AGENT_YML"
+  if [ -f "$WIKI_GRAPH_STATE_FILE" ] && command -v jq >/dev/null 2>&1; then
+    jq -rc '"wiki-graph: \(.last_status) — " + (.counts|tostring)' "$WIKI_GRAPH_STATE_FILE" 2>/dev/null || true
+  fi
+}
+
 # cmd_token_check — ad-hoc trigger for the token-health probe. Same
 # script as the cron tick, just invoked manually. Useful right after
 # updating .env or when doctor reports a stale state file.
@@ -1000,6 +1054,7 @@ main() {
     backup-vault)    cmd_backup_vault "$@" ;;
     backup-config)   cmd_backup_config "$@" ;;
     qmd-reindex)     cmd_qmd_reindex "$@" ;;
+    wiki-graph)      cmd_wiki_graph "$@" ;;
     token-check)     cmd_token_check ;;
     set-interval) cmd_set_interval "${1:-}" ;;
     set-prompt)   cmd_set_prompt   "${1:-}" ;;

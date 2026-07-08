@@ -322,6 +322,25 @@ heartbeatctl token-check` (default 86400 = 24h).
 - `1` — validation error (bad input value, unknown schema)
 - `2` — operational error (filesystem, yq, missing state.json)
 
+## Vault RAG
+
+### `wiki-graph`
+
+```
+heartbeatctl wiki-graph
+agentctl heartbeat wiki-graph           # same, from the host (both modes)
+```
+
+Regenerates the derived wiki graph + structural lint (feature 014). Reads the
+whole `wiki/` and writes `<vault>/.graph/{graph,backlinks,findings}.json` plus the
+`<workspace>/scripts/heartbeat/wiki-graph.json` state file (freshness + finding
+counts). `flock`-guarded (lock lives under `scripts/heartbeat/`, never in the
+vault), fail-silent (always exits 0; honesty is in the state file). NEVER edits the
+wiki — it reports; the agent fixes. A `20 */6` cron backstop runs the same command;
+opt out with `vault.wiki_graph.enabled=false`. `agentctl status`/`doctor` surface
+the freshness and degrade on integrity findings (broken links, frontmatter
+violations, index drift) or a dead runner.
+
 ## See also
 
 - [`docs/architecture.md`](architecture.md) — container topology, crond-as-root, cap drops.

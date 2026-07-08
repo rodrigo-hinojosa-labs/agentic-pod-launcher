@@ -319,8 +319,19 @@ agentctl heartbeat qmd-reindex                           # forzar un reindex aho
 journalctl -u agent-{{AGENT_NAME}}-vault-backup.service  # pushes del backup del vault
 agentctl heartbeat backup-vault                          # forzar un backup (agrega --dry-run para previsualizar)
 ```
+{{/if}}{{#if WIKI_GRAPH_ENABLED}}
+### Wiki-grafo — derivar y lint
+
+El runner del wiki-grafo es fail-silent (exit 0); el detalle va al journal, a los artefactos `.graph/` y al state file:
+
+```bash
+journalctl -u agent-{{AGENT_NAME}}-wiki-graph.service    # corridas programadas de derive+lint
+systemctl list-timers 'agent-{{AGENT_NAME}}-*'           # todos los timers del agente
+agentctl heartbeat wiki-graph                            # regenerar el grafo ahora
+agentctl status                                          # frescura del grafo + counts de hallazgos
+```
 {{/if}}
-Controlas el agente desde **claude.ai/code** y la app móvil (identidad `<hostname>-{{AGENT_NAME}}`). El healthcheck corre por timer (~5 min) y avisa si el login expira, hay error de auth, o la unit del watcher QMD está `failed`. Auto-recuperación: si el proceso muere, systemd lo rearranca en ~10 s (`Restart=always`).
+Controlas el agente desde **claude.ai/code** y la app móvil (identidad `<hostname>-{{AGENT_NAME}}`). El healthcheck corre por timer (~5 min) y avisa si el login expira, hay error de auth, o la unit del watcher QMD / wiki-grafo está `failed`. Auto-recuperación: si el proceso muere, systemd lo rearranca en ~10 s (`Restart=always`).
 
 ## 3. Verificación (gates en el host)
 

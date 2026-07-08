@@ -62,6 +62,31 @@ teardown() {
   done
 }
 
+# --- 014: normalization layer + schema markers -------------------------------
+
+@test "skeleton (014): normalization dir + template exist, index has the section" {
+  [ -d "$SKELETON/wiki/normalization" ]
+  [ -f "$SKELETON/_templates/normalization.md" ]
+  grep -qE '^## Normalization$' "$SKELETON/index.md"
+  # template carries the own-frontmatter keys (not the six-type ones)
+  grep -q '^canonical:' "$SKELETON/_templates/normalization.md"
+  grep -q '^aliases:' "$SKELETON/_templates/normalization.md"
+}
+
+@test "skeleton (014): CLAUDE.md documents the 2.5 Normalize + graph query steps (L2)" {
+  grep -q '2.5. \*\*Normalize terminology' "$SKELETON/CLAUDE.md"
+  grep -q '.graph/backlinks.json' "$SKELETON/CLAUDE.md"
+}
+
+@test "vault_seed_if_empty (014): normalization layer + schema markers reach the seed" {
+  run vault_seed_if_empty "$TMP_TEST_DIR/vseed14" "$SKELETON" "2026-07-07"
+  [ "$status" -eq 0 ]
+  [ -d "$TMP_TEST_DIR/vseed14/wiki/normalization" ]
+  [ -f "$TMP_TEST_DIR/vseed14/_templates/normalization.md" ]
+  grep -q '2.5. \*\*Normalize terminology' "$TMP_TEST_DIR/vseed14/CLAUDE.md"
+  grep -q '.graph/backlinks.json' "$TMP_TEST_DIR/vseed14/CLAUDE.md"
+}
+
 # --- vault_ensure_paths -----------------------------------------------------
 
 @test "vault_ensure_paths: creates the directory" {

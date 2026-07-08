@@ -65,6 +65,15 @@ if command -v systemctl >/dev/null 2>&1 && systemctl is-failed --quiet "$WATCH_U
   _demote WARN "qmd watcher failed (start-limit? reindex-on-change down — timer still backstops)"
 fi
 
+# 2d. wiki-graph runner (014/FR-014): WARN (not DEGRADED) if the derive+lint unit
+#     is `failed`. The last graph stays usable and the manual action refreshes it,
+#     so it's an anomaly worth attention, not a session outage. Same self-gating
+#     is-failed pattern: absent/inactive → no-op on non-vault agents.
+WG_UNIT="agent-${AGENT_NAME}-wiki-graph.service"
+if command -v systemctl >/dev/null 2>&1 && systemctl is-failed --quiet "$WG_UNIT"; then
+  _demote WARN "wiki-graph runner failed (graph derive+lint down — last .graph/ still usable)"
+fi
+
 # 3. Credential expiry — needs jq + readable creds; degrade gracefully if not.
 if command -v jq >/dev/null 2>&1 && [ -r "$CREDS" ]; then
   now_ms=$(( $(date +%s) * 1000 ))

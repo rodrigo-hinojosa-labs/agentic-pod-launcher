@@ -40,7 +40,8 @@ case "$*" in
   *is-active*)          exit "${STUB_ACTIVE:-0}" ;;
   *show*MainPID*)       echo "${STUB_MAINPID:-1234}" ;;
   # is-failed --quiet: NOT failed (1) by default; a test sets STUB_WATCH_FAILED=1.
-  *is-failed*qmd-watch*) [ "${STUB_WATCH_FAILED:-0}" = 1 ] && exit 0 || exit 1 ;;
+  *is-failed*qmd-watch*)  [ "${STUB_WATCH_FAILED:-0}" = 1 ] && exit 0 || exit 1 ;;
+  *is-failed*wiki-graph*) [ "${STUB_WG_FAILED:-0}" = 1 ] && exit 0 || exit 1 ;;
   *is-failed*)          exit 1 ;;
   *)                    exit 0 ;;
 esac
@@ -124,6 +125,22 @@ _write_creds() {  # _write_creds <expiresAt-ms>
   STUB_ACTIVE=0 run "$TMP_TEST_DIR/hc.sh"
   [ "$status" -eq 0 ]
   ! [[ "$output" == *"watcher failed"* ]]
+}
+
+@test "healthcheck WARN: a failed wiki-graph unit → WARN, never DEGRADED (014/T022)" {
+  _write_creds 99999999999999
+  STUB_ACTIVE=0 STUB_WG_FAILED=1 run "$TMP_TEST_DIR/hc.sh"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"WARN"* ]]
+  [[ "$output" == *"wiki-graph runner failed"* ]]
+  ! [[ "$output" == *"DEGRADED"* ]]
+}
+
+@test "healthcheck: a healthy (non-failed) wiki-graph unit adds no warning (014)" {
+  _write_creds 99999999999999
+  STUB_ACTIVE=0 run "$TMP_TEST_DIR/hc.sh"
+  [ "$status" -eq 0 ]
+  ! [[ "$output" == *"wiki-graph runner failed"* ]]
 }
 
 @test "healthcheck WARN: login expiring within 24h → exit 1" {
