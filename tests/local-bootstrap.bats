@@ -90,7 +90,24 @@ _write_mcp() { printf '{ "mcpServers": { %s } }\n' "$1" > "$WS/.mcp.json"; }
   '
   run env BOOTSTRAP_DRY_RUN=1 "$BOOT"
   [ "$status" -eq 0 ]
-  echo "$output" | grep -qE '^PLAN bun [0-9]+\.[0-9]+\.[0-9]+$'
+  # 015 US2: the plan line now carries the resolved libc variant + asset.
+  echo "$output" | grep -qE '^PLAN bun [0-9]+\.[0-9]+\.[0-9]+ \((glibc|musl)\) asset=bun-linux-[a-z0-9]+(-musl)?\.zip$'
+}
+
+@test "bootstrap dry-run: glibc host selects the glibc bun asset (US2)" {
+  _write_mcp '"qmd": {"command":"bunx","args":["@tobilu/qmd@2.5.3","mcp"]}'
+  run env BOOTSTRAP_DRY_RUN=1 AGENTIC_LIBC=glibc "$BOOT"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qE '^PLAN bun [0-9.]+ \(glibc\) asset=bun-linux-[a-z0-9]+\.zip$'
+  # glibc asset MUST NOT be the -musl build
+  ! echo "$output" | grep -qE 'asset=bun-linux-[a-z0-9]+-musl\.zip'
+}
+
+@test "bootstrap dry-run: musl host selects the musl bun asset (US2, docker parity)" {
+  _write_mcp '"qmd": {"command":"bunx","args":["@tobilu/qmd@2.5.3","mcp"]}'
+  run env BOOTSTRAP_DRY_RUN=1 AGENTIC_LIBC=musl "$BOOT"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qE '^PLAN bun [0-9.]+ \(musl\) asset=bun-linux-[a-z0-9]+-musl\.zip$'
 }
 
 @test "bootstrap dry-run: full config plans every runtime it references" {

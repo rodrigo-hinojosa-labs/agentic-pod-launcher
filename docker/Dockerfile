@@ -229,6 +229,7 @@ COPY scripts/lib/token_health.sh    /opt/agent-admin/scripts/lib/token_health.sh
 COPY scripts/lib/plugin-install.sh /opt/agent-admin/scripts/lib/plugin-install.sh
 COPY scripts/lib/qmd_index.sh       /opt/agent-admin/scripts/lib/qmd_index.sh
 COPY scripts/lib/wiki_graph.sh      /opt/agent-admin/scripts/lib/wiki_graph.sh
+COPY scripts/lib/rag_obs.sh         /opt/agent-admin/scripts/lib/rag_obs.sh
 COPY scripts/check_token_health.sh  /opt/agent-admin/scripts/check_token_health.sh
 RUN chmod +x /opt/agent-admin/scripts/heartbeatctl \
               /opt/agent-admin/scripts/check_token_health.sh \

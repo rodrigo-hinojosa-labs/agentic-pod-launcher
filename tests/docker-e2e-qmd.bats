@@ -237,6 +237,17 @@ PY
   run in_container sh -c 'jq -r .last_status /workspace/scripts/heartbeat/wiki-graph.json'
   [ "$output" = "ok" ]
 
+  # ── Phase 4.6: 015 US3 — rag_obs.sh baked in + host-backed scratch routing ───
+  # The shared observability helper is mirrored + COPYed into the image (T004), so
+  # the runners source it (not the fallback). And the wiki-graph runner routed its
+  # temporaries onto host-backed .state (under the state dir), NOT the tmpfs /tmp —
+  # this is what keeps bunx's ~98MB qmd cache from filling /tmp and ENOSPC-ing the
+  # aggregation on a large vault (the ferrari bug, now fixed in code).
+  run in_container sh -c 'test -f /opt/agent-admin/scripts/lib/rag_obs.sh && echo HAVE_RAGOBS'
+  echo "$output" | grep -q HAVE_RAGOBS       # grep (not [[ ]]) so a miss FAILS the test
+  run in_container sh -c 'test -d /workspace/scripts/heartbeat/tmp && echo HAVE_SCRATCH'
+  echo "$output" | grep -q HAVE_SCRATCH
+
   # ── Phase 5: least privilege intact (Principle II, NON-NEGOTIABLE) ───────────
   local cid
   cid=$(cd "$DEST" && docker compose ps -q "$AGENT_NAME")
