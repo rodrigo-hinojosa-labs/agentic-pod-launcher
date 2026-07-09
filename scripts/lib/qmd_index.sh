@@ -31,6 +31,17 @@ elif [ -f "$(dirname "${BASH_SOURCE[0]}")/backup_vault.sh" ]; then
   source "$(dirname "${BASH_SOURCE[0]}")/backup_vault.sh"
 fi
 
+# 015 US3/US4: shared observability helpers (redact_secrets + scratch_dir).
+# Image-first / repo-relative, same pattern as backup_vault.sh above.
+# shellcheck source=/dev/null
+if [ -f /opt/agent-admin/scripts/lib/rag_obs.sh ]; then
+  source /opt/agent-admin/scripts/lib/rag_obs.sh
+elif [ -f "$(dirname "${BASH_SOURCE[0]}")/rag_obs.sh" ]; then
+  # shellcheck source=/dev/null
+  source "$(dirname "${BASH_SOURCE[0]}")/rag_obs.sh"
+fi
+command -v scratch_dir >/dev/null 2>&1 || scratch_dir() { printf '%s\n' "${TMPDIR:-/tmp}"; }
+
 _qmd_log() { echo "[qmd] $*" >&2; }
 
 # The pinned package spec, single-sourced from agent.yml vault.qmd.version.
@@ -82,10 +93,15 @@ _qmd_enabled() {
 # (degrade to a direct call where it is absent, e.g. macOS dev), so a wedged
 # download can never hang the boot before the watchdog (Principle IV).
 _qmd_run() {
-  local _to=""
+  local _to="" _scratch
   if command -v timeout >/dev/null 2>&1; then _to="timeout ${QMD_CMD_TIMEOUT:-900}"; fi
+  # 015 US3: point bunx's package cache (~98MB for @tobilu/qmd) and every qmd
+  # temporary at host-backed .state (under the qmd cache root) instead of the
+  # 100MB tmpfs /tmp, which it otherwise fills → ENOSPC for qmd AND the wiki-graph
+  # runner. The cache also survives restarts there (fewer cold-starts).
+  _scratch=$(scratch_dir "$(qmd_cache_root)")
   # shellcheck disable=SC2086  # $_to must word-split into `timeout N` (or empty)
-  $_to bunx "$@"
+  TMPDIR="$_scratch" TMP="$_scratch" TEMP="$_scratch" $_to bunx "$@"
 }
 
 # Read the last indexed hash from the state file (empty if absent).
@@ -234,10 +250,35 @@ qmd_reindex() {
   return 0
 }
 
+# 015 US4: one-line, redacted tail of a captured qmd stderr — for the reindex log
+# + the diagnostic. NEVER prints in the clear if redaction is unavailable (a
+# missing mirror must not turn observability into a secret leak — Principle V).
+_qmd_tail_redacted() {
+  local f="$1"
+  command -v redact_secrets >/dev/null 2>&1 || { printf 'redaction-unavailable\n'; return 0; }
+  [ -f "$f" ] || { printf 'unknown\n'; return 0; }
+  # Redact the WHOLE stream FIRST, then truncate — truncating first could chop a
+  # secret's anchor (sk-ant-/<digits>:/KEY=) off at the 500-byte boundary and leak
+  # the bare value past the anchor-dependent rules (Principle V).
+  redact_secrets < "$f" 2>/dev/null | tr '\n' ' ' | tail -c 500
+}
+
+# 015 US4: log the effective reindex env once (redacted) so a docker reindex
+# failure is diagnosable against the manual invocation that works (BUG 4). Only
+# when redaction is available — never dump env otherwise.
+_qmd_log_reindex_env() {
+  local pkg="$1"
+  command -v redact_secrets >/dev/null 2>&1 || return 0
+  printf 'pkg=%s coll=%s cache_root=%s QMD_CONFIG_DIR=%s XDG_CACHE_HOME=%s TMPDIR=%s\n' \
+    "$pkg" "${QMD_COLLECTION_NAME:-vault}" "$(qmd_cache_root)" "${QMD_CONFIG_DIR:-}" \
+    "${XDG_CACHE_HOME:-}" "$(scratch_dir "$(qmd_cache_root)")" \
+    | redact_secrets | while IFS= read -r _l; do _qmd_log "reindex env: $_l"; done
+}
+
 # Critical section of qmd_reindex (runs under flock when available).
 _qmd_reindex_locked() {
   local agent_yml="$1" vault_dir="$2"
-  local state_file current last pkg
+  local state_file current last pkg scratch rlog
   state_file=$(qmd_state_file)
   current=$(vault_hash "$vault_dir" 2>/dev/null || echo "")
   last=$(qmd_last_hash "$state_file")
@@ -248,14 +289,20 @@ _qmd_reindex_locked() {
   fi
   command -v bunx >/dev/null 2>&1 || { _qmd_log "reindex: bunx unavailable — skip"; return 0; }
   pkg=$(qmd_pkg "$agent_yml")
+  # 015 US4: surface the effective env + the REAL qmd stderr (redacted) instead of
+  # swallowing it with >/dev/null 2>&1. The old silent path hid the docker-only
+  # wrapper failure (BUG 4); the root-cause fix is the confirmatory ferrari gate.
+  _qmd_log_reindex_env "$pkg"
+  scratch=$(scratch_dir "$(qmd_cache_root)")
+  rlog="$scratch/reindex.err"
   _qmd_log "reindex: update + embed via $pkg"
-  if ! _qmd_run "$pkg" update >/dev/null 2>&1; then
-    _qmd_log "reindex: 'update' failed/timed out"
+  if ! _qmd_run "$pkg" update >"$rlog" 2>&1; then
+    _qmd_log "reindex: 'update' failed/timed out: $(_qmd_tail_redacted "$rlog")"
     qmd_write_state "$state_file" "$last" "error"
     return 0
   fi
-  if ! _qmd_run "$pkg" embed >/dev/null 2>&1; then
-    _qmd_log "reindex: 'embed' failed/timed out"
+  if ! _qmd_run "$pkg" embed >"$rlog" 2>&1; then
+    _qmd_log "reindex: 'embed' failed/timed out: $(_qmd_tail_redacted "$rlog")"
     qmd_write_state "$state_file" "$last" "error"
     return 0
   fi

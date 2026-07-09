@@ -91,3 +91,47 @@ YAML
   [ "$status" -eq 1 ]
   echo "$output" | grep -qi "unknown flag"
 }
+
+# ── 015 US4: reindex observability (docker BUG 4 diagnosis, root-cause deferred) ─
+@test "reindex: a failing qmd surfaces the REAL stderr (redacted) + logs the env (US4)" {
+  # shellcheck source=/dev/null
+  source "$BATS_TEST_DIRNAME/../scripts/lib/qmd_index.sh"
+  export QMD_CACHE_HOME="$BATS_TEST_TMPDIR/cache"; mkdir -p "$QMD_CACHE_HOME"
+  export QMD_INDEX_STATE_FILE="$BATS_TEST_TMPDIR/qmd-index.json"   # absent → hash differs → not skipped
+  local vault="$BATS_TEST_TMPDIR/vault"; mkdir -p "$vault"; printf '# n\nhi\n' > "$vault/a.md"
+  mkdir -p "$BATS_TEST_TMPDIR/bin"; printf '#!/bin/sh\nexit 0\n' > "$BATS_TEST_TMPDIR/bin/bunx"; chmod +x "$BATS_TEST_TMPDIR/bin/bunx"
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+  # stub the qmd invocation to fail with a secret-bearing stderr
+  _qmd_run() { echo "qmd: fatal: config not found (sk-ant-oat01-LEAKME999)" >&2; return 1; }
+  run _qmd_reindex_locked "$HEARTBEATCTL_WORKSPACE/agent.yml" "$vault"
+  [ "$status" -eq 0 ]                                       # fail-silent (exit 0)
+  echo "$output" | grep -q "config not found"              # real error visible (not swallowed)
+  echo "$output" | grep -q "reindex env:"                  # effective env logged for diagnosis
+  ! echo "$output" | grep -q "LEAKME999"                   # secret redacted (Principle V)
+}
+
+@test "reindex: state records last_status=error on qmd failure (US4)" {
+  # shellcheck source=/dev/null
+  source "$BATS_TEST_DIRNAME/../scripts/lib/qmd_index.sh"
+  export QMD_CACHE_HOME="$BATS_TEST_TMPDIR/cache2"; mkdir -p "$QMD_CACHE_HOME"
+  export QMD_INDEX_STATE_FILE="$BATS_TEST_TMPDIR/qmd-index2.json"
+  local vault="$BATS_TEST_TMPDIR/vault2"; mkdir -p "$vault"; printf '# n\nhi\n' > "$vault/a.md"
+  mkdir -p "$BATS_TEST_TMPDIR/bin2"; printf '#!/bin/sh\nexit 0\n' > "$BATS_TEST_TMPDIR/bin2/bunx"; chmod +x "$BATS_TEST_TMPDIR/bin2/bunx"
+  PATH="$BATS_TEST_TMPDIR/bin2:$PATH"
+  _qmd_run() { echo "boom" >&2; return 1; }
+  _qmd_reindex_locked "$HEARTBEATCTL_WORKSPACE/agent.yml" "$vault" 2>/dev/null
+  run jq -r '.last_status' "$QMD_INDEX_STATE_FILE"
+  [ "$output" = "error" ]
+}
+
+@test "reindex: a secret whose anchor straddles the 500-byte tail boundary is still redacted (US4/Principle V)" {
+  # shellcheck source=/dev/null
+  source "$BATS_TEST_DIRNAME/../scripts/lib/qmd_index.sh"
+  local errf="$BATS_TEST_TMPDIR/qmd.err"
+  # Put the Telegram-token anchor "<digits>:" >500 bytes from EOF, so a
+  # truncate-then-redact path would drop the anchor and leak the bare value.
+  { printf '8835512065:AAHfiqksKZ8WmR2zSjiQ7v4TMAKdiHm9T0LEAKHALF'; head -c 600 < /dev/zero | tr '\0' 'x'; printf '\n'; } > "$errf"
+  run _qmd_tail_redacted "$errf"
+  [ "$status" -eq 0 ]
+  ! echo "$output" | grep -q "LEAKHALF"      # bare token value must NOT survive
+}

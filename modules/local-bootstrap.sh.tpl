@@ -141,24 +141,56 @@ provision_github_mcp() {
   rm -rf "$tmp"
 }
 
-# bun/bunx — required only by the qmd MCP (bunx). Static musl zip; needs unzip.
+# Detect the host libc so we pick a bun build that EXECUTES here. Docker (Alpine)
+# is musl; local bare-metal (Debian/Ubuntu) is glibc — a musl bun there fails at
+# execve with `cannot execute: required file not found`. Probe the dynamic loader
+# first (Alpine always ships /lib/ld-musl-*; glibc never does), then ldd, then
+# getconf; default glibc (the common local host). AGENTIC_LIBC overrides (tests).
+_libc_variant() {
+  case "${AGENTIC_LIBC:-}" in musl|glibc) printf '%s\n' "$AGENTIC_LIBC"; return 0 ;; esac
+  local f
+  for f in /lib/ld-musl-*.so.1 /lib/ld-musl-*; do
+    [ -e "$f" ] && { echo musl; return 0; }
+  done
+  if command -v ldd >/dev/null 2>&1; then
+    case "$(ldd --version 2>&1 | head -n1)" in
+      *musl*)                       echo musl;  return 0 ;;
+      *GLIBC*|*GNU\ libc*|*glibc*)  echo glibc; return 0 ;;
+    esac
+  fi
+  if command -v getconf >/dev/null 2>&1 && getconf GNU_LIBC_VERSION >/dev/null 2>&1; then
+    echo glibc; return 0
+  fi
+  echo glibc
+}
+
+# bun/bunx — required only by the qmd MCP (bunx). Zip build chosen by host libc
+# (glibc vs musl); needs unzip.
 provision_bun() {
-  if [ "$DRY_RUN" = 1 ]; then echo "PLAN bun ${BUN_VERSION}"; return 0; fi
-  if have bun && have bunx; then log "bun present"; return 0; fi
-  have unzip || { warn "unzip not found — cannot install bun (qmd MCP will not start); install it (e.g. apt-get install unzip)"; return 1; }
-  local arch bun_arch tmp
+  local arch bun_arch variant asset tmp
   arch="$(uname -m)"
   case "$arch" in
     x86_64)        bun_arch="x64" ;;
     aarch64|arm64) bun_arch="aarch64" ;;
     *) warn "unsupported arch for bun: $arch"; return 1 ;;
   esac
+  variant="$(_libc_variant)"
+  if [ "$variant" = "musl" ]; then
+    asset="bun-linux-${bun_arch}-musl"
+  else
+    asset="bun-linux-${bun_arch}"
+  fi
+  if [ "$DRY_RUN" = 1 ]; then echo "PLAN bun ${BUN_VERSION} (${variant}) asset=${asset}.zip"; return 0; fi
+  # Idempotent by EXECUTION, not mere presence: a musl build on a glibc host
+  # passes `have` but does not run — re-provision with the correct build.
+  if have bun && have bunx && bun --version >/dev/null 2>&1; then log "bun present"; return 0; fi
+  have unzip || { warn "unzip not found — cannot install bun (qmd MCP will not start); install it (e.g. apt-get install unzip)"; return 1; }
   tmp="$(mktemp -d)" || return 1
-  log "installing bun ${BUN_VERSION} (${bun_arch}) → ${TARGET_BIN}"
+  log "installing bun ${BUN_VERSION} (${bun_arch}, ${variant}) → ${TARGET_BIN}"
   if ( cd "$tmp" \
-        && curl -fsSL -o bun.zip "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-${bun_arch}-musl.zip" \
+        && curl -fsSL -o bun.zip "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/${asset}.zip" \
         && unzip -q bun.zip ); then
-    if mv "$tmp/bun-linux-${bun_arch}-musl/bun" "$TARGET_BIN/bun" && chmod +x "$TARGET_BIN/bun"; then
+    if mv "$tmp/${asset}/bun" "$TARGET_BIN/bun" && chmod +x "$TARGET_BIN/bun"; then
       ln -sf "$TARGET_BIN/bun" "$TARGET_BIN/bunx"
       log "bun installed"
     else

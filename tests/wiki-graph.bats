@@ -217,3 +217,28 @@ YML
   # ring is fully linked → 0 orphans
   [ "$(jq -r .counts.orphans "$TMP_TEST_DIR/big.json")" -eq 0 ]
 }
+
+# ── 015 US3: host-backed TMPDIR + honest infra-error observability ────────────
+@test "wiki-graph: routes TMPDIR to a host-backed scratch dir under the state dir (US3)" {
+  # Stub the aggregation to record the TMPDIR the runner set before failing fast.
+  export WG_SEEN_TMPDIR="$TMP_TEST_DIR/seen_tmpdir"
+  _wg_aggregate() { printf '%s\n' "$TMPDIR" > "$WG_SEEN_TMPDIR"; return 2; }
+  run wiki_graph_run "$AGENT_YML"
+  [ "$status" -eq 0 ]                                   # fail-silent (exit 0)
+  local seen; seen=$(cat "$WG_SEEN_TMPDIR")
+  # host-backed scratch = "<state-dir>/tmp", NOT the tmpfs /tmp
+  [ "$seen" = "$TMP_TEST_DIR/tmp" ]
+}
+
+@test "wiki-graph: aggregation failure records the REAL stderr (redacted) in state (US3/FR-007)" {
+  # Simulate the ferrari ENOSPC that the old 2>/dev/null hid, with a secret in the
+  # message to prove redaction (Principle V).
+  _wg_aggregate() { echo "jq: error: No space left on device (sk-ant-oat01-LEAKSECRET123)" >&2; return 2; }
+  run wiki_graph_run "$AGENT_YML"
+  [ "$status" -eq 0 ]
+  run jq -r '.error' "$TMP_TEST_DIR/wiki-graph.json"
+  # real infra error surfaced (not the generic "jq aggregation failed") ...
+  echo "$output" | grep -q 'No space left on device'
+  # ... and the secret never reaches the state file
+  echo "$output" | grep -q 'aggregation failed:' && ! echo "$output" | grep -q 'LEAKSECRET123'
+}

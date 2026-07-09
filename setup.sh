@@ -77,14 +77,58 @@ require_tool() {
 # Detect which claude CLI variant is installed. Preference order:
 # claude-enterprise > claude-personal > claude. Falls back to "claude"
 # if none are found (user will install it later).
-detect_claude_cli() {
-  for bin in claude-enterprise claude-personal claude; do
-    if command -v "$bin" &>/dev/null; then
-      echo "$bin"
-      return 0
-    fi
+# Resolve a configured Claude CLI reference to an ABSOLUTE, executable path.
+# Echoes the absolute path and returns 0; returns 1 (nothing on stdout) if it
+# cannot resolve. systemd resolves a unit's ExecStart against the manager PATH
+# (it ignores Environment=PATH), so a bare `claude` — native installer puts it at
+# ~/.local/bin/claude, outside that PATH — yields status=203/EXEC. The unit MUST
+# carry an absolute path. Prefer a stable symlink (survives Claude Code updates).
+#   $1 = configured value (may be absolute or a bare name); default `claude`
+#   $2 = the agent operator's HOME (defaults to $HOME) — probe THAT home, not the
+#        home of whoever runs --regenerate (root-vs-operator edge case).
+resolve_claude_bin() {
+  local cli="${1:-claude}" home="${2:-$HOME}" c p
+  # 1) already absolute + executable -> use as-is.
+  if [ "${cli#/}" != "$cli" ] && [ -x "$cli" ]; then printf '%s\n' "$cli"; return 0; fi
+  # 2) a bare name currently on PATH (command -v yields an absolute path for a file).
+  if [ "${cli#/}" = "$cli" ]; then
+    c=$(command -v "$cli" 2>/dev/null) && [ "${c#/}" != "$c" ] && [ -x "$c" ] \
+      && { printf '%s\n' "$c"; return 0; }
+  fi
+  # 3) known candidate names on PATH.
+  for c in claude-enterprise claude-personal claude; do
+    p=$(command -v "$c" 2>/dev/null) && [ "${p#/}" != "$p" ] && [ -x "$p" ] \
+      && { printf '%s\n' "$p"; return 0; }
   done
+  # 4) native-installer / local-install absolute candidates under the agent HOME.
+  for c in "$home/.local/bin/claude" "$home/.claude/local/claude"; do
+    [ -x "$c" ] && { printf '%s\n' "$c"; return 0; }
+  done
+  return 1
+}
+
+# Scaffold-time detection: persist an ABSOLUTE path in agent.yml when Claude is
+# already installed. If it is not yet installed, fall back to the bare literal so
+# the scaffold does not hard-fail — the local-mode render (_export_local_context)
+# re-resolves and FAILS LOUD if it is still unresolvable at unit-emit time.
+detect_claude_cli() {
+  local abs
+  abs=$(resolve_claude_bin "claude" "$HOME") && { printf '%s\n' "$abs"; return 0; }
   echo "claude"
+}
+
+# Principle I: persist the resolved absolute path back to agent.yml so a headless
+# re-regenerate (where `command -v claude` fails) never re-derives a bare literal.
+# Writes only when the value actually changed. Best-effort (yq may be absent in
+# an odd context) — the render-time guard is the real safety net.
+_persist_claude_cli() {
+  local agent_yml="$1" resolved="$2" current
+  [ -f "$agent_yml" ] || return 0
+  [ -n "$resolved" ] || return 0
+  command -v yq >/dev/null 2>&1 || return 0
+  current=$(yq -r '.deployment.claude_cli // ""' "$agent_yml" 2>/dev/null)
+  [ "$current" = "$resolved" ] && return 0
+  yq -i ".deployment.claude_cli = \"$resolved\"" "$agent_yml" 2>/dev/null || true
 }
 
 # Fetch a user's preferred SSH public key from GitHub.
@@ -1502,6 +1546,9 @@ mirror_catalog_to_docker() {
   # upgrade, mirrored so the Dockerfile COPY finds them.
   local src_wiki_graph="$dest/scripts/lib/wiki_graph.sh"
   local src_vault_deltas="$dest/modules/vault-deltas"
+  # feature 015: shared observability helper (redact + host-backed scratch),
+  # sourced by qmd_index.sh and wiki_graph.sh — mirrored so the image finds it.
+  local src_rag_obs="$dest/scripts/lib/rag_obs.sh"
   [ -f "$src_lib" ] || return 0
   [ -d "$src_plugins" ] || return 0
   mkdir -p "$dest/docker/scripts/lib" "$dest/docker/modules"
@@ -1519,6 +1566,9 @@ mirror_catalog_to_docker() {
   fi
   if [ -f "$src_wiki_graph" ]; then
     cp "$src_wiki_graph" "$dest/docker/scripts/lib/wiki_graph.sh"
+  fi
+  if [ -f "$src_rag_obs" ]; then
+    cp "$src_rag_obs" "$dest/docker/scripts/lib/rag_obs.sh"
   fi
   if [ -d "$src_vault_deltas" ]; then
     rm -rf "$dest/docker/modules/vault-deltas"
@@ -1549,6 +1599,10 @@ mirror_catalog_to_docker() {
     || missing="${missing}\n  - docker/scripts/lib/vault.sh"
   [ -f "$dest/docker/scripts/lib/qmd_index.sh" ] \
     || missing="${missing}\n  - docker/scripts/lib/qmd_index.sh"
+  [ -f "$dest/docker/scripts/lib/rag_obs.sh" ] \
+    || missing="${missing}\n  - docker/scripts/lib/rag_obs.sh"
+  [ -f "$dest/docker/scripts/lib/wiki_graph.sh" ] \
+    || missing="${missing}\n  - docker/scripts/lib/wiki_graph.sh"
   [ -f "$dest/docker/scripts/lib/backup_vault.sh" ] \
     || missing="${missing}\n  - docker/scripts/lib/backup_vault.sh"
   [ -f "$dest/docker/scripts/qmd_watch.sh" ] \
@@ -2154,7 +2208,14 @@ regenerate() {
   # here we render the workspace-side pieces (EnvironmentFile + login/kill-switch
   # helpers). The healthcheck is added by US3.
   if [ "$DEPLOYMENT_MODE_IS_DOCKER" != true ]; then
-    _export_local_context
+    if ! _export_local_context; then
+      echo "" >&2
+      echo "✗ Regeneration aborted: unresolved Claude CLI (see error above)." >&2
+      return 1
+    fi
+    # US1/Principle I: persist the resolved absolute path so future headless
+    # regenerates never re-derive a bare literal.
+    _persist_claude_cli "$agent_yml" "$CLAUDE_BIN"
     render_to_file "$modules_dir/remote-control.env.tpl"   "$SCRIPT_DIR/.state/remote-control.env"
     chmod 0640 "$SCRIPT_DIR/.state/remote-control.env" 2>/dev/null || true
     render_to_file "$modules_dir/local-login.sh.tpl"       "$SCRIPT_DIR/scripts/local/agent-login.sh"
@@ -2256,7 +2317,19 @@ _export_local_context() {
   OPERATOR_HOME="$HOME"
   HOST_NAME="$(hostname)"
   local _cli="${DEPLOYMENT_CLAUDE_CLI:-claude}"
-  CLAUDE_BIN="$(command -v "$_cli" 2>/dev/null || echo "$_cli")"
+  # US1/FR-001/003: resolve to an absolute, executable path against the operator
+  # HOME (NOT the --regenerate shell's PATH). Fail LOUD rather than emit a unit
+  # whose ExecStart systemd cannot resolve (status=203/EXEC, restart-loop).
+  if ! CLAUDE_BIN="$(resolve_claude_bin "$_cli" "$OPERATOR_HOME")"; then
+    echo "" >&2
+    echo "ERROR: could not resolve an absolute, executable path to the Claude CLI." >&2
+    echo "       Configured deployment.claude_cli='${_cli}'." >&2
+    echo "       Install Claude Code (the native installer puts it at ~/.local/bin/claude)" >&2
+    echo "       or set deployment.claude_cli to an absolute path in agent.yml, then re-run" >&2
+    echo "       ./setup.sh --regenerate. Refusing to emit a systemd unit with a" >&2
+    echo "       non-executable ExecStart (it would fail with status=203/EXEC)." >&2
+    return 1
+  fi
 }
 
 # Render + install a system-wide systemd unit. Docker mode wraps `docker compose
@@ -2279,7 +2352,11 @@ install_service() {
   if [ "${DEPLOYMENT_MODE_IS_DOCKER:-true}" = true ]; then
     tpl="$modules_dir/systemd.service.tpl"
   else
-    _export_local_context
+    if ! _export_local_context; then
+      echo "" >&2
+      echo "✗ Service install aborted: unresolved Claude CLI (see error above)." >&2
+      return 1
+    fi
     tpl="$modules_dir/systemd-remote-control.service.tpl"
   fi
   render_to_file "$tpl" "$staged"

@@ -2,6 +2,44 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Local-mode & docker RAG hardening after the first hardware gate**
+  (`015-local-mode-hardening`): brings the four launcher defects that the live
+  012+013+014 deployment (2026-07-08, mclaren local glibc + ferrari docker, a
+  2696-page Cencosud wiki) surfaced — and that were only hot-patched on the hosts
+  — into the code, test-first. **VERSION 0.8.0 → 0.9.0.** The container privilege
+  model is untouched (`docker-compose.yml.tpl` unchanged).
+  - **(US1) `claude_cli` resolves to an absolute, executable path.**
+    `detect_claude_cli` now returns an absolute path (native-installer symlink
+    `~/.local/bin/claude`, `~/.claude/local/claude`, or a `command -v` hit),
+    persisted in `agent.yml` (`_persist_claude_cli`, Principle I). At unit-emit
+    time `_export_local_context` re-resolves against the operator HOME — not the
+    `--regenerate` shell's PATH — and **fails loud** with an actionable message
+    rather than emit a bare `claude` ExecStart (which systemd resolves against its
+    own PATH → `status=203/EXEC` restart-loop, the critical bug).
+  - **(US2) `provision_bun` picks the bun build the host libc can run.**
+    `_libc_variant` probes the dynamic loader (`/lib/ld-musl-*` → `ldd` → `getconf`
+    → default glibc); a glibc host now gets `bun-linux-<arch>.zip`, Alpine keeps
+    `-musl`. The idempotency guard tests actual **execution** (`bun --version`), so
+    a musl-on-glibc binary is re-provisioned instead of skipped as "present".
+  - **(US3) Heavy temporaries route to host-backed `.state`, not the tmpfs `/tmp`.**
+    A new mirrored helper `scripts/lib/rag_obs.sh` (`scratch_dir` + `redact_secrets`)
+    lets `qmd_index.sh` (bunx's ~98MB qmd cache) and `wiki_graph.sh` (records/combined
+    `mktemp`) point `TMPDIR` at disk-backed `.state` — so bunx's cache no longer
+    fills the 100MB `/tmp` tmpfs and ENOSPC-es the aggregation on a large vault.
+    The wiki-graph aggregation now **captures and reports the real stderr**
+    (redacted) instead of swallowing it with `2>/dev/null` behind a generic
+    "aggregation failed" (refines Principle IV: fail-silent must not eat infra
+    errors like `No space left on device`).
+  - **(US4) The scheduled qmd reindex makes its failure observable.** The reindex
+    no longer hides qmd's stderr behind `>/dev/null 2>&1`; it captures it (redacted)
+    into the log/state and logs the effective env (cache root, config dir, TMPDIR,
+    collection) — the diagnostic for the docker-only wrapper failure. The
+    root-cause fix (index actually built) is the confirmatory ferrari gate.
+  - Secrets are never logged: every captured stderr/env dump passes through
+    `redact_secrets` (`sk-ant-*`, `gh*_`, Telegram-style, uppercase `*_TOKEN`/`*_KEY`)
+    before reaching a log or state file (Principle V).
+
 ### Added
 - **Wiki-graph RAG: derived knowledge graph + normalization + deterministic
   maintenance** (`014-wiki-graph-rag`): brings the Karpathy "LLM Wiki" pattern to

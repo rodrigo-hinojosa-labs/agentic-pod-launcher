@@ -26,6 +26,22 @@ elif [ -f "$(dirname "${BASH_SOURCE[0]}")/backup_vault.sh" ]; then
   source "$(dirname "${BASH_SOURCE[0]}")/backup_vault.sh"
 fi
 
+# 015 US3: shared observability helpers (redact_secrets + scratch_dir). Same
+# image-first / repo-relative pattern. Fallback defs keep the runner working (and
+# safe) if the mirror is ever missing — scratch_dir degrades to /tmp; redaction,
+# when unavailable, is handled by callers omitting the sensitive dump rather than
+# leaking (see qmd_index.sh). For wiki-graph the captured stderr is jq/awk output,
+# so a passthrough fallback is acceptable here.
+# shellcheck source=/dev/null
+if [ -f /opt/agent-admin/scripts/lib/rag_obs.sh ]; then
+  source /opt/agent-admin/scripts/lib/rag_obs.sh
+elif [ -f "$(dirname "${BASH_SOURCE[0]}")/rag_obs.sh" ]; then
+  # shellcheck source=/dev/null
+  source "$(dirname "${BASH_SOURCE[0]}")/rag_obs.sh"
+fi
+command -v redact_secrets >/dev/null 2>&1 || redact_secrets() { cat; }
+command -v scratch_dir    >/dev/null 2>&1 || scratch_dir() { printf '%s\n' "${TMPDIR:-/tmp}"; }
+
 _wg_log() { echo "[wiki-graph] $*" >&2; }
 
 # 0 iff vault.enabled AND vault.wiki_graph.enabled is not false (default true
@@ -286,6 +302,14 @@ _wg_run_locked() {
     return 0
   fi
 
+  # 015 US3: route temporaries onto host-backed .state (the state dir lives under
+  # /workspace, disk-backed) instead of the 100MB tmpfs /tmp, which bunx's qmd
+  # package cache (~98MB) otherwise fills → ENOSPC for records/combined on a large
+  # vault. Robust-by-design against a full /tmp.
+  local scratch
+  scratch=$(scratch_dir "$(dirname "$state_file")")
+  export TMPDIR="$scratch" TMP="$scratch" TEMP="$scratch"
+
   local tmpd
   tmpd=$(mktemp -d "${TMPDIR:-/tmp}/wg.XXXXXX") || { wiki_graph_write_state "$state_file" "error" 0 "" "mktemp failed"; return 0; }
 
@@ -321,10 +345,19 @@ _wg_run_locked() {
   _wg_compute_stale "$vault_dir" "$records" > "$stale_file" 2>/dev/null || true
 
   # 5) jq aggregation → combined.json
-  local combined="$tmpd/combined.json"
-  if ! _wg_aggregate "$records" "$idx_file" "$allwiki" "$stale_file" "$vault_dir" > "$combined" 2>/dev/null; then
-    _wg_log "aggregation failed — error state, artifacts untouched"
-    wiki_graph_write_state "$state_file" "error" 0 "" "jq aggregation failed"
+  local combined="$tmpd/combined.json" aggerr="$tmpd/agg.err"
+  # 015 US3/FR-007: capture the real aggregation stderr (redacted) instead of
+  # swallowing it with 2>/dev/null. The old generic "jq aggregation failed" hid an
+  # ENOSPC "No space left on device" during the ferrari gate; fail-silent must
+  # record the infra error, not eat it (refines Principle IV).
+  if ! _wg_aggregate "$records" "$idx_file" "$allwiki" "$stale_file" "$vault_dir" > "$combined" 2>"$aggerr"; then
+    local emsg
+    # Redact the WHOLE stream FIRST, then truncate (a boundary-straddling secret
+    # anchor could otherwise leak the bare value — Principle V, defense in depth).
+    emsg=$(redact_secrets < "$aggerr" 2>/dev/null | tr '\n' ' ' | tail -c 500)
+    [ -n "$emsg" ] || emsg="unknown"
+    _wg_log "aggregation failed — error state, artifacts untouched: $emsg"
+    wiki_graph_write_state "$state_file" "error" 0 "" "aggregation failed: $emsg"
     rm -rf "$tmpd"
     return 0
   fi
