@@ -2008,6 +2008,19 @@ regenerate() {
   else
     QMD_MCP_ENV="{\"XDG_CACHE_HOME\": \"$SCRIPT_DIR/.state/.cache\", \"QMD_CONFIG_DIR\": \"$SCRIPT_DIR/.state/.config/qmd\"}"
   fi
+  # 016 (T036): the qmd MCP server (the READER Claude uses to search) must launch
+  # from the SAME managed bun-install prefix as the reindex — via a wrapper that
+  # reuses qmd_index.sh::qmd_mcp_exec — NOT `bunx`, which recompiles tree-sitter
+  # and aborts on Alpine musl (BUG 4). Precomputed per mode (same no-nested-{{#if}}
+  # constraint as the env). Docker: the image-baked wrapper. Local: the rendered
+  # workspace wrapper (which also fixes PATH + QMD_CACHE_HOME so its prefix matches
+  # the reindex writer's — the .mcp.json env only carries XDG_CACHE_HOME).
+  export QMD_MCP_COMMAND
+  if [ "$DEPLOYMENT_MODE_IS_DOCKER" = true ]; then
+    QMD_MCP_COMMAND="/opt/agent-admin/scripts/qmd-mcp"
+  else
+    QMD_MCP_COMMAND="$SCRIPT_DIR/scripts/local/agent-qmd-mcp.sh"
+  fi
   # 012 (FR-012): systemd OnCalendar for the local qmd/backup timers, converted
   # from the cron schedules in agent.yml (single source). Unsupported cron forms
   # fall back to the feature defaults + a warning (cron_to_systemd_calendar).
@@ -2227,6 +2240,9 @@ regenerate() {
     if [ "$(yq -r '.vault.qmd.enabled // false' "$agent_yml")" = "true" ]; then
       render_to_file "$modules_dir/local-qmd-reindex.sh.tpl" "$SCRIPT_DIR/scripts/local/agent-qmd-reindex.sh"
       render_to_file "$modules_dir/local-qmd-watch.sh.tpl"   "$SCRIPT_DIR/scripts/local/agent-qmd-watch.sh"
+      # 016 (T036): the qmd MCP server wrapper — Claude's search READER launches
+      # from the managed prefix via this, not `bunx` (.mcp.json → QMD_MCP_COMMAND).
+      render_to_file "$modules_dir/local-qmd-mcp.sh.tpl"     "$SCRIPT_DIR/scripts/local/agent-qmd-mcp.sh"
     fi
     # US3 (FR-007): vault backup entrypoint, rendered when vault is enabled.
     if [ "$(yq -r '.vault.enabled // false' "$agent_yml")" = "true" ]; then

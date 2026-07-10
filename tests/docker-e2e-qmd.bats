@@ -18,10 +18,17 @@
 #                                  events (the seam is still proven in Linux CI).
 #   5. least privilege (Princ.II)→ `docker inspect` confirms cap_drop: ALL stands.
 #
-# The real @tobilu/qmd engine + its ~300 MB model download are NOT exercised
-# (network-gated, slow, flaky) — `bunx` is stubbed so the orchestration, the
-# real filesystem-event delivery, real flock, and the cap set are what get
-# proven. Mirrors tests/docker-e2e-vault.bats (claude stub, compose-run gotchas).
+# The FIRST test stubs `bunx` so the orchestration (watcher, cron, flock, caps) is
+# proven fast, without the ~300 MB model. The SECOND test (016) DES-STUBS bunx and
+# exercises the REAL @tobilu/qmd: node-llama-cpp + better-sqlite3 compile against the
+# image toolchain — exactly the path the stub used to hide (BUG 4). Tiers:
+#   A build-detector : `qmd --help` RC 0 (the install + native compile succeed; no
+#                      model download). This is the direct BUG-4 detector.
+#   RED detection    : rebuild with --build-arg QMD_NATIVE_TOOLCHAIN=0 → A fails with
+#                      the real cause (cmake/node-gyp/gcc) — SC-003 both directions.
+#   Tier 2 (embed)   : gated by QMD_EMBED_E2E=1 — a real reindex (update + embed)
+#                      downloads the model (cache via QMD_E2E_MODEL_CACHE).
+# Mirrors tests/docker-e2e-vault.bats (claude stub, compose-run gotchas).
 #
 # Skipped by default (slow + requires Docker). Enable with DOCKER_E2E=1.
 
@@ -255,4 +262,90 @@ PY
   run docker inspect --format '{{.HostConfig.CapDrop}}' "$cid"
   [ "$status" -eq 0 ]
   [[ "$output" == *"ALL"* ]]
+}
+
+# 016: the des-stubbed, real-qmd test. Slow (native build + network). NOT executed
+# in the authoring session (no Docker) — validate/adjust the exact qmd subcommand
+# names against `qmd --help` in-container when the gate runs.
+@test "qmd real (016): native deps compile with toolchain; RED without it (SC-003)" {
+  local D="$TMP_TEST_DIR/agent-qmd-real" NAME="qmd-real"
+  mkdir -p "$D"
+  cat > "$D/agent.yml" <<YML
+version: 1
+agent: {name: $NAME, display_name: "qmd real", role: "test", vibe: "terse"}
+user: {name: "Tester", nickname: "Tester", timezone: "UTC", email: "t@e.x", language: "en"}
+deployment: {host: "test", workspace: "$D", install_service: false, claude_cli: "claude"}
+docker: {image_tag: "agent-admin:qmd-real", uid: $(id -u), gid: $(id -g), state_volume: "${NAME}-state", base_image: "alpine:3.24.1"}
+claude: {config_dir: "/home/agent/.claude", profile_new: true}
+notifications: {channel: none}
+features:
+  heartbeat: {enabled: true, interval: "30m", timeout: 30, retries: 0, default_prompt: "echo pong"}
+mcps: {defaults: [], atlassian: [], github: {enabled: false, email: ""}}
+vault:
+  enabled: true
+  path: .state/.vault
+  seed_skeleton: true
+  initial_sources: []
+  mcp: {enabled: true, server: vault}
+  qmd: {enabled: true, version: "2.5.3", schedule: "*/5 * * * *"}
+  schema: {frontmatter_required: true, log_format: "## [{date}] {op} | {title}"}
+plugins: []
+YML
+  cp -R "$REPO_ROOT/modules" "$REPO_ROOT/scripts" "$REPO_ROOT/docker" "$D/"
+  cp "$REPO_ROOT/setup.sh" "$D/"; chmod +x "$D/setup.sh"
+  (cd "$D" && ./setup.sh --regenerate --non-interactive)
+  touch "$D/.env"; chmod 0600 "$D/.env"
+  mkdir -p "$D/.state"   # macOS: absent .state breaks the /home/agent bind-mount
+  # claude stub only — NO bunx stub (that's the whole point of this test).
+  mkdir -p "$D/bin"; printf '#!/bin/bash\nexec sleep 86400\n' > "$D/bin/claude"; chmod +x "$D/bin/claude"
+  python3 - "$D/docker-compose.yml" <<'PY'
+import sys
+p=sys.argv[1]; t=open(p).read()
+n='      - ./:/workspace'; inj='      - ./bin/claude:/usr/local/bin/claude:ro'
+if inj not in t: t=t.replace(n, n+'\n'+inj, 1)
+open(p,'w').write(t)
+PY
+
+  # ── GREEN build (toolchain on) + Tier 1 build-detector (Fase A) ──
+  (cd "$D" && docker compose build)
+  qr() { (cd "$D" && docker compose run --rm -T --entrypoint sh -u agent "$NAME" -lc "$1"); }
+  run qr 'bunx @tobilu/qmd@2.5.3 --help >/tmp/a 2>&1; echo "RC=$?"'
+  echo "$output" | grep -q 'RC=0'      # real install + native compile succeeded
+  run qr 'command -v cmake'
+  [ "$status" -eq 0 ]                    # apk cmake present (not the glibc xpack)
+
+  # ── Tier 2 (embed): real reindex downloads the model — gated + slow ──
+  if [ "${QMD_EMBED_E2E:-0}" = "1" ]; then
+    (cd "$D" && docker compose up -d)
+    inc() { (cd "$D" && docker compose exec -T -u agent "$NAME" "$@"); }
+    inc sh -c 'mkdir -p /home/agent/.vault && printf -- "---\ntitle: t\n---\n# hi\n" > /home/agent/.vault/a.md'
+    run inc /usr/local/bin/heartbeatctl qmd-reindex
+    run inc sh -c 'jq -r .last_status /workspace/scripts/heartbeat/qmd-index.json'
+    echo "$output" | grep -qE 'ok|indexed'
+    run inc sh -c 'ls "$HOME/.cache/qmd/models/"*.gguf 2>/dev/null && echo HAVE_MODEL'
+    echo "$output" | grep -q HAVE_MODEL
+    # 016 T036: the MCP server (Claude's search reader) launches from the SAME
+    # managed prefix the reindex just built — via the wrapper, NOT bunx. It's a
+    # stdio server, so feed EOF + a short timeout and assert it started without a
+    # native-build/bunx/missing-binary failure (the BUG-4 signatures).
+    inc test -x /opt/agent-admin/scripts/qmd-mcp
+    run inc sh -lc 'timeout 25 /opt/agent-admin/scripts/qmd-mcp </dev/null >/tmp/m 2>&1; cat /tmp/m'
+    ! echo "$output" | grep -qiE 'tree-sitter.*exited with|node-gyp|cannot find module|bunx|no such file'
+    (cd "$D" && docker compose down -v --remove-orphans || true)
+  fi
+
+  # ── RED: rebuild WITHOUT the toolchain → Fase A must fail with the real cause ──
+  (cd "$D" && docker compose build --build-arg QMD_NATIVE_TOOLCHAIN=0)
+  # $HOME is the ./.state:/home/agent bind-mount, which SURVIVES the image rebuild
+  # and holds bun's GREEN-built cache. Use a throwaway HOME so the RED run re-runs
+  # the native compile from scratch instead of resolving the cached success —
+  # otherwise the toolchain-less path is never actually exercised.
+  run qr 'export HOME="$(mktemp -d)"; bunx @tobilu/qmd@2.5.3 --help >/tmp/a 2>&1; echo "RC=$?"; cat /tmp/a'
+  # A bare `! ... | grep -q` is exempt from set -e and would NEVER fail the test;
+  # assert the RC!=0 direction with an if+false whose body IS subject to set -e.
+  if echo "$output" | grep -q 'RC=0'; then
+    echo "SC-003 RED: toolchain-less build unexpectedly returned RC=0 -> $output" >&2
+    false
+  fi
+  echo "$output" | grep -qE 'cmake|CMake|node-gyp|exited with|gcc|c\+\+'
 }

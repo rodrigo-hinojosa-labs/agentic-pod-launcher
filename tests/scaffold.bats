@@ -168,9 +168,10 @@ EOF
   [ "$(yq -r '.vault.enabled' "$dest/agent.yml")" = "true" ]
   [ "$(yq -r '.vault.qmd.enabled' "$dest/agent.yml")" = "true" ]
   [ "$(yq -r '.vault.qmd.version' "$dest/agent.yml")" = "2.5.3" ]
-  [ "$(jq -r '.mcpServers.qmd.command' "$dest/.mcp.json")" = "bunx" ]
-  [ "$(jq -r '.mcpServers.qmd.args[0]' "$dest/.mcp.json")" = "@tobilu/qmd@2.5.3" ]
-  [ "$(jq -r '.mcpServers.qmd.args[1]' "$dest/.mcp.json")" = "mcp" ]
+  # 016 T036: the qmd MCP launches from the managed-prefix wrapper (docker image
+  # path), never bunx. The pin lives only in agent.yml (asserted above).
+  [ "$(jq -r '.mcpServers.qmd.command' "$dest/.mcp.json")" = "/opt/agent-admin/scripts/qmd-mcp" ]
+  [ "$(jq -r '.mcpServers.qmd.args | length' "$dest/.mcp.json")" = "0" ]
 }
 
 @test "scaffold mirrors vault.sh + modules/vault-skeleton/ into docker/ build context" {

@@ -287,15 +287,18 @@ vault:
     version: "2.5.3"
 EOF
   render_load_context "$TMP_TEST_DIR/agent.yml"
-  # docker mode: setup.sh precomputes QMD_MCP_ENV="{}" → byte-identical to v0.6.0.
+  # docker mode: setup.sh precomputes QMD_MCP_ENV="{}" and the image-baked wrapper
+  # path (016 T036: the MCP launches from the managed prefix, never `bunx`).
   export QMD_MCP_ENV="{}"
+  export QMD_MCP_COMMAND="/opt/agent-admin/scripts/qmd-mcp"
   result=$(render_template "$REPO_ROOT/modules/mcp-json.tpl")
   echo "$result" | jq . > /dev/null
-  [ "$(echo "$result" | jq -r '.mcpServers.qmd.command')" = "bunx" ]
-  [ "$(echo "$result" | jq -r '.mcpServers.qmd.args[0]')" = "@tobilu/qmd@2.5.3" ]
-  [ "$(echo "$result" | jq -r '.mcpServers.qmd.args[1]')" = "mcp" ]
+  [ "$(echo "$result" | jq -r '.mcpServers.qmd.command')" = "/opt/agent-admin/scripts/qmd-mcp" ]
+  [ "$(echo "$result" | jq -r '.mcpServers.qmd.args | length')" = "0" ]
   [ "$(echo "$result" | jq -r '.mcpServers.qmd.env')" = "{}" ]
-  unset QMD_MCP_ENV
+  # regression guard: the pre-016 bunx invocation must be gone (it repeats BUG 4).
+  [ "$(echo "$result" | jq -r '.mcpServers.qmd.command')" != "bunx" ]
+  unset QMD_MCP_ENV QMD_MCP_COMMAND
 }
 
 @test ".mcp.json (local mode) qmd env pins XDG_CACHE_HOME + QMD_CONFIG_DIR under the workspace (013 US1/T003)" {
@@ -373,11 +376,43 @@ vault:
 EOF
   render_load_context "$TMP_TEST_DIR/agent.yml"
   export QMD_MCP_ENV="{}"
+  export QMD_MCP_COMMAND="/opt/agent-admin/scripts/qmd-mcp"
   result=$(render_template "$REPO_ROOT/modules/mcp-json.tpl")
   echo "$result" | jq . > /dev/null
   [ "$(echo "$result" | jq -r '.mcpServers["atlassian-work"].command')" = "uvx" ]
   [ "$(echo "$result" | jq -r '.mcpServers.github.command')" = "github-mcp-server" ]
   [ "$(echo "$result" | jq -r '.mcpServers.vault.command')" = "npx" ]
-  [ "$(echo "$result" | jq -r '.mcpServers.qmd.command')" = "bunx" ]
-  unset QMD_MCP_ENV
+  [ "$(echo "$result" | jq -r '.mcpServers.qmd.command')" = "/opt/agent-admin/scripts/qmd-mcp" ]
+  unset QMD_MCP_ENV QMD_MCP_COMMAND
+}
+
+@test ".mcp.json (local mode) qmd command is the rendered workspace wrapper, not bunx (016 T036)" {
+  cat > "$TMP_TEST_DIR/agent.yml" << 'EOF'
+version: 1
+user:
+  timezone: "UTC"
+mcps:
+  atlassian: []
+  github:
+    enabled: false
+vault:
+  enabled: true
+  mcp:
+    enabled: true
+  qmd:
+    enabled: true
+    version: "2.5.3"
+EOF
+  render_load_context "$TMP_TEST_DIR/agent.yml"
+  # local mode: setup.sh precomputes the workspace wrapper path (which reuses
+  # qmd_index.sh::qmd_mcp_exec against the managed prefix) — never `bunx`.
+  export QMD_MCP_ENV='{"XDG_CACHE_HOME": "/home/op/agents/locbot/.state/.cache", "QMD_CONFIG_DIR": "/home/op/agents/locbot/.state/.config/qmd"}'
+  export QMD_MCP_COMMAND="/home/op/agents/locbot/scripts/local/agent-qmd-mcp.sh"
+  result=$(render_template "$REPO_ROOT/modules/mcp-json.tpl")
+  echo "$result" | jq . > /dev/null
+  [ "$(echo "$result" | jq -r '.mcpServers.qmd.command')" = "/home/op/agents/locbot/scripts/local/agent-qmd-mcp.sh" ]
+  [ "$(echo "$result" | jq -r '.mcpServers.qmd.args | length')" = "0" ]
+  # regression guard: never bunx (it repeats BUG 4 on Alpine and splits the prefix).
+  [ "$(echo "$result" | jq -r '.mcpServers.qmd.command')" != "bunx" ]
+  unset QMD_MCP_ENV QMD_MCP_COMMAND
 }

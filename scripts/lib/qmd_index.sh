@@ -89,19 +89,136 @@ _qmd_enabled() {
   [ "$vault_en" = "true" ] && [ "$qmd_en" = "true" ]
 }
 
-# _qmd_run PKG ARGS... — `bunx PKG ARGS`, bounded by timeout(1) when present
-# (degrade to a direct call where it is absent, e.g. macOS dev), so a wedged
-# download can never hang the boot before the watchdog (Principle IV).
-_qmd_run() {
-  local _to="" _scratch
-  if command -v timeout >/dev/null 2>&1; then _to="timeout ${QMD_CMD_TIMEOUT:-900}"; fi
-  # 015 US3: point bunx's package cache (~98MB for @tobilu/qmd) and every qmd
-  # temporary at host-backed .state (under the qmd cache root) instead of the
-  # 100MB tmpfs /tmp, which it otherwise fills → ENOSPC for qmd AND the wiki-graph
-  # runner. The cache also survives restarts there (fewer cold-starts).
+# 016: qmd is installed from a MANAGED bun prefix, not `bunx`. The prefix pins
+# @tobilu/qmd and trusts ONLY the deps whose native build qmd actually needs, so
+# tree-sitter-* stay unbuilt (qmd uses the web-tree-sitter WASM grammar) while
+# node-llama-cpp / better-sqlite3 compile. This is the root-cause fix for BUG 4:
+# `bunx PKG` let bun run EVERY dep's install-script → tree-sitter node-gyp aborted
+# the whole install on Alpine musl (no glibc prebuild loads, no compiler).
+
+# The bigstack LD_PRELOAD shim path (docker image only; overridable for tests).
+QMD_BIGSTACK_SO="${QMD_BIGSTACK_SO:-/opt/agent-admin/bigstack.so}"
+
+# The managed install prefix (holds package.json + node_modules/.bin/qmd).
+_qmd_prefix() { printf '%s\n' "$(qmd_cache_root)/pkg"; }
+
+# The pinned manifest. trustedDependencies lists ONLY better-sqlite3 (store) and
+# node-llama-cpp (embeddings) — tree-sitter-* are DELIBERATELY absent so bun's
+# default-deny leaves them unbuilt. Keep this the single definition (tests assert
+# its exact shape).
+_qmd_manifest() {
+  printf '{\n  "dependencies": { "@tobilu/qmd": "%s" },\n  "trustedDependencies": ["better-sqlite3", "node-llama-cpp"]\n}\n' "$1"
+}
+
+# Extract the version from a PKG spec (@tobilu/qmd@2.5.3 → 2.5.3); no explicit
+# version → "latest".
+_qmd_ver() {
+  case "$1" in
+    *@*@*) printf '%s\n' "${1##*@}" ;;
+    *)     printf '%s\n' "latest" ;;
+  esac
+}
+
+# Portable sha256 (Linux coreutils / macOS shasum) of stdin.
+_qmd_sha() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum | awk '{print $1}';
+  else shasum -a 256 2>/dev/null | awk '{print $1}'; fi
+}
+
+# _qmd_ensure_prefix PKG — idempotently install qmd into the managed prefix so
+# tree-sitter-* stay unbuilt (WASM grammar) while node-llama-cpp/better-sqlite3
+# compile. Shared by _qmd_run (batch, timeout) and qmd_mcp_exec (server, no
+# timeout). Returns non-zero (and logs the REAL, redacted build error) when the
+# native build failed and the prefix binary is absent — so callers surface BUG 4
+# instead of a misleading "No such file or directory".
+_qmd_ensure_prefix() {
+  local pkg="$1"
+  local _to_build="" _scratch prefix ver manifest want have ilog
+  if command -v timeout >/dev/null 2>&1; then
+    # The one-time from-source native build (node-llama-cpp/llama.cpp on musl
+    # aarch64) can dwarf a recurrent update; give it its OWN, larger budget so a
+    # legitimately long compile is not SIGTERM'd into a loop that never writes
+    # .installed-hash (setup runs backgrounded, so a long build is safe).
+    # QMD_INSTALL_TIMEOUT=0 => uncapped.
+    _to_build="timeout ${QMD_INSTALL_TIMEOUT:-3600}"
+    [ "${QMD_INSTALL_TIMEOUT:-3600}" = "0" ] && _to_build=""
+  fi
+  # 015 US3: keep the bun cache + every qmd/native-build temporary on host-backed
+  # .state (under the qmd cache root), not the 100MB tmpfs /tmp it otherwise fills
+  # → ENOSPC for qmd AND the wiki-graph runner. Also survives restarts.
   _scratch=$(scratch_dir "$(qmd_cache_root)")
+  prefix="$(_qmd_prefix)"
+  mkdir -p "$prefix" 2>/dev/null || true
+  ver="$(_qmd_ver "$pkg")"
+  manifest="$(_qmd_manifest "$ver")"
+  want="$(printf '%s' "$manifest" | _qmd_sha)"
+  have=""
+  [ -f "$prefix/.installed-hash" ] && have="$(cat "$prefix/.installed-hash" 2>/dev/null)"
+  # (Re)install only when the manifest changed OR the binary is missing — hash
+  # guard, not mtime (Principle IV). node-llama-cpp's native build runs HERE under
+  # portable-ARM cmake options so llama.cpp compiles on musl aarch64 without
+  # -march=native (016 research Decision 1). GGML_* only affect the build step.
+  if [ "$want" != "$have" ] || [ ! -x "$prefix/node_modules/.bin/qmd" ]; then
+    printf '%s' "$manifest" > "$prefix/package.json"
+    ilog="$_scratch/qmd-install.err"
+    # shellcheck disable=SC2086  # $_to_build must word-split into `timeout N` (or empty)
+    if ( cd "$prefix" && \
+         NODE_LLAMA_CPP_CMAKE_OPTION_GGML_NATIVE=OFF \
+         NODE_LLAMA_CPP_CMAKE_OPTION_GGML_CPU_ARM_ARCH=armv8-a \
+         TMPDIR="$_scratch" TMP="$_scratch" TEMP="$_scratch" $_to_build bun install >"$ilog" 2>&1 ); then
+      printf '%s' "$want" > "$prefix/.installed-hash"
+    fi
+    # 016/US4: if the native build (cmake/gcc/node-llama-cpp) failed, the prefix
+    # binary is absent — surface the REAL, redacted compile error (BUG 4's root
+    # cause) and stop, so the caller's exec can't overwrite the diagnosis with a
+    # misleading "No such file or directory". This lands on fd2, which the reindex
+    # caller captures into its rlog + tails redacted. If an OLD binary survived a
+    # failed RE-install, return 0 and let the caller run it (degrade to the prior
+    # version rather than losing indexing entirely — Principle IV).
+    if [ ! -x "$prefix/node_modules/.bin/qmd" ]; then
+      _qmd_log "install: bun install failed for $pkg: $(_qmd_tail_redacted "$ilog")"
+      return 1
+    fi
+  fi
+  return 0
+}
+
+# _qmd_run PKG ARGS... — run a BATCH qmd command from the managed prefix, bounded
+# by timeout(1) when present (degrade to a direct call where absent, e.g. macOS
+# dev), so a wedged download/build can never hang the boot before the watchdog
+# (Principle IV). NOT for the long-running MCP server — see qmd_mcp_exec.
+_qmd_run() {
+  local pkg="$1"; shift
+  local _to="" _scratch prefix ld=""
+  if command -v timeout >/dev/null 2>&1; then _to="timeout ${QMD_CMD_TIMEOUT:-900}"; fi
+  _qmd_ensure_prefix "$pkg" || return 1
+  _scratch=$(scratch_dir "$(qmd_cache_root)")
+  prefix="$(_qmd_prefix)"
+  # Runtime std::regex/stack mitigation (musl's 128KB pthread stack SIGSEGVs on the
+  # tokenizer/grammar recursion): preload the 8MB-stack shim ONLY for `embed`, and
+  # only when it exists (docker image; absent on glibc local where it isn't needed).
+  # Scoped, never global → bun/tmux/other procs unaffected.
+  if [ "${1:-}" = "embed" ] && [ -f "$QMD_BIGSTACK_SO" ]; then ld="$QMD_BIGSTACK_SO"; fi
   # shellcheck disable=SC2086  # $_to must word-split into `timeout N` (or empty)
-  TMPDIR="$_scratch" TMP="$_scratch" TEMP="$_scratch" $_to bunx "$@"
+  LD_PRELOAD="$ld" TMPDIR="$_scratch" TMP="$_scratch" TEMP="$_scratch" \
+    $_to "$prefix/node_modules/.bin/qmd" "$@"
+}
+
+# qmd_mcp_exec [PKG] — exec the long-running qmd MCP stdio server from the SAME
+# managed prefix (T036: the MCP path must NOT use `bunx`, which recompiles
+# tree-sitter and aborts on Alpine musl — BUG 4). No timeout (it runs for the
+# life of the Claude session); LD_PRELOAD=bigstack when present because the MCP
+# server embeds queries at runtime (same node-llama-cpp/musl std::regex hazard as
+# `embed`). Called by the image-baked/workspace `qmd-mcp` wrapper.
+qmd_mcp_exec() {
+  local pkg="${1:-$(qmd_pkg)}"
+  local _scratch prefix ld=""
+  _qmd_ensure_prefix "$pkg" || return 1
+  _scratch=$(scratch_dir "$(qmd_cache_root)")
+  prefix="$(_qmd_prefix)"
+  [ -f "$QMD_BIGSTACK_SO" ] && ld="$QMD_BIGSTACK_SO"
+  exec env LD_PRELOAD="$ld" TMPDIR="$_scratch" TMP="$_scratch" TEMP="$_scratch" \
+    "$prefix/node_modules/.bin/qmd" mcp
 }
 
 # Read the last indexed hash from the state file (empty if absent).
@@ -178,14 +295,18 @@ qmd_setup_if_needed() {
 # Critical section of qmd_setup_if_needed (runs under flock when available).
 _qmd_setup_locked() {
   local agent_yml="$1" cache_root="$2" vault_dir="$3" sentinel="$4"
-  local pkg coll
+  local pkg coll slog
+  # 016/US4: capture the setup run (which is where the native build FIRST runs on
+  # a fresh boot) so a failing compile is diagnosable here, not just on the next
+  # reindex tick. Redacted tail only — never the raw stream (Principle V).
+  slog="$(scratch_dir "$cache_root")/qmd-setup.err"
   # Double-checked locking: a concurrent winner may have finished between our
   # pre-lock sentinel check and acquiring the lock — re-check inside the lock.
   if [ -f "$sentinel" ] && [ -f "$cache_root/index.sqlite" ]; then
     _qmd_log "setup: completed by a concurrent run — skip"
     return 0
   fi
-  command -v bunx >/dev/null 2>&1 || { _qmd_log "setup: bunx unavailable — skip"; return 0; }
+  command -v bun >/dev/null 2>&1 || { _qmd_log "setup: bun unavailable — skip"; return 0; }
   pkg=$(qmd_pkg "$agent_yml")
   coll="${QMD_COLLECTION_NAME:-vault}"
   # Only `collection add` when there's no index yet. If a prior run was
@@ -194,8 +315,8 @@ _qmd_setup_locked() {
   # present we skip straight to `embed` (which is idempotent / re-embeds).
   if [ ! -f "$cache_root/index.sqlite" ]; then
     _qmd_log "setup: collection add via $pkg (vault=$vault_dir)"
-    if ! _qmd_run "$pkg" collection add "$vault_dir" --name "$coll" --mask '**/*.md' >/dev/null 2>&1; then
-      _qmd_log "setup: 'collection add' failed/timed out — retry next boot"
+    if ! _qmd_run "$pkg" collection add "$vault_dir" --name "$coll" --mask '**/*.md' >"$slog" 2>&1; then
+      _qmd_log "setup: 'collection add' failed/timed out: $(_qmd_tail_redacted "$slog") — retry next boot"
       return 0
     fi
   else
@@ -204,12 +325,12 @@ _qmd_setup_locked() {
   # Contract (contracts/qmd-cli.md): add → update → embed. `update` re-scans the
   # collection so the re-entrant branch (index present, sentinel absent after an
   # interrupted run) also picks up any vault changes before embedding.
-  if ! _qmd_run "$pkg" update >/dev/null 2>&1; then
-    _qmd_log "setup: 'update' failed/timed out — retry next boot"
+  if ! _qmd_run "$pkg" update >"$slog" 2>&1; then
+    _qmd_log "setup: 'update' failed/timed out: $(_qmd_tail_redacted "$slog") — retry next boot"
     return 0
   fi
-  if ! _qmd_run "$pkg" embed >/dev/null 2>&1; then
-    _qmd_log "setup: 'embed' failed/timed out — retry next boot"
+  if ! _qmd_run "$pkg" embed >"$slog" 2>&1; then
+    _qmd_log "setup: 'embed' failed/timed out: $(_qmd_tail_redacted "$slog") — retry next boot"
     return 0
   fi
   : > "$sentinel" 2>/dev/null || true
@@ -287,7 +408,7 @@ _qmd_reindex_locked() {
     qmd_write_state "$state_file" "$current" "skipped"
     return 0
   fi
-  command -v bunx >/dev/null 2>&1 || { _qmd_log "reindex: bunx unavailable — skip"; return 0; }
+  command -v bun >/dev/null 2>&1 || { _qmd_log "reindex: bun unavailable — skip"; return 0; }
   pkg=$(qmd_pkg "$agent_yml")
   # 015 US4: surface the effective env + the REAL qmd stderr (redacted) instead of
   # swallowing it with >/dev/null 2>&1. The old silent path hid the docker-only

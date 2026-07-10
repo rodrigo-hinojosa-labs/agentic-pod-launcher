@@ -3,6 +3,46 @@
 ## [Unreleased]
 
 ### Fixed
+- **qmd native deps build on Alpine musl (`016-qmd-native-deps`, BUG 4 root-cause)**:
+  the docker qmd reindex failed because `@tobilu/qmd@2.5.3` pulls native modules with
+  no musl prebuild and the image had no compiler — surfaced by 015's US4 observability
+  on ferrari. **VERSION 0.9.0 → 0.10.0.** Alpine single-stage and the privilege model
+  are untouched (Principle II intact); the toolchain bloat is tracked in the plan's
+  Complexity Tracking. Verified adversarially as viable-but-medium-confidence (nobody
+  proved the whole node-llama-cpp-compiled-under-bun-on-musl chain); the DOCKER_E2E +
+  ferrari gate decides, with fallback B/C armed (see `research.md`).
+  - **Managed bun-install prefix instead of `bunx`.** `_qmd_run` installs qmd into a
+    prefix whose manifest trusts ONLY `better-sqlite3` + `node-llama-cpp`, so bun's
+    default-deny leaves `tree-sitter-*` unbuilt (qmd uses the web-tree-sitter WASM
+    grammar) while the embeddings/store deps compile. Idempotent by manifest hash.
+  - **C/C++ toolchain in the image, gated by build-arg.** `build-base cmake linux-headers
+    libgomp` under `ARG QMD_NATIVE_TOOLCHAIN=1` (passed via compose `build.args`); `apk
+    cmake` on PATH makes node-llama-cpp use it, never its glibc xpack download.
+  - **`bigstack.so` for the musl std::regex/stack hazard.** A `pthread_create` shim (8MB
+    stacks) is `LD_PRELOAD`-ed ONLY for `qmd embed`, only when present (docker image;
+    absent on glibc local). Native build forced portable via `GGML_NATIVE=OFF` +
+    `GGML_CPU_ARM_ARCH=armv8-a`.
+  - **DOCKER_E2E exercises real qmd.** A des-stubbed test builds with the toolchain and
+    runs `qmd --help` (install + native compile), with a RED case (`--build-arg
+    QMD_NATIVE_TOOLCHAIN=0`) proving detection; the real embed is gated behind
+    `QMD_EMBED_E2E=1` (model cache via `QMD_E2E_MODEL_CACHE`).
+  - **Version guardrail.** `tests/qmd-version-guard.bats` + `docs/qmd-upgrade-checklist.md`
+    prevent a silent qmd bump (2.6.x moved tree-sitter to hard deps, which would break
+    the fix).
+  - **MCP server off `bunx` too (T036).** The qmd MCP server — the reader Claude
+    searches with — launched via `bunx @tobilu/qmd mcp`, which repeated BUG 4 on
+    Alpine and resolved a different prefix than the reindex. It now runs from the
+    same managed prefix via `qmd_mcp_exec` (no timeout, `LD_PRELOAD=bigstack`),
+    behind an image-baked `docker/scripts/qmd-mcp` and a rendered local
+    `agent-qmd-mcp.sh` (which fixes PATH + `QMD_CACHE_HOME` so its prefix matches the
+    reindex writer). `.mcp.json`'s qmd `command` is a per-mode `{{QMD_MCP_COMMAND}}`.
+  - **Adversarial-review hardening.** A 15-agent review caught 4 self-introduced
+    defects (all fixed): `bun install >/dev/null` had re-buried the native-build
+    error US4 exists to surface (now captured + redacted + `return 1` on an absent
+    binary, degrading to a surviving old binary); `docker/bigstack.c` was untracked
+    (the `COPY` would abort a clean-clone build); and two `!`-negated bats assertions
+    were dead (reordered last). Plus a separate `QMD_INSTALL_TIMEOUT` (3600s) for the
+    one-time build and `bigstack.so` now also grows sub-8MB `attr!=NULL` threads.
 - **Local-mode & docker RAG hardening after the first hardware gate**
   (`015-local-mode-hardening`): brings the four launcher defects that the live
   012+013+014 deployment (2026-07-08, mclaren local glibc + ferrari docker, a

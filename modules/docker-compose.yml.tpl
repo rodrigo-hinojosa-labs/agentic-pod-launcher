@@ -19,6 +19,11 @@ services:
         UV_VERSION: "{{DOCKER_UV_VERSION}}"
         BUN_VERSION: "{{DOCKER_BUN_VERSION}}"
         GUM_VERSION: "{{DOCKER_GUM_VERSION}}"
+        # 016: C/C++ toolchain for qmd's native deps (node-llama-cpp, better-sqlite3)
+        # that build from source at runtime. Always 1 in production; the DOCKER_E2E
+        # RED test overrides with `--build-arg QMD_NATIVE_TOOLCHAIN=0` to build a
+        # toolchain-less image and prove the failure is detected (SC-003).
+        QMD_NATIVE_TOOLCHAIN: "1"
     cap_drop:
       - ALL
     cap_add:

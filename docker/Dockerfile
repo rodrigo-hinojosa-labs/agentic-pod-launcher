@@ -46,6 +46,20 @@ RUN apk add --no-cache \
       inotify-tools \
       tzdata
 
+# 016 (BUG 4): qmd's native deps (node-llama-cpp embeddings, better-sqlite3) build
+# from source at RUNTIME via `bun install` — no musl prebuild exists, and the
+# .state bind-mount masks anything baked under /home/agent, so the toolchain must
+# live in the FINAL image (a throwaway builder stage cannot help). Gated by a
+# build-arg so the DOCKER_E2E RED test can build a toolchain-less image. `apk cmake`
+# on PATH makes node-llama-cpp use it (never its glibc xpack download). bigstack.so
+# (8MB pthread stacks) mitigates the musl std::regex/stack SIGSEGV at embed time.
+ARG QMD_NATIVE_TOOLCHAIN=1
+COPY bigstack.c /opt/agent-admin/bigstack.c
+RUN if [ "$QMD_NATIVE_TOOLCHAIN" = "1" ]; then \
+      apk add --no-cache build-base cmake linux-headers libgomp; \
+      gcc -shared -fPIC -o /opt/agent-admin/bigstack.so /opt/agent-admin/bigstack.c -ldl; \
+    fi
+
 # Install gum from the charmbracelet tap alternative: use the static binary.
 ARG GUM_VERSION=0.17.0
 RUN set -eux; \
@@ -211,12 +225,16 @@ COPY scripts/wizard-container.sh /opt/agent-admin/scripts/wizard-container.sh
 COPY scripts/write_container_info.sh /opt/agent-admin/scripts/write_container_info.sh
 COPY scripts/apply_telegram_typing_patch.py /opt/agent-admin/scripts/apply_telegram_typing_patch.py
 COPY scripts/qmd_watch.sh /opt/agent-admin/scripts/qmd_watch.sh
+# 016 (T036): the qmd MCP server launches from the managed prefix via this wrapper
+# (qmd_index.sh::qmd_mcp_exec), not `bunx` — .mcp.json's qmd command points here.
+COPY scripts/qmd-mcp /opt/agent-admin/scripts/qmd-mcp
 RUN chmod +x /opt/agent-admin/entrypoint.sh \
              /opt/agent-admin/scripts/start_services.sh \
              /opt/agent-admin/scripts/wizard-container.sh \
              /opt/agent-admin/scripts/write_container_info.sh \
              /opt/agent-admin/scripts/apply_telegram_typing_patch.py \
-             /opt/agent-admin/scripts/qmd_watch.sh
+             /opt/agent-admin/scripts/qmd_watch.sh \
+             /opt/agent-admin/scripts/qmd-mcp
 
 # Heartbeat CLI and helper libs (image-baked, stable code).
 COPY scripts/heartbeatctl /opt/agent-admin/scripts/heartbeatctl
