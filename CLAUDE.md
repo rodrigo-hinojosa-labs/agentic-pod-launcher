@@ -130,8 +130,34 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3`. Already-p
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
-Active spec-kit feature: **016-qmd-native-deps** — fix del root-cause de BUG 4 (qmd falla en docker
-Alpine musl). VERSION 0.9.0 → 0.10.0 pending. Plan: `specs/016-qmd-native-deps/plan.md`. La
+**017-qmd-sqlite-vec-musl ACTIVA** (branch `017-qmd-sqlite-vec-musl` desde main=`14169cf`, 2026-07-10,
+VERSION 0.10.0→0.11.0). Plan: `specs/017-qmd-sqlite-vec-musl/plan.md`. **El DOCKER_E2E de 016 se CORRIÓ
+(imagen `agent-admin:qmd-real`, Alpine musl aarch64) y reveló que 016 NO cierra el embed semántico:
+hay un TERCER módulo nativo que la investigación de 17 agentes jamás vio.** node-llama-cpp (el "muro
+real" temido) embebe OK sin SIGSEGV; el muro es `sqlite-vec-linux-arm64@0.1.9`, un prebuilt **glibc**
+(needs `ld-linux-aarch64.so.1`, `__memcpy_chk@GLIBC_2.17`) que no carga en musl (el `vec0.so.so` era
+red herring del fallback de dos intentos de SQLite). Solo afecta docker/musl (ferrari); local/glibc
+(mclaren) el embed YA funciona. **FIX VERIFICADO end-to-end en musl**: compilar la amalgamación
+oficial de sqlite-vec v0.1.9 con shim `-Du_int8_t=uint8_t …` (musl no expone nombres BSD) + toolchain
+de 016, hornear en build a `/opt/agent-admin/sqlite-vec/vec0.so`, y swap del prebuilt glibc en
+`_qmd_ensure_prefix` (gateado por el artefacto horneado + libc musl) → `embed` real "2 chunks in 24s"
++ vsearch semántico 42%. 017 completa el US2 de 016, des-stubea el DOCKER_E2E (embed+vsearch reales) y
+arregla el defecto de la Fase A (usaba `bunx --help`, por eso 016 pasó el merge sin ejercer el
+binding). Guardrail: par qmd 2.5.3 ↔ sqlite-vec 0.1.9. Decisión del usuario: 017 primero (test-first),
+LUEGO un solo despliegue completo a mclaren+ferrari. **IMPLEMENTADO Y VALIDADO (2026-07-10): suite
+host VERDE (959), shellcheck limpio, y DOCKER_E2E VERDE en Alpine musl aarch64 real (build + Fase A
+con vec0 musl + Tier 2 embed real `last_status=indexed` + vsearch semántico "gato" + MCP sin BUG-4 +
+RED con vec0/bigstack ausentes). Confianza ALTA — el gate DOCKER_E2E que 016 saltó ahora está CERRADO.
+Cambios: `docker/scripts/build-sqlite-vec.sh` (nuevo), `docker/Dockerfile` (ARG SQLITE_VEC_VERSION +
+compile gateado), `scripts/lib/qmd_index.sh` (`_qmd_swap_sqlite_vec`), `tests/qmd-sqlite-vec.bats`
+(nuevo, 7), `tests/docker-e2e-qmd.bats` (des-stub embed real; arregla carrera de timing y aserción MCP
+muerta), VERSION 0.11.0, CHANGELOG. Falta: commit + PR + gate confirmatorio ferrari (vault 2696 real),
+que ocurre en el despliegue.** Fase spec-kit: implement hecho.
+
+**016-qmd-native-deps MERGED** (PR #71, merge `14169cf`, 2026-07-10, VERSION 0.10.0). **Gates
+confirmatorios AÚN ABIERTOS: DOCKER_E2E parcialmente corrido (léxico VERDE, embed ROJO por sqlite-vec
+→ lo cierra 017) + ferrari.** Fix del root-cause de BUG 4 (qmd falla en docker
+Alpine musl). Plan: `specs/016-qmd-native-deps/plan.md`. La
 observabilidad de 015 (US4), desplegada en ferrari 2026-07-10, reveló el root-cause: `bunx
 @tobilu/qmd@2.5.3` compila DOS módulos nativos sin prebuilt musl — `tree-sitter-*` (opcional; qmd usa
 el `.wasm` de web-tree-sitter en runtime, el binding nativo es irrelevante) y `node-llama-cpp@3.18.1`
@@ -161,7 +187,7 @@ Prior: 001-deps-upgrade (PR #55), 002-fix-schema-bool, 003-bootstrap-hardening (
 007-fix-mcp-test-drift (PR #62), 008-fix-postlogin-plugin-install (PR #63),
 009-fix-extra-marketplace-install (PR #64), 010-self-managing-rag (PR #65),
 011-local-standalone-mode (PR #66), 012-local-vault-rag (PR #67), 013-local-rag-parity (PR #68),
-014-wiki-graph-rag (PR #69), 015-local-mode-hardening (PR #70) — all
+014-wiki-graph-rag (PR #69), 015-local-mode-hardening (PR #70), 016-qmd-native-deps (PR #71) — all
 merged. 011 added the second
 wizard **deployment mode** (`deployment.mode: docker|local`); Principle II is a justified opt-in
 VIOLATION in local mode. 012 ported vault+QMD+backup to local systemd (5 units, lib relocation to
@@ -185,8 +211,8 @@ defects and fixed them before commit: truncate-before-redact secret leak at the 
 (fixed to redact-then-truncate in qmd_index.sh + wiki_graph.sh, with a boundary regression test),
 and 2 dead `[[ ]]` e2e assertions (fixed to `grep -q`).
 
-**016 STATUS (2026-07-10): host-side IMPLEMENTED + hardened, host suite GREEN (950+), shellcheck
-clean.** Wrapper `_qmd_run` (managed `bun install` prefix, tree-sitter unbuilt via default-deny,
+**016 STATUS (2026-07-10): MERGED to main (PR #71, `14169cf`), host suite GREEN (952), shellcheck
+clean — but the DOCKER_E2E + ferrari confirmatory gates were NOT run before merge (still open).** Wrapper `_qmd_run` (managed `bun install` prefix, tree-sitter unbuilt via default-deny,
 node-llama-cpp/better-sqlite3 compiled) + Dockerfile toolchain gated by `QMD_NATIVE_TOOLCHAIN` +
 `bigstack.so` (8MB-stack pthread shim for musl std::regex; now also grows attr!=NULL <8MB threads) +
 compose build-arg + DOCKER_E2E des-stubbed (RED via `--build-arg=0`, throwaway `HOME`). An adversarial

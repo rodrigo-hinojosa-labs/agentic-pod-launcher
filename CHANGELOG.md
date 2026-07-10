@@ -3,6 +3,35 @@
 ## [Unreleased]
 
 ### Fixed
+- **qmd semantic embed on Alpine musl — the third native module (`017-qmd-sqlite-vec-musl`)**:
+  running 016's DOCKER_E2E revealed that 016 did NOT close the semantic embed on musl —
+  it fixed install + lexical + node-llama-cpp, but `qmd embed` still failed because
+  `sqlite-vec-linux-arm64@0.1.9` ships a **glibc** prebuilt (`vec0.so`) that cannot
+  `dlopen` under musl (needs `ld-linux-aarch64.so.1` + fortified `__memcpy_chk`/`__fread_chk@GLIBC_2.17`).
+  The reported `vec0.so.so: No such file or directory` was a red herring (SQLite's
+  two-try suffix fallback masking the glibc load failure). Affects docker/musl only;
+  local/glibc already loads the prebuilt. **VERSION 0.10.0 → 0.11.0.** Fix verified
+  end-to-end on the real musl image (`Embedded N chunks` + a semantic vsearch hit).
+  Alpine single-stage and the privilege model are untouched (Principle II intact); the
+  ~150KB baked artifact is tracked in the plan's Complexity Tracking.
+  - **Compile sqlite-vec for musl at image build.** `docker/scripts/build-sqlite-vec.sh`
+    downloads the pinned v0.1.9 amalgamation (sha256-verified, fail-loud), compiles it
+    with the 016 toolchain and the mandatory `-Du_int8_t=uint8_t -Du_int16_t=uint16_t
+    -Du_int64_t=uint64_t` shim (sqlite-vec typedefs the BSD names musl does not expose),
+    and bakes a musl `vec0.so` to `/opt/agent-admin/sqlite-vec/vec0.so`. Gated by the
+    same `QMD_NATIVE_TOOLCHAIN` build-arg (`ARG SQLITE_VEC_VERSION=0.1.9`).
+  - **Runtime swap in the managed prefix.** `qmd_index.sh::_qmd_swap_sqlite_vec` replaces
+    the glibc prebuilt in the prefix with the baked musl build during
+    `_qmd_ensure_prefix`, gated by (baked artifact present) + (musl libc). Idempotent
+    (`cmp`-skip); on glibc a no-op; fail-silent if the artifact is absent (toolchain off)
+    — lexical index stays intact (Principle IV).
+  - **DOCKER_E2E de-stubbed for the real embed.** Fase A now drives the production path
+    (`_qmd_run`, not `bunx`) and asserts the baked vec0 is musl; Tier 2 asserts a real
+    embed succeeds (only possible if vec0 loaded) + a semantic vsearch hit; the RED build
+    (`--build-arg QMD_NATIVE_TOOLCHAIN=0`) asserts both `bigstack.so` and `vec0.so` are
+    absent — a deterministic SC-003 proof both directions.
+  - **Version guardrail.** `tests/qmd-sqlite-vec.bats` fixes the known-good pair
+    (qmd `2.5.3` ↔ sqlite-vec `0.1.9`) so a qmd bump forces re-verifying the musl compile.
 - **qmd native deps build on Alpine musl (`016-qmd-native-deps`, BUG 4 root-cause)**:
   the docker qmd reindex failed because `@tobilu/qmd@2.5.3` pulls native modules with
   no musl prebuild and the image had no compiler — surfaced by 015's US4 observability
