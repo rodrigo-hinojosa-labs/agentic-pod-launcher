@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# 016 (T036): launch the qmd MCP stdio server from the managed bun-install prefix
+# via qmd_index.sh::qmd_mcp_exec, NOT `bunx` — which recompiles tree-sitter and
+# aborts on Alpine musl (BUG 4). Docker image-baked at /opt/agent-admin/scripts;
+# referenced by .mcp.json's qmd `command`.
+#
+# The .mcp.json applies the qmd env (`{}` in docker → qmd_cache_root falls back to
+# $HOME/.cache/qmd, the same prefix the reindex writer uses). qmd_mcp_exec ensures
+# the prefix (idempotent bun install) then EXECs `qmd mcp` with LD_PRELOAD=bigstack
+# (query embedding hits the same musl std::regex/stack hazard as `embed`). No
+# timeout — the MCP server runs for the life of the Claude session.
+set -uo pipefail
+if [ -f /opt/agent-admin/scripts/lib/qmd_index.sh ]; then
+  # shellcheck source=/dev/null
+  . /opt/agent-admin/scripts/lib/qmd_index.sh
+elif [ -f "$(dirname "$0")/lib/qmd_index.sh" ]; then
+  # shellcheck source=/dev/null
+  . "$(dirname "$0")/lib/qmd_index.sh"
+else
+  echo "qmd-mcp: qmd_index.sh not found" >&2
+  exit 1
+fi
+qmd_mcp_exec

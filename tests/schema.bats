@@ -65,7 +65,9 @@ teardown() { teardown_tmp_dir; }
   # and the qmd/backup timer OnCalendar values.
   known_external="${known_external} VAULT_MCP_PATH GCAL_CREDS_PATH LOCAL_VAULT_DIR QMD_TIMER_ONCALENDAR BACKUP_TIMER_ONCALENDAR "
   # 013: derived in setup.sh per mode for the qmd MCP `env` (storage pin).
-  known_external="${known_external} QMD_MCP_ENV "
+  # 016 (T036): QMD_MCP_COMMAND — the qmd MCP `command`, per mode (image-baked
+  # wrapper in docker, rendered workspace wrapper in local; never `bunx`).
+  known_external="${known_external} QMD_MCP_ENV QMD_MCP_COMMAND "
   # 014: derived in setup.sh (default-true enable, schedule default, local OnCalendar).
   known_external="${known_external} WIKI_GRAPH_ENABLED WIKI_GRAPH_SCHEDULE WIKI_GRAPH_TIMER_ONCALENDAR "
 

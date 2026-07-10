@@ -71,8 +71,8 @@
       "env": {}
     }{{/if}}{{#if VAULT_QMD_ENABLED}},
     "qmd": {
-      "command": "bunx",
-      "args": ["@tobilu/qmd@{{VAULT_QMD_VERSION}}", "mcp"],
+      "command": "{{QMD_MCP_COMMAND}}",
+      "args": [],
       "env": {{QMD_MCP_ENV}}
     }{{/if}}
   }

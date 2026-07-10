@@ -130,36 +130,38 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3`. Already-p
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
-Active spec-kit feature: **015-local-mode-hardening** — hardening del launcher tras el PRIMER
-gate de hardware real (2026-07-08, mclaren local glibc + ferrari docker, wiki 2696 páginas).
-Plan: `specs/015-local-mode-hardening/plan.md`. Lleva al CÓDIGO los 4 bugs que sólo se
-parchearon en los hosts en vivo (013/014 quedaron CERRADOS por ese despliegue). **US1** (P1
-crítico): `detect_claude_cli` (setup.sh:80-88) devuelve nombre pelado → `_export_local_context`
-(setup.sh:2258-59) resuelve con `command -v` local → headless degrada a literal `claude` →
-systemd `203/EXEC`. Fix (clarify): resolver a **absoluta** + persistir en `agent.yml` + guard
-en regenerate + **fail-loud**. **US2** (P1): `provision_bun`
-(modules/local-bootstrap.sh.tpl:145-171) baja siempre `-musl.zip` (L159) → no ejecuta en glibc.
-Fix: **detectar libc** (probe `/lib/ld-musl-*`→ldd→getconf→default glibc) + guard por
-**ejecución real** (`bun --version` rc 0), no presencia. **US3** (P1): tmpfs `/tmp` 100m
-(docker-compose.yml.tpl:32) se llena con cache de bunx (~98MB) → ENOSPC; `2>/dev/null`
-(wiki_graph.sh:325) oculta el error. Fix (clarify): **routear TMPDIR host-backed bajo `.state`**
-en los wrappers (NO se toca el compose → Principle II intacto) + capturar el stderr real
-(redactado) en el state (refina Principle IV: fail-silent ≠ error-swallow). **US4** (P2, SÓLO
-observabilidad en 015): reindex qmd traga error con `>/dev/null 2>&1` (qmd_index.sh:252,257);
-fix en alcance = quitar redirección + loguear env efectivo (redactado); root-cause DEFERIDO al
-gate confirmatorio con ferrari. Libs `scripts/lib/{wiki_graph,qmd_index}.sh` espejadas a docker
-(COPY Dockerfile:230-231) → DOCKER_E2E OBLIGATORIO. Artifacts:
-`specs/015-local-mode-hardening/{spec,plan,research,data-model,quickstart}.md` + contracts/
-{claude-cli-resolution,bun-libc-provisioning,temp-routing-and-observability,qmd-reindex-observability}.md.
-VERSION 0.8.0 → 0.9.0 pending. Gates: host suite + shellcheck, DOCKER_E2E (US3/US4),
-confirmatorio mclaren (US1/US2) + ferrari (US3/US4, requiere túnel Cloudflare arriba).
+Active spec-kit feature: **016-qmd-native-deps** — fix del root-cause de BUG 4 (qmd falla en docker
+Alpine musl). VERSION 0.9.0 → 0.10.0 pending. Plan: `specs/016-qmd-native-deps/plan.md`. La
+observabilidad de 015 (US4), desplegada en ferrari 2026-07-10, reveló el root-cause: `bunx
+@tobilu/qmd@2.5.3` compila DOS módulos nativos sin prebuilt musl — `tree-sitter-*` (opcional; qmd usa
+el `.wasm` de web-tree-sitter en runtime, el binding nativo es irrelevante) y `node-llama-cpp@3.18.1`
+(DURO, para `qmd embed`; el muro real). Decisiones (clarify): **Opción A — mantener Alpine** (no
+cambiar base OS) + **embed en alcance** + **DOCKER_E2E real** (des-stubear bunx). Diseño
+(plan/research, 2 workflows 17+5 agentes): (1) `apk add build-base cmake git linux-headers libgomp`
+gateado por build-arg `QMD_NATIVE_TOOLCHAIN`; `apk cmake` en PATH hace que node-llama-cpp use el
+cmake del sistema (nunca el xpack glibc); (2) `scripts/lib/qmd_index.sh::_qmd_run`: `bunx` → prefijo
+`bun install` con `trustedDependencies:[better-sqlite3,node-llama-cpp]` → tree-sitter NO compila
+(WASM), node-llama-cpp SÍ; env `NODE_LLAMA_CPP_CMAKE_OPTION_GGML_NATIVE=OFF`+`GGML_CPU_ARM_ARCH=armv8-a`
+y `LD_PRELOAD=/opt/agent-admin/bigstack.so` (pthread 8MB, hazard std::regex/stack musl 128KB) SOLO en
+embed; (3) DOCKER_E2E tiers A(build)/B(update)/C(embed, gate `QMD_EMBED_E2E`) + detección RED por
+`--build-arg QMD_NATIVE_TOOLCHAIN=0`. Veredicto adversarial: viable pero confianza **MEDIA** (nadie
+demostró node-llama-cpp compilado-desde-fuente + cargado-por-bun + embed real en musl; riesgo bun/N-API
+en dispose/exit, INDEPENDIENTE de musl) → **fallback B (base glibc, exigiría enmienda de constitución)
+/ C (embeddings remotos) ARMADO** con criterio de disparo en research.md. Complexity Tracking: bloat de
+toolchain (violación del *espíritu* minimalista; "Alpine single-stage" y Principle II intactos, sin
+enmienda). Libs `scripts/lib/qmd_index.sh` espejada a docker (COPY) → DOCKER_E2E OBLIGATORIO. Artifacts:
+`specs/016-qmd-native-deps/{spec,plan,research,data-model,quickstart}.md` +
+contracts/{qmd-invocation,dockerfile-toolchain,docker-e2e-tiers,qmd-version-guardrail}.md. Gates: host
+suite + shellcheck, DOCKER_E2E des-stubeado (ABSORBE el gate DOCKER_E2E que 015 dejó pendiente),
+confirmatorio ferrari (embed real + wiki-graph 2696 + `/tmp` sin ENOSPC — es el gate de BUG 4 que 015
+difirió). Siguiente: `/speckit-tasks`.
 
 Prior: 001-deps-upgrade (PR #55), 002-fix-schema-bool, 003-bootstrap-hardening (PR #56),
 004-macos-bootstrap-hardening (PR #59), 005-fix-schema-false (PR #60), 006-headless-bootstrap (PR #61),
 007-fix-mcp-test-drift (PR #62), 008-fix-postlogin-plugin-install (PR #63),
 009-fix-extra-marketplace-install (PR #64), 010-self-managing-rag (PR #65),
 011-local-standalone-mode (PR #66), 012-local-vault-rag (PR #67), 013-local-rag-parity (PR #68),
-014-wiki-graph-rag (PR #69) — all
+014-wiki-graph-rag (PR #69), 015-local-mode-hardening (PR #70) — all
 merged. 011 added the second
 wizard **deployment mode** (`deployment.mode: docker|local`); Principle II is a justified opt-in
 VIOLATION in local mode. 012 ported vault+QMD+backup to local systemd (5 units, lib relocation to
@@ -171,5 +173,33 @@ parity (kill-switch/doctor 0-1-2/manual actions/healthcheck), and docker `bunx` 
 (FR-016 — docker qmd never ran against real binaries before). 014 shipped the wiki-graph +
 normalization + additive `vault_seed_missing` upgrade (VERSION 0.8.0). The 013/014 hardware
 gates were CLOSED by the 2026-07-08 live deployment (mclaren local + ferrari docker, wiki-graph
-validated on 2696 real pages, zero mutation) — that gate is exactly what surfaced 015's 4 bugs.
+validated on 2696 real pages, zero mutation) — that gate surfaced 015's 4 bugs. 015 (VERSION 0.9.0)
+brought those 4 host-only patches into the launcher code test-first: US1 `resolve_claude_bin`
+(absolute path to the stable symlink) + `_persist_claude_cli` in agent.yml + fail-loud
+`_export_local_context`; US2 `_libc_variant` (loader/ldd/getconf probe) + glibc/musl bun build
+selection with a real-execution guard; US3 new mirrored `scripts/lib/rag_obs.sh`
+(`redact_secrets`+`scratch_dir`) + host-backed `TMPDIR` under `.state` for bunx/qmd/wiki-graph
+(`docker-compose.yml.tpl` UNTOUCHED → Principle II intact) + redacted real-stderr capture; US4
+observability-only. An adversarial pre-commit review (5 dimensions) caught 2 self-introduced
+defects and fixed them before commit: truncate-before-redact secret leak at the 500-byte boundary
+(fixed to redact-then-truncate in qmd_index.sh + wiki_graph.sh, with a boundary regression test),
+and 2 dead `[[ ]]` e2e assertions (fixed to `grep -q`).
+
+**016 STATUS (2026-07-10): host-side IMPLEMENTED + hardened, host suite GREEN (950+), shellcheck
+clean.** Wrapper `_qmd_run` (managed `bun install` prefix, tree-sitter unbuilt via default-deny,
+node-llama-cpp/better-sqlite3 compiled) + Dockerfile toolchain gated by `QMD_NATIVE_TOOLCHAIN` +
+`bigstack.so` (8MB-stack pthread shim for musl std::regex; now also grows attr!=NULL <8MB threads) +
+compose build-arg + DOCKER_E2E des-stubbed (RED via `--build-arg=0`, throwaway `HOME`). An adversarial
+review (15-agent workflow) caught 4 self-introduced defects — all fixed: (1) `bun install >/dev/null`
+killed US4 observability → capture to scratch + redacted `_qmd_log` + `return 1` on absent binary
+(degrade to old binary if it survives); (2) `docker/bigstack.c` untracked → `git add`ed; (3+4) two
+dead `!`-negated bats assertions → reordered last. Plus 2 plausible hardenings: separate
+`QMD_INSTALL_TIMEOUT` (3600s) for the one-time build, and the bigstack attr!=NULL coverage. **T036
+CLOSED (user chose extend-now):** the qmd MCP server no longer uses `bunx` (repeated BUG 4 + split the
+prefix) — new `qmd_mcp_exec` (no timeout, bigstack, from the managed prefix) behind an image-baked
+`docker/scripts/qmd-mcp` + a rendered local `agent-qmd-mcp.sh` (fixes PATH + `QMD_CACHE_HOME` so its
+prefix matches the reindex writer); `mcp-json.tpl` → `{{QMD_MCP_COMMAND}}` (per-mode, like
+`QMD_MCP_ENV`). **Gates still OPEN (not runnable in this session): DOCKER_E2E on a Docker host + the
+ferrari confirmatory (real embed + MCP start + wiki-graph 2696 + `/tmp` no ENOSPC).** VERSION 0.10.0,
+CHANGELOG done.
 <!-- SPECKIT END -->
