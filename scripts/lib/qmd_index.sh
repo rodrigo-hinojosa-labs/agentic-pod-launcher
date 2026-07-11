@@ -102,6 +102,47 @@ QMD_BIGSTACK_SO="${QMD_BIGSTACK_SO:-/opt/agent-admin/bigstack.so}"
 # The managed install prefix (holds package.json + node_modules/.bin/qmd).
 _qmd_prefix() { printf '%s\n' "$(qmd_cache_root)/pkg"; }
 
+# 017: the baked musl-compiled sqlite-vec extension (docker image only;
+# overridable for tests). sqlite-vec ships a GLIBC prebuilt
+# (node_modules/sqlite-vec-linux-arm64/vec0.so) that CANNOT dlopen under musl —
+# it needs ld-linux-aarch64.so.1 and fortified GLIBC_2.17 symbols (__memcpy_chk /
+# __fread_chk). The Dockerfile compiles a musl vec0.so at build time and bakes it
+# here; the swap below replaces the glibc prebuilt in the prefix. On glibc (local
+# mode) the artifact is absent and the prebuilt loads fine → no-op.
+QMD_VEC0_MUSL_SO="${QMD_VEC0_MUSL_SO:-/opt/agent-admin/sqlite-vec/vec0.so}"
+
+# 0 iff the running libc is musl. Overridable for host tests via QMD_MUSL_LOADER
+# (point it at an existing file for musl, an absent one for glibc). Production:
+# presence of a musl dynamic loader under /lib.
+_qmd_on_musl() {
+  if [ -n "${QMD_MUSL_LOADER+x}" ]; then [ -e "$QMD_MUSL_LOADER" ]; return; fi
+  ls /lib/ld-musl-*.so.1 >/dev/null 2>&1
+}
+
+# _qmd_swap_sqlite_vec PREFIX — on musl, replace the glibc sqlite-vec prebuilt in
+# the managed prefix with the baked musl build so `qmd embed`/`vsearch` can load
+# the vec0 extension. Gated by (a) musl libc and (b) the baked artifact existing;
+# on glibc the artifact is absent → no-op. Idempotent (cmp-skip). Fail-silent: on
+# musl with the artifact absent (e.g. QMD_NATIVE_TOOLCHAIN=0) log + continue — the
+# lexical index still works, only vector embed is unavailable (Principle IV).
+_qmd_swap_sqlite_vec() {
+  local prefix="$1"
+  local target="$prefix/node_modules/sqlite-vec-linux-arm64/vec0.so"
+  _qmd_on_musl || return 0                 # glibc: prebuilt already loads
+  [ -e "$target" ] || return 0             # sqlite-vec package not present
+  if [ ! -f "$QMD_VEC0_MUSL_SO" ]; then
+    _qmd_log "sqlite-vec: musl build absent ($QMD_VEC0_MUSL_SO) — vector embed unavailable, lexical index intact"
+    return 0
+  fi
+  cmp -s "$QMD_VEC0_MUSL_SO" "$target" 2>/dev/null && return 0   # already musl
+  if cp -f "$QMD_VEC0_MUSL_SO" "$target" 2>/dev/null; then
+    _qmd_log "sqlite-vec: swapped glibc prebuilt for musl build"
+  else
+    _qmd_log "sqlite-vec: swap failed (cp) — vector embed may be unavailable"
+  fi
+  return 0
+}
+
 # The pinned manifest. trustedDependencies lists ONLY better-sqlite3 (store) and
 # node-llama-cpp (embeddings) — tree-sitter-* are DELIBERATELY absent so bun's
 # default-deny leaves them unbuilt. Keep this the single definition (tests assert
@@ -180,6 +221,10 @@ _qmd_ensure_prefix() {
       return 1
     fi
   fi
+  # 017: ensure the vec0 extension can load under musl (idempotent; no-op on
+  # glibc). Runs every ensure — a prefix restored from .state onto a fresh musl
+  # container still needs the swap even when the install itself was skipped.
+  _qmd_swap_sqlite_vec "$prefix"
   return 0
 }
 

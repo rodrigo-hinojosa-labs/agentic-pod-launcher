@@ -19,15 +19,20 @@
 #   5. least privilege (Princ.II)→ `docker inspect` confirms cap_drop: ALL stands.
 #
 # The FIRST test stubs `bunx` so the orchestration (watcher, cron, flock, caps) is
-# proven fast, without the ~300 MB model. The SECOND test (016) DES-STUBS bunx and
-# exercises the REAL @tobilu/qmd: node-llama-cpp + better-sqlite3 compile against the
-# image toolchain — exactly the path the stub used to hide (BUG 4). Tiers:
-#   A build-detector : `qmd --help` RC 0 (the install + native compile succeed; no
-#                      model download). This is the direct BUG-4 detector.
-#   RED detection    : rebuild with --build-arg QMD_NATIVE_TOOLCHAIN=0 → A fails with
-#                      the real cause (cmake/node-gyp/gcc) — SC-003 both directions.
+# proven fast, without the ~300 MB model. The SECOND test (016/017) exercises the
+# REAL @tobilu/qmd via the PRODUCTION path (_qmd_run / managed prefix): node-llama-cpp
+# + better-sqlite3 compile against the image toolchain, tree-sitter stays WASM, and
+# the musl-compiled sqlite-vec vec0.so is swapped into the prefix (017). Tiers:
+#   A build-detector : the baked vec0.so is musl (017), and `_qmd_run --help` RC 0
+#                      (install + native compile succeed via the managed prefix, NOT
+#                      `bunx` which recompiles tree-sitter and re-triggers BUG 4). No
+#                      model download.
+#   RED detection    : rebuild with --build-arg QMD_NATIVE_TOOLCHAIN=0 → bigstack.so
+#                      AND vec0.so are absent (both gated by the toolchain) — a
+#                      deterministic SC-003 proof, both directions.
 #   Tier 2 (embed)   : gated by QMD_EMBED_E2E=1 — a real reindex (update + embed)
-#                      downloads the model (cache via QMD_E2E_MODEL_CACHE).
+#                      downloads the model; embed SUCCEEDS only if vec0 loaded (017),
+#                      and a semantic vsearch returns the right doc (SC-001).
 # Mirrors tests/docker-e2e-vault.bats (claude stub, compose-run gotchas).
 #
 # Skipped by default (slow + requires Docker). Enable with DOCKER_E2E=1.
@@ -308,9 +313,21 @@ PY
 
   # ── GREEN build (toolchain on) + Tier 1 build-detector (Fase A) ──
   (cd "$D" && docker compose build)
-  qr() { (cd "$D" && docker compose run --rm -T --entrypoint sh -u agent "$NAME" -lc "$1"); }
-  run qr 'bunx @tobilu/qmd@2.5.3 --help >/tmp/a 2>&1; echo "RC=$?"'
-  echo "$output" | grep -q 'RC=0'      # real install + native compile succeeded
+  # bash entrypoint (NOT sh): qmd_index.sh sources backup_vault.sh, which uses bash
+  # syntax — busybox sh would syntax-error. -u agent so the managed prefix lands
+  # under the agent-owned .state.
+  qr() { (cd "$D" && docker compose run --rm -T --entrypoint bash -u agent "$NAME" -lc "$1"); }
+  # 017: the musl sqlite-vec build is baked under the toolchain gate — present + musl
+  # (the npm prebuilt is glibc and cannot load on musl).
+  run qr 'if [ -f /opt/agent-admin/sqlite-vec/vec0.so ] && ! strings /opt/agent-admin/sqlite-vec/vec0.so | grep -q GLIBC_; then echo VEC0_MUSL_OK; fi'
+  echo "$output" | grep -q VEC0_MUSL_OK
+  # 016/017: Fase A drives the PRODUCTION install path (_qmd_run / managed prefix),
+  # NOT `bunx` directly — `bunx PKG` runs EVERY dep's install script, recompiling
+  # tree-sitter and re-triggering BUG 4 on musl. `--help` proves the native install
+  # (node-llama-cpp + better-sqlite3 compiled, tree-sitter left as WASM) produced a
+  # working qmd binary, and _qmd_ensure_prefix ran the vec0 swap — no model download.
+  run qr '. /opt/agent-admin/scripts/lib/qmd_index.sh; _qmd_run "$(qmd_pkg)" --help >/tmp/a 2>&1; echo "RC=$?"'
+  echo "$output" | grep -q 'RC=0'
   run qr 'command -v cmake'
   [ "$status" -eq 0 ]                    # apk cmake present (not the glibc xpack)
 
@@ -318,34 +335,62 @@ PY
   if [ "${QMD_EMBED_E2E:-0}" = "1" ]; then
     (cd "$D" && docker compose up -d)
     inc() { (cd "$D" && docker compose exec -T -u agent "$NAME" "$@"); }
-    inc sh -c 'mkdir -p /home/agent/.vault && printf -- "---\ntitle: t\n---\n# hi\n" > /home/agent/.vault/a.md'
-    run inc /usr/local/bin/heartbeatctl qmd-reindex
-    run inc sh -c 'jq -r .last_status /workspace/scripts/heartbeat/qmd-index.json'
-    echo "$output" | grep -qE 'ok|indexed'
+    # First-boot setup (collection add + update + embed) runs backgrounded under the
+    # SAME flock reindex uses. Wait for its sentinel before touching the index —
+    # otherwise our reindex just loses the lock (exit 91) and writes nothing. The
+    # embed here already exercises vec0 end-to-end; a glibc prebuilt would make it
+    # fail with "sqlite-vec extension is unavailable" and no sentinel would appear.
+    local sdeadline=$(( $(date +%s) + 600 )) setup_done=0
+    while [ "$(date +%s)" -lt "$sdeadline" ]; do
+      if inc sh -c 'test -f "$HOME/.cache/qmd/.qmd-setup-ok"' 2>/dev/null; then setup_done=1; break; fi
+      sleep 5
+    done
+    if [ "$setup_done" -ne 1 ]; then
+      echo "--- setup did not complete; container logs ---" >&2
+      (cd "$D" && docker compose logs --tail=120 2>&1) >&2 || true
+    fi
+    [ "$setup_done" -eq 1 ]
     run inc sh -c 'ls "$HOME/.cache/qmd/models/"*.gguf 2>/dev/null && echo HAVE_MODEL'
     echo "$output" | grep -q HAVE_MODEL
-    # 016 T036: the MCP server (Claude's search reader) launches from the SAME
-    # managed prefix the reindex just built — via the wrapper, NOT bunx. It's a
-    # stdio server, so feed EOF + a short timeout and assert it started without a
-    # native-build/bunx/missing-binary failure (the BUG-4 signatures).
+    # 017: the swap put a MUSL vec0 in the managed prefix (not the glibc prebuilt).
+    run inc bash -lc 'f="$HOME/.cache/qmd/pkg/node_modules/sqlite-vec-linux-arm64/vec0.so"; if strings "$f" | grep -q GLIBC_; then echo GLIBC; else echo MUSL; fi'
+    echo "$output" | grep -q MUSL
+    # 017 (SC-001): a SEMANTIC query returns the right doc — vec0 stores/retrieves
+    # vectors and the query embeds too. Add a distinct doc, reindex (the lock is free
+    # now setup is done), and assert last_status=indexed (only reachable if vec0
+    # LOADED — a glibc prebuilt → "sqlite-vec unavailable" → embed error).
+    inc sh -c 'printf -- "---\ntitle: gatos\n---\nEl gato duerme sobre el teclado del computador.\n" > /home/agent/.vault/gatos.md'
+    run inc /usr/local/bin/heartbeatctl qmd-reindex
+    [ "$status" -eq 0 ]
+    run inc sh -c 'jq -r .last_status /workspace/scripts/heartbeat/qmd-index.json'
+    echo "$output" | grep -qE 'ok|indexed'
+    # Preload bigstack (query embedding hits the same musl std::regex/stack guard the
+    # MCP uses) and run qmd from the prefix. The semantic query has no lexical overlap.
+    run inc bash -lc 's="$HOME/.cache/qmd/tmp"; mkdir -p "$s"; . /opt/agent-admin/scripts/lib/qmd_index.sh; LD_PRELOAD="$QMD_BIGSTACK_SO" TMPDIR="$s" "$(_qmd_prefix)/node_modules/.bin/qmd" vsearch "animal encima del pc" 2>&1'
+    echo "$output" | grep -qi 'gato'
+    # 016 T036: the MCP server (Claude's search reader) launches from the SAME managed
+    # prefix, via the wrapper, NOT bunx. Feed EOF + a short timeout and assert it
+    # started without a native-build/bunx/missing-binary failure (BUG-4 signatures).
+    # if+false so the check is subject to set -e (a bare `! ... | grep` never fails).
     inc test -x /opt/agent-admin/scripts/qmd-mcp
     run inc sh -lc 'timeout 25 /opt/agent-admin/scripts/qmd-mcp </dev/null >/tmp/m 2>&1; cat /tmp/m'
-    ! echo "$output" | grep -qiE 'tree-sitter.*exited with|node-gyp|cannot find module|bunx|no such file'
+    if echo "$output" | grep -qiE 'tree-sitter.*exited with|node-gyp|cannot find module|bunx|no such file'; then
+      echo "MCP start showed a BUG-4 signature: $output" >&2
+      false
+    fi
     (cd "$D" && docker compose down -v --remove-orphans || true)
   fi
 
-  # ── RED: rebuild WITHOUT the toolchain → Fase A must fail with the real cause ──
+  # ── RED: rebuild WITHOUT the toolchain → the native artifacts are gated off ─────
+  # Both bigstack.so (016) and the musl sqlite-vec vec0.so (017) are produced ONLY
+  # under QMD_NATIVE_TOOLCHAIN=1. Their ABSENCE is a deterministic, fast proof the
+  # gate discriminates (SC-003, both directions: present in GREEN above, absent
+  # here) — no compile / network / model, and no .state cache-carryover hazard.
+  # Without the musl vec0, `qmd embed` cannot load the extension → semantic RAG is
+  # unavailable, which is exactly the pre-017 failure mode.
   (cd "$D" && docker compose build --build-arg QMD_NATIVE_TOOLCHAIN=0)
-  # $HOME is the ./.state:/home/agent bind-mount, which SURVIVES the image rebuild
-  # and holds bun's GREEN-built cache. Use a throwaway HOME so the RED run re-runs
-  # the native compile from scratch instead of resolving the cached success —
-  # otherwise the toolchain-less path is never actually exercised.
-  run qr 'export HOME="$(mktemp -d)"; bunx @tobilu/qmd@2.5.3 --help >/tmp/a 2>&1; echo "RC=$?"; cat /tmp/a'
-  # A bare `! ... | grep -q` is exempt from set -e and would NEVER fail the test;
-  # assert the RC!=0 direction with an if+false whose body IS subject to set -e.
-  if echo "$output" | grep -q 'RC=0'; then
-    echo "SC-003 RED: toolchain-less build unexpectedly returned RC=0 -> $output" >&2
-    false
-  fi
-  echo "$output" | grep -qE 'cmake|CMake|node-gyp|exited with|gcc|c\+\+'
+  run qr 'if [ -f /opt/agent-admin/sqlite-vec/vec0.so ]; then echo PRESENT; else echo ABSENT; fi'
+  echo "$output" | grep -q ABSENT
+  run qr 'if [ -f /opt/agent-admin/bigstack.so ]; then echo PRESENT; else echo ABSENT; fi'
+  echo "$output" | grep -q ABSENT
 }

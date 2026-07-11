@@ -54,10 +54,18 @@ RUN apk add --no-cache \
 # on PATH makes node-llama-cpp use it (never its glibc xpack download). bigstack.so
 # (8MB pthread stacks) mitigates the musl std::regex/stack SIGSEGV at embed time.
 ARG QMD_NATIVE_TOOLCHAIN=1
+# 017: sqlite-vec (the vec0 vector extension for `qmd embed`) ships only a GLIBC
+# prebuilt that cannot dlopen under musl — the THIRD native module of the embed
+# path, missed by 016. Compile it for musl from the pinned amalgamation and bake
+# it here; qmd_index.sh swaps it into the managed prefix at runtime. Same gate as
+# the toolchain (a QMD_NATIVE_TOOLCHAIN=0 build omits it → DOCKER_E2E RED).
+ARG SQLITE_VEC_VERSION=0.1.9
 COPY bigstack.c /opt/agent-admin/bigstack.c
+COPY scripts/build-sqlite-vec.sh /opt/agent-admin/scripts/build-sqlite-vec.sh
 RUN if [ "$QMD_NATIVE_TOOLCHAIN" = "1" ]; then \
       apk add --no-cache build-base cmake linux-headers libgomp; \
       gcc -shared -fPIC -o /opt/agent-admin/bigstack.so /opt/agent-admin/bigstack.c -ldl; \
+      SQLITE_VEC_VERSION="$SQLITE_VEC_VERSION" sh /opt/agent-admin/scripts/build-sqlite-vec.sh; \
     fi
 
 # Install gum from the charmbracelet tap alternative: use the static binary.
