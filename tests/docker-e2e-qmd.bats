@@ -18,8 +18,13 @@
 #                                  events (the seam is still proven in Linux CI).
 #   5. least privilege (Princ.II)→ `docker inspect` confirms cap_drop: ALL stands.
 #
-# The FIRST test stubs `bunx` so the orchestration (watcher, cron, flock, caps) is
-# proven fast, without the ~300 MB model. The SECOND test (016/017) exercises the
+# The FIRST test stubs the qmd ENGINE (fake binary pre-seeded into the managed
+# prefix under .state — the post-016 seam, see
+# specs/019-fix-qmd-test-drift/contracts/qmd-test-seam.md; a PATH `bunx` stub is
+# dead code since 016) so the orchestration (watcher, cron, flock, caps) is
+# proven fast, without the ~300 MB model. 019 NOTE: this alignment is
+# syntax-validated on the host only; full Docker validation is DEFERRED to the
+# next DOCKER_E2E=1 run on a Docker host. The SECOND test (016/017) exercises the
 # REAL @tobilu/qmd via the PRODUCTION path (_qmd_run / managed prefix): node-llama-cpp
 # + better-sqlite3 compile against the image toolchain, tree-sitter stays WASM, and
 # the musl-compiled sqlite-vec vec0.so is swapped into the prefix (017). Tiers:
@@ -87,28 +92,45 @@ YML
   touch "$DEST/.env"; chmod 0600 "$DEST/.env"
 
   # 3) stubs. claude: sleep forever so the watchdog stops respawning the tmux
-  #    session. bunx: fast no-op that fakes index.sqlite on `collection add`, so
-  #    qmd_setup_if_needed completes without the real 300 MB model download.
+  #    session. qmd engine: fake binary PRE-SEEDED into the managed prefix under
+  #    .state (019 seam — post-016, _qmd_run executes
+  #    $prefix/node_modules/.bin/qmd directly; a PATH bunx stub is dead code).
+  #    The pre-seeded .installed-hash makes _qmd_ensure_prefix skip `bun
+  #    install`, so qmd_setup_if_needed completes without network or the real
+  #    300 MB model download. Hash derived from the lib's own helpers so it
+  #    tracks the manifest (sha256 of identical content — host/container agree).
   mkdir -p "$DEST/bin"
   cat > "$DEST/bin/claude" <<'CL'
 #!/bin/bash
 exec sleep 86400
 CL
-  cat > "$DEST/bin/bunx" <<'BX'
+  chmod +x "$DEST/bin/claude"
+
+  local _prefix="$DEST/.state/.cache/qmd/pkg"
+  mkdir -p "$_prefix/node_modules/.bin"
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/scripts/lib/qmd_index.sh"
+  printf '%s' "$(_qmd_manifest "2.5.3")" > "$_prefix/package.json"
+  printf '%s' "$(_qmd_manifest "2.5.3")" | _qmd_sha > "$_prefix/.installed-hash"
+  cat > "$_prefix/node_modules/.bin/qmd" <<'QS'
 #!/bin/sh
-# qmd e2e stub for @tobilu/qmd: log calls, fake the index on `collection add`,
-# exit 0 fast for collection/update/embed. (mcp is only launched by claude,
-# which is itself stubbed, so it never runs here.)
+# qmd e2e engine stub: log calls, fake the index on `collection add`, emit the
+# 018 completion signal on embed/status so the multi-pass loop ends in one
+# pass. (mcp is only launched by claude, which is itself stubbed.)
 mkdir -p "$HOME/.cache/qmd" 2>/dev/null || true
-echo "$*" >> "$HOME/.cache/qmd/bunx-calls.log" 2>/dev/null || true
-case "$2" in
+echo "$*" >> "$HOME/.cache/qmd/engine-calls.log" 2>/dev/null || true
+case "$1" in
   collection) : > "$HOME/.cache/qmd/index.sqlite" ;;
+  embed)  echo "✓ All content hashes already have embeddings" ;;
+  status) echo "Pending: 0 need embedding" ;;
 esac
 exit 0
-BX
-  chmod +x "$DEST/bin/claude" "$DEST/bin/bunx"
+QS
+  chmod +x "$_prefix/node_modules/.bin/qmd"
 
-  # 4) bind-mount both stubs into the container over the real binaries.
+  # 4) bind-mount the claude stub into the container over the real binary.
+  #    (The engine stub needs no mount — it lives under .state, which IS the
+  #    /home/agent bind-mount.)
   python3 - "$DEST/docker-compose.yml" <<'PY'
 import sys
 path = sys.argv[1]
@@ -116,7 +138,6 @@ txt = open(path).read()
 needle = '      - ./:/workspace'
 for inject in (
     '      - ./bin/claude:/usr/local/bin/claude:ro',
-    '      - ./bin/bunx:/usr/local/bin/bunx:ro',
 ):
     if inject not in txt:
         txt = txt.replace(needle, needle + '\n' + inject, 1)
@@ -141,12 +162,12 @@ PY
   if [ "$setup_ok" -ne 1 ]; then
     echo "--- container logs ---" >&2
     (cd "$DEST" && docker compose logs --tail=100 2>&1) >&2 || true
-    echo "--- bunx calls ---" >&2
-    in_container sh -c 'cat "$HOME/.cache/qmd/bunx-calls.log" 2>&1' >&2 || true
+    echo "--- engine calls ---" >&2
+    in_container sh -c 'cat "$HOME/.cache/qmd/engine-calls.log" 2>&1' >&2 || true
   fi
   [ "$setup_ok" -eq 1 ]
   # setup must have run the full add → update → embed sequence
-  run in_container sh -c 'cat "$HOME/.cache/qmd/bunx-calls.log"'
+  run in_container sh -c 'cat "$HOME/.cache/qmd/engine-calls.log"'
   [[ "$output" == *"collection add"* ]]
   [[ "$output" == *"update"* ]]
   [[ "$output" == *"embed"* ]]
@@ -155,7 +176,7 @@ PY
   run in_container sh -c 'pgrep -f qmd_watch.sh >/dev/null && echo WATCHER_UP'
   [[ "$output" == *"WATCHER_UP"* ]]
   # The */5 backstop line reaches /etc/crontabs/agent via entrypoint's root
-  # crontab-sync loop, which polls every 15s. The bunx stub makes first-boot
+  # crontab-sync loop, which polls every 15s. The engine stub makes first-boot
   # setup finish in seconds, so POLL for the line rather than racing the first
   # sync tick. (busybox `crontab -l` reads a different path — read the file crond
   # actually uses.)
@@ -171,9 +192,9 @@ PY
   run in_container sh -c 'command -v inotifywait >/dev/null && echo HAVE_INOTIFY'
   [[ "$output" == *"HAVE_INOTIFY"* ]]
 
-  # 013 FR-016: `bunx` MUST exist in the REAL image (not via the PATH stub the
-  # pipeline uses) — the qmd MCP + qmd_index.sh call it. Assert the absolute path
-  # so the stub can't mask a missing symlink like it did before this feature.
+  # 013 FR-016: `bunx` MUST exist in the REAL image — general bun tooling relies
+  # on the symlink (since 019 no PATH stub can mask it: the engine stub lives in
+  # the managed prefix, not on PATH). Assert the absolute path.
   run in_container sh -c 'test -x /usr/local/bin/bunx && readlink /usr/local/bin/bunx'
   [ "$status" -eq 0 ]
   [[ "$output" == *"/usr/local/bin/bun"* ]]

@@ -100,14 +100,19 @@ teardown() { teardown_tmp_dir; }
 @test "--regenerate backfills vault.qmd.version and renders a valid qmd pin (pre-010 upgrade)" {
   cd "$TMP_TEST_DIR"
   # Simulate a pre-010 workspace that opted into QMD before the version pin
-  # existed: enabled=true, no version key (mcp-json.tpl would otherwise render a
-  # broken "@tobilu/qmd@"). The regenerate path must backfill the floor so the
-  # pin stays valid (contracts/agent-yml-schema.md; agent.yml as single source).
+  # existed: enabled=true, no version key. The regenerate path must backfill
+  # the floor into agent.yml — the single source the runtime wrapper reads the
+  # pin from (contracts/agent-yml-schema.md; agent.yml as single source).
+  # Post-016/T036 the pin no longer flows into .mcp.json args: the qmd entry
+  # renders the per-mode wrapper (QMD_MCP_COMMAND) with EMPTY args, and the
+  # wrapper resolves the version from agent.yml at runtime (qmd_pkg). This
+  # seed workspace backfills deployment.mode=docker → docker wrapper path.
+  # See specs/019-fix-qmd-test-drift/contracts/qmd-test-seam.md (anti-patterns).
   yq -i '.vault.qmd.enabled = true' agent.yml
   echo 'n' | ./setup.sh --regenerate
   [ "$(yq -r '.vault.qmd.version' agent.yml)" = "2.5.3" ]
-  [ "$(jq -r '.mcpServers.qmd.args[0]' .mcp.json)" = "@tobilu/qmd@2.5.3" ]
-  [ "$(jq -r '.mcpServers.qmd.args[1]' .mcp.json)" = "mcp" ]
+  [ "$(jq -r '.mcpServers.qmd.command' .mcp.json)" = "/opt/agent-admin/scripts/qmd-mcp" ]
+  [ "$(jq '.mcpServers.qmd.args | length' .mcp.json)" = "0" ]
 }
 
 @test "--non-interactive regenerate skips plugin prompt" {
