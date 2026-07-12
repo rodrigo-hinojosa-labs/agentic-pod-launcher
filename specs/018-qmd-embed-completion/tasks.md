@@ -169,7 +169,7 @@ tiny progress with `QMD_EMBED_MAX_PASSES=2` stops after 2 passes as `partial`; s
     docker-e2e-qmd.bats pending=0 assertion) pass. Zero regressions attributable to 018.
 - [X] T017 Bump `VERSION` 0.11.0 → 0.12.0 and add a `CHANGELOG.md` entry describing the multi-pass
   embed completion (user-facing: large vaults now finish embedding).
-- [ ] T018 On merge: update `CLAUDE.md` — move 018 into the prior-features list and flip its SPECKIT
+- [X] T018 On merge: update `CLAUDE.md` — move 018 into the prior-features list and flip its SPECKIT
   block to MERGED with the PR/merge SHA (do NOT commit `.claude/settings.json`).
 
 ---
