@@ -273,23 +273,39 @@ qmd_last_hash() {
   jq -r '.hash // ""' "$state_file" 2>/dev/null
 }
 
-# Atomic write of qmd-index.json: {hash, last_run, last_status, runs}.
+# Atomic write of qmd-index.json: {hash, last_run, last_status, runs[, pending]}.
 # runs increments from the prior file. Mirrors vault_write_state's tmp+mv.
+#
+# 018: optional 4th arg PENDING (documents still needing an embedding — see
+# contracts/reindex-state.md). When given (a non-negative integer), it is
+# written verbatim. When omitted (legacy 3-arg callers), the PRIOR file's
+# `pending` is carried over unchanged — including its absence: a state file
+# that has never recorded a pending count stays without one, which
+# `_qmd_reindex_locked` reads as "unknown" and treats as "must resume", never
+# as "0 pending" (that distinction is the FR-003 resume guarantee).
 qmd_write_state() {
-  local state_file="$1" hash="$2" status="$3"
-  local dir tmp runs now
+  local state_file="$1" hash="$2" status="$3" pending="${4:-}"
+  local dir tmp runs now prev_pending_json pending_json
   dir=$(dirname "$state_file")
   mkdir -p "$dir" 2>/dev/null || true
   runs=0
+  prev_pending_json="null"
   if [ -f "$state_file" ]; then
     runs=$(jq -r '.runs // 0' "$state_file" 2>/dev/null || echo 0)
+    prev_pending_json=$(jq -c '.pending // null' "$state_file" 2>/dev/null || echo null)
   fi
   case "$runs" in *[!0-9]*) runs=0 ;; esac
   runs=$((runs + 1))
+  case "$pending" in
+    ''|*[!0-9]*) pending_json="$prev_pending_json" ;;
+    *) pending_json="$pending" ;;
+  esac
   now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
   tmp=$(mktemp "$dir/.qmd-index.json.XXXXXX") || return 0
   if jq -n --arg hash "$hash" --arg status "$status" --arg run "$now" --argjson runs "$runs" \
-      '{hash:$hash, last_run:$run, last_status:$status, runs:$runs}' > "$tmp" 2>/dev/null; then
+      --argjson pending "$pending_json" \
+      '{hash:$hash, last_run:$run, last_status:$status, runs:$runs} + (if $pending == null then {} else {pending:$pending} end)' \
+      > "$tmp" 2>/dev/null; then
     mv -f "$tmp" "$state_file" 2>/dev/null || rm -f "$tmp"
   else
     rm -f "$tmp"
@@ -441,18 +457,90 @@ _qmd_log_reindex_env() {
     | redact_secrets | while IFS= read -r _l; do _qmd_log "reindex env: $_l"; done
 }
 
+# 018: fixed anti-runaway backstop on the embed-completion loop (see
+# contracts/embed-completion.md). NOT an agent.yml field (Clarifications
+# 2026-07-10) — env-overridable for tests only.
+QMD_EMBED_MAX_PASSES="${QMD_EMBED_MAX_PASSES:-12}"
+
+# _qmd_pending_count PKG — how many active documents still need an embedding,
+# per qmd's own `status` line ("Pending: N need embedding"). Echoes a bare
+# non-negative integer on success; echoes nothing and returns non-zero when
+# `status` fails or the count can't be parsed — callers MUST treat that as
+# UNKNOWN, never as zero (018 data-model.md).
+_qmd_pending_count() {
+  local pkg="$1" out n
+  out=$(_qmd_run "$pkg" status 2>/dev/null) || { printf ''; return 1; }
+  n=$(printf '%s\n' "$out" | grep -oE 'Pending:[[:space:]]*[0-9]+' | grep -oE '[0-9]+' | head -n1)
+  if [ -z "$n" ]; then printf ''; return 1; fi
+  printf '%s\n' "$n"
+}
+
+# _qmd_embed_until_complete PKG STATE_FILE HASH LAST_HASH — 018: run
+# successive `qmd embed` passes (each a fresh, engine-capped session — see
+# research.md R1) until qmd reports full coverage, a pass makes no forward
+# progress (permanently-failing documents), or QMD_EMBED_MAX_PASSES is hit.
+# Never patches/modifies the qmd engine (loop-around, not a patch — R2).
+# Always returns 0 (fail-silent; a cron tick/watcher must never crash).
+_qmd_embed_until_complete() {
+  local pkg="$1" state_file="$2" hash="$3" last_hash="$4"
+  local scratch rlog pass=1 prev_pending="" out rc pending
+  scratch=$(scratch_dir "$(qmd_cache_root)")
+  rlog="$scratch/embed-pass.err"
+  while [ "$pass" -le "$QMD_EMBED_MAX_PASSES" ]; do
+    out=$(_qmd_run "$pkg" embed 2>&1)
+    rc=$?
+    printf '%s\n' "$out" > "$rlog"
+    if [ "$rc" -ne 0 ]; then
+      _qmd_log "reindex: embed pass $pass failed/timed out: $(_qmd_tail_redacted "$rlog")"
+      qmd_write_state "$state_file" "$last_hash" "error"
+      return 0
+    fi
+    if printf '%s\n' "$out" | grep -q "All content hashes already have embeddings"; then
+      _qmd_log "reindex: embed complete after $pass pass(es)"
+      qmd_write_state "$state_file" "$hash" "indexed" 0
+      return 0
+    fi
+    pending=$(_qmd_pending_count "$pkg")
+    if [ -n "$pending" ] && [ "$pending" -eq 0 ] 2>/dev/null; then
+      _qmd_log "reindex: embed complete after $pass pass(es) (pending=0)"
+      qmd_write_state "$state_file" "$hash" "indexed" 0
+      return 0
+    fi
+    if [ -n "$pending" ] && [ -n "$prev_pending" ] && [ "$pending" -ge "$prev_pending" ] 2>/dev/null; then
+      _qmd_log "reindex: embed stalled after $pass pass(es), pending=$pending"
+      qmd_write_state "$state_file" "$hash" "stalled" "$pending"
+      return 0
+    fi
+    _qmd_log "reindex: embed pass $pass done, pending=${pending:-unknown}"
+    [ -n "$pending" ] && prev_pending="$pending"
+    pass=$((pass + 1))
+  done
+  _qmd_log "reindex: embed pass cap ($QMD_EMBED_MAX_PASSES) reached, pending=${pending:-unknown}"
+  qmd_write_state "$state_file" "$hash" "partial" "${pending:-0}"
+  return 0
+}
+
 # Critical section of qmd_reindex (runs under flock when available).
+#
+# 018: the unchanged-vault guard now also checks the PERSISTED pending count
+# (FR-003/FR-004) — an unchanged vault only skips embedding when it is ALSO
+# fully embedded (pending==0). Otherwise (pending>0, or unknown/pre-018 state)
+# it resumes embedding without re-running `update` (no vault re-scan needed).
 _qmd_reindex_locked() {
   local agent_yml="$1" vault_dir="$2"
-  local state_file current last pkg scratch rlog
+  local state_file current last pkg scratch rlog pending
   state_file=$(qmd_state_file)
   current=$(vault_hash "$vault_dir" 2>/dev/null || echo "")
   last=$(qmd_last_hash "$state_file")
-  if [ -n "$current" ] && [ "$current" = "$last" ]; then
-    _qmd_log "reindex: vault unchanged ($current) — skip embed"
-    qmd_write_state "$state_file" "$current" "skipped"
+  pending=""
+  [ -f "$state_file" ] && pending=$(jq -r '.pending // ""' "$state_file" 2>/dev/null)
+
+  if [ -n "$current" ] && [ "$current" = "$last" ] && [ "$pending" = "0" ]; then
+    _qmd_log "reindex: vault unchanged ($current), fully embedded — skip"
+    qmd_write_state "$state_file" "$current" "skipped" 0
     return 0
   fi
+
   command -v bun >/dev/null 2>&1 || { _qmd_log "reindex: bun unavailable — skip"; return 0; }
   pkg=$(qmd_pkg "$agent_yml")
   # 015 US4: surface the effective env + the REAL qmd stderr (redacted) instead of
@@ -461,18 +549,18 @@ _qmd_reindex_locked() {
   _qmd_log_reindex_env "$pkg"
   scratch=$(scratch_dir "$(qmd_cache_root)")
   rlog="$scratch/reindex.err"
-  _qmd_log "reindex: update + embed via $pkg"
-  if ! _qmd_run "$pkg" update >"$rlog" 2>&1; then
-    _qmd_log "reindex: 'update' failed/timed out: $(_qmd_tail_redacted "$rlog")"
-    qmd_write_state "$state_file" "$last" "error"
-    return 0
+
+  if [ -n "$current" ] && [ "$current" = "$last" ]; then
+    _qmd_log "reindex: vault unchanged ($current), embeddings pending — resuming"
+  else
+    _qmd_log "reindex: update via $pkg"
+    if ! _qmd_run "$pkg" update >"$rlog" 2>&1; then
+      _qmd_log "reindex: 'update' failed/timed out: $(_qmd_tail_redacted "$rlog")"
+      qmd_write_state "$state_file" "$last" "error"
+      return 0
+    fi
   fi
-  if ! _qmd_run "$pkg" embed >"$rlog" 2>&1; then
-    _qmd_log "reindex: 'embed' failed/timed out: $(_qmd_tail_redacted "$rlog")"
-    qmd_write_state "$state_file" "$last" "error"
-    return 0
-  fi
-  qmd_write_state "$state_file" "$current" "indexed"
-  _qmd_log "reindex: done ($current)"
+
+  _qmd_embed_until_complete "$pkg" "$state_file" "$current" "$last"
   return 0
 }

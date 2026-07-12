@@ -364,6 +364,11 @@ PY
     [ "$status" -eq 0 ]
     run inc sh -c 'jq -r .last_status /workspace/scripts/heartbeat/qmd-index.json'
     echo "$output" | grep -qE 'ok|indexed'
+    # 018: a small e2e vault embeds within a single pass, so the completion
+    # loop drives pending to 0 in this run (not the multi-pass scenario a
+    # multi-thousand-chunk vault needs — that is the ferrari hardware gate).
+    run inc sh -c 'jq -r .pending /workspace/scripts/heartbeat/qmd-index.json'
+    [ "$output" = "0" ]
     # Preload bigstack (query embedding hits the same musl std::regex/stack guard the
     # MCP uses) and run qmd from the prefix. The semantic query has no lexical overlap.
     run inc bash -lc 's="$HOME/.cache/qmd/tmp"; mkdir -p "$s"; . /opt/agent-admin/scripts/lib/qmd_index.sh; LD_PRELOAD="$QMD_BIGSTACK_SO" TMPDIR="$s" "$(_qmd_prefix)/node_modules/.bin/qmd" vsearch "animal encima del pc" 2>&1'

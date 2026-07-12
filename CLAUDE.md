@@ -130,8 +130,25 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3`. Already-p
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
-**017-qmd-sqlite-vec-musl ACTIVA** (branch `017-qmd-sqlite-vec-musl` desde main=`14169cf`, 2026-07-10,
-VERSION 0.10.0→0.11.0). Plan: `specs/017-qmd-sqlite-vec-musl/plan.md`. **El DOCKER_E2E de 016 se CORRIÓ
+**018-qmd-embed-completion ACTIVE** (branch `018-qmd-embed-completion` desde main=`70d8f23`,
+2026-07-10, VERSION 0.11.0→0.12.0). Plan: `specs/018-qmd-embed-completion/plan.md`. Cierra el hallazgo
+del gate confirmatorio de 017: `qmd embed` tiene un cap HARDCODEADO de 30min/sesión (`store.js:1377`
+`maxDuration: 30*60*1000`, no configurable por env) → un embed grande de primera vez corta a
+~859/2423 chunks ("LLM session expired") y el cron NO reanuda (guard `vault unchanged → skip embed`).
+Fix (decisiones /speckit-clarify 2026-07-10): **LOOP alrededor del motor (NO parchear qmd) DENTRO de
+una sola invocación** de `_qmd_reindex_locked` — pasadas frescas de `qmd embed` hasta
+completar/stall/cap; el guard REANUDA si quedan pendientes (`pending>0` o desconocido); el estado
+`qmd-index.json` gana `pending` + `last_status` `partial`/`stalled`; el cap es una **constante fija**
+`QMD_EMBED_MAX_PASSES` (env-overridable solo para tests, NO en agent.yml). Señal de completitud/stall =
+`qmd status` `Pending: N` + `✓ All content hashes already have embeddings`. Lib espejada
+`scripts/lib`↔`docker/scripts/lib` → DOCKER_E2E OBLIGATORIO. Gates: bats host (loop/guard/stall
+stubbeados) + DOCKER_E2E (`pending→0`) + ferrari (corpus 2423 completo + hit semántico limpio, SC-006).
+Artifacts: `specs/018-qmd-embed-completion/{spec,plan,research,data-model,quickstart}.md` +
+`contracts/{embed-completion,reindex-state}.md`. Fase spec-kit: **plan hecho, siguiente
+`/speckit-tasks`.**
+
+**017-qmd-sqlite-vec-musl MERGED** (PR #72, merge `70d8f23`, 2026-07-10, VERSION 0.11.0). Plan:
+`specs/017-qmd-sqlite-vec-musl/plan.md`. **El DOCKER_E2E de 016 se CORRIÓ
 (imagen `agent-admin:qmd-real`, Alpine musl aarch64) y reveló que 016 NO cierra el embed semántico:
 hay un TERCER módulo nativo que la investigación de 17 agentes jamás vio.** node-llama-cpp (el "muro
 real" temido) embebe OK sin SIGSEGV; el muro es `sqlite-vec-linux-arm64@0.1.9`, un prebuilt **glibc**

@@ -48,10 +48,13 @@ EOF
   export PATH="$TMP_TEST_DIR/bin:$PATH"
 }
 
-@test "qmd_reindex skips embed when the vault is unchanged" {
+@test "qmd_reindex skips embed when the vault is unchanged AND fully embedded" {
+  # 018/FR-004: "unchanged" alone is no longer sufficient to skip — it must
+  # ALSO be fully embedded (pending=0), or a large first-time embed that hit
+  # the session cap would never resume (see contracts/embed-completion.md).
   _install_bunx
   local h; h=$(vault_hash "$QMD_VAULT_DIR")
-  qmd_write_state "$QMD_INDEX_STATE_FILE" "$h" "indexed"
+  qmd_write_state "$QMD_INDEX_STATE_FILE" "$h" "indexed" 0
   : > "$QMD_STUB_LOG"
   run qmd_reindex "$AGENT_YML"
   [ "$status" -eq 0 ]
@@ -124,4 +127,41 @@ EOF
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "already running"
   [ ! -s "$QMD_STUB_LOG" ]
+}
+
+# ── 018 (qmd-embed-completion): qmd_write_state's optional 4th `pending` arg ──
+# See specs/018-qmd-embed-completion/contracts/reindex-state.md.
+
+@test "qmd_write_state with a 4th arg writes an integer pending field" {
+  qmd_write_state "$QMD_INDEX_STATE_FILE" "HASHA" "partial" 700
+  run jq -r '.pending' "$QMD_INDEX_STATE_FILE"
+  [ "$output" = "700" ]
+  run jq -e '.pending | type == "number"' "$QMD_INDEX_STATE_FILE"
+  [ "$status" -eq 0 ]
+}
+
+@test "qmd_write_state 3-arg form (back-compat) still works and existence-check still passes" {
+  run qmd_write_state "$QMD_INDEX_STATE_FILE" "HASHA" "indexed"
+  [ "$status" -eq 0 ]
+  run jq -e '.hash and .last_run and .last_status and (.runs|type=="number")' "$QMD_INDEX_STATE_FILE"
+  [ "$status" -eq 0 ]
+}
+
+@test "qmd_write_state 3-arg form leaves pending absent (unknown) on a brand-new file" {
+  qmd_write_state "$QMD_INDEX_STATE_FILE" "HASHA" "indexed"
+  run jq -e 'has("pending")' "$QMD_INDEX_STATE_FILE"
+  [ "$status" -ne 0 ]
+}
+
+@test "qmd_write_state 3-arg form carries forward the prior pending value" {
+  qmd_write_state "$QMD_INDEX_STATE_FILE" "HASHA" "partial" 700
+  qmd_write_state "$QMD_INDEX_STATE_FILE" "HASHA" "error"
+  run jq -r '.pending' "$QMD_INDEX_STATE_FILE"
+  [ "$output" = "700" ]
+}
+
+@test "qmd_write_state indexed status always pairs with pending=0" {
+  qmd_write_state "$QMD_INDEX_STATE_FILE" "HASHA" "indexed" 0
+  run jq -r '.pending' "$QMD_INDEX_STATE_FILE"
+  [ "$output" = "0" ]
 }
