@@ -107,9 +107,11 @@ intent-preserved P2, US3 documented-seam P3) per spec.md.
     `update` call dropped → reindex test red at `grep -q "update"`; (c)
     `.mcp.json` qmd command mutated → regenerate test red at the command
     assertion. All three restored via `git checkout --`.
-- [ ] T012 On merge: update `CLAUDE.md` SPECKIT block — 019 to MERGED with
+- [X] T012 On merge: update `CLAUDE.md` SPECKIT block — 019 to MERGED with
   PR/SHA, fold into the prior-features list (do NOT commit
   `.claude/settings.json`).
+  - DONE 2026-07-12: PR #74, merge `2bf984b`; CLAUDE.md SPECKIT flipped to MERGED with the
+    977/0 gate result.
 
 ## Dependencies & Execution Order
 

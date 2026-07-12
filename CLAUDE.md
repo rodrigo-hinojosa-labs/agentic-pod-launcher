@@ -130,8 +130,8 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3`. Already-p
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
-**019-fix-qmd-test-drift ACTIVE** (branch `019-fix-qmd-test-drift` APILADA sobre
-`018-qmd-embed-completion`=`98ac058`, 2026-07-12; rebase sobre main al mergear PR #73). Plan:
+**019-fix-qmd-test-drift MERGED** (PR #74, merge `2bf984b`, 2026-07-12; rebasada sobre el squash de
+018 antes del merge — historia lineal). Plan:
 `specs/019-fix-qmd-test-drift/plan.md`. Cierra las 7 fallas PREEXISTENTES de la suite host (drift de
 016): `tests/qmd-index.bats` (2) y `tests/qmd-setup.bats` (4) stubbean un `bunx` que `_qmd_run` ya no
 invoca (post-016 ejecuta `$(_qmd_prefix)/node_modules/.bin/qmd` directo), y `tests/regenerate.bats`
@@ -141,14 +141,17 @@ gestionado (`$QMD_CACHE_HOME/pkg/node_modules/.bin/qmd`) más `.installed-hash` 
 `_qmd_manifest`/`_qmd_sha` de la propia lib más `bun` no-op en PATH para los guards; el stub de éxito
 DEBE emitir la señal de completitud 018 (`All content hashes already have embeddings` / `Pending: 0`)
 o el reindex cae en `stalled`. Contrato: `specs/019-fix-qmd-test-drift/contracts/qmd-test-seam.md`
-(seam B = override de `_qmd_run`, SOLO unit tests). regenerate: asertar backfill agent.yml (intacto)
-+ `command=/opt/agent-admin/scripts/qmd-mcp`, `args|length==0`. CERO cambios de producción
-(tests-only; sin bump de VERSION); Tier-1 de docker-e2e-qmd.bats se alinea sintácticamente con
-validación DIFERIDA al próximo DOCKER_E2E. Gate: `bats tests/` = 0 fallas sin `bun` real.
-Fase spec-kit: **plan hecho, siguiente `/speckit-tasks`.**
+(seam B = override de `_qmd_run`, SOLO unit tests). regenerate: aserta backfill agent.yml (intacto)
+más `command=/opt/agent-admin/scripts/qmd-mcp`, `args|length==0`. CERO cambios de producción
+(tests-only; sin bump de VERSION); Tier-1 de docker-e2e-qmd.bats alineado al seam con
+validación DIFERIDA al próximo DOCKER_E2E. **GATE CERRADO: `bats tests/` = 977 ok, 0 not ok
+(antes 7), 20 skips esperados; intención de cobertura verificada por mutation spot-check 3/3.**
+Fase spec-kit: **completa (12/12 tareas).**
 
-**018-qmd-embed-completion EN PR** (PR #73 ABIERTO, pendiente de merge; branch desde main=`70d8f23`,
-2026-07-10, VERSION 0.11.0→0.12.0). Plan: `specs/018-qmd-embed-completion/plan.md`. Cierra el hallazgo
+**018-qmd-embed-completion MERGED** (PR #73, merge `5f5a2d3`, 2026-07-12; branch desde main=`70d8f23`,
+VERSION 0.11.0→0.12.0). **Gate confirmatorio ferrari AÚN ABIERTO (corpus 2423 completo vía cron +
+hit semántico, SC-006) + DOCKER_E2E Tier-2 (`pending→0`) — ambos ocurren en el despliegue de
+v0.12.0.** Plan: `specs/018-qmd-embed-completion/plan.md`. Cierra el hallazgo
 del gate confirmatorio de 017: `qmd embed` tiene un cap HARDCODEADO de 30min/sesión (`store.js:1377`
 `maxDuration: 30*60*1000`, no configurable por env) → un embed grande de primera vez corta a
 ~859/2423 chunks ("LLM session expired") y el cron NO reanuda (guard `vault unchanged → skip embed`).
@@ -161,8 +164,11 @@ completar/stall/cap; el guard REANUDA si quedan pendientes (`pending>0` o descon
 `scripts/lib`↔`docker/scripts/lib` → DOCKER_E2E OBLIGATORIO. Gates: bats host (loop/guard/stall
 stubbeados) + DOCKER_E2E (`pending→0`) + ferrari (corpus 2423 completo + hit semántico limpio, SC-006).
 Artifacts: `specs/018-qmd-embed-completion/{spec,plan,research,data-model,quickstart}.md` +
-`contracts/{embed-completion,reindex-state}.md`. Fase spec-kit: **plan hecho, siguiente
-`/speckit-tasks`.**
+`contracts/{embed-completion,reindex-state}.md`. Implementación validada: 13 tests nuevos
+(qmd-embed-completion.bats) + 5 de `pending` en qmd-index.bats + sanity check en contenedor
+Alpine/musl real (las 3 funciones nuevas correctas bajo busybox); las 7 fallas restantes de la
+suite en ese momento eran drift preexistente de 016 → cerradas por 019 (suite 977/0 tras ambos
+merges). Fase spec-kit: **completa (17/18 tareas + T018 al merge, hecho).**
 
 **017-qmd-sqlite-vec-musl MERGED** (PR #72, merge `70d8f23`, 2026-07-10, VERSION 0.11.0). Plan:
 `specs/017-qmd-sqlite-vec-musl/plan.md`. **El DOCKER_E2E de 016 se CORRIÓ
