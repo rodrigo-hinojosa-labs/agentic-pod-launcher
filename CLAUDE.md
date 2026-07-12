@@ -130,7 +130,24 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3`. Already-p
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
-**018-qmd-embed-completion ACTIVE** (branch `018-qmd-embed-completion` desde main=`70d8f23`,
+**019-fix-qmd-test-drift ACTIVE** (branch `019-fix-qmd-test-drift` APILADA sobre
+`018-qmd-embed-completion`=`98ac058`, 2026-07-12; rebase sobre main al mergear PR #73). Plan:
+`specs/019-fix-qmd-test-drift/plan.md`. Cierra las 7 fallas PREEXISTENTES de la suite host (drift de
+016): `tests/qmd-index.bats` (2) y `tests/qmd-setup.bats` (4) stubbean un `bunx` que `_qmd_run` ya no
+invoca (post-016 ejecuta `$(_qmd_prefix)/node_modules/.bin/qmd` directo), y `tests/regenerate.bats`
+(1) asume el shape pre-T036 de `.mcp.json` (`args[0]=@tobilu/qmd@…`) retirado por
+`{{QMD_MCP_COMMAND}}`+`args:[]`. Fix: **seam canónico A** — binario `qmd` falso DENTRO del prefijo
+gestionado (`$QMD_CACHE_HOME/pkg/node_modules/.bin/qmd`) más `.installed-hash` pre-sembrado vía
+`_qmd_manifest`/`_qmd_sha` de la propia lib más `bun` no-op en PATH para los guards; el stub de éxito
+DEBE emitir la señal de completitud 018 (`All content hashes already have embeddings` / `Pending: 0`)
+o el reindex cae en `stalled`. Contrato: `specs/019-fix-qmd-test-drift/contracts/qmd-test-seam.md`
+(seam B = override de `_qmd_run`, SOLO unit tests). regenerate: asertar backfill agent.yml (intacto)
++ `command=/opt/agent-admin/scripts/qmd-mcp`, `args|length==0`. CERO cambios de producción
+(tests-only; sin bump de VERSION); Tier-1 de docker-e2e-qmd.bats se alinea sintácticamente con
+validación DIFERIDA al próximo DOCKER_E2E. Gate: `bats tests/` = 0 fallas sin `bun` real.
+Fase spec-kit: **plan hecho, siguiente `/speckit-tasks`.**
+
+**018-qmd-embed-completion EN PR** (PR #73 ABIERTO, pendiente de merge; branch desde main=`70d8f23`,
 2026-07-10, VERSION 0.11.0→0.12.0). Plan: `specs/018-qmd-embed-completion/plan.md`. Cierra el hallazgo
 del gate confirmatorio de 017: `qmd embed` tiene un cap HARDCODEADO de 30min/sesión (`store.js:1377`
 `maxDuration: 30*60*1000`, no configurable por env) → un embed grande de primera vez corta a

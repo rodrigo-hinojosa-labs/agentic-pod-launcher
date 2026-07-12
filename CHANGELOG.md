@@ -3,6 +3,29 @@
 ## [Unreleased]
 
 ### Fixed
+- **Host test suite restored to 0 failures — post-016 QMD test drift repaired
+  (`019-fix-qmd-test-drift`)**: 7 host tests had failed permanently since 016 replaced
+  `bunx` with the managed `bun install` prefix — their stubs planted a `bunx` binary
+  nothing executes (`tests/qmd-index.bats` ×2, `tests/qmd-setup.bats` ×4), and one
+  `tests/regenerate.bats` assertion still expected the pre-T036 `.mcp.json` shape
+  (`args[0]=@tobilu/qmd@…`) that the per-mode wrapper contract retired. A permanently
+  red suite masks real regressions and forced release gates to hand-triage the output.
+  Test-only change — no production behavior, templates, or libraries touched; no
+  VERSION bump.
+  - **Canonical engine seam.** New shared helpers
+    (`tests/helper.bash::install_qmd_stub{,_fail}`) plant a fake `qmd` binary inside
+    the managed prefix with a pre-seeded `.installed-hash` (derived via the lib's own
+    `_qmd_manifest`/`_qmd_sha`) plus a no-op `bun` for the guards — exercising the real
+    `_qmd_run`/`_qmd_ensure_prefix` skip path. Contract + anti-patterns documented in
+    `specs/019-fix-qmd-test-drift/contracts/qmd-test-seam.md`.
+  - **018-aware repair.** The success stub emits the completion signal ("All content
+    hashes already have embeddings" / `Pending: 0`) so the multi-pass embed loop lands
+    `indexed`/`pending=0` — a naive re-stub would now end `stalled`.
+  - **Coverage intent preserved.** All 7 repaired tests keep their original
+    assertions (update+embed ordering, error-with-hash-preserved, sentinel lifecycle,
+    version-pin backfill), verified by mutation spot-checks (3/3 deliberate breakages
+    detected). The gated `docker-e2e-qmd.bats` Tier-1 stub was aligned to the same
+    seam, with validation deferred to the next `DOCKER_E2E=1` run.
 - **qmd embed completes on large vaults despite the 30-minute engine session cap
   (`018-qmd-embed-completion`)**: the 017 confirmatory gate on ferrari (a ~2,423-chunk
   vault) revealed that a single `qmd embed` invocation stops partway — qmd's own

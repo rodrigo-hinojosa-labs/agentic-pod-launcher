@@ -1,7 +1,13 @@
 #!/usr/bin/env bats
 # US2 (010-self-managing-rag): qmd_reindex is hash-debounced (skips embed when
 # the vault is unchanged), runs update+embed when it changed, and is
-# flock-guarded against concurrent runs. Host-side, no Docker — `bunx` stubbed.
+# flock-guarded against concurrent runs. Host-side, no Docker.
+#
+# Engine seam (019, post-016 contract): _qmd_run executes
+# $(_qmd_prefix)/node_modules/.bin/qmd directly — a PATH `bunx` stub is dead
+# code. Tests stub via helper.bash::install_qmd_stub{,_fail} (fake engine
+# binary in the managed prefix + pre-seeded .installed-hash + no-op `bun` for
+# the guards). See specs/019-fix-qmd-test-drift/contracts/qmd-test-seam.md.
 
 load helper
 
@@ -12,7 +18,7 @@ setup() {
   export QMD_VAULT_DIR="$TMP_TEST_DIR/vault"; mkdir -p "$QMD_VAULT_DIR"
   printf '# note\nhello\n' > "$QMD_VAULT_DIR/a.md"
   export QMD_INDEX_STATE_FILE="$TMP_TEST_DIR/qmd-index.json"
-  export QMD_STUB_LOG="$TMP_TEST_DIR/bunx.log"; : > "$QMD_STUB_LOG"
+  export QMD_STUB_LOG="$TMP_TEST_DIR/engine.log"; : > "$QMD_STUB_LOG"
   mkdir -p "$TMP_TEST_DIR/bin"
   AGENT_YML="$TMP_TEST_DIR/agent.yml"
   cat > "$AGENT_YML" <<YAML
@@ -28,31 +34,11 @@ YAML
 
 teardown() { teardown_tmp_dir; }
 
-_install_bunx() {
-  cat > "$TMP_TEST_DIR/bin/bunx" <<EOF
-#!/bin/sh
-echo "\$@" >> "$QMD_STUB_LOG"
-exit 0
-EOF
-  chmod +x "$TMP_TEST_DIR/bin/bunx"
-  export PATH="$TMP_TEST_DIR/bin:$PATH"
-}
-
-_install_bunx_fail() {
-  cat > "$TMP_TEST_DIR/bin/bunx" <<EOF
-#!/bin/sh
-echo "\$@" >> "$QMD_STUB_LOG"
-exit 1
-EOF
-  chmod +x "$TMP_TEST_DIR/bin/bunx"
-  export PATH="$TMP_TEST_DIR/bin:$PATH"
-}
-
 @test "qmd_reindex skips embed when the vault is unchanged AND fully embedded" {
   # 018/FR-004: "unchanged" alone is no longer sufficient to skip — it must
   # ALSO be fully embedded (pending=0), or a large first-time embed that hit
   # the session cap would never resume (see contracts/embed-completion.md).
-  _install_bunx
+  install_qmd_stub
   local h; h=$(vault_hash "$QMD_VAULT_DIR")
   qmd_write_state "$QMD_INDEX_STATE_FILE" "$h" "indexed" 0
   : > "$QMD_STUB_LOG"
@@ -64,21 +50,25 @@ EOF
 }
 
 @test "qmd_reindex runs update+embed and records indexed when the vault changed" {
-  _install_bunx
+  install_qmd_stub
   qmd_write_state "$QMD_INDEX_STATE_FILE" "STALEHASH" "indexed"
   : > "$QMD_STUB_LOG"
   run qmd_reindex "$AGENT_YML"
   [ "$status" -eq 0 ]
   grep -q "update" "$QMD_STUB_LOG"
   grep -q "embed" "$QMD_STUB_LOG"
+  # The stub emits the 018 completion signal on `embed`, so the multi-pass
+  # loop finishes in one pass: indexed + pending=0 (018 schema).
   run jq -r '.last_status' "$QMD_INDEX_STATE_FILE"
   [ "$output" = "indexed" ]
+  run jq -r '.pending' "$QMD_INDEX_STATE_FILE"
+  [ "$output" = "0" ]
   run jq -r '.hash' "$QMD_INDEX_STATE_FILE"
   [ "$output" != "STALEHASH" ]
 }
 
 @test "qmd_reindex increments runs and writes a well-formed state file" {
-  _install_bunx
+  install_qmd_stub
   run qmd_reindex "$AGENT_YML"
   [ "$status" -eq 0 ]
   run jq -r '.runs' "$QMD_INDEX_STATE_FILE"
@@ -87,8 +77,8 @@ EOF
   [ "$status" -eq 0 ]
 }
 
-@test "qmd_reindex records last_status=error and preserves the prior hash on bunx failure" {
-  _install_bunx_fail
+@test "qmd_reindex records last_status=error and preserves the prior hash on engine failure" {
+  install_qmd_stub_fail
   qmd_write_state "$QMD_INDEX_STATE_FILE" "STALEHASH" "indexed"
   : > "$QMD_STUB_LOG"
   run qmd_reindex "$AGENT_YML"
@@ -102,7 +92,7 @@ EOF
 }
 
 @test "qmd_reindex is a no-op when vault.qmd.enabled=false" {
-  _install_bunx
+  install_qmd_stub
   yq -i '.vault.qmd.enabled = false' "$AGENT_YML"
   : > "$QMD_STUB_LOG"
   run qmd_reindex "$AGENT_YML"
@@ -116,7 +106,7 @@ EOF
 # `ok ... # skip` here is NOT concurrency coverage — that lives in CI/e2e.
 @test "qmd_reindex skips when the reindex lock is already held" {
   command -v flock >/dev/null 2>&1 || skip "flock not available on host (covered in Linux CI + container)"
-  _install_bunx
+  install_qmd_stub
   qmd_write_state "$QMD_INDEX_STATE_FILE" "STALEHASH" "indexed"
   flock -x "$QMD_CACHE_HOME/.reindex.lock" -c "sleep 5" &
   local holder=$!

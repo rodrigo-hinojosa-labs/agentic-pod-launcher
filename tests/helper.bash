@@ -31,6 +31,58 @@ load_lib() {
   source "$lib"
 }
 
+# ── Canonical QMD engine seam (019) ─────────────────────────────────────────
+# Post-016, _qmd_run executes $(_qmd_prefix)/node_modules/.bin/qmd DIRECTLY —
+# a PATH-level `bunx` stub is dead code. These helpers plant a fake engine
+# binary inside the managed prefix, pre-seed .installed-hash via the lib's own
+# _qmd_manifest/_qmd_sha (so _qmd_ensure_prefix takes its skip path, never
+# `bun install`), and drop a no-op `bun` on PATH for the `command -v bun`
+# guards. Callers must have sourced scripts/lib/qmd_index.sh and exported
+# QMD_CACHE_HOME + QMD_STUB_LOG first.
+# Contract: specs/019-fix-qmd-test-drift/contracts/qmd-test-seam.md
+#
+# _qmd_stub_prefix_seed VER — shared layout (manifest + hash + dirs).
+_qmd_stub_prefix_seed() {
+  local ver="${1:-2.5.3}" prefix="$QMD_CACHE_HOME/pkg"
+  mkdir -p "$prefix/node_modules/.bin" "$TMP_TEST_DIR/bin"
+  printf '%s' "$(_qmd_manifest "$ver")" > "$prefix/package.json"
+  printf '%s' "$(_qmd_manifest "$ver")" | _qmd_sha > "$prefix/.installed-hash"
+  printf '#!/bin/sh\nexit 0\n' > "$TMP_TEST_DIR/bin/bun"
+  chmod +x "$TMP_TEST_DIR/bin/bun"
+  export PATH="$TMP_TEST_DIR/bin:$PATH"
+}
+
+# install_qmd_stub [VER] — success engine: logs each invocation ("$@" = qmd
+# subcommands, no package-spec prefix), fakes index.sqlite on `collection`,
+# and emits the 018 completion signal on `embed`/`status` so
+# _qmd_embed_until_complete finishes in one pass (indexed, pending=0).
+install_qmd_stub() {
+  _qmd_stub_prefix_seed "${1:-2.5.3}"
+  cat > "$QMD_CACHE_HOME/pkg/node_modules/.bin/qmd" <<EOF
+#!/bin/sh
+echo "\$@" >> "$QMD_STUB_LOG"
+case "\$1" in
+  collection) mkdir -p "$QMD_CACHE_HOME"; : > "$QMD_CACHE_HOME/index.sqlite" ;;
+  embed)  echo "✓ All content hashes already have embeddings" ;;
+  status) echo "Pending: 0 need embedding" ;;
+esac
+exit 0
+EOF
+  chmod +x "$QMD_CACHE_HOME/pkg/node_modules/.bin/qmd"
+}
+
+# install_qmd_stub_fail [VER] — failing engine: same layout, exits 1 on every
+# subcommand, no completion output (drives the fail-silent/error paths).
+install_qmd_stub_fail() {
+  _qmd_stub_prefix_seed "${1:-2.5.3}"
+  cat > "$QMD_CACHE_HOME/pkg/node_modules/.bin/qmd" <<EOF
+#!/bin/sh
+echo "\$@" >> "$QMD_STUB_LOG"
+exit 1
+EOF
+  chmod +x "$QMD_CACHE_HOME/pkg/node_modules/.bin/qmd"
+}
+
 # wizard_answers — emit canonical wizard responses for the common path.
 #
 # Pipes one answer per line in the order setup.sh asks them. Caller pipes
