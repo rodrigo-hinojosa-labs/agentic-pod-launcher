@@ -3,6 +3,32 @@
 ## [Unreleased]
 
 ### Fixed
+- **qmd embed completes on large vaults despite the 30-minute engine session cap
+  (`018-qmd-embed-completion`)**: the 017 confirmatory gate on ferrari (a ~2,423-chunk
+  vault) revealed that a single `qmd embed` invocation stops partway — qmd's own
+  embedding session hard-caps at 30 minutes (`store.js:1377`, not configurable), and
+  the scheduled reindex never resumed the shortfall because its "vault unchanged" guard
+  skipped embedding unconditionally. The vector index silently ended up covering a
+  fraction of the vault, degrading every semantic search. **VERSION 0.11.0 → 0.12.0.**
+  Root cause and fix verified live on ferrari during authoring (manual multi-pass loop
+  embedded 1127 + 1116 chunks across sessions, growing the index 72.9MB → 87MB+) before
+  being codified here.
+  - **Loop around the engine, never patch it.** `qmd_index.sh::_qmd_embed_until_complete`
+    re-invokes `qmd embed` in successive fresh sessions — inside ONE
+    `_qmd_reindex_locked` call — until qmd reports full coverage ("All content hashes
+    already have embeddings" / `qmd status` pending=0), a pass makes no forward
+    progress (permanently-failing documents → `stalled`), or a fixed internal
+    `QMD_EMBED_MAX_PASSES` (12) is hit (`partial`). Never modifies the qmd engine
+    itself.
+  - **Resumable unchanged-vault guard.** `_qmd_reindex_locked` now also reads the
+    persisted `pending` count: an unchanged vault only skips embedding when it is ALSO
+    fully embedded (`pending==0`); otherwise (pending>0, or unknown/pre-018 state) it
+    resumes embedding without re-running `update`.
+  - **Extended state file.** `qmd_write_state` gains an optional `pending` argument
+    (backward-compatible: 3-arg callers carry the prior value forward, including its
+    absence); `last_status` gains `partial`/`stalled` alongside the existing
+    `indexed`/`skipped`/`error`.
+  - Verified under the real Alpine/musl/busybox runtime (mirrored `docker/scripts/lib/qmd_index.sh`, jq/mktemp/date behavior) via a throwaway scaffold + container, in addition to the host bats suite; the multi-thousand-chunk multi-pass hardware confirmation is the ferrari gate.
 - **qmd semantic embed on Alpine musl — the third native module (`017-qmd-sqlite-vec-musl`)**:
   running 016's DOCKER_E2E revealed that 016 did NOT close the semantic embed on musl —
   it fixed install + lexical + node-llama-cpp, but `qmd embed` still failed because
