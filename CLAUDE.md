@@ -8,7 +8,7 @@ This is **the launcher**, not an agent. `./setup.sh` is a bash wizard that scaff
 
 Three distinct code paths live in this repo, and confusing them is the most common mistake:
 
-1. **Host-side launcher** — `setup.sh`, `scripts/lib/{yaml,render,wizard,wizard-gum}.sh`, `modules/*.tpl`. Runs on the user's Mac/Linux during scaffolding. Depends on host tools: `bash 4+`, `yq v4+`, `jq`, `git`, BSD/GNU `sed`, optional `gum` (auto-downloaded to `scripts/vendor/bin/`).
+1. **Host-side launcher** — `setup.sh`, `scripts/lib/{yaml,render,wizard,wizard-gum}.sh`, `modules/*.tpl`. Runs on the user's Mac/Linux during scaffolding. Depends on host tools: `bash` (no version floor — no bash-4-only construct and no `BASH_VERSINFO` gate anywhere; the suite runs on macOS's stock 3.2), `yq v4+`, `jq`, `git`, BSD/GNU `sed`, optional `gum` (auto-downloaded to `scripts/vendor/bin/`).
 2. **Image-baked code** — `docker/` (Dockerfile, `entrypoint.sh`, `crontab.tpl`, `scripts/start_services.sh`, `scripts/wizard-container.sh`, `scripts/heartbeatctl`, `scripts/lib/{interval,state}.sh`, `scripts/apply_telegram_typing_patch.py`). Copied into the Alpine 3.20 image at build time, lives at `/opt/agent-admin/` inside containers. Read-only at runtime — changes require an image rebuild.
 3. **Workspace-templated code** — `scripts/heartbeat/{heartbeat.sh,notifiers/}`. Copied verbatim into each scaffolded workspace by `setup.sh`. Runs as `agent` inside the container via the bind-mount.
 
@@ -112,12 +112,14 @@ Three things to remember when touching the backup code:
 
 `docker/scripts/apply_telegram_typing_patch.py` is re-applied on every boot by `start_services.sh::apply_plugin_patches` against the plugin copy in `~/.claude/plugins/cache/claude-plugins-official/telegram/*/server.ts`. Idempotent via marker comments (one per patch group: typing, offset, stderr, primary), fail-silent if any of the anchor regexes drift. Don't move the patch invocation out of the boot path — the plugin cache lives under `.state/` which means a workspace clone receives an unpatched plugin until the next boot.
 
-The typing patch is currently at **v3** — same runtime contract as v2 (no time cap; the indicator persists until `case 'reply'` fires or the bun process exits) plus observability:
+The typing patch is at **v4 (anti-zombie)** — `MARKER_TYPING = "…typing refresh patch v4"` (`apply_telegram_typing_patch.py:61`). The runtime contract changed at v4: the indicator is **capped**, it no longer persists indefinitely.
 
-- The setInterval logs `telegram channel: typing tick N for chat <id>` to stderr every 5 invocations (~20s). The stderr-capture patch tees this to `/workspace/scripts/heartbeat/logs/telegram-mcp-stderr.log`, so a quiet log during a long Claude turn is direct evidence of a runtime issue.
-- `bot.api.sendChatAction(...).catch(() => {})` was the v1/v2 anti-pattern that silently swallowed every Telegram error (rate limit, network, expired token). v3 routes the error through `process.stderr.write(...)` so it's visible in the same log.
+- **Cap (v4).** `_TYPING_MAX_DURATION_MS` = `TELEGRAM_TYPING_MAX_MS` if it parses to a positive int, else **300000 (5 min)** (`:118-122`). When `elapsed` exceeds it, the keep-alive calls `_typingStop`, sends the chat a user-facing warning ("Tardé más de N min… es probable que el OAuth de Claude haya expirado… revisa `agentctl doctor`"), writes `telegram channel: typing aborted after Nm (T ticks)` to stderr, and returns (`:132-146`). The motivating failure was zombie typing: with v3, an agent blocked on `/login` left the bot "thinking" for hours.
+- **Observability (from v3, retained).** The setInterval logs `telegram channel: typing tick N for chat <id>` to stderr every 5 invocations (~20s), teed by the stderr-capture patch to `/workspace/scripts/heartbeat/logs/telegram-mcp-stderr.log` — a quiet log during a long Claude turn is direct evidence of a runtime issue. `bot.api.sendChatAction(...).catch(() => {})` was the v1/v2 anti-pattern that silently swallowed every Telegram error; v3+ routes it through `process.stderr.write(...)`.
 
-The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3`. Already-patched agents at any version ratchet up transparently — `upgrade_typing_v1_to_v2` strips the cap and bumps the marker; `upgrade_typing_v2_to_v3` rewrites the helper block with instrumentation. Both upgraders are fail-silent if helpers were edited out-of-band (logs WARN; leaves the file at the highest matching version).
+The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:668-670`). Already-patched agents at any version ratchet up transparently — `upgrade_typing_v1_to_v2` strips the old 120s cap, `upgrade_typing_v2_to_v3` adds instrumentation, `upgrade_typing_v3_to_v4` rewrites the helper with the duration cap + warning. All upgraders are fail-silent if helpers were edited out-of-band (logs WARN; leaves the file at the highest matching version).
+
+**Implication for long operations**: any turn that legitimately exceeds ~5 minutes (a big embed, a wiki-graph pass over a large vault) will drop the indicator and warn the chat. That's the intended trade-off — a false "I'm stuck" beats an indefinite lie. Raise `TELEGRAM_TYPING_MAX_MS` in the workspace `.env` if an agent's normal turns run longer.
 
 ## Common gotchas
 
@@ -130,25 +132,47 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3`. Already-p
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
-**020-docs-refresh ACTIVE** (branch `020-docs-refresh` desde main=`33bfb74` v0.12.0, 2026-07-12;
-docs-only, SIN bump de VERSION). Plan: `specs/020-docs-refresh/plan.md`. Alcance CERRADO: 13 docs
-(README + agentic-quickstart.{es,en} + 8 guías docs/ + 3 templates de docs modules/{next-steps.en,
-next-steps.es,claude-md}.tpl); EXCLUIDOS CLAUDE.md, CHANGELOG (salvo nota), specs/, docs/superpowers/.
-Fase 0 (workflow `wf_a96ac163-11f`, 16 agentes, 475 verificaciones): **121 hallazgos** (33 false, 46
-stale, 41 needs-qualifier, 1 unverified) en `drift-audit.md` (oráculo SC-001) + orden canónico de 52
-prompts del wizard en `wizard-prompt-order.md` (oráculo SC-002; fuente wizard_answers()) + coverage-map
-de 25 subsistemas 011-019 (8 SIN documentar: `agent-bootstrap`, `resolve_claude_bin`,
-`_libc_variant`, `rag_obs`/TMPDIR, wrapper MCP qmd, sqlite-vec/vec0, embed multi-pasada 018, seam
-019). Peores: vault.md
-(sección QMD pre-010 con bunx manual + shape retirado de .mcp.json), adding-an-mcp.md (6 false/6 high),
-claude-md.tpl (4 high), architecture.md:279 ("invoked via bunx"), README (docker-only + consejo falso
-RESTORE_IDENTITY_KEY env — solo existe el flag --identity-key). Estrategia R2: REBUILD quickstarts
-(sobre el orden canónico) + state-layout + secciones qmd de vault + framing de README; QUIRÚRGICO el
-resto. Reglas: contracts/doc-update-contract.md (re-verificar TODO al escribir aunque la tabla traiga
-evidencia; per-mode qualifiers; "as of v0.12.0" en hechos que envejecen; fixes de template CON su
-aserción de test en el mismo commit). HALLAZGO fuera de alcance registrado: el typing patch está en
-**v4** (cap 5min TELEGRAM_TYPING_MAX_MS + warning al chat) — este CLAUDE.md aún dice v3; corregir en
-su próximo mantenimiento. Fase spec-kit: **plan hecho, siguiente `/speckit-tasks`.**
+**020-docs-refresh MERGED** (PR #76, merge `336f559`, 2026-07-13; docs-only, VERSION sigue 0.12.0).
+Plan: `specs/020-docs-refresh/plan.md`. Puso los 14 docs en alcance (README, agentic-quickstart.{es,en},
+las 8 guías de docs/ y los 3 templates de docs modules/{next-steps.en,next-steps.es,claude-md}.tpl) al
+día con la realidad del código. Fase 0 (workflow de 16 agentes, 475 verificaciones): **121 hallazgos** (33
+false, 46 stale, 41 needs-qualifier, 1 unverified) en `drift-audit.md` (oráculo SC-001) + orden canónico
+de 52 prompts del wizard en `wizard-prompt-order.md` (oráculo SC-002; fuente `wizard_answers()`) +
+coverage-map de 25 subsistemas 011-019 (8 SIN documentar). Los peores eran: README (framing docker-only,
+más el consejo FALSO `RESTORE_IDENTITY_KEY` env — solo existe el flag `--identity-key`), los dos quickstarts
+(anteriores al prompt de deployment mode → reconstruidos sobre los 52 prompts), vault.md (sección QMD
+pre-010: bunx manual + shape retirado de `.mcp.json`), adding-an-mcp.md, claude-md.tpl y
+architecture.md:279 ("invoked via bunx").
+
+**La lección del cierre — la pasada adversarial es obligatoria en features de docs.** Los escritores
+cerraron los 121 hallazgos, pero un verificador por doc (instrucción: *refutar* al escritor releyendo el
+código) cazó **14 errores nuevos** introducidos o arrastrados AL REESCRIBIR: el TMPDIR del wiki-graph NO
+está bajo `.state` (es `<workspace>/scripts/heartbeat/tmp`, `wiki_graph.sh:310`); `/opt/npm-cache` es del
+UID del agente, no de root (`Dockerfile:211`); rotar el token de Telegram NO se arregla con restart
+(`ensure_channel_env_synced` early-returnea si la key ya existe, `start_services.sh:413`); `heartbeatctl`
+NO regenera "todos los derivados", solo `heartbeat.conf` + crontab; el pin de MCPVault se single-sourcea
+en `versions.sh:46` (dos drift-guards en bats), no en el template; un scaffold con fork deshabilitado SÍ
+deja rama local `<agent>/live` (`setup.sh:1869-1881`); `NEXT_STEPS.md` NO lo refresca ningún
+`--regenerate` (único call site: `setup.sh:1255`, dentro de `run_wizard`). Sin esa pasada se mergeaban.
+Gates: SC-001 121/121 sin sobrevivientes, SC-005 `bats tests/` 977 ok / 0 not ok (baseline intacto; NINGÚN
+string grepeado por tests cambió), SC-006 0 enlaces muertos.
+
+**DOS HALLAZGOS DE CÓDIGO registrados en `specs/020-docs-refresh/research.md` (R5), NO arreglados —
+candidatos a feature propia:**
+1. **Modo local: ningún artefacto renderizado carga el `.env` del workspace en la sesión systemd.** La
+   única `EnvironmentFile` de las units es `systemd-remote-control.service.tpl:12` →
+   `.state/remote-control.env`, que define 4 claves (`CLAUDE_CONFIG_DIR`, `DISABLE_AUTOUPDATER`, `HOME`,
+   `PATH`). Pero `mcp-json.tpl` pasa TODOS los secretos del catálogo por expansión `${VAR}`
+   (`FIRECRAWL_API_KEY`:27, los seis `ATLASSIAN_*`:53-58, `GITHUB_PAT`:65, `AWS_*`:41-42). En docker
+   resuelven vía `env_file` de compose (`docker-compose.yml.tpl:67`); **en local expanden a vacío** → un
+   MCP opcional con `requires_secret: true` arranca sin credencial. El fix aparente
+   (`EnvironmentFile=-<workspace>/.env`) exige su propio threat-model: el `.env` es `0600` y la unit corre
+   como el operador.
+2. **El piso de `bash 4+` NO lo exige el código** (ni un constructo bash-4-only —`declare -A`, `mapfile`,
+   `local -n`, `${x,,}`, `coproc`— ni un gate de `BASH_VERSINFO`; la suite corre en macOS con bash 3.2 de
+   stock). Corregido en el README y en el punto 1 de este archivo (que lo declaraba mal).
+
+Fase spec-kit: **completa (19/19 tareas + T019 al merge, hecho).**
 
 **019-fix-qmd-test-drift MERGED** (PR #74, merge `2bf984b`, 2026-07-12; rebasada sobre el squash de
 018 antes del merge — historia lineal). Plan:
