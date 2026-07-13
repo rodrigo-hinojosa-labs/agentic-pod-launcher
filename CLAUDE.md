@@ -130,6 +130,26 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3`. Already-p
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
+**020-docs-refresh ACTIVE** (branch `020-docs-refresh` desde main=`33bfb74` v0.12.0, 2026-07-12;
+docs-only, SIN bump de VERSION). Plan: `specs/020-docs-refresh/plan.md`. Alcance CERRADO: 13 docs
+(README + agentic-quickstart.{es,en} + 8 guías docs/ + 3 templates de docs modules/{next-steps.en,
+next-steps.es,claude-md}.tpl); EXCLUIDOS CLAUDE.md, CHANGELOG (salvo nota), specs/, docs/superpowers/.
+Fase 0 (workflow `wf_a96ac163-11f`, 16 agentes, 475 verificaciones): **121 hallazgos** (33 false, 46
+stale, 41 needs-qualifier, 1 unverified) en `drift-audit.md` (oráculo SC-001) + orden canónico de 52
+prompts del wizard en `wizard-prompt-order.md` (oráculo SC-002; fuente wizard_answers()) + coverage-map
+de 25 subsistemas 011-019 (8 SIN documentar: `agent-bootstrap`, `resolve_claude_bin`,
+`_libc_variant`, `rag_obs`/TMPDIR, wrapper MCP qmd, sqlite-vec/vec0, embed multi-pasada 018, seam
+019). Peores: vault.md
+(sección QMD pre-010 con bunx manual + shape retirado de .mcp.json), adding-an-mcp.md (6 false/6 high),
+claude-md.tpl (4 high), architecture.md:279 ("invoked via bunx"), README (docker-only + consejo falso
+RESTORE_IDENTITY_KEY env — solo existe el flag --identity-key). Estrategia R2: REBUILD quickstarts
+(sobre el orden canónico) + state-layout + secciones qmd de vault + framing de README; QUIRÚRGICO el
+resto. Reglas: contracts/doc-update-contract.md (re-verificar TODO al escribir aunque la tabla traiga
+evidencia; per-mode qualifiers; "as of v0.12.0" en hechos que envejecen; fixes de template CON su
+aserción de test en el mismo commit). HALLAZGO fuera de alcance registrado: el typing patch está en
+**v4** (cap 5min TELEGRAM_TYPING_MAX_MS + warning al chat) — este CLAUDE.md aún dice v3; corregir en
+su próximo mantenimiento. Fase spec-kit: **plan hecho, siguiente `/speckit-tasks`.**
+
 **019-fix-qmd-test-drift MERGED** (PR #74, merge `2bf984b`, 2026-07-12; rebasada sobre el squash de
 018 antes del merge — historia lineal). Plan:
 `specs/019-fix-qmd-test-drift/plan.md`. Cierra las 7 fallas PREEXISTENTES de la suite host (drift de
