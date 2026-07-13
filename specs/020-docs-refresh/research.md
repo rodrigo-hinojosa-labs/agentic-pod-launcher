@@ -81,9 +81,40 @@ render fixtures) so no assertion drifts silently (the 016-era lesson).
    `docker/scripts/apply_telegram_typing_patch.py:61,112-150`. The repo's
    own `CLAUDE.md` still describes v3; `CLAUDE.md` is out of scope here
    (maintained by its own process) — flagged for its next maintenance pass.
-2. No code-is-wrong findings surfaced: every mismatch audited resolved to
-   doc drift (FR-008's escape hatch was not needed so far; implement keeps
-   it open).
+2. **Local mode never loads the workspace `.env` into the agent session — so
+   catalog-MCP secrets cannot resolve there** (surfaced by the `adding-an-mcp`
+   writer; verified independently at implement time). `modules/mcp-json.tpl`
+   passes every catalog secret by shell expansion — `"FIRECRAWL_API_KEY":
+   "${FIRECRAWL_API_KEY}"` (:27), the six `${ATLASSIAN_*}` (:53-58),
+   `"GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PAT}"` (:65), `${AWS_*}` (:41-42).
+   In **docker** those resolve because `modules/docker-compose.yml.tpl:67` mounts
+   the workspace `.env` via `env_file`. In **local** mode there is no equivalent:
+   the only `EnvironmentFile` in the rendered units is
+   `modules/systemd-remote-control.service.tpl:12` →
+   `<workspace>/.state/remote-control.env`, and that file
+   (`modules/remote-control.env.tpl`) defines exactly four keys —
+   `CLAUDE_CONFIG_DIR`, `DISABLE_AUTOUPDATER`, `HOME`, `PATH`. No rendered local
+   artifact sources `<workspace>/.env`. Consequence: an operator who enables an
+   optional MCP with `requires_secret: true` in local mode fills `.env` as the
+   wizard instructs, and the variable expands to the empty string at MCP start.
+   **This is a CODE gap, not doc drift** — out of scope for 020 (docs-only,
+   FR-008). Candidate for its own feature; the fix is presumably an
+   `EnvironmentFile=-<workspace>/.env` on the session unit (the `-` prefix keeps
+   it optional), but that needs its own threat-model pass: `.env` is `0600` and
+   the unit runs as the operator, so the file's mode and the unit's `User=` have
+   to be reconciled before shipping.
+
+3. **The launcher's own `CLAUDE.md` claims a `bash 4+` host floor that the code
+   does not enforce** (surfaced by the README writer). `setup.sh` /
+   `scripts/lib/*` / `scripts/agentctl` contain no bash-4-only construct
+   (`declare -A`, `mapfile`/`readarray`, `local -n`, `${x,,}`/`${x^^}`, `coproc`)
+   and there is no `BASH_VERSINFO` gate anywhere; the suite is routinely run on a
+   macOS host with stock bash 3.2. The README now says "no bash version floor".
+   `CLAUDE.md` is out of scope here — flagged for its next maintenance pass,
+   alongside the typing-patch v3→v4 correction above.
+
+4. No other code-is-wrong findings surfaced: every remaining mismatch audited
+   resolved to doc drift.
 
 ## R6 — Verification discipline at implement time
 
