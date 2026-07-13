@@ -7,7 +7,7 @@
 ```bash
 cd {{DEPLOYMENT_WORKSPACE}}
 docker compose build
-./scripts/agentctl up                    # docker compose up -d
+./scripts/agentctl up                    # docker compose up -d (pre-crea .state/ si falta)
 ```
 
 El contenedor arranca y el supervisor lanza Claude Code dentro de una sesión tmux detached. Conéctate con `agentctl attach` — el wrapper hace retry-loop interno (15s máx) hasta que el supervisor termine de respawnear la sesión:
@@ -16,7 +16,7 @@ El contenedor arranca y el supervisor lanza Claude Code dentro de una sesión tm
 ./scripts/agentctl attach
 ```
 
-> **Nota**: `agentctl` es un wrapper host-side de `docker exec -u agent {{AGENT_NAME}} ...`. Resuelve el nombre del container desde `agent.yml` (cwd) o de la flag `-a NAME`. Subcomandos: `attach`, `logs [-f]`, `status`, `heartbeat <sub>`, `mcp [list]`, `shell [--root]`, `up`, `stop`, `restart`, `ps`, `run <cmd…>`. Equivalente raw (si prefieres tipearlo): `docker exec -it -u agent {{AGENT_NAME}} tmux attach -t agent`.
+> **Nota**: `agentctl` es un wrapper host-side de `docker exec -u agent {{AGENT_NAME}} ...`. Resuelve el nombre del container desde `agent.yml` (cwd) o de la flag `-a NAME`. Subcomandos (a la fecha de v0.12.0): `doctor`, `attach`, `logs [-f]`, `status`, `heartbeat <sub>`, `mcp [list]`, `versions [--check]`, `shell [--root]`, `up`, `start`, `stop`, `restart`, `ps`, `run <cmd…>`. Equivalente raw (si prefieres tipearlo): `docker exec -it -u agent {{AGENT_NAME}} tmux attach -t agent`.
 
 Para salir sin matar el contenedor: `Ctrl-b d` (atajo estándar de tmux).
 
@@ -27,18 +27,25 @@ Para salir sin matar el contenedor: `Ctrl-b d` (atajo estándar de tmux).
 En macOS la credencial del `/login` interactivo no persiste — la incoherencia de
 cache de VirtioFS sobre el bind-mount `~/.claude` la descarta, así que Claude
 vuelve a "Not logged in" en cada arranque. Usa un token de larga duración:
-genéralo una vez en el **host** y ponlo en `.env` ANTES de `docker compose up`.
+genéralo una vez en el **host** y ponlo en `.env` ANTES del primer `agentctl up`.
 
 ```bash
 claude setup-token            # en el HOST; autoriza OAuth, pega el código EN LA TERMINAL
 #   → imprime un token de larga duración: sk-ant-oat01-…
 $EDITOR {{DEPLOYMENT_WORKSPACE}}/.env   # define CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-…
-docker compose up -d          # el agente arranca ya autenticado — sin /login
+./scripts/agentctl up         # el agente arranca ya autenticado — sin /login
 ```
 
-El token vive solo en `.env` (0600, gitignored) — nunca en `agent.yml`. Con el
-backup de identidad en modo parcial (sin recipient SSH) el `.env` se respalda en
-texto plano al fork, así que prefiere un recipient configurado si usas token.
+El token vive solo en `.env` (0600, gitignored) — nunca en `agent.yml`. El backup
+de identidad **nunca** sube un `.env` en texto plano: con un recipient age/SSH
+configurado (modo completo) viaja cifrado como `.env.age`; sin recipient (modo
+parcial) el `.env` **queda fuera del fork por completo** — el token entonces NO
+se recupera con `./setup.sh --restore-from-fork` y hay que volver a crearlo
+después de un restore. Configura un recipient para tenerlo respaldado cifrado:
+
+```bash
+./scripts/agentctl heartbeat backup-identity --configure-key <path|pubkey>
+```
 
 ### /login interactivo (fallback)
 
@@ -82,6 +89,52 @@ Luego:
 
 Para salir sin matar la sesión: `Ctrl-b d`.
 
+## 5. Vault, índice semántico y wiki-grafo (opcional)
+
+Modo docker: todo esto corre **dentro del contenedor** por cron (no hay unidades
+systemd); cada pieza está gateada en `agent.yml` y no hace nada si está apagada.
+Defaults a la fecha de v0.12.0:
+
+| Feature | Gate en `agent.yml` | Cadencia (override) |
+|---|---|---|
+| Backup del vault → rama `backup/vault` | `vault.enabled: true` | `0 * * * *` (`vault.backup_schedule`) |
+| Índice semántico QMD (backstop de reindex) | `vault.qmd.enabled: true` | `*/5 * * * *` (`vault.qmd.schedule`) |
+| Wiki-grafo: derive + lint estructural | vault on; se apaga con `vault.wiki_graph.enabled: false` | `20 */6 * * *` (`vault.wiki_graph.schedule`) |
+
+Con QMD encendido, el supervisor además construye el índice en background en el
+primer boot y mantiene un watcher inotify, así que una edición reindexa de
+inmediato; la línea de cron es solo el backstop. Ambos llaman al mismo comando
+con flock, así que nunca se pisan.
+
+El workspace está bind-mounted en `/workspace`, así que el estado y los logs se
+leen desde el host sin entrar al contenedor:
+
+```bash
+cd {{DEPLOYMENT_WORKSPACE}}
+tail -f scripts/heartbeat/logs/qmd-reindex.log     # corridas de reindex
+tail -f scripts/heartbeat/logs/wiki-graph.log      # corridas de derive + lint
+tail -f scripts/heartbeat/logs/backup-vault.log    # pushes del backup del vault
+jq . scripts/heartbeat/qmd-index.json              # hash, last_run, last_status, pending
+jq . scripts/heartbeat/wiki-graph.json             # last_run, last_status, counts
+
+# Acciones manuales (con flock; seguras aunque el cron esté armado)
+./scripts/agentctl heartbeat qmd-reindex           # reindex ahora (--dry-run solo reporta)
+./scripts/agentctl heartbeat wiki-graph            # regenerar el grafo ahora
+./scripts/agentctl heartbeat backup-vault --dry-run
+```
+
+**Completitud del embed.** `qmd embed` no alcanza a terminar un primer índice
+grande en una sola sesión del motor, así que una corrida de reindex encadena
+pasadas frescas hasta cubrir el corpus, con un tope fijo (12 pasadas a la fecha
+de v0.12.0). `qmd-index.json` deja el resultado: `last_status: indexed` +
+`pending: 0` = corpus completo; `partial` = se alcanzó el tope y quedan
+`pending: N`; `stalled` = una pasada no avanzó nada. Mientras `pending` sea
+distinto de cero (o no exista), la corrida siguiente **reanuda** el embed en vez
+de saltarlo por el guard de "vault sin cambios" — no hay que hacer el loop a
+mano. `skipped` = vault sin cambios y ya completo; `error` = la corrida falló
+(revisa el log de arriba). Un corpus parcial se nota como búsquedas semánticas
+flojas, no como error.
+
 ## Uso diario
 
 ```bash
@@ -94,24 +147,27 @@ Para salir sin matar la sesión: `Ctrl-b d`.
 # Tail del log de Claude
 ./scripts/agentctl logs -f
 
-# Rotar un secreto
+# Rotar un secreto (.env se inyecta como env_file al CREAR el contenedor)
 $EDITOR {{DEPLOYMENT_WORKSPACE}}/.env
-./scripts/agentctl restart
+docker compose up -d --force-recreate    # `agentctl restart` NO re-inyecta el .env
 
 # Actualizar a una versión nueva del template
 cd {{DEPLOYMENT_WORKSPACE}}
 git pull                                 # si tu workspace es un fork
-docker compose build && ./scripts/agentctl restart
+docker compose build
+./scripts/agentctl up                    # up -d recrea el contenedor con la imagen nueva
 ```
+
+> **`restart` no es `stop` + `up`.** `agentctl restart` ejecuta `docker compose restart`: reinicia el proceso del contenedor **existente**, sin recrearlo. No levanta una imagen recién construida ni vuelve a leer `.env` (incluido `CLAUDE_CODE_OAUTH_TOKEN`). Para cualquier cambio de imagen o de secretos usa `./scripts/agentctl up` (o `docker compose up -d --force-recreate`).
 
 ### Cheatsheet completo de `agentctl`
 
 ```bash
 # Ciclo de vida del contenedor
-./scripts/agentctl up                    # docker compose up -d
-./scripts/agentctl stop                  # docker compose stop (preserva state)
-./scripts/agentctl restart               # stop + up
-./scripts/agentctl ps                    # estado del contenedor
+./scripts/agentctl up                    # docker compose up -d (pre-crea .state/ si falta)
+./scripts/agentctl stop                  # docker compose down (remueve el contenedor; .state/ se preserva)
+./scripts/agentctl restart               # docker compose restart (mismo contenedor: NO recarga imagen ni .env)
+./scripts/agentctl ps                    # docker compose ps
 
 # Sesión interactiva
 ./scripts/agentctl attach                # tmux attach (retry-loop 15s)
@@ -124,7 +180,12 @@ docker compose build && ./scripts/agentctl restart
 ./scripts/agentctl logs -f               # follow
 ./scripts/agentctl logs --stderr         # forensic tail del MCP stderr de Telegram
 ./scripts/agentctl status                # heartbeat status (atajo a heartbeat status)
-./scripts/agentctl doctor                # 12 chequeos en orden de dependencia
+./scripts/agentctl doctor                # diagnóstico completo; exit 0 limpio / 1 warnings / 2 errores
+
+# Pins del toolchain registrados en agent.yml
+./scripts/agentctl versions              # versiones + canales registrados
+./scripts/agentctl versions --check      # además consulta upstream y marca lo desactualizado
+./scripts/agentctl versions --upgrade    # re-resuelve los canales no pineados en agent.yml
 
 # MCP servers
 ./scripts/agentctl mcp                   # claude mcp list (ver servers + estado)
@@ -141,6 +202,9 @@ docker compose build && ./scripts/agentctl restart
 ./scripts/agentctl heartbeat backup-identity
 ./scripts/agentctl heartbeat backup-vault
 ./scripts/agentctl heartbeat backup-config
+./scripts/agentctl heartbeat qmd-reindex   # reindex del índice semántico del vault
+./scripts/agentctl heartbeat wiki-graph    # derivar el wiki-grafo + lint
+./scripts/agentctl heartbeat token-check   # probe ad-hoc de salud de tokens
 ```
 
 > **Resolución de nombre del agente**: `agentctl` lee `agent.yml` del cwd (o el flag `-a NAME`) para saber qué container atacar. Si cambias de directorio o tienes varios agentes, usa `-a <name>`.
@@ -157,7 +221,7 @@ docker compose build && ./scripts/agentctl restart
 
 ## Troubleshooting
 
-### Si algo no anda: corré `agentctl doctor` primero
+### Si algo no anda: corre `agentctl doctor` primero
 
 Antes de cualquier otra cosa:
 
@@ -165,7 +229,7 @@ Antes de cualquier otra cosa:
 ./scripts/agentctl doctor
 ```
 
-Hace 12 chequeos en orden de dependencia (Docker daemon → container → health → agent.yml → tmux → crond → plugin Telegram → heartbeat → vault → patches) y reporta `✓` / `⚠` / `✗` por cada uno con sugerencia accionable cuando algo falla. Es la forma más rápida de saber qué subsistema está roto sin ejecutar 8 comandos distintos. También lista cualquier plugin que el supervisor no pudo instalar, cada uno con un comando de reintento copy-paste.
+Recorre los chequeos en orden de dependencia (daemon de Docker → contenedor existe → contenedor corriendo → health → `agent.yml` + versión del launcher → `.env` 0600 → tmux → crond → plugin de Telegram → heartbeat → vault → patches del plugin → `.state/` como fuente del bind-mount) y después agrega frescura de los tres backups (identity/vault/config), plugins que el supervisor no pudo instalar y salud de los tokens (GitHub, Telegram, Atlassian, OAuth de Claude). Reporta `✓` / `⚠` / `✗` por cada uno con una sugerencia accionable, y sale `0` limpio / `1` con warnings / `2` con errores. Es la forma más rápida de saber qué subsistema está roto sin ejecutar 8 comandos distintos: cada plugin fallido viene con su comando de reintento copy-paste.
 
 ### El agente deja de responder en Telegram ("ghosting")
 
@@ -210,7 +274,7 @@ Referencia completa (todos los subcomandos + reglas de validación + timing de p
 
 Dos causas distintas, ambas resueltas usando `agentctl attach` en lugar del comando raw:
 
-1. **Falta `-u agent`**: `docker exec` por defecto entra como root, y tmux guarda el socket por UID en `/tmp/tmux-<uid>/`. La sesión vive en el UID de `agent` (501 por default), así que root mira `/tmp/tmux-0/` y reporta vacío. `agentctl attach` siempre pasa `-u agent`. Equivalente raw: `docker exec -it -u agent {{AGENT_NAME}} tmux attach -t agent`.
+1. **Falta `-u agent`**: `docker exec` por defecto entra como root, y tmux guarda el socket por UID en `/tmp/tmux-<uid>/`. La sesión vive en el UID de `agent` — el UID de tu host, horneado como build-arg (típicamente `501` en macOS, `1000` en Linux; el default de la imagen es `ARG UID=1000`) —, así que root mira `/tmp/tmux-0/` y reporta vacío. `agentctl attach` siempre pasa `-u agent`. Equivalente raw: `docker exec -it -u agent {{AGENT_NAME}} tmux attach -t agent`.
 
 2. **Timing del watchdog**: el supervisor poll cada 2s y respawnea la sesión tmux después de `/login`, `/exit`, restart del canal Telegram, o crash de algún proceso. Entre el "muere" y el "respawn completo" hay una ventana de 5–15 segundos donde no hay session `agent`. Reattach inmediato cae en esa ventana → "no sessions". `agentctl attach` poll cada segundo hasta 15s y conecta apenas el supervisor termina el respawn.
 
@@ -271,7 +335,9 @@ docker exec -u agent {{AGENT_NAME}} heartbeatctl logs         # runs.jsonl
 
 #### "N MCP servers failed" al arrancar
 
-Dentro del agente corre `/mcp` para ver cada servidor y su estado. Los más importantes: `plugin:telegram:telegram`, `atlassian-*`, `github`, `playwright`. Las fallas típicas son env vars faltantes en `.env` (tokens de Atlassian, GitHub PAT) o binarios ausentes (`bun`, `uvx`).
+Dentro del agente corre `/mcp` para ver cada servidor y su estado. Los que importan: `plugin:telegram:telegram`, `atlassian-*`, `github`, `playwright` y —cuando el vault está encendido— `vault` y `qmd`. Las fallas típicas son env vars faltantes en `.env` (tokens de Atlassian, GitHub PAT) o binarios ausentes (`bun`, `uvx`, `npx`).
+
+`qmd` es un caso aparte: no corre por `bunx`. Su `command` en `.mcp.json` es el wrapper horneado en la imagen `/opt/agent-admin/scripts/qmd-mcp`, que levanta el server desde el mismo prefijo bun gestionado al que escribe el reindex. Si falla, mira primero el log del reindex (`scripts/heartbeat/logs/qmd-reindex.log`): un prefijo roto rompe a los dos.
 {{/if}}{{#unless DEPLOYMENT_MODE_IS_DOCKER}}Tu agente está scaffoldeado en **modo local** (Linux/systemd) en `{{DEPLOYMENT_WORKSPACE}}` — corre directo en el host, sin contenedor Docker, como una sesión persistente de Claude Code Remote Control bajo systemd.
 
 > **Advertencia de seguridad.** El agente corre como **tu usuario** y hereda tus privilegios y secretos (archivos, llaves SSH, tokens). No hay aislamiento de contenedor. Quien controle la cuenta claude.ai controla esta máquina: **MFA es obligatorio**. Nunca se usa `--dangerously-skip-permissions`.
@@ -279,7 +345,7 @@ Dentro del agente corre `/mcp` para ver cada servidor y su estado. Los más impo
 ## Requisitos (host Linux)
 
 - `systemd`, `jq`, `git`, `bash`.
-- Claude Code **≥ 2.1.51** (el helper de login verifica la versión).
+- Claude Code **≥ 2.1.51** (a la fecha de v0.12.0; el helper de login verifica la versión y aborta si no se cumple).
 - Cuenta claude.ai con plan compatible con Remote Control (toggle ON en Team/Enterprise).
 - **MFA activo** en la cuenta.
 
@@ -288,21 +354,37 @@ Dentro del agente corre `/mcp` para ver cada servidor y su estado. Los más impo
 ```bash
 cd {{DEPLOYMENT_WORKSPACE}}
 ./setup.sh --login        # verifica versión, pre-siembra onboarding, lanza el OAuth,
-                          # aplica el trust del workspace y habilita el servicio systemd
+                          # aplica el trust del workspace, pre-acepta el prompt de Remote Control,
+                          # provisiona los runtimes MCP y habilita el servicio systemd
 ```
 
 - Es un login OAuth interactivo (el token inference-only de `claude setup-token` NO sirve para Remote Control).
 - En headless: tuneliza el puerto del callback por SSH (`ssh -L <port>:localhost:<port> host`) y completa el OAuth en tu navegador.
 - Deja `{{DEPLOYMENT_WORKSPACE}}/.state/.claude/.credentials.json` (0600, gitignored) y re-aplica el trust (el login reescribe `.claude.json`).
+- Corre `scripts/local/agent-bootstrap.sh` ("Provisioning MCP runtimes") antes de habilitar la unit: ese paso instala `uv`/`uvx`, los symlinks `node`/`npx`, `bun` y `github-mcp-server` en `~/.local/bin`. Necesita red; sin él, cada MCP server muere con `ENOENT` en su primer arranque.
 - Es idempotente: re-ejecutarlo no rompe nada.
 
 ## 2. Operación
 
+Modo local: `agentctl` no queda en tu `PATH` — invócalo como `./scripts/agentctl`
+desde el workspace. Los subcomandos exclusivos de docker (`up`, `attach`, `shell`,
+`logs`, `mcp`, …) se niegan con exit 2 y apuntan al equivalente systemd.
+
 ```bash
 systemctl status  agent-{{AGENT_NAME}}.service          # estado de la sesión
 journalctl -u     agent-{{AGENT_NAME}}.service -f        # logs (busca 'session url'/'connected')
-./scripts/local/agent-killswitch.sh                     # KILL SWITCH (detiene sesión + qmd + backup + healthcheck)
+./scripts/agentctl status                               # dashboard de la unit + vault/RAG
+./scripts/agentctl doctor                               # diagnóstico; exit 0 limpio / 1 warnings / 2 errores
+./scripts/agentctl versions --check                     # pins del toolchain en agent.yml vs upstream
+./scripts/local/agent-killswitch.sh                     # KILL SWITCH (detiene sesión + qmd + wiki-grafo + backup del vault + healthcheck)
 ```
+
+El `doctor` local chequea `claude` en el `PATH` y su versión, que la unit esté
+`active`, una señal de conexión reciente en el journal, `.credentials.json`
+(presente + `0600`) y —cuando el vault está encendido— las units de QMD y
+wiki-grafo, la frescura del índice y la del backup del vault. Como sale con
+`0`/`1`/`2`, `./scripts/agentctl doctor || alert` sirve para monitoreo. Al kill
+switch agrégale `--disable` para que además no arranque en el próximo boot.
 {{#if VAULT_QMD_ENABLED}}
 ### RAG (QMD) — frescura y control
 
@@ -312,12 +394,15 @@ Los entrypoints de reindex son fail-silent (exit 0); el detalle va al journal de
 journalctl -u agent-{{AGENT_NAME}}-qmd-reindex.service   # corridas de reindex programadas
 journalctl -u agent-{{AGENT_NAME}}-qmd-watch.service     # watcher inotify (reindex al cambiar)
 systemctl list-timers 'agent-{{AGENT_NAME}}-*'           # todos los timers del agente
-agentctl heartbeat qmd-reindex                           # forzar un reindex ahora
+./scripts/agentctl heartbeat qmd-reindex                 # forzar un reindex ahora (no acepta --dry-run: reindexaría de verdad)
+jq . scripts/heartbeat/qmd-index.json                    # hash, last_run, last_status, pending
 ```
+
+**Completitud del embed.** `qmd embed` no alcanza a terminar un primer índice grande en una sola sesión del motor, así que una corrida de reindex encadena pasadas frescas hasta cubrir el corpus, con un tope fijo (12 pasadas a la fecha de v0.12.0). `qmd-index.json` deja el resultado: `last_status: indexed` + `pending: 0` = corpus completo; `partial` = se alcanzó el tope y quedan `pending: N`; `stalled` = una pasada no avanzó nada. Mientras `pending` sea distinto de cero (o no exista), el siguiente tick del timer **reanuda** el embed en vez de saltarlo por el guard de "vault sin cambios" — no hay que hacer el loop de `qmd embed` a mano. `skipped` = vault sin cambios y ya completo; `error` = la corrida falló (revisa el journal). Un corpus parcial se nota como búsquedas semánticas flojas, no como error.
 {{/if}}{{#if VAULT_ENABLED}}
 ```bash
 journalctl -u agent-{{AGENT_NAME}}-vault-backup.service  # pushes del backup del vault
-agentctl heartbeat backup-vault                          # forzar un backup (agrega --dry-run para previsualizar)
+./scripts/agentctl heartbeat backup-vault                # forzar un backup (agrega --dry-run para previsualizar)
 ```
 {{/if}}{{#if WIKI_GRAPH_ENABLED}}
 ### Wiki-grafo — derivar y lint
@@ -327,8 +412,8 @@ El runner del wiki-grafo es fail-silent (exit 0); el detalle va al journal, a lo
 ```bash
 journalctl -u agent-{{AGENT_NAME}}-wiki-graph.service    # corridas programadas de derive+lint
 systemctl list-timers 'agent-{{AGENT_NAME}}-*'           # todos los timers del agente
-agentctl heartbeat wiki-graph                            # regenerar el grafo ahora
-agentctl status                                          # frescura del grafo + counts de hallazgos
+./scripts/agentctl heartbeat wiki-graph                  # regenerar el grafo ahora
+./scripts/agentctl status                                # frescura del grafo + counts de hallazgos
 ```
 {{/if}}
 Controlas el agente desde **claude.ai/code** y la app móvil (identidad `<hostname>-{{AGENT_NAME}}`). El healthcheck corre por timer (~5 min) y avisa si el login expira, hay error de auth, o la unit del watcher QMD / wiki-grafo está `failed`. Auto-recuperación: si el proceso muere, systemd lo rearranca en ~10 s (`Restart=always`).

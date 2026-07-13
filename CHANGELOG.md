@@ -2,6 +2,38 @@
 
 ## [Unreleased]
 
+### Documentation
+- **Full docs refresh to v0.12.0 reality (`020-docs-refresh`)**: the doc set had drifted
+  behind features 011-019. A code-anchored audit of all 14 in-scope documents recorded
+  **121 findings** (33 false claims, 46 stale, 41 missing a per-mode qualifier, 1
+  unverified) plus 25 subsystems shipped since 011 of which **8 were documented nowhere**.
+  Every finding was closed and re-checked adversarially against the source. Docs-only —
+  no VERSION bump, no behavior change, suite unchanged.
+  - **README**: dual-mode framing (docker *and* local/systemd — local mode was invisible
+    before), corrected restore instructions (only the `--identity-key PATH` flag works;
+    the documented `RESTORE_IDENTITY_KEY` env var is clobbered at `setup.sh:356`), real
+    test count and doctor surface, Alpine base 3.24, RAG/backup/uninstall sections rebuilt
+    from the code.
+  - **Agentic quickstarts (es/en)**: rebuilt on the canonical 52-prompt wizard order —
+    they predated the `deployment.mode` prompt entirely and walked a flow that no longer
+    exists. Both now cover docker and local end to end, with the non-interactive fork
+    behaviour (`FORK_ACCEPT_PUBLIC`) that silently disables the fork on a piped stdin.
+  - **`docs/vault.md`, `docs/state-layout.md`**: the QMD sections predated feature 010
+    (manual `bunx` operations, the retired `.mcp.json` shape) and the `.state/` tree
+    predated local mode, the managed prefix and the wiki-graph. Rebuilt: auto-setup,
+    managed `bun install` prefix, per-mode MCP wrappers, XDG storage, multi-pass embed +
+    resumable guard (018).
+  - **`docs/architecture.md`, `getting-started.md`, `heartbeatctl.md`, `adding-an-mcp.md`,
+    `adding-a-notifier.md`, `qmd-upgrade-checklist.md`**: surgical corrections — qmd is no
+    longer "invoked via bunx", the per-mode MCP command/env contract, `qmd-index.json`'s
+    `pending` + `partial`/`stalled` states, the sqlite-vec/vec0 musl swap (017), the
+    `rag_obs.sh` TMPDIR routing (015), and the 019 test-seam contract.
+  - **Workspace doc templates** (`modules/{claude-md,next-steps.en,next-steps.es}.tpl`):
+    the runtime facts every scaffolded agent is taught — heartbeatctl's real mutation scope
+    (it regenerates `heartbeat.conf` + crontab, not "every derived file"), the Telegram
+    typing patch at v4 (5-minute cap, not indefinite), `NEXT_STEPS.md` as a
+    scaffold-time snapshot no `--regenerate` refreshes, and EN/ES parity restored.
+
 ### Fixed
 - **Host test suite restored to 0 failures — post-016 QMD test drift repaired
   (`019-fix-qmd-test-drift`)**: 7 host tests had failed permanently since 016 replaced
