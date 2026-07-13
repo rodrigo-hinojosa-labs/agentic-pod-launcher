@@ -750,7 +750,7 @@ run_wizard() {
   if [ "$(ask_yn 'Enable Atlassian MCP?' 'n')" = "true" ]; then
     while true; do
       local ws_name ws_url ws_email ws_token
-      ws_name=$(ask_required "Workspace alias (e.g. personal, work) — unique identifier for this Atlassian account")
+      ws_name=$(ask_validated "Workspace alias (e.g. personal, work) — unique identifier for this Atlassian account" validate_atlassian_alias)
       ws_url=$(ask_validated "Atlassian URL (e.g. https://yourco.atlassian.net)" validate_url)
       ws_email=$(ask_validated "Email" validate_email "$user_email")
       echo "  API token for this workspace — generate one at"
@@ -2234,6 +2234,7 @@ regenerate() {
     render_to_file "$modules_dir/local-login.sh.tpl"       "$SCRIPT_DIR/scripts/local/agent-login.sh"
     render_to_file "$modules_dir/local-killswitch.sh.tpl"  "$SCRIPT_DIR/scripts/local/agent-killswitch.sh"
     render_to_file "$modules_dir/local-healthcheck.sh.tpl" "$SCRIPT_DIR/scripts/local/agent-healthcheck.sh"
+    render_to_file "$modules_dir/local-secret-check.sh.tpl" "$SCRIPT_DIR/scripts/local/agent-secret-check.sh"
     render_to_file "$modules_dir/local-bootstrap.sh.tpl"   "$SCRIPT_DIR/scripts/local/agent-bootstrap.sh"
     # US2 (FR-004/005/006): QMD reindex entrypoint + watcher wrapper, rendered
     # only when qmd is enabled. Their systemd units are installed by install_service.
@@ -2356,7 +2357,10 @@ _export_local_context() {
 install_service() {
   local agent_name="$1" workspace="$2"
   local modules_dir="$SCRIPT_DIR/modules"
-  local unit_file="/etc/systemd/system/agent-${agent_name}.service"
+  # Overridable for host-side tests (mirrors LOGIN_SYSTEMD_DIR in
+  # local-login.sh.tpl); production default is the real system path.
+  local systemd_dir="${SETUP_SYSTEMD_DIR:-/etc/systemd/system}"
+  local unit_file="${systemd_dir}/agent-${agent_name}.service"
   local staged tpl
   staged=$(mktemp)
   # Bind $staged into the trap body at set-time (double quotes), not at
@@ -2392,8 +2396,8 @@ install_service() {
   # Local mode also ships a healthcheck timer (US3). Install it alongside the
   # session unit so the agent is observable out of the box; stage it if no sudo.
   if [ "${DEPLOYMENT_MODE_IS_DOCKER:-true}" != true ]; then
-    local hc_svc="/etc/systemd/system/agent-${agent_name}-healthcheck.service"
-    local hc_tmr="/etc/systemd/system/agent-${agent_name}-healthcheck.timer"
+    local hc_svc="${systemd_dir}/agent-${agent_name}-healthcheck.service"
+    local hc_tmr="${systemd_dir}/agent-${agent_name}-healthcheck.timer"
     local staged_svc staged_tmr
     staged_svc=$(mktemp); staged_tmr=$(mktemp)
     render_to_file "$modules_dir/local-healthcheck.service.tpl" "$staged_svc"
@@ -2425,9 +2429,9 @@ install_service() {
     render_to_file "$modules_dir/local-qmd-reindex.timer.tpl"   "$s_ri_tmr"
     render_to_file "$modules_dir/local-qmd-watch.service.tpl"   "$s_wa_svc"
     if sudo -n true 2>/dev/null; then
-      sudo cp "$s_ri_svc" "/etc/systemd/system/$q_ri_svc"
-      sudo cp "$s_ri_tmr" "/etc/systemd/system/$q_ri_tmr"
-      sudo cp "$s_wa_svc" "/etc/systemd/system/$q_wa_svc"
+      sudo cp "$s_ri_svc" "${systemd_dir}/$q_ri_svc"
+      sudo cp "$s_ri_tmr" "${systemd_dir}/$q_ri_tmr"
+      sudo cp "$s_wa_svc" "${systemd_dir}/$q_wa_svc"
       sudo systemctl daemon-reload
       sudo systemctl enable --now "$q_ri_tmr" "$q_wa_svc" \
         && echo "  ✓ qmd reindex timer + watcher installed + enabled"
@@ -2450,8 +2454,8 @@ install_service() {
     render_to_file "$modules_dir/local-vault-backup.service.tpl" "$s_b_svc"
     render_to_file "$modules_dir/local-vault-backup.timer.tpl"   "$s_b_tmr"
     if sudo -n true 2>/dev/null; then
-      sudo cp "$s_b_svc" "/etc/systemd/system/$b_svc"
-      sudo cp "$s_b_tmr" "/etc/systemd/system/$b_tmr"
+      sudo cp "$s_b_svc" "${systemd_dir}/$b_svc"
+      sudo cp "$s_b_tmr" "${systemd_dir}/$b_tmr"
       sudo systemctl daemon-reload
       sudo systemctl enable --now "$b_tmr" \
         && echo "  ✓ vault backup timer installed + enabled"
@@ -2474,8 +2478,8 @@ install_service() {
     render_to_file "$modules_dir/local-wiki-graph.service.tpl" "$s_wg_svc"
     render_to_file "$modules_dir/local-wiki-graph.timer.tpl"   "$s_wg_tmr"
     if sudo -n true 2>/dev/null; then
-      sudo cp "$s_wg_svc" "/etc/systemd/system/$wg_svc"
-      sudo cp "$s_wg_tmr" "/etc/systemd/system/$wg_tmr"
+      sudo cp "$s_wg_svc" "${systemd_dir}/$wg_svc"
+      sudo cp "$s_wg_tmr" "${systemd_dir}/$wg_tmr"
       sudo systemctl daemon-reload
       sudo systemctl enable --now "$wg_tmr" \
         && echo "  ✓ wiki-graph timer installed + enabled"

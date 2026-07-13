@@ -8,6 +8,8 @@ load helper
 setup() {
   setup_tmp_dir
   cp -r "$REPO_ROOT/scripts" "$TMP_TEST_DIR/"
+  mkdir -p "$TMP_TEST_DIR/modules"
+  cp -r "$REPO_ROOT/modules/mcps" "$TMP_TEST_DIR/modules/"
   cat > "$TMP_TEST_DIR/agent.yml" << 'YML'
 version: 1
 agent:
@@ -236,6 +238,10 @@ teardown() { teardown_tmp_dir; }
 @test "local doctor: all-sane exits 0 (013 FR-009)" {
   cd "$TMP_TEST_DIR"
   # no qmd/backup artifacts → no vault/RAG checks; unit active + login present.
+  # 021: a 0600 .env with no enabled secret-requiring MCP is also "sane" —
+  # the doctor's new secrets check must not turn a clean agent red.
+  printf 'CLAUDE_CODE_OAUTH_TOKEN=x\n' > .env
+  chmod 600 .env
   run ./scripts/agentctl doctor
   [ "$status" -eq 0 ]
   [[ "$output" == *"Local checks passed"* ]]
@@ -304,4 +310,236 @@ SH
   [ "$status" -ne 0 ]
   [[ "$output" == *"Docker-mode command"* || "$output" == *"systemctl"* ]]
   [ ! -f "$DOCKER_MARKER" ]
+}
+
+# ─── 021-local-secret-delivery (US3): _local_secrets_doctor ─────────────────
+# contracts/secret-delivery.md D1-D4 + the exclusion table (data-model.md).
+
+_write_agent_yml_with_mcps() {  # _write_agent_yml_with_mcps EXTRA_MCPS_YAML
+  cat > "$TMP_TEST_DIR/agent.yml" << YML
+version: 1
+agent:
+  name: locbot
+user: {timezone: UTC, email: a@b.com}
+deployment:
+  workspace: "."
+  mode: local
+docker: {uid: 1000, gid: 1000, image_tag: "x:latest", base_image: "alpine:3.20"}
+notifications: {channel: none}
+features: {heartbeat: {enabled: true, interval: "30m", timeout: 300, retries: 1, default_prompt: "ok"}}
+mcps:
+$1
+YML
+}
+
+@test "021 D1: .env missing → WARN" {
+  _write_agent_yml_with_mcps "  defaults: []
+  atlassian: []
+  github: {enabled: false}"
+  cd "$TMP_TEST_DIR"
+  run ./scripts/agentctl doctor
+  [ "$status" -eq 1 ]
+  [[ "$output" == *".env"* ]]
+}
+
+@test "021 D1: .env present with loose permissions (644) → WARN naming chmod 600" {
+  _write_agent_yml_with_mcps "  defaults: []
+  atlassian: []
+  github: {enabled: false}"
+  printf 'NOTIFY_BOT_TOKEN=x\n' > "$TMP_TEST_DIR/.env"
+  chmod 644 "$TMP_TEST_DIR/.env"
+  cd "$TMP_TEST_DIR"
+  run ./scripts/agentctl doctor
+  [ "$status" -eq 1 ]
+  [[ "$output" == *".env"* && "$output" == *"600"* ]]
+}
+
+@test "021 D1: .env present at 0600 → no permissions warning" {
+  _write_agent_yml_with_mcps "  defaults: []
+  atlassian: []
+  github: {enabled: false}"
+  printf 'NOTIFY_BOT_TOKEN=x\n' > "$TMP_TEST_DIR/.env"
+  chmod 600 "$TMP_TEST_DIR/.env"
+  cd "$TMP_TEST_DIR"
+  run ./scripts/agentctl doctor
+  [ "$status" -eq 0 ]
+}
+
+@test "021 D2: a lint-dirty .env (trailing backslash) → WARN naming line+key, value never printed" {
+  _write_agent_yml_with_mcps "  defaults: []
+  atlassian: []
+  github: {enabled: false}"
+  printf 'GITHUB_PAT=ghp_supersecrettoken12345\\\n' > "$TMP_TEST_DIR/.env"
+  chmod 600 "$TMP_TEST_DIR/.env"
+  cd "$TMP_TEST_DIR"
+  run ./scripts/agentctl doctor
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"GITHUB_PAT"* ]]
+  # Load-bearing negative — last, per the suite's bats hazard.
+  if printf '%s' "$output" | grep -q 'ghp_supersecrettoken12345'; then false; fi
+}
+
+@test "021 D4: an enabled catalog MCP with an empty required secret → WARN naming the variable" {
+  _write_agent_yml_with_mcps "  defaults: [fetch, git, filesystem, firecrawl]
+  atlassian: []
+  github: {enabled: false}"
+  printf 'FIRECRAWL_API_KEY=\n' > "$TMP_TEST_DIR/.env"
+  chmod 600 "$TMP_TEST_DIR/.env"
+  cd "$TMP_TEST_DIR"
+  run ./scripts/agentctl doctor
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"FIRECRAWL_API_KEY"* ]]
+}
+
+@test "021 D4: the same MCP with the secret populated → no warning for it" {
+  _write_agent_yml_with_mcps "  defaults: [fetch, git, filesystem, firecrawl]
+  atlassian: []
+  github: {enabled: false}"
+  printf 'FIRECRAWL_API_KEY=fc-real-value\n' > "$TMP_TEST_DIR/.env"
+  chmod 600 "$TMP_TEST_DIR/.env"
+  cd "$TMP_TEST_DIR"
+  run ./scripts/agentctl doctor
+  [ "$status" -eq 0 ]
+  if printf '%s' "$output" | grep -q 'FIRECRAWL_API_KEY'; then false; fi
+}
+
+@test "021: no-cry-wolf — an MCP that does not require a secret is never warned about" {
+  _write_agent_yml_with_mcps "  defaults: [fetch, git, filesystem, aws]
+  atlassian: []
+  github: {enabled: false}"
+  printf 'NOTIFY_BOT_TOKEN=x\n' > "$TMP_TEST_DIR/.env"
+  chmod 600 "$TMP_TEST_DIR/.env"
+  cd "$TMP_TEST_DIR"
+  run ./scripts/agentctl doctor
+  [ "$status" -eq 0 ]
+  if printf '%s' "$output" | grep -qE 'AWS_PROFILE|AWS_REGION'; then false; fi
+}
+
+@test "021: an empty CLAUDE_CODE_OAUTH_TOKEN is INFO, never a WARN (normal /login state)" {
+  _write_agent_yml_with_mcps "  defaults: []
+  atlassian: []
+  github: {enabled: false}"
+  printf 'CLAUDE_CODE_OAUTH_TOKEN=\n' > "$TMP_TEST_DIR/.env"
+  chmod 600 "$TMP_TEST_DIR/.env"
+  cd "$TMP_TEST_DIR"
+  run ./scripts/agentctl doctor
+  [ "$status" -eq 0 ]
+}
+
+@test "021: GITHUB_FORK_PAT is excluded — an empty value never warns" {
+  _write_agent_yml_with_mcps "  defaults: []
+  atlassian: []
+  github: {enabled: false}"
+  printf 'GITHUB_FORK_PAT=\n' > "$TMP_TEST_DIR/.env"
+  chmod 600 "$TMP_TEST_DIR/.env"
+  cd "$TMP_TEST_DIR"
+  run ./scripts/agentctl doctor
+  [ "$status" -eq 0 ]
+}
+
+@test "021 D4: an enabled atlassian instance with an empty token → WARN naming the variable" {
+  _write_agent_yml_with_mcps "  defaults: []
+  atlassian:
+    - name: work
+      url: \"https://work.atlassian.net\"
+      email: \"a@work.com\"
+  github: {enabled: false}"
+  cat > "$TMP_TEST_DIR/.env" << 'EOF'
+ATLASSIAN_WORK_CONFLUENCE_URL=https://work.atlassian.net/wiki
+ATLASSIAN_WORK_CONFLUENCE_USERNAME=a@work.com
+ATLASSIAN_WORK_JIRA_URL=https://work.atlassian.net
+ATLASSIAN_WORK_JIRA_USERNAME=a@work.com
+ATLASSIAN_WORK_TOKEN=
+EOF
+  chmod 600 "$TMP_TEST_DIR/.env"
+  cd "$TMP_TEST_DIR"
+  run ./scripts/agentctl doctor
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"ATLASSIAN_WORK_TOKEN"* ]]
+}
+
+@test "021 D4: enabled github MCP with an empty GITHUB_PAT → WARN naming the variable" {
+  _write_agent_yml_with_mcps "  defaults: []
+  atlassian: []
+  github: {enabled: true}"
+  printf 'GITHUB_PAT=\n' > "$TMP_TEST_DIR/.env"
+  chmod 600 "$TMP_TEST_DIR/.env"
+  cd "$TMP_TEST_DIR"
+  run ./scripts/agentctl doctor
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"GITHUB_PAT"* ]]
+}
+
+@test "021 D3: the installed unit does not carry the .env EnvironmentFile → WARN" {
+  _write_agent_yml_with_mcps "  defaults: []
+  atlassian: []
+  github: {enabled: false}"
+  printf 'NOTIFY_BOT_TOKEN=x\n' > "$TMP_TEST_DIR/.env"
+  chmod 600 "$TMP_TEST_DIR/.env"
+  cat > "$TMP_TEST_DIR/bin/systemctl" << 'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *is-active*) exit 0 ;;
+  *is-failed*) exit 1 ;;
+  *cat*)
+    printf '[Service]\nEnvironmentFile=/home/op/wk/.state/remote-control.env\n'
+    ;;
+  *) exit 0 ;;
+esac
+SH
+  chmod +x "$TMP_TEST_DIR/bin/systemctl"
+  cd "$TMP_TEST_DIR"
+  run ./scripts/agentctl doctor
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"installed"* ]]
+}
+
+@test "021 D3: the installed unit DOES carry the .env EnvironmentFile → no warning" {
+  _write_agent_yml_with_mcps "  defaults: []
+  atlassian: []
+  github: {enabled: false}"
+  printf 'NOTIFY_BOT_TOKEN=x\n' > "$TMP_TEST_DIR/.env"
+  chmod 600 "$TMP_TEST_DIR/.env"
+  cat > "$TMP_TEST_DIR/bin/systemctl" << 'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *is-active*) exit 0 ;;
+  *is-failed*) exit 1 ;;
+  *cat*)
+    printf '[Service]\nEnvironmentFile=-/home/op/wk/.env\nEnvironmentFile=/home/op/wk/.state/remote-control.env\n'
+    ;;
+  *) exit 0 ;;
+esac
+SH
+  chmod +x "$TMP_TEST_DIR/bin/systemctl"
+  cd "$TMP_TEST_DIR"
+  run ./scripts/agentctl doctor
+  [ "$status" -eq 0 ]
+}
+
+@test "021: an all-clean secrets configuration produces zero secrets output (no crying wolf)" {
+  _write_agent_yml_with_mcps "  defaults: [fetch, git, filesystem, firecrawl]
+  atlassian: []
+  github: {enabled: true}"
+  cat > "$TMP_TEST_DIR/.env" << 'EOF'
+FIRECRAWL_API_KEY=fc-real
+GITHUB_PAT=ghp_real
+EOF
+  chmod 600 "$TMP_TEST_DIR/.env"
+  cat > "$TMP_TEST_DIR/bin/systemctl" << 'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *is-active*) exit 0 ;;
+  *is-failed*) exit 1 ;;
+  *cat*)
+    printf '[Service]\nEnvironmentFile=-/home/op/wk/.env\nEnvironmentFile=/home/op/wk/.state/remote-control.env\n'
+    ;;
+  *) exit 0 ;;
+esac
+SH
+  chmod +x "$TMP_TEST_DIR/bin/systemctl"
+  cd "$TMP_TEST_DIR"
+  run ./scripts/agentctl doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Local checks passed"* ]]
 }

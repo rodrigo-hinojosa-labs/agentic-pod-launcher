@@ -381,10 +381,17 @@ journalctl -u     agent-{{AGENT_NAME}}.service -f        # logs (busca 'session 
 
 El `doctor` local chequea `claude` en el `PATH` y su versión, que la unit esté
 `active`, una señal de conexión reciente en el journal, `.credentials.json`
-(presente + `0600`) y —cuando el vault está encendido— las units de QMD y
+(presente + `0600`), `.env` (presente + `0600` + el secreto requerido de cada
+MCP habilitado, no vacío) y —cuando el vault está encendido— las units de QMD y
 wiki-grafo, la frescura del índice y la del backup del vault. Como sale con
 `0`/`1`/`2`, `./scripts/agentctl doctor || alert` sirve para monitoreo. Al kill
 switch agrégale `--disable` para que además no arranque en el próximo boot.
+
+**Los secretos** (`.env`) llegan a la sesión vía `EnvironmentFile=-.env` en la
+unit de systemd. Edita `.env` y después
+`sudo systemctl restart agent-{{AGENT_NAME}}.service` — systemd solo lo lee al
+arrancar el proceso, así que editar el archivo solo no hace nada hasta que la
+unit se reinicia. Corre `doctor` después para confirmar.
 {{#if VAULT_QMD_ENABLED}}
 ### RAG (QMD) — frescura y control
 

@@ -338,8 +338,8 @@ Everything the runners persist lives in `<workspace>/scripts/heartbeat/` (`/work
 
 | Path | What | Gitignored? |
 |---|---|---|
-| `<workspace>/.state/remote-control.env` | `EnvironmentFile` for the session unit: `CLAUDE_CONFIG_DIR`, `HOME`, `PATH` (0640) | yes (`.state/`) |
-| `<workspace>/.state/healthcheck-notify.env` | optional `NOTIFY_BOT_TOKEN` / `NOTIFY_CHAT_ID` for DEGRADED alerts — **secret, operator-provided** | yes (`.state/`) |
+| `<workspace>/.state/remote-control.env` | `EnvironmentFile` for the session unit: `CLAUDE_CONFIG_DIR`, `HOME`, `PATH` (0640). Loaded SECOND (after `.env`) so it always wins on a name collision. | yes (`.state/`) |
+| `<workspace>/.state/healthcheck-notify.env` | **legacy compatibility override** (021): if present, wins over `.env` for `NOTIFY_BOT_TOKEN`/`NOTIFY_CHAT_ID` — kept only so an agent that already had one keeps alerting unchanged. A fresh scaffold never creates this file; the workspace `.env` is the single source of secrets going forward. | yes (`.state/`) |
 | `<workspace>/scripts/local/agent-{login,killswitch,healthcheck,bootstrap}.sh` | rendered helpers | yes |
 | `<workspace>/scripts/local/agent-{qmd-reindex,qmd-watch,qmd-mcp}.sh` | rendered when `vault.qmd.enabled` | yes |
 | `<workspace>/scripts/local/agent-{vault-backup,wiki-graph}.sh` | rendered when the vault is on | yes |

@@ -324,6 +324,7 @@ The wizard (both interactive and agentic) validates inputs before accepting them
 | `HEARTBEAT_INTERVAL` | `Nm` / `Nh` or 5-field cron expression | `30m`, `2h`, `0 * * * *` | `30 minutes`, `every hour` |
 | `NOTIFY_BOT_TOKEN` (if non-empty) | `<digits>:<base64-like 25+>` | `123456789:AAEhBP0...` | `my-token`, `123:short` |
 | `*_URL` (Atlassian, fork) | http(s) only, no whitespace | `https://acme.atlassian.net` | `acme.atlassian.net`, `ftp://...` |
+| Atlassian workspace alias | Letters, digits, underscore only (interpolated into `ATLASSIAN_<ALIAS>_TOKEN`; a hyphen produces an invalid systemd variable name) | `work`, `cenco_corp` | `cenco-corp`, `my team` |
 | `UID`/`GID` | Non-negative integer (auto-detected, never asked) | `1000`, `501` | `-1`, `abc` |
 
 The same re-prompt-on-mismatch behavior applies to every choice prompt: `LANGUAGE` (`es`/`en`/`mixed`), `NOTIFY_CHANNEL` (`none`/`log`/`telegram`) and the final action (`proceed`/`edit`/`abort`).

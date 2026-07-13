@@ -1101,6 +1101,120 @@ _local_vault_qmd_doctor() {
   fi
 }
 
+# 021-local-secret-delivery: does the enabled configuration have every secret
+# it needs, actually delivered via .env? WARN only (_doctor_warn) — NEVER
+# _doctor_fail; a miscredentialed optional MCP degrades that MCP, it must not
+# take the session down (FR-004/FR-008).
+#
+# The required-secret set comes from agent.yml + the MCP catalog
+# (requires_secret/secret_env_var in modules/mcps/*.yml) — NEVER by grepping
+# the rendered .mcp.json. Grepping yields permanent false positives: aws.yml
+# declares requires_secret:false but mcp-json.tpl still references
+# AWS_PROFILE/AWS_REGION as passthrough env (US3 forbids crying wolf).
+#
+# Exclusions: `google-calendar` (its secret is a FILE PATH baked into
+# .mcp.json at render time via {{GCAL_CREDS_PATH}}, never read from .env —
+# warning about it here would send the operator to the wrong file);
+# GITHUB_FORK_PAT (no session/MCP consumer); an empty CLAUDE_CODE_OAUTH_TOKEN
+# is INFO only (the normal state of every /login-based local agent).
+_local_secrets_doctor() {
+  local agent="$1" ws="$2"
+  local env_file="${ws}/.env"
+
+  command -v env_file_get >/dev/null 2>&1 || {
+    # shellcheck source=/dev/null
+    . "${ws}/scripts/lib/env_file.sh" 2>/dev/null
+  }
+  command -v mcp_catalog_get >/dev/null 2>&1 || {
+    # shellcheck source=/dev/null
+    . "${ws}/scripts/lib/mcp-catalog.sh" 2>/dev/null
+  }
+  export MCP_CATALOG_DIR="${ws}/modules/mcps"
+
+  # D1: presence + permissions (mirrors the docker doctor's .env check).
+  if [ ! -f "$env_file" ]; then
+    _doctor_warn ".env not found at $env_file" "re-run ./setup.sh --regenerate, or restore from backup"
+    return 0
+  fi
+  local perms
+  perms=$(stat -f '%Lp' "$env_file" 2>/dev/null || stat -c '%a' "$env_file" 2>/dev/null)
+  if [ "$perms" = "600" ]; then
+    _doctor_pass ".env present (0600)"
+  else
+    _doctor_warn ".env permissions are $perms (should be 600)" "chmod 600 $env_file"
+  fi
+
+  # D2: portable-subset lint findings — line + key + reason, NEVER a value.
+  if command -v env_file_lint >/dev/null 2>&1; then
+    local lint_out
+    lint_out=$(env_file_lint "$env_file" 2>/dev/null)
+    if [ -n "$lint_out" ]; then
+      local lline
+      while IFS= read -r lline; do
+        [ -n "$lline" ] && _doctor_warn ".env: $lline" "see contracts/env-file-format.md for the portable subset"
+      done <<< "$lint_out"
+    fi
+  fi
+
+  # D3: the INSTALLED unit must load .env — catches the silent no-op where
+  # --regenerate ran but the operator never sudo-cp'd + daemon-reload'd +
+  # restarted the unit (021 R6: nothing else restarts it for you).
+  if command -v systemctl >/dev/null 2>&1; then
+    local unit_cat
+    unit_cat=$(systemctl cat "agent-${agent}.service" 2>/dev/null || true)
+    if [ -n "$unit_cat" ]; then
+      if printf '%s\n' "$unit_cat" | grep -qE '^EnvironmentFile=-.*/\.env$'; then
+        _doctor_pass "installed unit loads the workspace .env"
+      else
+        _doctor_warn "installed unit does not load .env yet (stale — regenerate ran but the unit was never reinstalled)" \
+          "sudo cp ./agent-${agent}.service /etc/systemd/system/ ; sudo systemctl daemon-reload ; sudo systemctl restart agent-${agent}.service"
+      fi
+    fi
+  fi
+
+  # D4: required-secret set, per catalog MCP enabled in agent.yml.mcps.defaults
+  # (the flat list: always-on defaults + operator-enabled optional MCPs).
+  local mcp_id secret_var val doc_url
+  while IFS= read -r mcp_id; do
+    [ -z "$mcp_id" ] && continue
+    [ "$mcp_id" = "google-calendar" ] && continue
+    [ "$(mcp_catalog_get "$mcp_id" requires_secret 2>/dev/null)" = "true" ] || continue
+    secret_var=$(mcp_catalog_get "$mcp_id" secret_env_var 2>/dev/null)
+    [ -n "$secret_var" ] || continue
+    val=$(env_file_get "$secret_var" "$env_file")
+    if [ -z "$val" ]; then
+      doc_url=$(mcp_catalog_get "$mcp_id" secret_doc_url 2>/dev/null)
+      _doctor_warn "${secret_var} missing or empty in ${env_file}" "${doc_url:-fill it in .env}"
+    fi
+  done < <(yq -r '.mcps.defaults[]?' "${ws}/agent.yml" 2>/dev/null)
+
+  # Atlassian instances: 5 delivered vars each (mcp-json.tpl's env block).
+  local a_name a_upper suffix var
+  while IFS= read -r a_name; do
+    [ -z "$a_name" ] && continue
+    a_upper=$(printf '%s' "$a_name" | tr '[:lower:]' '[:upper:]')
+    for suffix in CONFLUENCE_URL CONFLUENCE_USERNAME TOKEN JIRA_URL JIRA_USERNAME; do
+      var="ATLASSIAN_${a_upper}_${suffix}"
+      val=$(env_file_get "$var" "$env_file")
+      [ -z "$val" ] && _doctor_warn "${var} missing or empty in ${env_file}" \
+        "generate at https://id.atlassian.com/manage-profile/security/api-tokens"
+    done
+  done < <(yq -r '.mcps.atlassian[]?.name' "${ws}/agent.yml" 2>/dev/null)
+
+  # github: enabled -> GITHUB_PAT required. GITHUB_FORK_PAT has no session/MCP
+  # consumer — excluded.
+  if [ "$(yq -r '.mcps.github.enabled // false' "${ws}/agent.yml" 2>/dev/null)" = "true" ]; then
+    val=$(env_file_get GITHUB_PAT "$env_file")
+    [ -z "$val" ] && _doctor_warn "GITHUB_PAT missing or empty in ${env_file}" \
+      "generate a token and fill it in .env"
+  fi
+
+  # CLAUDE_CODE_OAUTH_TOKEN: informational only — never a WARN. Empty is the
+  # normal state of every /login-based local agent.
+  val=$(env_file_get CLAUDE_CODE_OAUTH_TOKEN "$env_file")
+  [ -z "$val" ] && echo "  ◦ CLAUDE_CODE_OAUTH_TOKEN empty — normal for a /login-based agent (info only)"
+}
+
 cmd_local_status() {
   local agent unit ws
   agent=$(resolve_agent_name) || exit $?
@@ -1168,6 +1282,7 @@ cmd_local_doctor() {
   fi
 
   _local_vault_qmd_doctor "$agent" "$ws"
+  _local_secrets_doctor "$agent" "$ws"
 
   # 013 FR-009: honest exit codes for scripting/monitoring, matching cmd_doctor —
   # 0 clean / 1 warnings / 2 failures. Previously any number of warnings (QMD in

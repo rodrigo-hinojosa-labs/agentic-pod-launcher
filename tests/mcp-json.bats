@@ -44,12 +44,14 @@ EOF
   [ "$(echo "$result" | jq -r '.mcpServers.playwright // "absent"')" = "absent" ]
   [ "$(echo "$result" | jq -r '.mcpServers.time // "absent"')" = "absent" ]
   # Atlassian workspace iterated from agent.yml.
-  [ "$(echo "$result" | jq -r '.mcpServers["atlassian-personal"].env.CONFLUENCE_URL')" = '${ATLASSIAN_PERSONAL_CONFLUENCE_URL}' ]
-  [ "$(echo "$result" | jq -r '.mcpServers["atlassian-personal"].env.CONFLUENCE_USERNAME')" = '${ATLASSIAN_PERSONAL_CONFLUENCE_USERNAME}' ]
-  [ "$(echo "$result" | jq -r '.mcpServers["atlassian-personal"].env.CONFLUENCE_API_TOKEN')" = '${ATLASSIAN_PERSONAL_TOKEN}' ]
-  [ "$(echo "$result" | jq -r '.mcpServers["atlassian-personal"].env.JIRA_URL')" = '${ATLASSIAN_PERSONAL_JIRA_URL}' ]
-  [ "$(echo "$result" | jq -r '.mcpServers["atlassian-personal"].env.JIRA_USERNAME')" = '${ATLASSIAN_PERSONAL_JIRA_USERNAME}' ]
-  [ "$(echo "$result" | jq -r '.mcpServers["atlassian-personal"].env.JIRA_API_TOKEN')" = '${ATLASSIAN_PERSONAL_TOKEN}' ]
+  # 021: every secret ref carries a :- default (an unset var must not fail
+  # the whole .mcp.json parse — see modules/mcp-json.tpl).
+  [ "$(echo "$result" | jq -r '.mcpServers["atlassian-personal"].env.CONFLUENCE_URL')" = '${ATLASSIAN_PERSONAL_CONFLUENCE_URL:-}' ]
+  [ "$(echo "$result" | jq -r '.mcpServers["atlassian-personal"].env.CONFLUENCE_USERNAME')" = '${ATLASSIAN_PERSONAL_CONFLUENCE_USERNAME:-}' ]
+  [ "$(echo "$result" | jq -r '.mcpServers["atlassian-personal"].env.CONFLUENCE_API_TOKEN')" = '${ATLASSIAN_PERSONAL_TOKEN:-}' ]
+  [ "$(echo "$result" | jq -r '.mcpServers["atlassian-personal"].env.JIRA_URL')" = '${ATLASSIAN_PERSONAL_JIRA_URL:-}' ]
+  [ "$(echo "$result" | jq -r '.mcpServers["atlassian-personal"].env.JIRA_USERNAME')" = '${ATLASSIAN_PERSONAL_JIRA_USERNAME:-}' ]
+  [ "$(echo "$result" | jq -r '.mcpServers["atlassian-personal"].env.JIRA_API_TOKEN')" = '${ATLASSIAN_PERSONAL_TOKEN:-}' ]
   [ "$(echo "$result" | jq -r '.mcpServers.github // "absent"')" = "absent" ]
 }
 
@@ -104,7 +106,7 @@ EOF
   [ "$(echo "$result" | jq -r '.mcpServers.playwright.command')" = "npx" ]
   [ "$(echo "$result" | jq -r '.mcpServers.time.args[1]')" = "--local-timezone=America/Santiago" ]
   [ "$(echo "$result" | jq -r '.mcpServers.firecrawl.command')" = "npx" ]
-  [ "$(echo "$result" | jq -r '.mcpServers.firecrawl.env.FIRECRAWL_API_KEY')" = '${FIRECRAWL_API_KEY}' ]
+  [ "$(echo "$result" | jq -r '.mcpServers.firecrawl.env.FIRECRAWL_API_KEY')" = '${FIRECRAWL_API_KEY:-}' ]
   unset MCPS_PLAYWRIGHT_ENABLED MCPS_TIME_ENABLED MCPS_FIRECRAWL_ENABLED
 }
 

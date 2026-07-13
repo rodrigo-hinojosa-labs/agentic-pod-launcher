@@ -375,9 +375,15 @@ journalctl -u     agent-{{AGENT_NAME}}.service -f        # logs (look for 'sessi
 ```
 
 `doctor` (local) checks Claude Code on `PATH`, the unit's active state, a recent
-connection signal in the journal, `.credentials.json` (present + `0600`), and —
+connection signal in the journal, `.credentials.json` (present + `0600`),
+`.env` (present + `0600` + every enabled MCP's required secret non-empty), and —
 when the vault is on — the QMD/wiki-graph units, index freshness and vault-backup
 staleness. Add `--disable` to the kill switch to also prevent start at boot.
+
+**Secrets** (`.env`) reach the session via `EnvironmentFile=-.env` on the
+systemd unit. Edit `.env`, then `sudo systemctl restart agent-{{AGENT_NAME}}.service`
+— systemd only reads it at process start, so an edit alone does nothing until
+the unit restarts. Run `doctor` afterward to confirm.
 {{#if VAULT_QMD_ENABLED}}
 ### RAG (QMD) — freshness & control
 

@@ -124,6 +124,24 @@ validate_url() {
   return 1
 }
 
+# validate_atlassian_alias VAL → 0 if the alias is safe to become a
+# systemd/env-var-name segment. It is uppercased and interpolated into
+# ATLASSIAN_<ALIAS>_TOKEN etc (modules/mcp-json.tpl, render.sh's {{NAME}}
+# substitution) and, since 021, delivered to the local session via a
+# systemd EnvironmentFile. A dash or space produces an INVALID systemd
+# variable name: systemd drops the whole assignment AND logs the raw
+# KEY=VALUE at ERROR to the journal (a credential leak) — docker compose
+# accepts the same dashed key fine, so this was invisible until local mode
+# actually loaded the workspace .env.
+validate_atlassian_alias() {
+  local v="$1"
+  if [[ "$v" =~ ^[A-Za-z0-9_]+$ ]]; then
+    return 0
+  fi
+  echo "  ✗ Alias must be letters, digits, or underscore only (no dashes/spaces) — it becomes ATLASSIAN_<ALIAS>_TOKEN etc." >&2
+  return 1
+}
+
 # validate_uid_gid VAL → 0 if numeric and >= 0. UID 0 is rare for agents
 # but reserved for root explicitly; we accept it (callers can override
 # if they want stricter "must be >0").
