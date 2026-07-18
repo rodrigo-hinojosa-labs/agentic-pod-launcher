@@ -365,6 +365,34 @@ YML
   [ "$status" -eq 0 ]
 }
 
+@test "021 D1: .env 0600 under GNU-stat semantics → no false warning (mclaren gate regression)" {
+  # The doctor runs on the agent's OWN host, which in local mode is Linux. There
+  # `stat -f` means --file-system and prints a statvfs block to stdout (NOT the
+  # mode), so a macOS-first stat order silently mis-read a perfectly-0600 .env as
+  # a warning and leaked the statvfs. This stub reproduces GNU coreutils stat:
+  #   -c '%a' FILE  → the octal mode (what we want)
+  #   -f '%Lp' FILE → -f is --file-system; the '%Lp' is a bogus path, so it
+  #                   prints a statvfs block and fails (exit 1).
+  cat > "$TMP_TEST_DIR/bin/stat" << 'SH'
+#!/usr/bin/env bash
+if [ "$1" = "-c" ] && [ "$2" = "%a" ]; then echo "600"; exit 0; fi
+if [ "$1" = "-f" ]; then echo "  File: statvfs Namelen: 255 Type: ext2/ext3"; exit 1; fi
+exit 1
+SH
+  chmod +x "$TMP_TEST_DIR/bin/stat"
+  _write_agent_yml_with_mcps "  defaults: []
+  atlassian: []
+  github: {enabled: false}"
+  printf 'NOTIFY_BOT_TOKEN=x\n' > "$TMP_TEST_DIR/.env"
+  chmod 600 "$TMP_TEST_DIR/.env"
+  cd "$TMP_TEST_DIR"
+  run ./scripts/agentctl doctor
+  [ "$status" -eq 0 ]
+  # No statvfs contamination leaked into any message.
+  run grep -q "Namelen" <<< "$output"
+  [ "$status" -ne 0 ]
+}
+
 @test "021 D2: a lint-dirty .env (trailing backslash) → WARN naming line+key, value never printed" {
   _write_agent_yml_with_mcps "  defaults: []
   atlassian: []
@@ -481,8 +509,37 @@ EOF
 case "$*" in
   *is-active*) exit 0 ;;
   *is-failed*) exit 1 ;;
-  *cat*)
-    printf '[Service]\nEnvironmentFile=/home/op/wk/.state/remote-control.env\n'
+  *show*EnvironmentFiles*)
+    echo "/home/op/wk/.state/remote-control.env (ignore_errors=no)"
+    ;;
+  *) exit 0 ;;
+esac
+SH
+  chmod +x "$TMP_TEST_DIR/bin/systemctl"
+  cd "$TMP_TEST_DIR"
+  run ./scripts/agentctl doctor
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"installed"* ]]
+}
+
+@test "021 D3: uses systemctl show, not cat — detects a stale unit even when 'cat' is unreadable (mclaren gate)" {
+  # On the agent's own Linux host the installed unit file can be root-only, so
+  # 'systemctl cat' fails with 'Permission denied' for the operator. D3 must NOT
+  # depend on cat (that silently skipped the whole check on mclaren). 'systemctl
+  # show' works unprivileged and reflects what systemd actually loaded.
+  _write_agent_yml_with_mcps "  defaults: []
+  atlassian: []
+  github: {enabled: false}"
+  printf 'NOTIFY_BOT_TOKEN=x\n' > "$TMP_TEST_DIR/.env"
+  chmod 600 "$TMP_TEST_DIR/.env"
+  cat > "$TMP_TEST_DIR/bin/systemctl" << 'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *is-active*) exit 0 ;;
+  *is-failed*) exit 1 ;;
+  *cat*) echo "Failed to cat: Permission denied" >&2; exit 1 ;;
+  *show*EnvironmentFiles*)
+    echo "/home/op/wk/.state/remote-control.env (ignore_errors=no)"
     ;;
   *) exit 0 ;;
 esac
@@ -505,8 +562,8 @@ SH
 case "$*" in
   *is-active*) exit 0 ;;
   *is-failed*) exit 1 ;;
-  *cat*)
-    printf '[Service]\nEnvironmentFile=-/home/op/wk/.env\nEnvironmentFile=/home/op/wk/.state/remote-control.env\n'
+  *show*EnvironmentFiles*)
+    echo "/home/op/wk/.env (ignore_errors=yes) /home/op/wk/.state/remote-control.env (ignore_errors=no)"
     ;;
   *) exit 0 ;;
 esac
@@ -531,8 +588,8 @@ EOF
 case "$*" in
   *is-active*) exit 0 ;;
   *is-failed*) exit 1 ;;
-  *cat*)
-    printf '[Service]\nEnvironmentFile=-/home/op/wk/.env\nEnvironmentFile=/home/op/wk/.state/remote-control.env\n'
+  *show*EnvironmentFiles*)
+    echo "/home/op/wk/.env (ignore_errors=yes) /home/op/wk/.state/remote-control.env (ignore_errors=no)"
     ;;
   *) exit 0 ;;
 esac
