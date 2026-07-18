@@ -195,9 +195,22 @@ test-first (RED→GREEN + re-verificados en mclaren): (1) `stat -f` (macOS) en L
 falso WARN de permisos del `.env` + fuga del statvfs; fix helper portable `_file_mode` (GNU `-c %a`
 primero). (2) D3 leía la unit con `systemctl cat`, que da `Permission denied` en una unit root-only → el
 check se saltaba en silencio; fix a `systemctl show -p EnvironmentFiles`. Suite: **1052 ok, 0 not ok** (977
-baseline + 75 nuevos = 73 + 2 del gate). **PENDIENTE (necesita tu `sudo`):** instalar la unit staged +
-`daemon-reload` + `restart`, luego la batería post-restart (conteo `/proc/environ` 0→1, `systemctl show -p
-Environment` sin valores, `.env` corrupto no tumba el boot, doctor exit 1 con secreto en blanco). Fase
+baseline + 75 nuevos = 73 + 2 del gate).
+
+**GATE T019 CERRADO — PASADA POST-RESTART (2026-07-18):** el operador instaló la unit staged +
+`daemon-reload` + `restart`; unit `active`. Medido en vivo, solo conteos, sin imprimir jamás un valor:
+la unit carga `.env (ignore_errors=yes)` **primero** y `remote-control.env (ignore_errors=no)` segundo
+(ese `ignore_errors=yes` **es** FR-004, impuesto por systemd); **`/proc/<MainPID>/environ`: `GITHUB_PAT`
+0→1 y las 6 variables declaradas presentes (6/6), ninguna vacía** — el bug medido está muerto;
+`systemctl show -p Environment` vacío (SC-003, sin exposición); `agentctl doctor` con `✓ .env present
+(0600)` + `✓ installed unit loads the workspace .env` (D3 pasa) y cero WARN de secreto faltante; el
+`ExecStartPre` no avisó (correcto, no falta nada). La detección FR-004 se validó con `env_file_lint`
+sobre fixtures desechables (BOM y backslash final), nombrando la clave y **nunca el valor**. DOS ítems
+NO corridos a propósito (costo > evidencia, documentados en `tasks.md`): el test *empírico* de `.env`
+corrupto (exigía 2 restarts más y solo reprobaría el `ignore_errors=yes` que systemd ya reporta) y una
+llamada MCP viva (Claude Code spawnea los MCP on-demand: el cgroup solo tiene la sesión, 10 hilos sin
+hijos; la cadena está probada donde importa — el proceso que los lanza lleva los 6 secretos, y heredar
+el entorno al hijo es garantía del SO). Fase
 spec-kit: **implement completo y MERGEADO (PR #78, `dbe8274`); T020 cerrado. Los 2 fixes de portabilidad
 del doctor NO alcanzaron ese merge (el gate corrió después) → van en PR aparte desde
 `021-doctor-portability`. T019 a medias: falta el restart con `sudo` en mclaren + la batería
