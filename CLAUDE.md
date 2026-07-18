@@ -180,12 +180,26 @@ unit de sesión con `EnvironmentFile=-.env` PRIMERO + `ExecStartPre=-agent-secre
 `validate_atlassian_alias` cierra la fuga de credencial; `${VAR:-}` en las 9 referencias de secretos
 de `mcp-json.tpl`; healthcheck reescrito para parsear (nunca sourcear) con `.state/healthcheck-notify.env`
 como override de compatibilidad; `_local_secrets_doctor` nuevo en `agentctl` (D1-D4, WARN nunca fail);
-seam `SETUP_SYSTEMD_DIR` en `install_service` (antes sin cobertura de test alguna). Suite: **1050 ok, 0
-not ok** (977 baseline + 73 tests nuevos en 8 archivos, 3 nuevos). Mutation spot-check 3/3 (orden de
-EnvironmentFile detectado por 1 test, RCE del healthcheck por 1, lint neutralizado por 11). Shellcheck
-limpio. Docker intacto (guardado por assertion byte-level). VERSION 0.12.0→0.13.0. Fase spec-kit:
-**implement completo, siguiente: abrir PR (sin mergear sin confirmación) → T019 gate de hardware en
-mclaren al desplegar → T020 cierre SPECKIT al mergear.**
+seam `SETUP_SYSTEMD_DIR` en `install_service` (antes sin cobertura de test alguna). Mutation spot-check 3/3
+(orden de EnvironmentFile detectado por 1 test, RCE del healthcheck por 1, lint neutralizado por 11).
+Shellcheck limpio. Docker intacto (guardado por assertion byte-level). VERSION 0.12.0→0.13.0.
+
+**GATE DE HARDWARE mclaren — PASADA DE STAGING (2026-07-18, PRE-restart):** porté los 8 deltas de runtime
+al workspace vivo (los 8 eran byte-idénticos a `main` antes → el delta 021 aplicó limpio, sin merge
+quirúrgico), corrí `./setup.sh --regenerate` → unit **staged, NO instalada** (`sudo` pide contraseña en
+mclaren; es exactamente la trampa que D3 existe para cazar). Invariantes en artefactos verificados en el
+host: unit con `EnvironmentFile=-.env` primero + `ExecStartPre=-`, `.mcp.json` todo `${VAR:-}`, healthcheck
+con `env_file_get` y cero `source`. **El gate cazó DOS bugs de portabilidad en `agentctl doctor`** — ambos
+en código que solo corre en el host Linux del agente, ambos verdes en la suite macOS, ambos arreglados
+test-first (RED→GREEN + re-verificados en mclaren): (1) `stat -f` (macOS) en Linux es `--file-system` →
+falso WARN de permisos del `.env` + fuga del statvfs; fix helper portable `_file_mode` (GNU `-c %a`
+primero). (2) D3 leía la unit con `systemctl cat`, que da `Permission denied` en una unit root-only → el
+check se saltaba en silencio; fix a `systemctl show -p EnvironmentFiles`. Suite: **1052 ok, 0 not ok** (977
+baseline + 75 nuevos = 73 + 2 del gate). **PENDIENTE (necesita tu `sudo`):** instalar la unit staged +
+`daemon-reload` + `restart`, luego la batería post-restart (conteo `/proc/environ` 0→1, `systemctl show -p
+Environment` sin valores, `.env` corrupto no tumba el boot, doctor exit 1 con secreto en blanco). Fase
+spec-kit: **implement + fixes del gate completos; PR #78 abierto (sin mergear); T019 a medias (falta el
+restart con sudo) → T020 cierre SPECKIT al mergear.**
 
 **020-docs-refresh MERGED** (PR #76, merge `336f559`, 2026-07-13; docs-only, VERSION sigue 0.12.0).
 Plan: `specs/020-docs-refresh/plan.md`. Puso los 14 docs en alcance (README, agentic-quickstart.{es,en},

@@ -205,16 +205,17 @@ variants; run the rendered boot-check script directly.
 - [X] T017 Full gates: `bats tests/` (expect baseline 977 + the new tests, 0
   failures), `shellcheck -S error` clean over every touched shell file, and the
   docker-unchanged guard (T008's byte-level assertion) green. Record counts here.
-  - **Result**: `bats tests/` = **1050 ok / 0 not ok** (977 baseline + 73 new,
+  - **Result**: `bats tests/` = **1052 ok / 0 not ok** (977 baseline + 75 new,
     zero regressions). `shellcheck -S error` clean over every touched file
     (`setup.sh`, `scripts/agentctl`, `scripts/lib/env_file.sh`,
     `scripts/lib/wizard-validators.sh`). Docker-unchanged guard green
     (`021: docker mode is otherwise byte-unchanged` in `modules-render.bats`).
-  - **New test tally**: 73 across 8 files — 3 new (`env-file.bats` 25,
+    (75 = the original 73 + 2 added by the mclaren hardware gate; see T019.)
+  - **New test tally**: 75 across 8 files — 3 new (`env-file.bats` 25,
     `local-install-service.bats` 6, `local-secret-check.bats` 4) + additions to
     5 existing (`wizard-validators.bats` +4, `local-render.bats` +10,
     `modules-render.bats` +4, `local-healthcheck.bats` +6, `agentctl-local.bats`
-    +14) + assertion-only updates (no new tests) in `mcp-json.bats` (7 literal
+    +16) + assertion-only updates (no new tests) in `mcp-json.bats` (7 literal
     `${VAR}` shapes → `${VAR:-}`) and `quickstart-doc.bats` (validator allowlist
     + a new EN/ES parity row for the alias rule).
 - [X] T018 Mutation spot-check (the 019 discipline): 3 deliberate breakages —
@@ -227,11 +228,31 @@ variants; run the rendered boot-check script directly.
     `local-healthcheck.bats`); (c) detected by 11 tests (10 in `env-file.bats`
     + 1 in `agentctl-local.bats`'s D2 doctor check) — spanning both the lib
     layer and the doctor's consumption of it. All three reverted; the suite
-    returned to 1050/0 after each revert.
-- [ ] T019 Hardware gate on mclaren (AT DEPLOYMENT, after merge — quickstart.md
-  section "Hardware gate"): items 1-7 including the FR-004 corrupted-.env boot
-  test and the `/proc/<MainPID>/environ` count going 0 → 1. Record results in
-  the deployment log; this closes SC-001/SC-003/SC-005/SC-006 on real systemd.
+    returned to 1052/0 after each revert.
+- [ ] T019 Hardware gate on mclaren (quickstart.md section "Hardware gate"):
+  items 1-7 including the FR-004 corrupted-.env boot test and the
+  `/proc/<MainPID>/environ` count going 0 → 1. Closes SC-001/SC-003/SC-005 on
+  real systemd.
+  - **Staging pass done (2026-07-18, pre-restart)**: ported the 8 runtime deltas
+    to the live mclaren workspace (all 8 byte-identical to `main` before, so the
+    021 delta applied clean), ran `./setup.sh --regenerate` → unit **staged, not
+    installed** (`sudo` needs a password on mclaren — the exact trap D3 exists
+    for). Rendered-artifact invariants all verified on the host: unit has
+    `EnvironmentFile=-.../.env` first + `ExecStartPre=-`; `.mcp.json` all
+    `${VAR:-}`; healthcheck uses `env_file_get`, zero `source`.
+  - **The gate caught two portability bugs in `agentctl doctor`** — both in code
+    that only ever runs on the agent's Linux host, both green on the macOS test
+    suite, both fixed test-first here (RED→GREEN + re-verified on mclaren):
+    (1) `stat -f` (macOS) means `--file-system` on Linux → false `.env`
+    permission WARN + statvfs leak; fixed with a portable `_file_mode` helper.
+    (2) D3 read the unit via `systemctl cat`, which is `Permission denied` on a
+    root-only unit file → the check silently skipped; switched to `systemctl
+    show -p EnvironmentFiles`. Post-fix the doctor correctly reports the staged
+    unit as not-yet-installed.
+  - **Still pending (needs the operator's `sudo`)**: install the staged unit +
+    `daemon-reload` + `restart`, then the `/proc/environ` 0 → 1 count, the
+    `systemctl show -p Environment` no-values check, the corrupted-`.env` boot
+    test, and a blanked-secret doctor exit-1 check.
 - [ ] T020 On merge: update `CLAUDE.md` SPECKIT block — 021 to MERGED with
   PR/SHA (never commit `.claude/settings.json`).
 

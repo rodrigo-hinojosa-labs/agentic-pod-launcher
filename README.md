@@ -317,7 +317,7 @@ Mutations propagate via `agent.yml` → `heartbeat.conf` → staging crontab →
 The test suite uses `bats-core` and runs entirely on the host (no Docker required for the default suite; `yq` v4+, `jq`, `git` and `tmux` are the other host deps). Coverage spans the render engine, YAML lib, interval-to-cron converter, state-lib helpers, notifier contracts, the heartbeat runner, the plugin and MCP catalogs, the Telegram patcher, the heartbeat config-dir isolation, every `heartbeatctl` subcommand, the deployment-mode branch (local render, bootstrap, systemd schedule conversion, kill switch, healthcheck), the QMD/RAG stack (index lib, embed-completion loop, sqlite-vec, wiki-graph), the three backup primitives, and token health.
 
 ```bash
-bats tests/                                       # full suite (1050 tests as of v0.13.0)
+bats tests/                                       # full suite (1052 tests as of v0.13.0)
 bats tests/heartbeatctl.bats                      # single file
 bats tests/render.bats -f "substitutes"           # single test by name fragment
 

@@ -118,6 +118,15 @@ _doctor_fail() {
 }
 _doctor_skip() { echo "  ⊝ $1 (skipped — $2)"; }
 
+# Portable octal file mode (e.g. "600"). GNU coreutils uses `-c %a`; BSD/macOS
+# uses `-f %Lp`. GNU MUST be tried first: on the agents' own Linux hosts `stat -f`
+# means --file-system and prints a statvfs block to stdout (not the mode), so a
+# macOS-first order silently contaminated the value and mis-flagged a 0600 file
+# (caught by the 021 mclaren hardware gate). Empty on failure.
+_file_mode() {
+  stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null
+}
+
 # Story C: surface plugins the supervisor failed to install. Reads the
 # bind-mounted state file (host-side; no exec needed) and prints a copy-paste
 # retry command per residual failure (FR-C3).
@@ -432,7 +441,7 @@ cmd_doctor() {
   env_file=$(dirname "${yml:-./agent.yml}")/.env
   if [ -f "$env_file" ]; then
     local perms
-    perms=$(stat -f '%Lp' "$env_file" 2>/dev/null || stat -c '%a' "$env_file" 2>/dev/null)
+    perms=$(_file_mode "$env_file")
     if [ "$perms" = "600" ]; then
       _doctor_pass ".env present (0600)"
     else
@@ -1137,7 +1146,7 @@ _local_secrets_doctor() {
     return 0
   fi
   local perms
-  perms=$(stat -f '%Lp' "$env_file" 2>/dev/null || stat -c '%a' "$env_file" 2>/dev/null)
+  perms=$(_file_mode "$env_file")
   if [ "$perms" = "600" ]; then
     _doctor_pass ".env present (0600)"
   else
@@ -1160,10 +1169,14 @@ _local_secrets_doctor() {
   # --regenerate ran but the operator never sudo-cp'd + daemon-reload'd +
   # restarted the unit (021 R6: nothing else restarts it for you).
   if command -v systemctl >/dev/null 2>&1; then
-    local unit_cat
-    unit_cat=$(systemctl cat "agent-${agent}.service" 2>/dev/null || true)
-    if [ -n "$unit_cat" ]; then
-      if printf '%s\n' "$unit_cat" | grep -qE '^EnvironmentFile=-.*/\.env$'; then
+    # 'systemctl show' (not 'cat'): the installed unit file may be root-only, so
+    # 'cat' fails 'Permission denied' for the operator and silently skips the
+    # whole check (021 mclaren gate). 'show' works unprivileged and reflects what
+    # systemd actually loaded; the leading '-' surfaces as (ignore_errors=yes).
+    local unit_ef
+    unit_ef=$(systemctl show "agent-${agent}.service" -p EnvironmentFiles --value 2>/dev/null || true)
+    if [ -n "$unit_ef" ]; then
+      if printf '%s' "$unit_ef" | grep -qE '/\.env \(ignore_errors=yes\)'; then
         _doctor_pass "installed unit loads the workspace .env"
       else
         _doctor_warn "installed unit does not load .env yet (stale — regenerate ran but the unit was never reinstalled)" \
@@ -1273,7 +1286,7 @@ cmd_local_doctor() {
 
   if [ -r "$creds" ]; then
     local perms
-    perms=$(stat -f '%Lp' "$creds" 2>/dev/null || stat -c '%a' "$creds" 2>/dev/null)
+    perms=$(_file_mode "$creds")
     if [ "$perms" = "600" ]; then _doctor_pass "Login present (.credentials.json 0600)"
     else _doctor_warn ".credentials.json perms ${perms} (want 600)" "chmod 600 ${creds}"; fi
   else

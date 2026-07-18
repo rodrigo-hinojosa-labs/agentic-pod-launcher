@@ -49,11 +49,23 @@
   - New shared lib `scripts/lib/env_file.sh` (never mirrored to docker — no
     container consumer): `env_file_get` (safe read, never sources) and
     `env_file_lint` (the portable-subset check). Docker mode is untouched.
-  - Test-first: 73 new tests across 8 files (3 of them new: `env-file.bats`,
+  - Test-first: 75 new tests across 8 files (3 of them new: `env-file.bats`,
     `local-install-service.bats`, `local-secret-check.bats`), plus assertion
     updates in `mcp-json.bats`/`modules-render.bats` for the `${VAR:-}`
     shape and in `local-render.bats` for the unit's new directives —
     verified against the full pre-feature baseline (977 green).
+  - **Hardware-gate hardening (mclaren)**: deploying to the live local host
+    surfaced two portability bugs in `agentctl doctor` — both in code that runs
+    on the agent's *own* Linux box, both invisible on the macOS test host.
+    (1) The file-permission check used `stat -f` (BSD/macOS); on Linux `-f`
+    means `--file-system` and prints a statvfs block instead of the mode,
+    mis-flagging a perfectly-`0600` `.env` — folded into a portable `_file_mode`
+    helper (GNU `-c %a` first). (2) The installed-unit check (D3) read the unit
+    with `systemctl cat`, which fails `Permission denied` when the unit file is
+    root-only, silently skipping the very check that catches a
+    staged-but-uninstalled unit — switched to `systemctl show -p
+    EnvironmentFiles` (unprivileged; reflects what systemd actually loaded).
+    Both fixed test-first with stubs reproducing the Linux behavior.
 
 ### Documentation
 - **Full docs refresh to v0.12.0 reality (`020-docs-refresh`)**: the doc set had drifted
