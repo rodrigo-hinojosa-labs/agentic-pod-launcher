@@ -99,7 +99,7 @@ teardown() { teardown_tmp_dir; }
   result=$(render_template "$REPO_ROOT/modules/mcp-json.tpl")
   printf '%s' "$result" | grep -q '"command": "github-mcp-server"' \
     && printf '%s' "$result" | grep -q '"stdio"' \
-    && printf '%s' "$result" | grep -q '"GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PAT}"'
+    && printf '%s' "$result" | grep -q '"GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PAT:-}"'
 }
 
 @test "mcp-json github MCP drops the deprecated @modelcontextprotocol/server-github" {
@@ -107,4 +107,63 @@ teardown() { teardown_tmp_dir; }
   result=$(render_template "$REPO_ROOT/modules/mcp-json.tpl")
   printf '%s' "$result" | grep -q '"github"' \
     && ! printf '%s' "$result" | grep -q '@modelcontextprotocol/server-github'
+}
+
+# --- 021-local-secret-delivery: ${VAR} -> ${VAR:-} for every secret ref -----
+# (R4/plan D6.2). Per code.claude.com/docs/en/mcp, an unset ${VAR} with no
+# default can fail the WHOLE .mcp.json parse — one empty secret would take
+# fetch/git/filesystem/vault/qmd down with it. Docker-neutral: compose's
+# env_file always sets the keys, so this changes nothing there but the string.
+
+@test "021: FIRECRAWL_API_KEY carries a :- default" {
+  export MCPS_FIRECRAWL_ENABLED=true
+  result=$(render_template "$REPO_ROOT/modules/mcp-json.tpl")
+  printf '%s' "$result" | grep -q '"FIRECRAWL_API_KEY": "${FIRECRAWL_API_KEY:-}"'
+}
+
+@test "021: AWS_PROFILE and AWS_REGION carry a :- default" {
+  export MCPS_AWS_ENABLED=true
+  result=$(render_template "$REPO_ROOT/modules/mcp-json.tpl")
+  printf '%s' "$result" | grep -q '"AWS_PROFILE": "${AWS_PROFILE:-}"' \
+    && printf '%s' "$result" | grep -q '"AWS_REGION": "${AWS_REGION:-}"'
+}
+
+@test "021: all 5 atlassian instance vars carry a :- default" {
+  local fixture="$TMP_TEST_DIR/atlassian.yml"
+  cat > "$fixture" << 'EOF'
+version: 1
+agent: {name: my-bot, display_name: "MyBot", role: "r", vibe: "v"}
+user: {name: A, nickname: A, timezone: UTC, email: a@b.com, language: en}
+deployment: {host: h, workspace: "/home/a/wk", install_service: true}
+notifications: {channel: none}
+features: {heartbeat: {enabled: true, interval: "30m", timeout: 300, retries: 1, default_prompt: "ok"}}
+mcps:
+  atlassian:
+    - name: work
+      url: "https://work.atlassian.net"
+      email: "a@work.com"
+  github: {enabled: false}
+EOF
+  render_load_context "$fixture"
+  result=$(render_template "$REPO_ROOT/modules/mcp-json.tpl")
+  printf '%s' "$result" | grep -q '"CONFLUENCE_URL": "${ATLASSIAN_WORK_CONFLUENCE_URL:-}"' \
+    && printf '%s' "$result" | grep -q '"CONFLUENCE_USERNAME": "${ATLASSIAN_WORK_CONFLUENCE_USERNAME:-}"' \
+    && printf '%s' "$result" | grep -q '"CONFLUENCE_API_TOKEN": "${ATLASSIAN_WORK_TOKEN:-}"' \
+    && printf '%s' "$result" | grep -q '"JIRA_URL": "${ATLASSIAN_WORK_JIRA_URL:-}"' \
+    && printf '%s' "$result" | grep -q '"JIRA_USERNAME": "${ATLASSIAN_WORK_JIRA_USERNAME:-}"' \
+    && printf '%s' "$result" | grep -q '"JIRA_API_TOKEN": "${ATLASSIAN_WORK_TOKEN:-}"'
+}
+
+@test "021: docker mode is otherwise byte-unchanged — only the :- insertions differ" {
+  export MCPS_FIRECRAWL_ENABLED=true MCPS_AWS_ENABLED=true MCPS_GITHUB_ENABLED=true
+  result=$(render_template "$REPO_ROOT/modules/mcp-json.tpl")
+  # Strip every ":-" we just added; the remainder must be valid JSON with the
+  # commands/args untouched — a cheap proxy for "nothing else moved".
+  local stripped
+  stripped=$(printf '%s' "$result" | sed 's/:-}/}/g')
+  printf '%s' "$stripped" | grep -q '"FIRECRAWL_API_KEY": "${FIRECRAWL_API_KEY}"' \
+    && printf '%s' "$stripped" | grep -q '"AWS_PROFILE": "${AWS_PROFILE}"' \
+    && printf '%s' "$stripped" | grep -q '"GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PAT}"' \
+    && printf '%s' "$result" | grep -q '"command": "npx"' \
+    && printf '%s' "$result" | grep -q '"command": "github-mcp-server"'
 }

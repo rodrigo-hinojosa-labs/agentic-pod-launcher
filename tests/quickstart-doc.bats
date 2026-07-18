@@ -170,7 +170,8 @@ load helper
     case "$fn" in
       validate_email|validate_telegram_token|validate_timezone| \
       validate_cron_or_interval|validate_agent_name|validate_url| \
-      validate_uid_gid|validate_workspace_path|validate_destination_path) ;;
+      validate_uid_gid|validate_workspace_path|validate_destination_path| \
+      validate_atlassian_alias) ;;
       *) echo "Unknown validator in lib (update test): $fn" >&2; return 1 ;;
     esac
   done < <(grep -oE '^validate_[a-z_]+' "$lib")

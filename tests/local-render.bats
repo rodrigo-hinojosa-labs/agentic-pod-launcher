@@ -95,6 +95,70 @@ teardown() { teardown_tmp_dir; }
   grep -q '^EnvironmentFile=/home/op/agents/locbot/.state/remote-control.env$' "$TMP_TEST_DIR/unit"
 }
 
+# ─── 021-local-secret-delivery: workspace .env delivery ─────────────────────
+# contracts/secret-delivery.md invariants U1-U4.
+
+@test "systemd unit (U2): workspace .env is loaded with the '-' (ignore-if-missing) prefix" {
+  render_to_file "$REPO_ROOT/modules/systemd-remote-control.service.tpl" "$TMP_TEST_DIR/unit"
+  grep -q '^EnvironmentFile=-/home/op/agents/locbot/.env$' "$TMP_TEST_DIR/unit"
+}
+
+@test "systemd unit (U1): the .env line comes BEFORE remote-control.env (later file wins in systemd)" {
+  # Load-bearing on the LINE NUMBER, not just presence: remote-control.env's
+  # PATH/HOME/CLAUDE_CONFIG_DIR must always beat a stray line in .env, or every
+  # MCP spawn ENOENTs (the historical 203/EXEC failure). A comment can't
+  # enforce this — only a numeric ordering assertion can.
+  render_to_file "$REPO_ROOT/modules/systemd-remote-control.service.tpl" "$TMP_TEST_DIR/unit"
+  local env_line rc_line
+  env_line=$(grep -n '^EnvironmentFile=-/home/op/agents/locbot/\.env$' "$TMP_TEST_DIR/unit" | cut -d: -f1)
+  rc_line=$(grep -n '^EnvironmentFile=/home/op/agents/locbot/\.state/remote-control\.env$' "$TMP_TEST_DIR/unit" | cut -d: -f1)
+  [ -n "$env_line" ]
+  [ -n "$rc_line" ]
+  [ "$env_line" -lt "$rc_line" ]
+}
+
+@test "systemd unit (U3): ExecStartPre runs the boot secret-check, ignore-if-failed" {
+  render_to_file "$REPO_ROOT/modules/systemd-remote-control.service.tpl" "$TMP_TEST_DIR/unit"
+  grep -q '^ExecStartPre=-/home/op/agents/locbot/scripts/local/agent-secret-check\.sh$' "$TMP_TEST_DIR/unit"
+}
+
+@test "systemd unit: never uses the unsafe Environment= directive for secrets" {
+  render_to_file "$REPO_ROOT/modules/systemd-remote-control.service.tpl" "$TMP_TEST_DIR/unit"
+  if grep -qE '^Environment=' "$TMP_TEST_DIR/unit"; then false; fi
+}
+
+@test "U4: the healthcheck timer's service unit has NO EnvironmentFile for .env" {
+  render_to_file "$REPO_ROOT/modules/local-healthcheck.service.tpl" "$TMP_TEST_DIR/hc.service"
+  if grep -q 'EnvironmentFile' "$TMP_TEST_DIR/hc.service"; then false; fi
+}
+
+@test "U4: the qmd-reindex unit has NO EnvironmentFile" {
+  render_to_file "$REPO_ROOT/modules/local-qmd-reindex.service.tpl" "$TMP_TEST_DIR/u"
+  if grep -q 'EnvironmentFile' "$TMP_TEST_DIR/u"; then false; fi
+}
+
+@test "U4: the qmd-watch unit has NO EnvironmentFile" {
+  render_to_file "$REPO_ROOT/modules/local-qmd-watch.service.tpl" "$TMP_TEST_DIR/u"
+  if grep -q 'EnvironmentFile' "$TMP_TEST_DIR/u"; then false; fi
+}
+
+@test "U4: the vault-backup unit has NO EnvironmentFile" {
+  render_to_file "$REPO_ROOT/modules/local-vault-backup.service.tpl" "$TMP_TEST_DIR/u"
+  if grep -q 'EnvironmentFile' "$TMP_TEST_DIR/u"; then false; fi
+}
+
+@test "U4: the wiki-graph unit has NO EnvironmentFile" {
+  render_to_file "$REPO_ROOT/modules/local-wiki-graph.service.tpl" "$TMP_TEST_DIR/u"
+  if grep -q 'EnvironmentFile' "$TMP_TEST_DIR/u"; then false; fi
+}
+
+@test "021 T014: local-secret-check.sh.tpl renders, carries the render header, and never hardcodes 'do not hand-edit' as a lie" {
+  render_to_file "$REPO_ROOT/modules/local-secret-check.sh.tpl" "$TMP_TEST_DIR/agent-secret-check.sh"
+  grep -q 'Rendered from modules/local-secret-check.sh.tpl' "$TMP_TEST_DIR/agent-secret-check.sh"
+  grep -q '^WORKSPACE="/home/op/agents/locbot"$' "$TMP_TEST_DIR/agent-secret-check.sh"
+  grep -q '^exit 0$' "$TMP_TEST_DIR/agent-secret-check.sh"
+}
+
 @test "systemd unit: restart budget + RestartSec present" {
   render_to_file "$REPO_ROOT/modules/systemd-remote-control.service.tpl" "$TMP_TEST_DIR/unit"
   grep -q '^RestartSec=10$' "$TMP_TEST_DIR/unit"

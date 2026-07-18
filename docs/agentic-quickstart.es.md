@@ -324,6 +324,7 @@ El wizard (manual y agéntico) valida los inputs antes de aceptarlos. Si el slas
 | `HEARTBEAT_INTERVAL` | `Nm` / `Nh` o expresión cron de 5 campos | `30m`, `2h`, `0 * * * *` | `1d`, `30 minutes`, `every hour` |
 | `NOTIFY_BOT_TOKEN` (si no vacío) | `<dígitos>:<base64-like 25+>` | `123456789:AAEhBP0...` | `mi-token`, `123:short` |
 | `*_URL` (Atlassian, fork) | http(s) only, sin whitespace | `https://acme.atlassian.net` | `acme.atlassian.net`, `ftp://...` |
+| Alias de workspace Atlassian | Solo letras, dígitos, guion bajo (se interpola en `ATLASSIAN_<ALIAS>_TOKEN`; un guion produce un nombre de variable systemd inválido) | `work`, `cenco_corp` | `cenco-corp`, `mi equipo` |
 | `UID`/`GID` | Entero no-negativo (auto-detectado, no se pregunta) | `1000`, `501` | `-1`, `abc` |
 
 El mismo comportamiento de re-prompt aplica a todos los prompts de elección: `LANGUAGE` (`es`/`en`/`mixed`), `NOTIFY_CHANNEL` (`none`/`log`/`telegram`) y la acción final (`proceed`/`edit`/`abort`).

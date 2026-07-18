@@ -170,6 +170,38 @@ setup() {
   [[ "$output" == *"whitespace"* ]]
 }
 
+# ── validate_atlassian_alias (021) ──────────────────────────
+# A dashed/spaced alias becomes ATLASSIAN_<ALIAS>_TOKEN etc. In docker that's
+# a legal compose env key; in local mode systemd DROPS the whole assignment
+# (invalid variable name) and logs the raw KEY=VALUE at ERROR — a credential
+# leak. 021 (local secret delivery) is what makes systemd actually read the
+# workspace .env, so this defect — invisible before — must be closed with it.
+
+@test "validate_atlassian_alias accepts letters/digits/underscore" {
+  validate_atlassian_alias "work"
+  validate_atlassian_alias "personal2"
+  validate_atlassian_alias "cenco_corp"
+  validate_atlassian_alias "A_B_9"
+}
+
+@test "validate_atlassian_alias rejects a dash (invalid systemd env-var name)" {
+  run validate_atlassian_alias "cenco-corp"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"ATLASSIAN_"* ]]
+}
+
+@test "validate_atlassian_alias rejects a space" {
+  run validate_atlassian_alias "my work"
+  [ "$status" -eq 1 ]
+}
+
+@test "validate_atlassian_alias rejects empty input handling by the caller (empty is not this validator's job)" {
+  # Contract: validators reject on failed pattern match; ask_validated handles
+  # the empty-input loop separately. An empty string fails the pattern here.
+  run validate_atlassian_alias ""
+  [ "$status" -eq 1 ]
+}
+
 # ── validate_uid_gid ────────────────────────────────────────
 
 @test "validate_uid_gid accepts non-negative integers" {

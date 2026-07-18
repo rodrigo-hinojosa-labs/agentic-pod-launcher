@@ -11,7 +11,17 @@ UNIT="agent-${AGENT_NAME}.service"
 CONFIG_DIR="${WORKSPACE}/.state/.claude"
 CREDS="${CONFIG_DIR}/.credentials.json"
 # Optional notify config (NOTIFY_BOT_TOKEN, NOTIFY_CHAT_ID). Never versioned.
-NOTIFY_ENV="${WORKSPACE}/.state/healthcheck-notify.env"
+# 021 (local secret delivery): the source of truth is the workspace .env —
+# this unit has no EnvironmentFile of its own (least privilege), so it reads
+# the value itself via the shared parser (never sourced: .env can arrive from
+# a REMOTE fork restore, so `source`-ing it would be remote code execution).
+# NOTIFY_LEGACY_ENV is a COMPATIBILITY OVERRIDE for an already-hand-made file:
+# honored when present so a pre-021 agent keeps alerting exactly as before; a
+# fresh scaffold never creates it — .env is the only source going forward.
+NOTIFY_LEGACY_ENV="${WORKSPACE}/.state/healthcheck-notify.env"
+NOTIFY_ENV_FILE="${WORKSPACE}/.env"
+# shellcheck source=/dev/null
+. "${WORKSPACE}/scripts/lib/env_file.sh"
 EXPIRY_WARN_MS=$((24 * 60 * 60 * 1000))   # warn when <24h of login remains
 
 status="OK"
@@ -94,13 +104,16 @@ fi
 echo "agent-${AGENT_NAME} healthcheck: ${status}${reason:+ (${reason})}"
 
 # 4. Optional notify on DEGRADED. Token NEVER on argv/journal: curl reads the
-#    request (URL + token + body) from stdin via --config -.
-if [ "$status" = "DEGRADED" ] && [ -r "$NOTIFY_ENV" ]; then
-  # shellcheck source=/dev/null
-  . "$NOTIFY_ENV"
-  if [ -n "${NOTIFY_BOT_TOKEN:-}" ] && [ -n "${NOTIFY_CHAT_ID:-}" ] && command -v curl >/dev/null 2>&1; then
+#    request (URL + token + body) from stdin via --config -. Source: the
+#    legacy file if present (compatibility override), else the workspace .env.
+if [ "$status" = "DEGRADED" ]; then
+  notify_src="$NOTIFY_ENV_FILE"
+  [ -r "$NOTIFY_LEGACY_ENV" ] && notify_src="$NOTIFY_LEGACY_ENV"
+  notify_bot_token=$(env_file_get NOTIFY_BOT_TOKEN "$notify_src")
+  notify_chat_id=$(env_file_get NOTIFY_CHAT_ID "$notify_src")
+  if [ -n "$notify_bot_token" ] && [ -n "$notify_chat_id" ] && command -v curl >/dev/null 2>&1; then
     printf 'url = "https://api.telegram.org/bot%s/sendMessage"\ndata-urlencode = "chat_id=%s"\ndata-urlencode = "text=agent-%s DEGRADED: %s"\n' \
-      "$NOTIFY_BOT_TOKEN" "$NOTIFY_CHAT_ID" "$AGENT_NAME" "$reason" \
+      "$notify_bot_token" "$notify_chat_id" "$AGENT_NAME" "$reason" \
       | curl -s --config - >/dev/null 2>&1 || true
   fi
 fi

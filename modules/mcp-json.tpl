@@ -24,7 +24,7 @@
       "command": "npx",
       "args": ["-y", "firecrawl-mcp"],
       "env": {
-        "FIRECRAWL_API_KEY": "${FIRECRAWL_API_KEY}"
+        "FIRECRAWL_API_KEY": "${FIRECRAWL_API_KEY:-}"
       }
     }{{/if}}{{#if MCPS_GOOGLE_CALENDAR_ENABLED}},
     "google-calendar": {
@@ -38,8 +38,8 @@
       "command": "uvx",
       "args": ["awslabs.aws-api-mcp-server@latest"],
       "env": {
-        "AWS_PROFILE": "${AWS_PROFILE}",
-        "AWS_REGION": "${AWS_REGION}"
+        "AWS_PROFILE": "${AWS_PROFILE:-}",
+        "AWS_REGION": "${AWS_REGION:-}"
       }
     }{{/if}}{{#if MCPS_TREE_SITTER_ENABLED}},
     "tree-sitter": {
@@ -50,19 +50,19 @@
       "command": "uvx",
       "args": ["mcp-atlassian"],
       "env": {
-        "CONFLUENCE_URL": "${ATLASSIAN_{{NAME}}_CONFLUENCE_URL}",
-        "CONFLUENCE_USERNAME": "${ATLASSIAN_{{NAME}}_CONFLUENCE_USERNAME}",
-        "CONFLUENCE_API_TOKEN": "${ATLASSIAN_{{NAME}}_TOKEN}",
-        "JIRA_URL": "${ATLASSIAN_{{NAME}}_JIRA_URL}",
-        "JIRA_USERNAME": "${ATLASSIAN_{{NAME}}_JIRA_USERNAME}",
-        "JIRA_API_TOKEN": "${ATLASSIAN_{{NAME}}_TOKEN}"
+        "CONFLUENCE_URL": "${ATLASSIAN_{{NAME}}_CONFLUENCE_URL:-}",
+        "CONFLUENCE_USERNAME": "${ATLASSIAN_{{NAME}}_CONFLUENCE_USERNAME:-}",
+        "CONFLUENCE_API_TOKEN": "${ATLASSIAN_{{NAME}}_TOKEN:-}",
+        "JIRA_URL": "${ATLASSIAN_{{NAME}}_JIRA_URL:-}",
+        "JIRA_USERNAME": "${ATLASSIAN_{{NAME}}_JIRA_USERNAME:-}",
+        "JIRA_API_TOKEN": "${ATLASSIAN_{{NAME}}_TOKEN:-}"
       }
     }{{/each}}{{#if MCPS_GITHUB_ENABLED}},
     "github": {
       "command": "github-mcp-server",
       "args": ["stdio"],
       "env": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PAT}"
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PAT:-}"
       }
     }{{/if}}{{#if VAULT_MCP_ENABLED}},
     "vault": {

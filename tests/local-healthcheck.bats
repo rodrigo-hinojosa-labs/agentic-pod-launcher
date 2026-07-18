@@ -24,6 +24,12 @@ features: {heartbeat: {enabled: true, interval: "30m", timeout: 300, retries: 1,
 YML
   render_load_context "$TMP_TEST_DIR/agent.yml" >/dev/null
 
+  # 021: the healthcheck sources scripts/lib/env_file.sh relative to the
+  # workspace (mirroring the real scaffold, where scripts/ is copied
+  # wholesale) — mirror that layout here.
+  mkdir -p "$TMP_TEST_DIR/scripts/lib"
+  cp "$REPO_ROOT/scripts/lib/env_file.sh" "$TMP_TEST_DIR/scripts/lib/"
+
   # Render the healthcheck under test.
   render_to_file "$REPO_ROOT/modules/local-healthcheck.sh.tpl" "$TMP_TEST_DIR/hc.sh"
   chmod +x "$TMP_TEST_DIR/hc.sh"
@@ -183,6 +189,74 @@ _write_creds() {  # _write_creds <expiresAt-ms>
   # as a curl command-line argument.
   grep -q 'curl -s --config -' "$TMP_TEST_DIR/hc.sh"
   ! grep -qE 'curl[^|]*(-d|--data|--header)[^|]*NOTIFY_BOT_TOKEN' "$TMP_TEST_DIR/hc.sh"
+}
+
+# ─── 021-local-secret-delivery (US2): notify secrets via .env, never sourced ───
+# contracts/secret-delivery.md invariants H1-H5.
+
+_curl_stub_capture() {
+  # A curl stub that dumps its stdin (the --config file content) so tests can
+  # assert on the URL/token/chat_id it was actually handed.
+  cat > "$TMP_TEST_DIR/bin/curl" << SH
+#!/usr/bin/env bash
+cat > "$TMP_TEST_DIR/curl-stdin.captured"
+exit 0
+SH
+  chmod +x "$TMP_TEST_DIR/bin/curl"
+}
+
+@test "H-fallback: only .env populated (no legacy file) → DEGRADED still notifies from .env" {
+  _curl_stub_capture
+  printf 'NOTIFY_BOT_TOKEN=from-env-token\nNOTIFY_CHAT_ID=555\n' > "$TMP_TEST_DIR/.env"
+  STUB_ACTIVE=3 STUB_JOURNAL="connected" run "$TMP_TEST_DIR/hc.sh"
+  [ "$status" -eq 2 ]
+  grep -q 'from-env-token' "$TMP_TEST_DIR/curl-stdin.captured"
+}
+
+@test "H1: legacy file wins over .env when both are present" {
+  _curl_stub_capture
+  printf 'NOTIFY_BOT_TOKEN=from-env-token\nNOTIFY_CHAT_ID=555\n' > "$TMP_TEST_DIR/.env"
+  mkdir -p "$TMP_TEST_DIR/.state"
+  printf 'NOTIFY_BOT_TOKEN=legacy-token\nNOTIFY_CHAT_ID=999\n' > "$TMP_TEST_DIR/.state/healthcheck-notify.env"
+  STUB_ACTIVE=3 STUB_JOURNAL="connected" run "$TMP_TEST_DIR/hc.sh"
+  [ "$status" -eq 2 ]
+  grep -q 'legacy-token' "$TMP_TEST_DIR/curl-stdin.captured"
+  if grep -q 'from-env-token' "$TMP_TEST_DIR/curl-stdin.captured"; then false; fi
+}
+
+@test "H2: a fresh workspace never has the legacy file (nothing creates it)" {
+  [ ! -e "$TMP_TEST_DIR/.state/healthcheck-notify.env" ]
+}
+
+@test "H3 SECURITY: the notify source is parsed, never sourced (canary must not fire)" {
+  _curl_stub_capture
+  local canary="$TMP_TEST_DIR/pwned"
+  cat > "$TMP_TEST_DIR/.env" << EOF
+EVIL=\$(touch "$canary")
+NOTIFY_BOT_TOKEN=real-token
+NOTIFY_CHAT_ID=555
+EOF
+  STUB_ACTIVE=3 STUB_JOURNAL="connected" run "$TMP_TEST_DIR/hc.sh"
+  [ "$status" -eq 2 ]
+  grep -q 'real-token' "$TMP_TEST_DIR/curl-stdin.captured"
+  # Load-bearing negative — kept LAST per the suite's bats hazard.
+  [ ! -e "$canary" ]
+}
+
+@test "H4: only NOTIFY_BOT_TOKEN/NOTIFY_CHAT_ID are read — other .env secrets never reach curl's stdin" {
+  _curl_stub_capture
+  printf 'NOTIFY_BOT_TOKEN=real-token\nNOTIFY_CHAT_ID=555\nGITHUB_PAT=should-never-leak\n' > "$TMP_TEST_DIR/.env"
+  STUB_ACTIVE=3 STUB_JOURNAL="connected" run "$TMP_TEST_DIR/hc.sh"
+  [ "$status" -eq 2 ]
+  if grep -q 'should-never-leak' "$TMP_TEST_DIR/curl-stdin.captured"; then false; fi
+}
+
+@test "notify: empty NOTIFY_BOT_TOKEN in .env is treated as not-provided (no notify attempt)" {
+  _curl_stub_capture
+  printf 'NOTIFY_BOT_TOKEN=\nNOTIFY_CHAT_ID=555\n' > "$TMP_TEST_DIR/.env"
+  STUB_ACTIVE=3 STUB_JOURNAL="connected" run "$TMP_TEST_DIR/hc.sh"
+  [ "$status" -eq 2 ]
+  [ ! -e "$TMP_TEST_DIR/curl-stdin.captured" ]
 }
 
 @test "G3/FR-014: login helper rejects Claude Code < 2.1.51" {

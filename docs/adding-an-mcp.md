@@ -84,6 +84,16 @@ What the wizard does automatically from the descriptor
 No `setup.sh` edit, no `env-example.tpl` edit, and no `scripts/lib/schema.sh`
 edit is needed for this route (`mcps.defaults` is not schema-validated).
 
+**Delivery is symmetric across modes (021).** Docker reads `.env` via
+compose's `env_file`; local mode reads it via
+`EnvironmentFile=-<workspace>/.env` on the session unit
+(`modules/systemd-remote-control.service.tpl`) — Claude Code expands
+`${VAR:-}` in the rendered `.mcp.json` from its own process environment
+either way, so a new catalog secret needs no per-mode wiring. `agentctl
+doctor` (local mode) warns if an enabled MCP's `secret_env_var` is missing or
+empty, naming the variable and `.env` — see
+[`docs/state-layout.md`](state-layout.md) for the delivery mechanism.
+
 ### 2. Add the gated block to `modules/mcp-json.tpl`
 
 ```text

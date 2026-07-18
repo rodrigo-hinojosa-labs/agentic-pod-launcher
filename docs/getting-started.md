@@ -111,7 +111,7 @@ The healthcheck timer fires 2 minutes after boot and every 5 minutes thereafter,
 - `WARN` — no live relay connection, login expiring within 24h, a failed qmd-watch or wiki-graph unit, or a check it could not perform (no `ss`, no `jq`, unknown MainPID). It degrades gracefully rather than crying failure.
 - **Connection check:** it asks whether the session process holds an ESTABLISHED `:443` socket (`ss -tnpH state established`, matched against the unit's `MainPID`) — not whether the journal says "connected".
 
-It can notify on `DEGRADED` via optional `NOTIFY_BOT_TOKEN`/`NOTIFY_CHAT_ID` in `<workspace>/.state/healthcheck-notify.env` (the token is fed to `curl` via a config file on stdin, so it never appears on argv or in the journal).
+It can notify on `DEGRADED` via optional `NOTIFY_BOT_TOKEN`/`NOTIFY_CHAT_ID` — read from the workspace `.env` (021), or from the legacy `<workspace>/.state/healthcheck-notify.env` if that file is present (a compatibility override for agents that had one before 021; a fresh scaffold never creates it). The token is fed to `curl` via a config file on stdin, so it never appears on argv or in the journal.
 
 Operate and verify:
 
@@ -275,6 +275,8 @@ Restore pulls the branches in order — config first (so `vault.path` is known),
 
 ## Rotating Secrets
 
+### Docker mode
+
 `.env` is injected via `env_file`, which only applies at **container creation** — a plain restart does not re-read it, so the container must be recreated for the new value to reach the process environment:
 
 ```bash
@@ -295,6 +297,20 @@ docker compose restart                                         # supervisor re-s
 ```
 
 Equivalent alternative: run `/telegram:configure <new-token>` inside the Claude session, which rewrites the channel-scoped env directly.
+
+### Local mode (021)
+
+The session unit loads `.env` via `EnvironmentFile=-<workspace>/.env`, and — like docker's `env_file` — systemd only reads it at process **spawn**. Editing `.env` alone does nothing until the unit restarts:
+
+```bash
+nano <workspace>/.env                        # edit the secret
+sudo systemctl restart agent-<name>.service  # MANDATORY — EnvironmentFile is read at spawn
+./scripts/agentctl doctor                    # confirm: no secrets warning
+```
+
+If `agentctl doctor` warns `installed unit does not load .env yet`, the *installed* unit predates 021 — re-run `./setup.sh --regenerate`, then (only if it prints "staged … sudo unavailable") `sudo cp ./agent-<name>.service /etc/systemd/system/ && sudo systemctl daemon-reload`, then the restart above.
+
+The healthcheck (a separate oneshot unit, no `EnvironmentFile` of its own) re-reads `NOTIFY_BOT_TOKEN`/`NOTIFY_CHAT_ID` straight from `.env` on its next tick — no restart needed for that one.
 
 ## Teardown
 

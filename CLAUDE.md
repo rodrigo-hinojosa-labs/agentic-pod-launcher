@@ -132,6 +132,61 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
+**021-local-secret-delivery ACTIVE** (branch `021-local-secret-delivery` desde main=`cd6ad89` v0.12.0,
+2026-07-13). Plan: `specs/021-local-secret-delivery/plan.md`. **BUG MEDIDO EN HARDWARE VIVO**: el
+`.env` del workspace NUNCA llega a los procesos del agente en modo local. En mclaren, el entorno de la
+sesión corriendo tiene **0** de sus 6 secretos declarados (`tr '\0' '\n' < /proc/<MainPID>/environ |
+grep -cE '^(GITHUB_PAT|ATLASSIAN_MCLAREN_TOKEN)=' → 0`), mientras su `.mcp.json` declara 7 MCPs y
+referencia 6 variables. Docker entrega vía `env_file` de compose; local NO tiene equivalente (la única
+`EnvironmentFile` es `.state/remote-control.env`, con 4 claves NO secretas). Peor: el healthcheck local
+lee sus secretos de OTRO archivo (`.state/healthcheck-notify.env`) que NADIE crea → el wizard te pide el
+token del notifier y la alerta de DEGRADED nunca se dispara.
+
+DISEÑO (Fase 0: workflow `wf_7f4e37a8-1f4`, 6 investigadores + síntesis adversarial, 313 tool calls):
+**`EnvironmentFile=-<workspace>/.env` en la unit de sesión, PRIMERO** (antes de `remote-control.env` —
+en systemd gana el ÚLTIMO, así el PATH/HOME/CLAUDE_CONFIG_DIR del launcher nunca lo pisa una línea del
+operador; un PATH malo hace ENOENT a todo spawn de MCP = el 203/EXEC histórico). El prefijo `-` es
+OBLIGATORIO: un `.env` ausente/corrupto es no-op, no falla de unit — **eso ES FR-004, impuesto por
+systemd, no por nuestro código**. Claude Code expande `${VAR}` de `.mcp.json` desde su propio env y
+lanza los MCPs, así que esa línea cierra todo el hueco del catálogo.
+
+CLARIFICACIONES (decididas por el usuario 2026-07-13): alcance = sesión + healthcheck (los 4 timers NO
+reciben secretos, menor privilegio); `healthcheck-notify.env` = override de compatibilidad (si existe
+gana; un scaffold nuevo nunca lo crea); secreto faltante = doctor + WARN al boot, **nunca falla dura**
+(el ciclo sigue fail-silent — lo que muere es el silencio hacia el operador; NO enmienda la
+constitución).
+
+HALLAZGOS CRÍTICOS: (1) el healthcheck hoy hace `. "$NOTIFY_ENV"` — **RCE**, porque
+`--restore-from-fork` descifra un `.env.age` REMOTO al `.env`; el reemplazo PARSEA, nunca sourcea.
+(2) Un nombre de variable inválido hace que systemd loguee el `KEY=VALUE` COMPLETO al journal (fuga de
+credencial) — y el alias Atlassian del wizard **no está validado**: `cenco-corp` →
+`ATLASSIAN_CENCO-CORP_TOKEN`, nombre inválido en systemd → se dropea TODO el set Atlassian *y* se
+filtra el token. Sanitizar el alias ENTRA en 021 o 021 despacha una fuga el día uno. (3) systemd y
+compose **divergen** en shapes que el operador escribe a mano (backslash final se traga la línea
+siguiente; BOM descarta el archivo ENTERO en silencio) → nueva lib `scripts/lib/env_file.sh`
+(`env_file_get` sin `eval`, `env_file_lint` del subset portable). (4) **NUNCA** crear un archivo
+llamado `.env` bajo `.state/` — `backup_identity.sh:72,152-154` ya cifra esa ruta y empezaría a
+empujar secretos al fork. (5) El doctor debe inspeccionar la unit **INSTALADA**: `--regenerate` no
+reinicia nada y solo reinstala la unit si `install_service:true` Y `sudo -n` funciona — si no, deja el
+archivo staged y sale 0 (agente sigue sin secretos, doctor lo daría verde).
+
+DESMENTIDO por medición en vivo: la doc de Claude Code dice que un `${VAR}` sin definir hace fallar el
+parseo de TODO el `.mcp.json`; en 2.1.185 **no pasa** (los 7 MCPs enumeran igual). `${VAR:-}` en
+`mcp-json.tpl` baja de bloqueante a prudente. Constitución 6/6 PASS.
+
+**IMPLEMENTADO 2026-07-13 (test-first, 18/20 tareas — T019/T020 pendientes de despliegue/merge):**
+unit de sesión con `EnvironmentFile=-.env` PRIMERO + `ExecStartPre=-agent-secret-check.sh`;
+`scripts/lib/env_file.sh` nueva (`env_file_get` sin eval, `env_file_lint` del subset portable);
+`validate_atlassian_alias` cierra la fuga de credencial; `${VAR:-}` en las 9 referencias de secretos
+de `mcp-json.tpl`; healthcheck reescrito para parsear (nunca sourcear) con `.state/healthcheck-notify.env`
+como override de compatibilidad; `_local_secrets_doctor` nuevo en `agentctl` (D1-D4, WARN nunca fail);
+seam `SETUP_SYSTEMD_DIR` en `install_service` (antes sin cobertura de test alguna). Suite: **1050 ok, 0
+not ok** (977 baseline + 73 tests nuevos en 8 archivos, 3 nuevos). Mutation spot-check 3/3 (orden de
+EnvironmentFile detectado por 1 test, RCE del healthcheck por 1, lint neutralizado por 11). Shellcheck
+limpio. Docker intacto (guardado por assertion byte-level). VERSION 0.12.0→0.13.0. Fase spec-kit:
+**implement completo, siguiente: abrir PR (sin mergear sin confirmación) → T019 gate de hardware en
+mclaren al desplegar → T020 cierre SPECKIT al mergear.**
+
 **020-docs-refresh MERGED** (PR #76, merge `336f559`, 2026-07-13; docs-only, VERSION sigue 0.12.0).
 Plan: `specs/020-docs-refresh/plan.md`. Puso los 14 docs en alcance (README, agentic-quickstart.{es,en},
 las 8 guías de docs/ y los 3 templates de docs modules/{next-steps.en,next-steps.es,claude-md}.tpl) al

@@ -2,6 +2,59 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Local mode: the workspace `.env` now actually reaches the agent
+  (`021-local-secret-delivery`)**: measured on the live mclaren host — the
+  running session had **zero** of its six declared secrets, because no
+  systemd unit ever loaded the workspace `.env`. Docker mode delivers
+  secrets via compose's `env_file`; local mode had no equivalent at all, so
+  every catalog-MCP secret (Firecrawl, Google Calendar, AWS, Atlassian,
+  GitHub) silently expanded to nothing, and the healthcheck's Telegram alert
+  read from a *different* file (`.state/healthcheck-notify.env`) that
+  nothing ever created.
+  - **Delivery**: the session unit gains
+    `EnvironmentFile=-<workspace>/.env`, listed *before* the existing
+    `remote-control.env` (systemd's later file wins, so the launcher-pinned
+    `PATH`/`HOME`/`CLAUDE_CONFIG_DIR` can never be clobbered by a stray line
+    in `.env`). The leading `-` makes a missing/invalid `.env` a silent
+    no-op — never a boot failure. Claude Code expands `${VAR}` in
+    `.mcp.json` from its own process environment, so this one line closes
+    the whole catalog-MCP gap; no per-MCP wiring needed.
+  - **Healthcheck (RCE fix)**: it used to `source` the notify-secrets file —
+    and that file can arrive from a *remote* fork restore
+    (`--restore-from-fork` decrypts `.env.age` into `.env`), making the old
+    code remote code execution as the operator, every 5 minutes. It now
+    parses via a new allowlisted reader, never sourcing. The legacy
+    `.state/healthcheck-notify.env` is kept as a compatibility override (it
+    wins when present, so an already-configured agent keeps alerting
+    unchanged) but a fresh scaffold never creates it.
+  - **Diagnosis**: `agentctl doctor` (local mode) gained a secrets check —
+    `.env` presence/permissions, a portable-subset linter (systemd and
+    compose parse `.env` differently on several hand-editable shapes — a
+    trailing backslash, an `export ` prefix, a BOM — and hand-editing is the
+    *normal* path here), whether the *installed* unit actually loads `.env`
+    (catches an operator who ran `--regenerate` but never restarted the
+    unit), and whether every enabled MCP's required secret is present and
+    non-empty. A new boot-time check (`ExecStartPre=-`) mirrors the same
+    logic to stderr, visible via `journalctl`. Both are WARN-only — a
+    miscredentialed optional MCP degrades that MCP, never the session.
+  - **Two related defects closed in the same change**: an unvalidated
+    Atlassian workspace alias could contain a dash, producing an **invalid**
+    systemd variable name — systemd silently drops the assignment and logs
+    the full `KEY=VALUE` to the journal at ERROR (a credential leak the new
+    validator (`validate_atlassian_alias`) now rejects at collection time).
+    Every secret reference in `.mcp.json` gained a `${VAR:-}` default
+    (defence in depth against the documented Claude Code behavior for an
+    unset variable; docker-neutral).
+  - New shared lib `scripts/lib/env_file.sh` (never mirrored to docker — no
+    container consumer): `env_file_get` (safe read, never sources) and
+    `env_file_lint` (the portable-subset check). Docker mode is untouched.
+  - Test-first: 73 new tests across 8 files (3 of them new: `env-file.bats`,
+    `local-install-service.bats`, `local-secret-check.bats`), plus assertion
+    updates in `mcp-json.bats`/`modules-render.bats` for the `${VAR:-}`
+    shape and in `local-render.bats` for the unit's new directives —
+    verified against the full pre-feature baseline (977 green).
+
 ### Documentation
 - **Full docs refresh to v0.12.0 reality (`020-docs-refresh`)**: the doc set had drifted
   behind features 011-019. A code-anchored audit of all 14 in-scope documents recorded
