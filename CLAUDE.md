@@ -132,8 +132,8 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
-**021-local-secret-delivery ACTIVE** (branch `021-local-secret-delivery` desde main=`cd6ad89` v0.12.0,
-2026-07-13). Plan: `specs/021-local-secret-delivery/plan.md`. **BUG MEDIDO EN HARDWARE VIVO**: el
+**021-local-secret-delivery MERGED** (PR #78, merge `dbe8274` en main, 2026-07-18; branch desde
+main=`cd6ad89` v0.12.0, VERSION 0.12.0→0.13.0). Plan: `specs/021-local-secret-delivery/plan.md`. **BUG MEDIDO EN HARDWARE VIVO**: el
 `.env` del workspace NUNCA llega a los procesos del agente en modo local. En mclaren, el entorno de la
 sesión corriendo tiene **0** de sus 6 secretos declarados (`tr '\0' '\n' < /proc/<MainPID>/environ |
 grep -cE '^(GITHUB_PAT|ATLASSIAN_MCLAREN_TOKEN)=' → 0`), mientras su `.mcp.json` declara 7 MCPs y
@@ -198,8 +198,10 @@ check se saltaba en silencio; fix a `systemctl show -p EnvironmentFiles`. Suite:
 baseline + 75 nuevos = 73 + 2 del gate). **PENDIENTE (necesita tu `sudo`):** instalar la unit staged +
 `daemon-reload` + `restart`, luego la batería post-restart (conteo `/proc/environ` 0→1, `systemctl show -p
 Environment` sin valores, `.env` corrupto no tumba el boot, doctor exit 1 con secreto en blanco). Fase
-spec-kit: **implement + fixes del gate completos; PR #78 abierto (sin mergear); T019 a medias (falta el
-restart con sudo) → T020 cierre SPECKIT al mergear.**
+spec-kit: **implement completo y MERGEADO (PR #78, `dbe8274`); T020 cerrado. Los 2 fixes de portabilidad
+del doctor NO alcanzaron ese merge (el gate corrió después) → van en PR aparte desde
+`021-doctor-portability`. T019 a medias: falta el restart con `sudo` en mclaren + la batería
+post-restart.**
 
 **020-docs-refresh MERGED** (PR #76, merge `336f559`, 2026-07-13; docs-only, VERSION sigue 0.12.0).
 Plan: `specs/020-docs-refresh/plan.md`. Puso los 14 docs en alcance (README, agentic-quickstart.{es,en},
