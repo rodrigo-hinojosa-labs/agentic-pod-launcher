@@ -205,6 +205,25 @@ Two conclusions, both of which contradict earlier assumptions in this document:
    operator keeps the same link. This is FR-014 working as intended, and it is why
    "always clear at boot" would be a real regression rather than a cheap safety net.
 
+### Second measurement, in the mode we ship (`--spawn=session`)
+
+Reverting mclaren to `--spawn=session` required another `systemctl restart`, which
+produced an independent confirmation of the same behavior **in the exact spawn mode
+this feature keeps**:
+
+| Observation | Result |
+|---|---|
+| Pointer after restart | `sessionId` and `environmentId` unchanged; `pid` 466890 → 1154300 |
+| Client link | **unchanged** (`session_01Fbg3Cg…`), still reachable |
+| 021 invariants | intact — `.env (ignore_errors=yes)` first, then `remote-control.env`; `ExecStartPre` = `agent-secret-check.sh` |
+| Unit state | `active`, `NeedDaemonReload=no` |
+
+This is the direct hardware validation of the **"killed → do not touch"** branch of
+the predicate: systemd terminated the process, the server-side session survived, the
+vendor's reuse restored the same link. Any design that cleared the pointer on every
+start would have destroyed this. Measured twice now — once under `same-dir`, once
+under `session`.
+
 ### The tension this exposes between A and B
 
 B's discriminator is *why the previous process stopped*, and it only carries meaning
