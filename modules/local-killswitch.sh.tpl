@@ -9,6 +9,12 @@ set -euo pipefail
 
 AGENT_NAME="{{AGENT_NAME}}"
 UNIT="agent-${AGENT_NAME}.service"
+# 022 (US3/S28): the identity the unit actually announces to claude.ai/code.
+# This used to be recomposed as $(hostname)-${AGENT_NAME} at RUN time, which
+# stops matching the moment the name is configurable — handing the operator a
+# false label to search for in the very screen they use to kill the agent
+# remotely. The unit NAME is unrelated: it always derives from AGENT_NAME.
+SESSION_NAME="{{DEPLOYMENT_SESSION_NAME}}"
 # Companion units (present only when their feature is enabled). A kill switch
 # must halt ALL agent activity — otherwise the vault-backup timer keeps pushing to
 # the fork with the operator's credentials and the healthcheck keeps notifying,
@@ -34,4 +40,4 @@ fi
 
 echo ""
 echo "Remote alternative: toggle Remote Control OFF for this agent in claude.ai/code"
-echo "(session identity: $(hostname)-${AGENT_NAME})."
+echo "(session identity: ${SESSION_NAME})."

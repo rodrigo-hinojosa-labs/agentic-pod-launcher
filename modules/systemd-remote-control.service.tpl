@@ -31,7 +31,11 @@ ExecStartPre=-{{DEPLOYMENT_WORKSPACE}}/scripts/local/agent-secret-check.sh
 # unreachable. This runs ONCE per start, never against a live session, and acts
 # on the verdict systemd recorded below. Same double belt as the line above.
 ExecStartPre=-{{DEPLOYMENT_WORKSPACE}}/scripts/local/agent-session-check.sh
-ExecStart={{CLAUDE_BIN}} remote-control --name {{HOST_NAME}}-{{AGENT_NAME}} --spawn=session --verbose
+# 022 (US3): the client-visible name comes from agent.yml
+# (deployment.session_name), not from $(hostname) composed at render time. The
+# QUOTES are load-bearing: a name with spaces would otherwise split into several
+# argv entries and --spawn=session would land as the value of --name.
+ExecStart={{CLAUDE_BIN}} remote-control --name "{{DEPLOYMENT_SESSION_NAME}}" --spawn=session --verbose
 # 022: persist WHY we stopped ($SERVICE_RESULT/$EXIT_CODE/$EXIT_STATUS). It is
 # the only local signal that separates "the session ended" (process exited on
 # its own => retire the pointer) from "systemd killed us" (=> keep it; the

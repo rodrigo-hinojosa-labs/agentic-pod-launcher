@@ -303,3 +303,30 @@ YML
   run agent_yml_validate "$TMP_TEST_DIR/agent.yml"
   [ "$status" -eq 0 ]
 }
+
+# 022-local-session-lifecycle (US3/N9): deployment.session_name is an optional
+# string leaf — absent is the norm (the default is backfilled on --regenerate),
+# but a key that IS present must carry a real value. An empty one would render
+# `--name ""` into the unit and hand the operator an unnamed agent.
+@test "agent_yml_validate: deployment.session_name present and non-empty validates" {
+  _write_valid_yml
+  yq -i '.deployment.session_name = "bitacora"' "$TMP_TEST_DIR/agent.yml"
+  run agent_yml_validate "$TMP_TEST_DIR/agent.yml"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "agent_yml_validate: deployment.session_name present but empty → reported" {
+  _write_valid_yml
+  yq -i '.deployment.session_name = ""' "$TMP_TEST_DIR/agent.yml"
+  run agent_yml_validate "$TMP_TEST_DIR/agent.yml"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"session_name"* ]]
+}
+
+@test "agent_yml_validate: deployment.session_name absent is fine (the default case)" {
+  _write_valid_yml
+  run agent_yml_validate "$TMP_TEST_DIR/agent.yml"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}

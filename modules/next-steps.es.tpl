@@ -423,7 +423,7 @@ systemctl list-timers 'agent-{{AGENT_NAME}}-*'           # todos los timers del 
 ./scripts/agentctl status                                # frescura del grafo + counts de hallazgos
 ```
 {{/if}}
-Controlas el agente desde **claude.ai/code** y la app móvil (identidad `<hostname>-{{AGENT_NAME}}`). El healthcheck corre por timer (~5 min) y avisa si el login expira, hay error de auth, o la unit del watcher QMD / wiki-grafo está `failed`. Auto-recuperación: si el proceso muere, systemd lo rearranca en ~10 s (`Restart=always`).
+Controlas el agente desde **claude.ai/code** y la app móvil (identidad `{{DEPLOYMENT_SESSION_NAME}}`). El healthcheck corre por timer (~5 min) y avisa si el login expira, hay error de auth, o la unit del watcher QMD / wiki-grafo está `failed`. Auto-recuperación: si el proceso muere, systemd lo rearranca en ~10 s (`Restart=always`).
 
 ## 3. Verificación (gates en el host)
 
