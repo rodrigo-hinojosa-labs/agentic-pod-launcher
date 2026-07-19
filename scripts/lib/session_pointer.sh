@@ -49,11 +49,17 @@ session_pointer_slug() {
 session_pointer_path() {
   local ws="$1" cfg="$2" slug dir cand count first
 
-  # Step 1 MUST come first. If it came last it would be unreachable: an absent
-  # config dir makes the step-3 glob match zero and return 2 ("healthy, no
+  # Step 1 MUST come first. If it came last it would be unreachable: an unset or
+  # bogus config dir makes the step-3 glob match zero and return 2 ("healthy, no
   # session"), the exact false green FR-006 forbids.
   [ -n "$cfg" ] || return 1
-  [ -d "$cfg/projects" ] || return 1
+  [ -d "$cfg" ] || return 1
+  # A VALID config dir whose projects/ has not been created yet is a different
+  # thing entirely: Claude Code only creates it once a session runs, so a
+  # freshly logged-in agent legitimately has none. Reporting that as "cannot
+  # determine" made the doctor warn on every healthy fresh workspace — a false
+  # alarm caught by the 021 regression tests, and precisely what FR-006 forbids.
+  [ -d "$cfg/projects" ] || return 2
   ls "$cfg/projects" >/dev/null 2>&1 || return 1
 
   slug=$(session_pointer_slug "$ws")

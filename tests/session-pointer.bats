@@ -84,9 +84,20 @@ _mk_pointer() {  # _mk_pointer [SESSION_ID]
   [ "$status" -eq 1 ]
 }
 
-@test "path: CLAUDE_CONFIG_DIR without a projects/ subdir → rc 1" {
+@test "path: a CLAUDE_CONFIG_DIR that does not exist → rc 1" {
   run session_pointer_path "$WS" "$TMP_TEST_DIR/no-such-config"
   [ "$status" -eq 1 ]
+}
+
+@test "path: a valid config dir whose projects/ does not exist yet → rc 2, not rc 1" {
+  # Claude Code creates projects/ only once a session runs, so a freshly
+  # logged-in agent legitimately has none. Calling that "cannot determine" made
+  # the doctor warn on every healthy fresh workspace (caught by the 021
+  # regression tests). It is "no session yet" — FR-006.
+  local fresh="$TMP_TEST_DIR/fresh-cfg"
+  mkdir -p "$fresh"
+  run session_pointer_path "$WS" "$fresh"
+  [ "$status" -eq 2 ]
 }
 
 @test "S13 path: slug dir absent, exactly one pointer elsewhere → rc 0, that path" {
