@@ -235,9 +235,9 @@ confirm the documented default applies.
   from starting, verified on real systemd.
 - **SC-006**: A configured session name appears verbatim in the rendered unit; an
   omitted one yields the documented default with no duplicated host segment.
-- **SC-007**: The host test suite stays green with zero regressions (baseline 1050 on
-  `main` at `dbe8274`; 1052 if PR #79 lands first), and the docker-mode render is
-  byte-identical to before this feature.
+- **SC-007**: The host test suite stays green with zero regressions (measured
+  baseline **1052 ok / 0 not ok / 20 skips** on `main` at `7e50c44`, after PR #79),
+  and the docker-mode render is byte-identical to before this feature.
 - **SC-008**: The 021 secret-delivery invariants still hold afterwards: the live
   agent's session environment still carries all its declared secrets.
 - **SC-009**: Continuity is preserved when it should be — restarting an agent whose
