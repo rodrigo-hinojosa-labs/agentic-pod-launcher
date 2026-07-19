@@ -2235,6 +2235,12 @@ regenerate() {
     render_to_file "$modules_dir/local-killswitch.sh.tpl"  "$SCRIPT_DIR/scripts/local/agent-killswitch.sh"
     render_to_file "$modules_dir/local-healthcheck.sh.tpl" "$SCRIPT_DIR/scripts/local/agent-healthcheck.sh"
     render_to_file "$modules_dir/local-secret-check.sh.tpl" "$SCRIPT_DIR/scripts/local/agent-secret-check.sh"
+    # 022 (US1): the session-pointer hygiene pair. agent-session-exit.sh runs as
+    # ExecStopPost and records WHY the process stopped; agent-session-check.sh
+    # runs as the second ExecStartPre and retires a pointer that names a session
+    # which already ended. Both always exit 0.
+    render_to_file "$modules_dir/local-session-exit.sh.tpl"  "$SCRIPT_DIR/scripts/local/agent-session-exit.sh"
+    render_to_file "$modules_dir/local-session-check.sh.tpl" "$SCRIPT_DIR/scripts/local/agent-session-check.sh"
     render_to_file "$modules_dir/local-bootstrap.sh.tpl"   "$SCRIPT_DIR/scripts/local/agent-bootstrap.sh"
     # US2 (FR-004/005/006): QMD reindex entrypoint + watcher wrapper, rendered
     # only when qmd is enabled. Their systemd units are installed by install_service.

@@ -127,6 +127,51 @@ teardown() { teardown_tmp_dir; }
   if grep -qE '^Environment=' "$TMP_TEST_DIR/unit"; then false; fi
 }
 
+# ─── 022-local-session-lifecycle: session pointer hygiene ───────────────────
+# contracts/session-pointer-hygiene.md §3.1 (ordering) and §2.
+
+@test "022 unit: a second ExecStartPre runs the session check, ignore-if-failed" {
+  render_to_file "$REPO_ROOT/modules/systemd-remote-control.service.tpl" "$TMP_TEST_DIR/unit"
+  grep -q '^ExecStartPre=-/home/op/agents/locbot/scripts/local/agent-session-check\.sh$' "$TMP_TEST_DIR/unit"
+}
+
+@test "022 unit: the session check runs AFTER the 021 secret check" {
+  # Ordering is load-bearing on the line number: systemd runs multiple
+  # ExecStartPre= sequentially in declaration order, and the session check must
+  # not displace 021's boot warning.
+  render_to_file "$REPO_ROOT/modules/systemd-remote-control.service.tpl" "$TMP_TEST_DIR/unit"
+  local secret_line session_line
+  secret_line=$(grep -n '^ExecStartPre=-.*agent-secret-check\.sh$' "$TMP_TEST_DIR/unit" | cut -d: -f1)
+  session_line=$(grep -n '^ExecStartPre=-.*agent-session-check\.sh$' "$TMP_TEST_DIR/unit" | cut -d: -f1)
+  [ -n "$secret_line" ]
+  [ -n "$session_line" ]
+  [ "$secret_line" -lt "$session_line" ]
+}
+
+@test "022 unit: both session hooks run BEFORE ExecStart reads the pointer" {
+  render_to_file "$REPO_ROOT/modules/systemd-remote-control.service.tpl" "$TMP_TEST_DIR/unit"
+  local session_line exec_line
+  session_line=$(grep -n '^ExecStartPre=-.*agent-session-check\.sh$' "$TMP_TEST_DIR/unit" | cut -d: -f1)
+  exec_line=$(grep -n '^ExecStart=' "$TMP_TEST_DIR/unit" | cut -d: -f1)
+  [ -n "$session_line" ]
+  [ -n "$exec_line" ]
+  [ "$session_line" -lt "$exec_line" ]
+}
+
+@test "022 unit: ExecStopPost records the exit cause, ignore-if-failed" {
+  render_to_file "$REPO_ROOT/modules/systemd-remote-control.service.tpl" "$TMP_TEST_DIR/unit"
+  grep -q '^ExecStopPost=-/home/op/agents/locbot/scripts/local/agent-session-exit\.sh$' "$TMP_TEST_DIR/unit"
+}
+
+@test "022 unit: the 021 EnvironmentFile pair keeps its order after the new directives" {
+  # Regression guard for SC-008: inserting directives must not reorder these.
+  render_to_file "$REPO_ROOT/modules/systemd-remote-control.service.tpl" "$TMP_TEST_DIR/unit"
+  local env_line rc_line
+  env_line=$(grep -n '^EnvironmentFile=-/home/op/agents/locbot/\.env$' "$TMP_TEST_DIR/unit" | cut -d: -f1)
+  rc_line=$(grep -n '^EnvironmentFile=/home/op/agents/locbot/\.state/remote-control\.env$' "$TMP_TEST_DIR/unit" | cut -d: -f1)
+  [ "$env_line" -lt "$rc_line" ]
+}
+
 @test "U4: the healthcheck timer's service unit has NO EnvironmentFile for .env" {
   render_to_file "$REPO_ROOT/modules/local-healthcheck.service.tpl" "$TMP_TEST_DIR/hc.service"
   if grep -q 'EnvironmentFile' "$TMP_TEST_DIR/hc.service"; then false; fi
