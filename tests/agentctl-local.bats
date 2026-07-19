@@ -726,7 +726,13 @@ case "$*" in
     echo "/home/op/wk/.env (ignore_errors=yes) /home/op/wk/.state/remote-control.env (ignore_errors=no)" ;;
   *show*ExecStartPre*)
     echo "{ path=/wk/scripts/local/agent-secret-check.sh ; ignore_errors=yes }" ;;
-  *show*ExecStopPost*) echo "" ;;
+  # ExecStopPost is INTACT on purpose: leaving it empty would fire the OTHER
+  # warning too, and both carry the same `daemon-reload` hint — the assertion
+  # below would then pass without the ExecStartPre check existing at all. A
+  # mutation that made this check always report "pass" went undetected until
+  # this stub was tightened.
+  *show*ExecStopPost*)
+    echo "{ path=/wk/scripts/local/agent-session-exit.sh ; ignore_errors=yes }" ;;
   *) exit 0 ;;
 esac
 SH
@@ -734,7 +740,7 @@ SH
   cd "$TMP_TEST_DIR"
   run ./scripts/agentctl doctor
   [ "$status" -eq 1 ]
-  [[ "$output" == *"daemon-reload"* ]]
+  [[ "$output" == *"does not run the session check"* ]]
 }
 
 @test "022 S17: the installed unit lacks ExecStopPost → its own WARN" {

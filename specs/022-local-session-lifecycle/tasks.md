@@ -255,18 +255,18 @@ is gone.
 
 ## Phase 6: Polish & cross-cutting
 
-- [ ] T045 Run the full suite: `bats tests/` must be **1052 + N ok / 0 not ok** with N equal to the
+- [X] T045 Run the full suite: `bats tests/` must be **1052 + N ok / 0 not ok** with N equal to the
       number of tests added, and zero pre-existing tests edited except the two US3 owns
       (`tests/local-render.bats:65, 83`). Run `shellcheck -S error scripts/agentctl scripts/lib/*.sh`.
-- [ ] T046 Mutation spot-check (the 021 habit that caught the `EnvironmentFile` ordering and the
+- [X] T046 Mutation spot-check (the 021 habit that caught the `EnvironmentFile` ordering and the
       healthcheck RCE): break each new predicate deliberately — invert the `killed` branch of
       `session_decide`, empty the doctor's WARN message, neuter `session_pointer_retire` — and confirm
       at least one test goes red for each. Record the three results in the PR.
-- [ ] T047 [P] Update `docs/heartbeatctl.md:501-511` with the new doctor check, and close 021's
+- [X] T047 [P] Update `docs/heartbeatctl.md:501-511` with the new doctor check, and close 021's
       documentation debt in the same pass: that table still has **no rows for D1-D4**.
-- [ ] T048 [P] Update `CHANGELOG.md` and bump `VERSION` 0.13.0 → 0.14.0. The upgrade note must state
+- [X] T048 [P] Update `CHANGELOG.md` and bump `VERSION` 0.13.0 → 0.14.0. The upgrade note must state
       the accepted one-time change of the agent's client identity on first re-render (FR-015).
-- [ ] T049 [P] Update `modules/next-steps.es.tpl:426` and `modules/next-steps.en.tpl:418`, which
+- [X] T049 [P] Update `modules/next-steps.es.tpl:426` and `modules/next-steps.en.tpl:418`, which
       currently document the identity as `<hostname>-{{AGENT_NAME}}`. Both languages must change
       together — `tests/quickstart-doc.bats:48-65` enforces ES/EN token parity.
 - [ ] T050 Open the PR against `main`. Do **not** merge without explicit confirmation; `main` is
