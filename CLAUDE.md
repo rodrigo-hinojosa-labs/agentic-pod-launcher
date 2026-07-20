@@ -132,8 +132,38 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
-**023-fix-render-ampersand EN PR #81, SIN MERGEAR** (branch `023-fix-render-ampersand`, **rebasada
-2026-07-19 sobre main=`ab4bb32`** tras el merge de 022; VERSION 0.14.0→**0.15.0**). Plan:
+**024-fix-session-restart-retire EN CURSO** (branch `024-fix-session-restart-retire` desde
+main=`9b97654`, 2026-07-20). Plan: `specs/024-fix-session-restart-retire/plan.md`. **BUG MEDIDO EN
+HARDWARE, VIVO EN MAIN, introducido por 022 y cazado por su propio gate T051**: un `systemctl restart`
+retira el puntero de una sesión VIVA y anuncia una nueva, matando el enlace del operador.
+`session_decide` (`scripts/lib/session_pointer.sh:212-224`) conserva solo si el marcador es `killed`,
+pero Claude Code atrapa SIGTERM y sale con 0 → systemd reporta `exited` tanto en parada externa como
+en fin de sesión. El discriminador de 022 no discrimina, y como `killed` casi nunca ocurre la regla
+se comporta como **"retirar siempre"** — textualmente lo que la investigación de 022 declaró que
+sería regresión.
+
+**FASE 0: LA HIPÓTESIS OBVIA ERA FALSA, MEDIDA.** El candidato "`ExecStop` solo corre en paradas
+explícitas" se **refutó**: también corre cuando el proceso sale solo. La asimetría real está un hook
+más arriba y es **temporal, no de valor**: systemd puebla `$EXIT_CODE`/`$EXIT_STATUS` recién cuando el
+proceso principal ya murió, así que **dentro de `ExecStop`** están DEFINIDAS si salió solo y VACÍAS si
+la parada la inicia systemd (que corre `ExecStop` antes de matarlo). `ExecStopPost` es idéntico en los
+tres casos que hay que separar — por eso 022 no podía verlo; la información existía, estaba en el hook
+anterior. Sonda con unit de usuario desechable (sin sudo, sin tocar el agente): 5 casos + 3
+repeticiones c/u = **15/15 consistente**, incluida la variante `Restart=always` de la unit real.
+Bordes medidos: sale-solo-con-fallo (código 3) **omite `ExecStop`** por completo; ignorar TERM da
+`timeout`/`killed`/`KILL`. Regla adoptada de 4 filas, con **conservar** como default ante
+incertidumbre (lo contrario de hoy): conservar de más cuesta una conversación muerta y visible;
+retirar de más cuesta trabajo del operador sin aviso. `service_result`/`exit_status` YA se persisten
+(`:137`) y ninguna decisión los lee. **NO MEDIDO y declarado así**: si la restauración del enlace
+sigue valiendo tras un apagado largo, y la frecuencia relativa de los dos casos (el journal de mclaren
+retiene UN solo boot, ~2 días) — esta última quedó irrelevante para el diseño, porque con un
+discriminador real no hay que elegir qué caso romper. `session_pointer.sh` **NO** está espejado a
+`docker/` (verificado) → DOCKER_E2E fuera de alcance. Constitución 6/6 PASS, sin violaciones.
+**SC-006: el gate de hardware corre ANTES del merge** — van dos seguidas mergeadas sin él (021 costó
+el PR #79, 022 costó este defecto). Siguiente: `/speckit-tasks`.
+
+**023-fix-render-ampersand MERGED** (PR #81, merge `9b97654` en main, 2026-07-19; branch rebasada
+sobre main=`ab4bb32` tras el merge de 022; VERSION 0.14.0→**0.15.0**). Plan:
 `specs/023-fix-render-ampersand/plan.md`. **BUG MEDIDO, VIVO EN PRODUCCIÓN, ajeno
 a toda rama en curso** (falla igual en un worktree limpio de main): `scripts/lib/render.sh:90,95`
 expanden los `{{campo}}` de un bloque `{{#each}}` con `${var//patrón/reemplazo}`, y **desde bash 5.2**
@@ -175,7 +205,8 @@ una corrida normal sin flags) + `CLAUDE.md`/`README.md` corregidos. Suite comple
 bajo 5.3.15, 1068 ok/1 not ok bajo 3.2.57 — las 4 fallas son ruido preexistente ajeno (heartbeat/backup,
 pasan limpio en aislamiento), ninguna toca `render.sh` ni `render.bats` (28/28 en ambas versiones).
 Mutación: revertir un call site tumba 4 tests, incluido el dedicado. Shellcheck limpio. PR #81 abierto
-contra main, SIN MERGEAR. Pendiente no bloqueante: T026, medir ferrari cuando vuelva el túnel SSH.
+contra main y **MERGEADO** (`9b97654`) — T027 cerrado. Pendiente no bloqueante: T026, medir ferrari
+cuando vuelva el túnel SSH.
 
 **REBASE SOBRE 022 (2026-07-19) — la trampa que dejó y que git NO delata:** al mergearse 022 el PR
 quedó CONFLICTING. Los conflictos marcados eran dos y triviales (`.specify/feature.json`, `CHANGELOG.md`),
