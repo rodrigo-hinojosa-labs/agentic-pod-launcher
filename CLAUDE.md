@@ -132,8 +132,9 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
-**023-fix-render-ampersand EN PR #81, SIN MERGEAR** (branch `023-fix-render-ampersand` desde main=`7e50c44`,
-2026-07-19). Plan: `specs/023-fix-render-ampersand/plan.md`. **BUG MEDIDO, VIVO EN PRODUCCIÓN, ajeno
+**023-fix-render-ampersand EN PR #81, SIN MERGEAR** (branch `023-fix-render-ampersand`, **rebasada
+2026-07-19 sobre main=`ab4bb32`** tras el merge de 022; VERSION 0.14.0→**0.15.0**). Plan:
+`specs/023-fix-render-ampersand/plan.md`. **BUG MEDIDO, VIVO EN PRODUCCIÓN, ajeno
 a toda rama en curso** (falla igual en un worktree limpio de main): `scripts/lib/render.sh:90,95`
 expanden los `{{campo}}` de un bloque `{{#each}}` con `${var//patrón/reemplazo}`, y **desde bash 5.2**
 un `&` sin escapar en el REEMPLAZO significa "todo el texto coincidente" (compatibilidad ksh93). El
@@ -176,7 +177,18 @@ pasan limpio en aislamiento), ninguna toca `render.sh` ni `render.bats` (28/28 e
 Mutación: revertir un call site tumba 4 tests, incluido el dedicado. Shellcheck limpio. PR #81 abierto
 contra main, SIN MERGEAR. Pendiente no bloqueante: T026, medir ferrari cuando vuelva el túnel SSH.
 
-**022-local-session-lifecycle EN PR #80, SIN MERGEAR** (branch `022-local-session-lifecycle` desde
+**REBASE SOBRE 022 (2026-07-19) — la trampa que dejó y que git NO delata:** al mergearse 022 el PR
+quedó CONFLICTING. Los conflictos marcados eran dos y triviales (`.specify/feature.json`, `CHANGELOG.md`),
+pero **el peligroso fue `VERSION`, que git auto-mergeó SIN marcar conflicto**: ambas ramas habían escrito
+`0.14.0`, así que textualmente coincidían y el rebase las dio por resueltas, dejando dos features
+distintas reclamando la misma versión. El conflicto era semántico, no textual. Regla que sale de acá:
+**después de todo rebase, verificar `VERSION` contra `origin/main` a mano** — el rebase no lo va a
+avisar. 023 quedó en `0.15.0` (T023 ya tenía escrita esta regla de desempate desde antes de existir el
+conflicto). De paso se corrigió un defecto que dejó el merge de 022 en `main`: su heading `### Changed`
+quedó insertado ENTRE su propia viñeta y la de 021, así que la entrada de 021 —un *Fixed*— aparecía
+archivada bajo *Changed*. Se le devolvió su `### Fixed`.
+
+**022-local-session-lifecycle MERGED** (PR #80, merge `ab4bb32` en main, 2026-07-19; branch desde
 main=`7e50c44`, VERSION 0.13.0→0.14.0). Plan: `specs/022-local-session-lifecycle/plan.md`. Con
 `--spawn=session` el proceso sale PORQUE su sesión terminó, `Restart=always` lo revive, y Claude Code
 lee un puntero cuyo escritor está muerto como "reutiliza el environment Y el sessionId" → re-anuncia
@@ -193,9 +205,12 @@ hardware, por eso "limpiar siempre al boot" habría sido regresión). Sin detect
 sano). US3: el nombre de sesión sale de `deployment.session_name` en vez de componerse con `$(hostname)`
 (un agente bautizado con su host leía `mclaren-mclaren-admin`). Suite 1141 ok / 1 not ok, y ese único
 rojo es el bug de 023, preexistente y ajeno. Mutación 5 corridas, y una destapó un test propio que
-pasaba por la razón equivocada (S16 asertaba un hint compartido por dos avisos). **PENDIENTE: T051 gate
-de hardware en mclaren (necesita sudo), a correr ANTES del merge — en 021 el gate corrió después y
-costó un PR aparte (#79).**
+pasaba por la razón equivocada (S16 asertaba un hint compartido por dos avisos). **T051 SIGUE ABIERTA
+y el merge ocurrió sin ella**: el gate de hardware en mclaren (necesita `sudo`) estaba planificado
+ANTES del merge, precisamente porque en 021 correrlo después costó un PR aparte (#79) con dos bugs de
+portabilidad que la suite de macOS no podía ver. Se repitió el patrón. El riesgo concreto: los hooks
+`ExecStopPost`/`ExecStartPre` solo corren en el host Linux del agente, así que su primera ejecución
+real será en producción y cualquier defecto de portabilidad ahí saldrá igual que los de 021.
 
 **021-local-secret-delivery MERGED** (PR #78, merge `dbe8274` en main, 2026-07-18; branch desde
 main=`cd6ad89` v0.12.0, VERSION 0.12.0→0.13.0). Plan: `specs/021-local-secret-delivery/plan.md`. **BUG MEDIDO EN HARDWARE VIVO**: el
