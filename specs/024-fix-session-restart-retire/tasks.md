@@ -1,0 +1,269 @@
+# Tasks: reiniciar el agente deja de romper el enlace del cliente
+
+**Feature**: 024-fix-session-restart-retire · **Branch**: `024-fix-session-restart-retire` (base `main`=`9b97654`)
+**Plan**: [plan.md](./plan.md) · **Contrato**: [contracts/session-stop-classification.md](./contracts/session-stop-classification.md)
+**Gates**: [quickstart.md](./quickstart.md)
+
+Test-first no es opcional acá (Principio III). Cada fase de historia escribe sus tests, los
+confirma **ROJOS**, y recién entonces toca producción.
+
+**Dos reglas que atraviesan todo el archivo:**
+
+1. **La suite corre en las dos versiones de bash.** Un verde en una sola no prueba nada
+   (lección de 023).
+
+   ```bash
+   bats tests/                      # bash del PATH (5.x)
+   PATH="/bin:$PATH" bats tests/    # bash de stock (3.2)
+   ```
+
+2. **Los fixtures se alimentan con los valores MEDIDOS**, nunca con valores elegidos a
+   mano. Esa es la causa raíz de por qué la suite dejó pasar el defecto de 022: cada test
+   verificaba que la regla implementara lo que el autor creía, no que lo que el autor
+   creía fuera cierto ([research.md](./research.md) R6). Los valores están en la tabla de
+   R2 y en el contrato §1.2.
+
+---
+
+## Phase 1: Setup
+
+- [ ] T001 Registrar la línea base: correr `bats tests/` y `PATH="/bin:$PATH" bats tests/`
+      y anotar ambos conteos en el PR. Se esperan **0 fallas en ambas** (main venía en
+      1159 ok / 0 not ok). Si hay rojos preexistentes, identificarlos y declararlos ajenos
+      ANTES de tocar nada — si no, cualquier rojo posterior es indistinguible del propio.
+- [ ] T002 Verificar que la sonda del contrato §7 reproduce la medición en este entorno:
+      `sh specs/024-fix-session-restart-retire/probes/confirm-probe.sh` en un host con
+      systemd de usuario. **Si no hay host systemd disponible en este momento, marcar la
+      tarea como diferida al gate de hardware y decirlo**, en vez de darla por hecha.
+
+---
+
+## Phase 2: Foundational — la clasificación (BLOQUEANTE)
+
+**Todo lo demás depende de esta fase.** Es el cambio de contrato de la lib.
+
+### Tests (escribir primero, confirmar ROJO)
+
+- [ ] T003 En `tests/session-pointer.bats`, agregar los casos **C1-C10** del contrato §3.1
+      contra `session_decide`, cada uno asertando la decisión completa esperada y **con el
+      identificador del caso en el nombre del test**. Confirmar ROJO: hoy C1 devuelve
+      `retire` en vez de `keep`.
+- [ ] T004 [P] Agregar en `tests/session-pointer.bats` la cobertura de lectura del campo
+      nuevo `stop_cause`: presente/ausente/truncado, contra los helpers `_session_marker_field`
+      y `_session_marker_has_field` (`scripts/lib/session_pointer.sh:150,157`), que hoy solo
+      saben leer `exit_code`. Un fichero truncado debe leer "no se puede determinar", nunca
+      un valor vacío pero válido.
+- [ ] T005 [P] Agregar el test de **fusión** del marcador: `ExecStop` crea con causa,
+      `ExecStopPost` fusiona los campos de salida, y el resultado conserva **ambos**.
+      Es el invariante del diseño de marcador único (data-model §Decisión estructural).
+- [ ] T006 Confirmar que T003-T005 están **ROJOS** en las dos versiones de bash.
+
+### Implementación
+
+- [ ] T007 Extender `session_exit_marker_write` en `scripts/lib/session_pointer.sh:129-147`
+      para aceptar y persistir `stop_cause`, **preservando** el valor ya presente cuando el
+      llamador no lo aporta (la fusión de `ExecStopPost`). Sin `jq`: se sigue usando
+      `printf`, porque `jq` puede faltar en el host del agente.
+- [ ] T008 Generalizar `_session_marker_field` / `_session_marker_has_field`
+      (`:150-159`) para leer cualquier campo, conservando la semántica de "presente y
+      completo" que hoy protege contra ficheros truncados.
+- [ ] T009 Reescribir `session_decide` (`:212-224`) según la tabla del contrato §3.1.
+      **El default ante incertidumbre pasa a ser `keep`** — es lo contrario de hoy y es el
+      corazón de la feature (FR-004).
+- [ ] T010 Confirmar **VERDE** de T003-T005 en ambas versiones y
+      `shellcheck -S error scripts/lib/session_pointer.sh` limpio.
+
+**Checkpoint**: la clasificación es correcta y portable, aún sin conectar a systemd.
+
+---
+
+## Phase 3: User Story 1 — reiniciar no le quita la conversación al operador (P1)
+
+**Goal**: un `systemctl restart` con sesión viva conserva el puntero y el enlace.
+**Independent test**: reiniciar el servicio y comprobar que el `sessionId` no cambió y que
+no apareció hermano retirado.
+
+### Tests (escribir primero, confirmar ROJO)
+
+- [ ] T011 [P] [US1] En `tests/local-session-hooks.bats`, cubrir el hook de `ExecStop`:
+      con `EXIT_CODE` **vacío** escribe `stop_cause=external`; con `EXIT_CODE` **definido**
+      escribe `session-ended`. Son los dos valores MEDIDOS (contrato §1.2), no inventados.
+- [ ] T012 [P] [US1] Cubrir el flujo completo de los tres hooks para C1: `ExecStop`
+      (vacío) → `ExecStopPost` → `ExecStartPre` **conserva** el puntero y no crea hermano
+      retirado. **El nombre del test debe mencionar el reinicio** (contrato §6).
+- [ ] T013 [US1] Confirmar ROJO de T011-T012: el hook de `ExecStop` todavía no existe.
+
+### Implementación
+
+- [ ] T014 [US1] Crear `modules/local-session-stop.sh.tpl`, el hook de `ExecStop`: clasifica
+      por `${EXIT_CODE:-}` y escribe la causa en el marcador. Sale **0 siempre**
+      (Principio IV). **En su comentario de cabecera, NO escribir que `ExecStop` significa
+      "systemd nos está deteniendo"** — es la hipótesis refutada (contrato §2), el comentario
+      queda renderizado en la unit instalada y le enseñaría el modelo mental equivocado al
+      próximo lector.
+- [ ] T015 [US1] Agregar la directiva `ExecStop=-.../agent-session-stop.sh` en
+      `modules/systemd-remote-control.service.tpl`, **antes** de `ExecStopPost` y con el
+      prefijo `-` (contrato §4).
+- [ ] T016 [US1] Renderizar el hook nuevo en `setup.sh`, al lado de los dos que 022 ya
+      renderiza (`setup.sh:2303-2304`), con permisos de ejecución.
+- [ ] T017 [US1] Adaptar `modules/local-session-exit.sh.tpl` para que **fusione** en vez de
+      sobrescribir, preservando el `stop_cause` que dejó `ExecStop`.
+- [ ] T018 [US1] Confirmar VERDE de T011-T012 en ambas versiones de bash.
+
+**Checkpoint**: el defecto medido está muerto en la lógica. MVP cerrado.
+
+---
+
+## Phase 4: User Story 2 — una sesión que termina sola sigue limpiándose (P1)
+
+**Goal**: no reintroducir el bug original de 022 al arreglar US1.
+**Independent test**: simular el fin de sesión y comprobar que el puntero se retira.
+
+> US2 es P1 junto con US1 **a propósito**: arreglar una sin la otra deja el sistema roto
+> por el lado contrario, y ese lado (agente inalcanzable) es peor que el defecto actual.
+
+- [ ] T019 [P] [US2] Cubrir C2 en `tests/local-session-hooks.bats`: `ExecStop` con
+      `EXIT_CODE` definido → `ExecStartPre` **retira** el puntero y **lo renombra**, nunca
+      lo borra (FR-005). Confirmar ROJO primero.
+- [ ] T020 [P] [US2] Cubrir C3, el borde medido: salir solo con código ≠ 0 **omite
+      `ExecStop`** por completo, así que no hay `stop_cause` y la decisión sale de
+      `service_result=exit-code`. **Ojo con generalizar**: el caso `ignora TERM` también
+      termina en fallo y ahí `ExecStop` SÍ corre.
+- [ ] T021 [P] [US2] Cubrir C9 (compatibilidad hacia atrás): una unit **sin** la directiva
+      `ExecStop` nunca escribe `stop_cause` → debe **conservar**. Es lo que evita que una
+      actualización a medio aplicar siga destruyendo conversaciones.
+- [ ] T022 [P] [US2] Cubrir C10 (carrera): dos arranques competidores; solo uno gana el
+      `rename` de `session_exit_marker_consume` (`:179`) y el perdedor cae en la rama
+      conservadora.
+- [ ] T023 [US2] Confirmar VERDE de T019-T022 en ambas versiones.
+
+**Checkpoint**: los dos casos se atienden bien. Ya no hay que elegir cuál romper.
+
+---
+
+## Phase 5: User Story 3 — el operador puede saber qué pasó (P2)
+
+**Goal**: causa y decisión legibles sin leer el código.
+
+- [ ] T024 [P] [US3] En `modules/local-session-check.sh.tpl`, emitir los textos del
+      contrato §5.1 — uno por caso, nombrando **causa y decisión**. La línea actual (`:55`)
+      afirma "stale" sin decir en qué se basó, y eso es parte de por qué el defecto pasó
+      desapercibido.
+- [ ] T025 [P] [US3] En `scripts/agentctl`, reportar en el diagnóstico local la causa y la
+      decisión del último arranque.
+- [ ] T026 [US3] En `scripts/agentctl`, verificar que la **unit instalada** ejecuta la
+      directiva `ExecStop`, leyéndola con `systemctl show -p ExecStop` y **NO** con
+      `systemctl cat`, que da `Permission denied` en una unit root-only y haría que el check
+      se saltara en silencio (lección medida en el gate de 021).
+- [ ] T027 [US3] Cobertura en `tests/agentctl-local.bats` para T025-T026. **Cada aviso
+      necesita su propia aserción**: en 022 un test que compartía hint entre dos avisos
+      pasaba por la razón equivocada y solo lo destapó la mutación
+      (`specs/022-local-session-lifecycle/tasks.md:165`).
+- [ ] T028 [US3] Confirmar VERDE en ambas versiones.
+
+---
+
+## Phase 6: Polish & cross-cutting
+
+- [ ] T029 Suite completa **en las dos versiones**, cero fallas en ambas. Anotar los dos
+      conteos y las dos versiones exactas de bash en el PR.
+- [ ] T030 `shellcheck -S error setup.sh scripts/agentctl scripts/lib/*.sh` limpio.
+- [ ] T031 **Mutación (SC-004)**: revertir `session_decide` a la regla actual
+      (`if [ "$marker" = "killed" ]` → `keep`, si no `retire`) y confirmar que el rojo
+      **incluye un test cuyo nombre menciona el reinicio**. Si el único rojo fuera un test
+      genérico, la historia no está cumplida. Restaurar y anotar el resultado.
+- [ ] T032 Gate de no-regresión: `--regenerate` sobre un `agent.yml` existente produce la
+      unit con la directiva nueva y **sin otros cambios**. Verificar por `diff`, no por
+      inspección visual.
+- [ ] T033 `CHANGELOG.md` + `VERSION`. **Verificar `VERSION` contra `origin/main` A MANO
+      al abrir el PR**: 023 destapó que dos ramas que escriben el mismo número hacen que
+      git auto-mergee `VERSION` **sin marcar conflicto** — el conflicto es semántico, no
+      textual, y el rebase no lo delata.
+- [ ] T034 Nota de despliegue en el CHANGELOG: un workspace existente **no se corrige
+      solo**. Hay que correrle `--regenerate` **y reinstalar la unit**, porque
+      `--regenerate` no reinstala cuando `sudo` no está disponible (`setup.sh:2464`,
+      fallback staged en `:2469-2473`) y **nunca** reinicia.
+- [ ] T035 Documentar el límite de cobertura (FR-011): la suite corre en macOS, donde no
+      hay systemd, así que **no puede** verificar que systemd entregue esos valores. Decir
+      qué gate lo cubre, en vez de dejar que el verde de la suite sugiera una cobertura que
+      no existe.
+
+---
+
+## Phase 7: GATE DE HARDWARE — corre ANTES del merge (SC-006)
+
+> **Van dos features seguidas mergeadas sin su gate.** En 021 correrlo después costó el
+> PR #79 con dos bugs de portabilidad invisibles para la suite de macOS. En 022 costó el
+> defecto que esta feature arregla — y era un defecto de **premisa de diseño**, no de
+> portabilidad. **No una tercera vez.**
+
+- [ ] T036 Portar el delta al workspace de mclaren, midiendo divergencia por hash antes de
+      sobrescribir y dejando backups `.bak-pre024`. El workspace vivo está en
+      `/home/rodrigo-hinojosa/Documents/Personal/Claude/Agents/mclaren-admin`.
+- [ ] T037 `./setup.sh --regenerate` y verificar los artefactos **staged**: la unit con la
+      directiva `ExecStop`, y el hook nuevo renderizado y ejecutable. `sudo` pide
+      contraseña en mclaren, así que la unit queda staged y **no** instalada.
+- [ ] T038 **Requiere al operador**: instalar la unit (`sudo cp` + `daemon-reload` +
+      `restart`). Avisar que el restart corta la conversación en curso.
+- [ ] T039 **SC-001**: con una conversación viva, reiniciar el servicio y verificar que el
+      `sessionId` **no cambió**, que **no** apareció hermano retirado, y que el journal dice
+      "parada externa — puntero conservado". **La confirmación de alcance solo puede venir
+      del cliente del operador.** Repetir en **dos reinicios consecutivos**.
+- [ ] T040 **SC-002**: terminar la sesión desde el cliente y verificar que el puntero se
+      retira, se anuncia una sesión nueva y el agente queda alcanzable sin tocar el host.
+- [ ] T041 **SC-003**: comprobar que el journal y `agentctl doctor` nombran causa y decisión
+      en ambos casos.
+- [ ] T042 **SC-007**: con el marcador ausente y con uno corrupto, comprobar que un puntero
+      vivo **no** se destruye y que queda constancia de haber decidido bajo incertidumbre.
+      Usar ficheros desechables; **nunca** imprimir contenido del puntero.
+- [ ] T043 Anotar el resultado del gate en el PR **antes** de pedir el merge.
+
+---
+
+## Phase 8: Cierre
+
+- [ ] T044 Abrir el PR contra `main`. **No mergear sin confirmación explícita**: `main`
+      está protegida.
+- [ ] T045 Al mergear: actualizar el bloque SPECKIT de `CLAUDE.md` marcando 024 MERGED con
+      su SHA, y registrar el resultado del gate T036-T043.
+
+---
+
+## Dependencies
+
+```text
+Phase 1 (Setup)
+    └── Phase 2 (clasificación en session_pointer.sh)   ← BLOQUEA todo
+            ├── Phase 3 (US1 · P1) ── hook de ExecStop + directiva
+            │       └── Phase 4 (US2 · P1) ── depende de US1: los hooks ya existen
+            └── Phase 5 (US3 · P2) ── observabilidad [necesita la lib, NO los hooks]
+                    └── Phase 6 (Polish)
+                            └── Phase 7 (GATE DE HARDWARE)  ← ANTES del merge
+                                    └── Phase 8 (Cierre)
+```
+
+- **US2 depende de US1**, a diferencia del patrón habitual: sus casos ejercitan el hook de
+  `ExecStop` que US1 crea. No se pueden entregar en el orden inverso.
+- **US3 no depende de US1/US2.** Toca la lib y el diagnóstico; se puede construir en
+  paralelo una vez cerrada la Phase 2.
+- **T017 debe entrar junto con T014**, nunca después: si `ExecStop` empieza a escribir
+  `stop_cause` y `ExecStopPost` sigue sobrescribiendo el fichero entero, la causa se pierde
+  y C1 vuelve a fallar en silencio.
+
+## Parallel opportunities
+
+- **Phase 2 tests**: T004 y T005 son ficheros/aserciones independientes.
+- **Phase 4 completa**: T019-T022 son cuatro casos independientes del oráculo.
+- **Phase 5**: T024 (plantilla) y T025 (agentctl) tocan archivos distintos.
+- **Phase 3 y Phase 5** pueden avanzar en paralelo tras el checkpoint de Phase 2.
+
+## Implementation strategy
+
+**MVP = Phase 2 + Phase 3 + Phase 4.** Las dos historias P1 van juntas porque entregar una
+sola deja el sistema roto por el otro lado. Phase 5 (observabilidad) es entregable después
+sin bloquear el arreglo, pero **antes** del gate de hardware: sin ella, el gate no puede
+verificar SC-003.
+
+**El gate de hardware no es opcional ni posponible.** Es la única cobertura que existe para
+la parte del comportamiento que la suite host no puede tocar, y las dos features anteriores
+demostraron el costo de saltárselo.
