@@ -132,7 +132,7 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
-**023-fix-render-ampersand ACTIVE** (branch `023-fix-render-ampersand` desde main=`7e50c44`,
+**023-fix-render-ampersand EN PR #81, SIN MERGEAR** (branch `023-fix-render-ampersand` desde main=`7e50c44`,
 2026-07-19). Plan: `specs/023-fix-render-ampersand/plan.md`. **BUG MEDIDO, VIVO EN PRODUCCIÓN, ajeno
 a toda rama en curso** (falla igual en un worktree limpio de main): `scripts/lib/render.sh:90,95`
 expanden los `{{campo}}` de un bloque `{{#each}}` con `${var//patrón/reemplazo}`, y **desde bash 5.2**
@@ -163,7 +163,18 @@ propio archivo ya usa en `:105-110` para el bloque completo (esa línea NO se to
 **NO hay datos dañados**: el `agent.yml` de mclaren no tiene filas `mcps.atlassian` y cero valores con
 `&` (solo conteo, nunca se imprimieron valores). `render.sh` **NO** está espejado a `docker/` →
 DOCKER_E2E fuera de alcance (verificado, no supuesto). Constitución 6/6 PASS, sin violaciones.
-Siguiente: `/speckit-tasks`.
+
+**IMPLEMENTADO 2026-07-19 (test-first, 25/27 tareas):** `_render_replace_all` conectada en los dos call
+sites (`render.sh:90,95`). **SEGUNDO BUG, AUTOINFLINGIDO, cazado por el propio gate de no-regresión**:
+la primera versión capturaba el resultado con `row_expanded=$(...)`, y `$(...)` recorta los saltos de
+línea finales sin condición → se comía la línea en blanco entre filas consecutivas de un `{{#each}}`
+en el `.env` generado. Arreglado con byte centinela (`; printf '@'` / `%@`); test de regresión propio
+agregado. Guard de no-drift + línea de versión de bash visible en cada corrida (vía `&3`, funciona en
+una corrida normal sin flags) + `CLAUDE.md`/`README.md` corregidos. Suite completa: 1066 ok/3 not ok
+bajo 5.3.15, 1068 ok/1 not ok bajo 3.2.57 — las 4 fallas son ruido preexistente ajeno (heartbeat/backup,
+pasan limpio en aislamiento), ninguna toca `render.sh` ni `render.bats` (28/28 en ambas versiones).
+Mutación: revertir un call site tumba 4 tests, incluido el dedicado. Shellcheck limpio. PR #81 abierto
+contra main, SIN MERGEAR. Pendiente no bloqueante: T026, medir ferrari cuando vuelva el túnel SSH.
 
 **022-local-session-lifecycle EN PR #80, SIN MERGEAR** (branch `022-local-session-lifecycle` desde
 main=`7e50c44`, VERSION 0.13.0→0.14.0). Plan: `specs/022-local-session-lifecycle/plan.md`. Con

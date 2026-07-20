@@ -150,7 +150,7 @@ PATH="/bin:$PATH" bats tests/    # bash de stock (3.2)
 - [X] T024 Nota de despliegue en el CHANGELOG: el arreglo es del renderizador, así que un
       workspace existente **no se corrige solo** — hay que correrle `--regenerate`. En un
       workspace sin `&` eso es un no-op byte-idéntico (T022), así que es seguro en todos.
-- [ ] T025 Abrir el PR contra `main`. **No mergear sin confirmación explícita**: `main` está
+- [X] T025 Abrir el PR contra `main`. **No mergear sin confirmación explícita**: `main` está
       protegido. Nunca stagear `.claude/settings.json`.
 - [ ] T026 Medir ferrari cuando vuelva el túnel SSH (única pregunta abierta de la Fase 0):
       `bash --version` y el **conteo** de valores con `&` en su `agent.yml` — nunca imprimir
