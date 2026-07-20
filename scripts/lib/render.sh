@@ -1,6 +1,35 @@
 #!/usr/bin/env bash
 # Render engine — placeholders, conditionals, loops
 
+# _render_replace_all TEXT PLACEHOLDER VALUE → stdout
+# Replaces every occurrence of PLACEHOLDER in TEXT with VALUE, verbatim.
+#
+# Why not `${TEXT//$PLACEHOLDER/$VALUE}`: since bash 5.2, an unescaped `&` in
+# the REPLACEMENT of a `${var//pattern/replacement}` expansion means "the
+# whole matched text" (a ksh93-compat change). VALUE comes straight from
+# agent.yml — untrusted operator data — so a `&` in it used to corrupt the
+# render silently (measured: bash 3.2.57 correct, 5.2.37 and 5.3.15 both
+# corrupt; 5.2.37 is what mclaren, a live agent host, actually runs).
+#
+# Escaping `&` in VALUE instead is a trap that runs backwards: bash 3.2 has no
+# such special-casing, so `\&` would insert a literal backslash there,
+# breaking the one bash version that works today while fixing the others
+# (measured, specs/023-fix-render-ampersand/research.md R3).
+#
+# This walks TEXT with prefix/suffix expansions instead, which have no
+# replacement string at all — there is no "special character" category to
+# remember to escape, in this bash or the next one.
+_render_replace_all() {
+  local t="$1" p="$2" v="$3" out=""
+  while [ -n "$t" ]; do
+    case "$t" in
+      *"$p"*) out="${out}${t%%"$p"*}${v}"; t="${t#*"$p"}" ;;
+      *)      out="${out}${t}"; t="" ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+
 # Internal: path to the loaded YAML file (set by render_load_context)
 _RENDER_YAML_FILE=""
 
@@ -86,13 +115,28 @@ _render_each() {
         [ -z "$field" ] && continue
         fval=$(yq "${yq_path}[${i}].${field}" "$yaml_file" 2>/dev/null)
         [ "$fval" = "null" ] && fval=""
-        # Replace {{fieldname}} — use escaped braces to avoid quote injection
-        row_expanded="${row_expanded//\{\{${field}\}\}/$fval}"
+        # Replace {{fieldname}} verbatim — _render_replace_all (not bash's
+        # ${var//pattern/replacement}) because since bash 5.2 an unescaped &
+        # in the replacement means "the whole match", silently corrupting any
+        # operator value that contains one (023-fix-render-ampersand).
+        #
+        # The trailing `; printf '@'` / `%@` pair guards against a SEPARATE
+        # bug this same fix introduced and T022's no-regression check caught:
+        # `row_expanded=$(_render_replace_all ...)` is a command substitution,
+        # and $(...) unconditionally strips ALL trailing newlines from what it
+        # captures — corrupting `block_tpl`'s own trailing newline every block
+        # (env-example.tpl's atlassian entries lost their separating blank
+        # line). Appending a sentinel byte makes the captured stream never
+        # end in a newline, so `$(...)` has nothing to strip; stripping the
+        # sentinel back off afterward restores the output byte-for-byte.
+        row_expanded=$(_render_replace_all "$row_expanded" "{{${field}}}" "$fval"; printf '@')
+        row_expanded="${row_expanded%@}"
         # Replace {{FIELDNAME}} with uppercase value
         field_upper=$(printf '%s' "$field" | tr '[:lower:]' '[:upper:]')
         local fval_upper
         fval_upper=$(printf '%s' "$fval" | tr '[:lower:]' '[:upper:]')
-        row_expanded="${row_expanded//\{\{${field_upper}\}\}/$fval_upper}"
+        row_expanded=$(_render_replace_all "$row_expanded" "{{${field_upper}}}" "$fval_upper"; printf '@')
+        row_expanded="${row_expanded%@}"
       done < <(yq "${yq_path}[${i}] | keys | .[]" "$yaml_file" 2>/dev/null)
       expanded+="$row_expanded"
     done

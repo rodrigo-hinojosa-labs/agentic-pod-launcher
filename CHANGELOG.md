@@ -3,6 +3,49 @@
 ## [Unreleased]
 
 ### Fixed
+- **The render engine no longer corrupts config values containing `&`
+  (`023-fix-render-ampersand`)**: measured live in production — mclaren, an
+  agent host, runs bash 5.2.37, which reproduces the bug. Since bash 5.2, an
+  unescaped `&` in the *replacement* text of `${var//pattern/replacement}`
+  means "the whole matched text" (a ksh93-compat change); `scripts/lib/render.sh`
+  used exactly that construct to expand `{{field}}` placeholders inside a
+  `{{#each}}` block, so any `agent.yml` array value containing `&` — the
+  typical case being a URL with a query string — silently rewrote itself in
+  the generated `.env` and `.mcp.json`. No error, no warning, no non-zero exit.
+  - **The obvious fix was a trap, confirmed by measurement**: escaping the `&`
+    in the value fixes bash 5.2+ and *breaks* bash 3.2, which has no such
+    special-casing and would insert a literal backslash instead — trading a
+    live bug for a regression in the one bash version that worked. The chosen
+    fix instead walks the text with prefix/suffix expansions
+    (`${t%%"$p"*}`/`${t#*"$p"}`), which have no replacement string at all —
+    there is no "special character" category left to escape, in this bash or
+    the next one. Verified byte-identical across bash 3.2.57, 5.2.37 (mclaren),
+    and 5.3.15 (Homebrew) for ten adversarial values, including the
+    self-referential case (a value equal to its own placeholder).
+  - **A second, self-inflicted bug caught by this feature's own no-regression
+    check**: the first pass captured the new function's output via command
+    substitution (`row_expanded=$(...)`), which unconditionally strips
+    trailing newlines — silently eating the blank line between consecutive
+    `{{#each}}` rows in the generated `.env`. Fixed with a sentinel-byte
+    capture (`; printf '@'` / `%@`) that leaves nothing for `$(...)` to strip.
+  - **Why this went undetected for months**: `bats` resolves to whichever
+    `bash` is first on `PATH`. Homebrew's bash 5.3 wasn't installed on the
+    development machine until the same day this bug was found — before that,
+    `bats` silently ran under macOS's stock 3.2, where the bug is invisible.
+    The exact same commit produced a green suite and a red one on the same
+    machine the same day, and nothing declared which bash a run used. The
+    suite now emits the interpreter version as a diagnostic line on every run,
+    and `CLAUDE.md`/`README.md` no longer conflate "uses no bash-4-only
+    constructs" with "behaves identically across bash versions" — the two
+    are not the same claim, and only the second one is what this bug broke.
+  - Docker mode is untouched: `render.sh` is host-side only and is not
+    mirrored into `docker/`.
+  - **Upgrade note**: this fixes the *renderer*, not already-generated files —
+    an existing workspace does not self-heal. Run `./setup.sh --regenerate`
+    to re-render `.mcp.json` / `.env.example` with the fix. For a workspace
+    with no `&` anywhere in `agent.yml`, that regenerate is a byte-identical
+    no-op (verified); it only changes output for a value that was already
+    silently wrong.
 - **Local mode: the agent no longer goes silently unreachable after a restart
   (`022-local-session-lifecycle`)**: measured on the live mclaren host. With
   `--spawn=session` the process exits *because its session ended*; `Restart=always`
@@ -50,6 +93,8 @@
     time. It matched by accident; with a configurable name it would have printed a
     false identity — precisely the one the operator uses to find and stop the agent
     remotely.
+
+### Fixed
 - **Local mode: the workspace `.env` now actually reaches the agent
   (`021-local-secret-delivery`)**: measured on the live mclaren host — the
   running session had **zero** of its six declared secrets, because no

@@ -8,7 +8,7 @@ This is **the launcher**, not an agent. `./setup.sh` is a bash wizard that scaff
 
 Three distinct code paths live in this repo, and confusing them is the most common mistake:
 
-1. **Host-side launcher** — `setup.sh`, `scripts/lib/{yaml,render,wizard,wizard-gum}.sh`, `modules/*.tpl`. Runs on the user's Mac/Linux during scaffolding. Depends on host tools: `bash` (no version floor — no bash-4-only construct and no `BASH_VERSINFO` gate anywhere; the suite runs on macOS's stock 3.2), `yq v4+`, `jq`, `git`, BSD/GNU `sed`, optional `gum` (auto-downloaded to `scripts/vendor/bin/`).
+1. **Host-side launcher** — `setup.sh`, `scripts/lib/{yaml,render,wizard,wizard-gum}.sh`, `modules/*.tpl`. Runs on the user's Mac/Linux during scaffolding. Depends on host tools: `bash` **3.2–5.3, tested in both** (not just "no bash-4-only construct" — that description was TRUE about constructs and FALSE about behavior: bash 5.2 changed `${var//pattern/replacement}` so an unescaped `&` in the replacement means "the whole match", which silently corrupted any operator value containing one until `023-fix-render-ampersand` replaced it with `_render_replace_all`, a prefix/suffix walk with no replacement string to escape at all; see that spec's `research.md` for the full measurement, including why `bats`, being `#!/usr/bin/env bash`, can silently switch which bash a given run uses), `yq v4+`, `jq`, `git`, BSD/GNU `sed`, optional `gum` (auto-downloaded to `scripts/vendor/bin/`).
 2. **Image-baked code** — `docker/` (Dockerfile, `entrypoint.sh`, `crontab.tpl`, `scripts/start_services.sh`, `scripts/wizard-container.sh`, `scripts/heartbeatctl`, `scripts/lib/{interval,state}.sh`, `scripts/apply_telegram_typing_patch.py`). Copied into the Alpine 3.20 image at build time, lives at `/opt/agent-admin/` inside containers. Read-only at runtime — changes require an image rebuild.
 3. **Workspace-templated code** — `scripts/heartbeat/{heartbeat.sh,notifiers/}`. Copied verbatim into each scaffolded workspace by `setup.sh`. Runs as `agent` inside the container via the bind-mount.
 
@@ -132,6 +132,86 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
+**023-fix-render-ampersand EN PR #81, SIN MERGEAR** (branch `023-fix-render-ampersand`, **rebasada
+2026-07-19 sobre main=`ab4bb32`** tras el merge de 022; VERSION 0.14.0→**0.15.0**). Plan:
+`specs/023-fix-render-ampersand/plan.md`. **BUG MEDIDO, VIVO EN PRODUCCIÓN, ajeno
+a toda rama en curso** (falla igual en un worktree limpio de main): `scripts/lib/render.sh:90,95`
+expanden los `{{campo}}` de un bloque `{{#each}}` con `${var//patrón/reemplazo}`, y **desde bash 5.2**
+un `&` sin escapar en el REEMPLAZO significa "todo el texto coincidente" (compatibilidad ksh93). El
+valor `A&B` sale como `A{{url}}B` — sin error, sin warning, sin rc≠0. Medido en tres bash: 3.2.57
+correcto; **5.2.37 en mclaren (host de agente) corrupto**; 5.3.15 (Homebrew) corrupto. Consumidores:
+`modules/mcp-json.tpl:48` y `modules/env-example.tpl:14`, ambos sobre `MCPS_ATLASSIAN` (campos `name`,
+`url`, `email`) — y `env-example.tpl:15-19` escribe `{{url}}`/`{{email}}` DIRECTO al `.env` generado,
+o sea el bug degradaba el artefacto más sensible del workspace.
+
+**FASE 0 CIERRA 3 DE LAS 4 PREGUNTAS ABIERTAS, MIDIENDO**: (1) el arreglo "obvio" —escapar el `&` en
+el valor— **está descartado por medición**: en bash 3.2 inserta un backslash literal (7/9 casos rojos),
+o sea arregla 5.2+ y ROMPE 3.2, que hoy funciona. (2) `shopt -s compat51` **no existe** en 5.3 y
+`BASH_COMPAT=5.1` **no** restaura el comportamiento → descartado. (3) **Por qué el bug vivió meses**:
+`bats` es `#!/usr/bin/env bash`; `/opt/homebrew/Cellar/bash/5.3.15` se creó el **2026-07-19 10:38:34**
+(única versión en el Cellar, `installed_on_request:false` → dependencia transitiva), así que antes
+`env bash` resolvía a `/bin/bash` 3.2. La corrida de suite que terminó 10:40 arrancó ~10:28 bajo 3.2 →
+VERDE; la que terminó 11:44 arrancó post-10:38 bajo 5.3 → ROJA. **El mismo commit dio verde y rojo el
+mismo día en la misma máquina y nada en el repo lo declaraba.** Queda abierta solo ferrari (túnel SSH
+caído): sin medir su bash ni su `agent.yml`.
+
+**DECISIÓN**: primitiva nueva `_render_replace_all` con recorrido de prefijo/sufijo
+(`${t%%"$p"*}` / `${t#*"$p"}`), que **no tiene cadena de reemplazo** → no hay categoría "carácter
+especial" que escapar, ni hoy ni cuando bash 6 agregue otra regla. Arreglo estructural, no de escapado.
+Medido correcto en las 3 versiones × 9 valores + autorreferencial; cero subprocesos (200 sustituciones
+en 0s vs ~1s de la alternativa perl). Runner-up documentado: perl con `ENV{REPL}`+`/e`, que es lo que el
+propio archivo ya usa en `:105-110` para el bloque completo (esa línea NO se toca, es correcta).
+**NO hay datos dañados**: el `agent.yml` de mclaren no tiene filas `mcps.atlassian` y cero valores con
+`&` (solo conteo, nunca se imprimieron valores). `render.sh` **NO** está espejado a `docker/` →
+DOCKER_E2E fuera de alcance (verificado, no supuesto). Constitución 6/6 PASS, sin violaciones.
+
+**IMPLEMENTADO 2026-07-19 (test-first, 25/27 tareas):** `_render_replace_all` conectada en los dos call
+sites (`render.sh:90,95`). **SEGUNDO BUG, AUTOINFLINGIDO, cazado por el propio gate de no-regresión**:
+la primera versión capturaba el resultado con `row_expanded=$(...)`, y `$(...)` recorta los saltos de
+línea finales sin condición → se comía la línea en blanco entre filas consecutivas de un `{{#each}}`
+en el `.env` generado. Arreglado con byte centinela (`; printf '@'` / `%@`); test de regresión propio
+agregado. Guard de no-drift + línea de versión de bash visible en cada corrida (vía `&3`, funciona en
+una corrida normal sin flags) + `CLAUDE.md`/`README.md` corregidos. Suite completa: 1066 ok/3 not ok
+bajo 5.3.15, 1068 ok/1 not ok bajo 3.2.57 — las 4 fallas son ruido preexistente ajeno (heartbeat/backup,
+pasan limpio en aislamiento), ninguna toca `render.sh` ni `render.bats` (28/28 en ambas versiones).
+Mutación: revertir un call site tumba 4 tests, incluido el dedicado. Shellcheck limpio. PR #81 abierto
+contra main, SIN MERGEAR. Pendiente no bloqueante: T026, medir ferrari cuando vuelva el túnel SSH.
+
+**REBASE SOBRE 022 (2026-07-19) — la trampa que dejó y que git NO delata:** al mergearse 022 el PR
+quedó CONFLICTING. Los conflictos marcados eran dos y triviales (`.specify/feature.json`, `CHANGELOG.md`),
+pero **el peligroso fue `VERSION`, que git auto-mergeó SIN marcar conflicto**: ambas ramas habían escrito
+`0.14.0`, así que textualmente coincidían y el rebase las dio por resueltas, dejando dos features
+distintas reclamando la misma versión. El conflicto era semántico, no textual. Regla que sale de acá:
+**después de todo rebase, verificar `VERSION` contra `origin/main` a mano** — el rebase no lo va a
+avisar. 023 quedó en `0.15.0` (T023 ya tenía escrita esta regla de desempate desde antes de existir el
+conflicto). De paso se corrigió un defecto que dejó el merge de 022 en `main`: su heading `### Changed`
+quedó insertado ENTRE su propia viñeta y la de 021, así que la entrada de 021 —un *Fixed*— aparecía
+archivada bajo *Changed*. Se le devolvió su `### Fixed`.
+
+**022-local-session-lifecycle MERGED** (PR #80, merge `ab4bb32` en main, 2026-07-19; branch desde
+main=`7e50c44`, VERSION 0.13.0→0.14.0). Plan: `specs/022-local-session-lifecycle/plan.md`. Con
+`--spawn=session` el proceso sale PORQUE su sesión terminó, `Restart=always` lo revive, y Claude Code
+lee un puntero cuyo escritor está muerto como "reutiliza el environment Y el sessionId" → re-anuncia
+una sesión que el relay ya cerró, con TODO el diagnóstico en verde (is-active, 0 restarts, sin errores
+en journal, socket ESTABLISHED con tráfico real). **El reboot no era el disparador**: solo propagó un
+puntero ya envenenado; terminar una conversación desde el celular basta. **`--spawn=same-dir` NO lo
+arregla** (probado sobre el agente real: reutiliza igual y además destruye la señal de causa de salida).
+FIX: `ExecStopPost` persiste `$SERVICE_RESULT`/`$EXIT_CODE`/`$EXIT_STATUS`; `ExecStartPre` lo lee antes
+de arrancar. Salió solo ⇒ retirar el puntero (rename, nunca delete); lo mató systemd ⇒ dejarlo (la
+sesión puede seguir viva y la reutilización del vendor restaura el mismo enlace — medido DOS veces en
+hardware, por eso "limpiar siempre al boot" habría sido regresión). Sin detector nuevo (precedente
+`ebfe35f`). Doctor: delata `exited` sin consumir junto a puntero vivo, y DEJA de grepear el journal por
+`session url|connected|polling` (un `--spawn=session` sano es silencioso ahí → avisaba en todo agente
+sano). US3: el nombre de sesión sale de `deployment.session_name` en vez de componerse con `$(hostname)`
+(un agente bautizado con su host leía `mclaren-mclaren-admin`). Suite 1141 ok / 1 not ok, y ese único
+rojo es el bug de 023, preexistente y ajeno. Mutación 5 corridas, y una destapó un test propio que
+pasaba por la razón equivocada (S16 asertaba un hint compartido por dos avisos). **T051 SIGUE ABIERTA
+y el merge ocurrió sin ella**: el gate de hardware en mclaren (necesita `sudo`) estaba planificado
+ANTES del merge, precisamente porque en 021 correrlo después costó un PR aparte (#79) con dos bugs de
+portabilidad que la suite de macOS no podía ver. Se repitió el patrón. El riesgo concreto: los hooks
+`ExecStopPost`/`ExecStartPre` solo corren en el host Linux del agente, así que su primera ejecución
+real será en producción y cualquier defecto de portabilidad ahí saldrá igual que los de 021.
+
 **021-local-secret-delivery MERGED** (PR #78, merge `dbe8274` en main, 2026-07-18; branch desde
 main=`cd6ad89` v0.12.0, VERSION 0.12.0→0.13.0). Plan: `specs/021-local-secret-delivery/plan.md`. **BUG MEDIDO EN HARDWARE VIVO**: el
 `.env` del workspace NUNCA llega a los procesos del agente en modo local. En mclaren, el entorno de la
