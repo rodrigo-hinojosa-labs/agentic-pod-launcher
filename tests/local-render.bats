@@ -29,6 +29,7 @@ deployment:
   install_service: true
   claude_cli: "claude"
   mode: local
+  session_name: "locbot-remote"
 docker:
   image_tag: "agent-admin:latest"
   uid: 1000
@@ -60,9 +61,52 @@ teardown() { teardown_tmp_dir; }
   grep -q '^User=op$' "$TMP_TEST_DIR/unit"
 }
 
-@test "systemd unit: ExecStart uses the absolute claude path + stable <host>-<name>" {
+# 022/N1 (US3): the client-visible name comes from agent.yml, VERBATIM. The
+# fixture's session_name ("locbot-remote") is deliberately DIFFERENT from what
+# the old template composed ({{HOST_NAME}}-{{AGENT_NAME}} = "rpi5-locbot") and
+# HOST_NAME is still exported as "rpi5" in setup() — so this assertion can only
+# pass if the value is read from agent.yml and not recomposed at render time.
+@test "systemd unit: ExecStart uses the absolute claude path + the agent.yml session name" {
   render_to_file "$REPO_ROOT/modules/systemd-remote-control.service.tpl" "$TMP_TEST_DIR/unit"
-  grep -q '^ExecStart=/usr/local/bin/claude remote-control --name rpi5-locbot --spawn=session --verbose$' "$TMP_TEST_DIR/unit"
+  grep -q '^ExecStart=/usr/local/bin/claude remote-control --name "locbot-remote" --spawn=session --verbose$' "$TMP_TEST_DIR/unit"
+}
+
+# 022/N6: a name with spaces must reach systemd as ONE argument. Unquoted, a
+# value like "Bitácora Cenco" would split into several argv entries and
+# --spawn=session would end up as the value of --name.
+@test "022/N6: a session name with spaces stays a single quoted ExecStart argument" {
+  yq -i '.deployment.session_name = "Bitácora Cenco"' "$TMP_TEST_DIR/agent.yml"
+  render_load_context "$TMP_TEST_DIR/agent.yml" >/dev/null
+  render_to_file "$REPO_ROOT/modules/systemd-remote-control.service.tpl" "$TMP_TEST_DIR/unit"
+  grep -q -- '--name "Bitácora Cenco" --spawn=session' "$TMP_TEST_DIR/unit"
+}
+
+# 022/N7a: guard against a future rename of the field or a typo in the
+# placeholder, which _render_placeholders would silently turn into `--name ""`
+# (scripts/lib/render.sh:139 substitutes an undefined {{VAR}} with the empty
+# string, not with the literal). Negative assertion LAST and via `if … grep`:
+# a `! [[ … ]]` mid-body does not fail a test in this suite.
+@test "022/N7a: the rendered ExecStart never carries an empty --name" {
+  render_to_file "$REPO_ROOT/modules/systemd-remote-control.service.tpl" "$TMP_TEST_DIR/unit"
+  grep -qE -- '--name "[^"]+"' "$TMP_TEST_DIR/unit"
+  if grep -qE -- '--name ("")?( |$)' "$TMP_TEST_DIR/unit"; then false; fi
+}
+
+# 022/S28: the kill switch must print the identity the unit actually announces.
+# It used to recompose `$(hostname)-${AGENT_NAME}` at RUN time — which stops
+# matching the moment the name is configurable, handing the operator a false
+# label to search for in claude.ai/code.
+@test "022/S28: the kill switch prints the resolved session name, not \$(hostname)-\$AGENT_NAME" {
+  render_to_file "$REPO_ROOT/modules/local-killswitch.sh.tpl" "$TMP_TEST_DIR/kill.sh"
+  # The identity is injected at RENDER time and echoed as a shell variable at run
+  # time — so the rendered file carries the assignment, not the expanded string.
+  grep -q '^SESSION_NAME="locbot-remote"$' "$TMP_TEST_DIR/kill.sh"
+  grep -q 'session identity: ${SESSION_NAME}' "$TMP_TEST_DIR/kill.sh"
+  # ...and is never recomposed from the live hostname. Comment lines are stripped
+  # first: the template explains the OLD $(hostname) composition in prose, and a
+  # naive grep over the whole file matches that explanation, not the code.
+  run bash -c "grep -v '^[[:space:]]*#' '$TMP_TEST_DIR/kill.sh' | grep -c 'hostname'"
+  [ "$output" = "0" ]
 }
 
 @test "systemd unit: Restart=always (NOT on-failure)" {
@@ -80,7 +124,9 @@ teardown() { teardown_tmp_dir; }
 @test "systemd unit: ExecStart is remote-control --spawn=session, never skip-permissions" {
   render_to_file "$REPO_ROOT/modules/systemd-remote-control.service.tpl" "$TMP_TEST_DIR/unit"
   grep -q 'remote-control' "$TMP_TEST_DIR/unit"
-  grep -q -- '--name' "$TMP_TEST_DIR/unit"
+  # 022/S24: a bare `grep -- '--name'` also passed on `--name ""`. Require a
+  # non-empty quoted value so a broken placeholder can never sneak through here.
+  grep -qE -- '--name "[^"]+"' "$TMP_TEST_DIR/unit"
   grep -q -- '--spawn=session' "$TMP_TEST_DIR/unit"
   ! grep -q -- '--dangerously-skip-permissions' "$TMP_TEST_DIR/unit"
 }
@@ -125,6 +171,51 @@ teardown() { teardown_tmp_dir; }
 @test "systemd unit: never uses the unsafe Environment= directive for secrets" {
   render_to_file "$REPO_ROOT/modules/systemd-remote-control.service.tpl" "$TMP_TEST_DIR/unit"
   if grep -qE '^Environment=' "$TMP_TEST_DIR/unit"; then false; fi
+}
+
+# ─── 022-local-session-lifecycle: session pointer hygiene ───────────────────
+# contracts/session-pointer-hygiene.md §3.1 (ordering) and §2.
+
+@test "022 unit: a second ExecStartPre runs the session check, ignore-if-failed" {
+  render_to_file "$REPO_ROOT/modules/systemd-remote-control.service.tpl" "$TMP_TEST_DIR/unit"
+  grep -q '^ExecStartPre=-/home/op/agents/locbot/scripts/local/agent-session-check\.sh$' "$TMP_TEST_DIR/unit"
+}
+
+@test "022 unit: the session check runs AFTER the 021 secret check" {
+  # Ordering is load-bearing on the line number: systemd runs multiple
+  # ExecStartPre= sequentially in declaration order, and the session check must
+  # not displace 021's boot warning.
+  render_to_file "$REPO_ROOT/modules/systemd-remote-control.service.tpl" "$TMP_TEST_DIR/unit"
+  local secret_line session_line
+  secret_line=$(grep -n '^ExecStartPre=-.*agent-secret-check\.sh$' "$TMP_TEST_DIR/unit" | cut -d: -f1)
+  session_line=$(grep -n '^ExecStartPre=-.*agent-session-check\.sh$' "$TMP_TEST_DIR/unit" | cut -d: -f1)
+  [ -n "$secret_line" ]
+  [ -n "$session_line" ]
+  [ "$secret_line" -lt "$session_line" ]
+}
+
+@test "022 unit: both session hooks run BEFORE ExecStart reads the pointer" {
+  render_to_file "$REPO_ROOT/modules/systemd-remote-control.service.tpl" "$TMP_TEST_DIR/unit"
+  local session_line exec_line
+  session_line=$(grep -n '^ExecStartPre=-.*agent-session-check\.sh$' "$TMP_TEST_DIR/unit" | cut -d: -f1)
+  exec_line=$(grep -n '^ExecStart=' "$TMP_TEST_DIR/unit" | cut -d: -f1)
+  [ -n "$session_line" ]
+  [ -n "$exec_line" ]
+  [ "$session_line" -lt "$exec_line" ]
+}
+
+@test "022 unit: ExecStopPost records the exit cause, ignore-if-failed" {
+  render_to_file "$REPO_ROOT/modules/systemd-remote-control.service.tpl" "$TMP_TEST_DIR/unit"
+  grep -q '^ExecStopPost=-/home/op/agents/locbot/scripts/local/agent-session-exit\.sh$' "$TMP_TEST_DIR/unit"
+}
+
+@test "022 unit: the 021 EnvironmentFile pair keeps its order after the new directives" {
+  # Regression guard for SC-008: inserting directives must not reorder these.
+  render_to_file "$REPO_ROOT/modules/systemd-remote-control.service.tpl" "$TMP_TEST_DIR/unit"
+  local env_line rc_line
+  env_line=$(grep -n '^EnvironmentFile=-/home/op/agents/locbot/\.env$' "$TMP_TEST_DIR/unit" | cut -d: -f1)
+  rc_line=$(grep -n '^EnvironmentFile=/home/op/agents/locbot/\.state/remote-control\.env$' "$TMP_TEST_DIR/unit" | cut -d: -f1)
+  [ "$env_line" -lt "$rc_line" ]
 }
 
 @test "U4: the healthcheck timer's service unit has NO EnvironmentFile for .env" {

@@ -415,7 +415,7 @@ systemctl list-timers 'agent-{{AGENT_NAME}}-*'           # every agent timer at 
 ./scripts/agentctl status                                # graph freshness + finding counts
 ```
 {{/if}}
-You drive the agent from **claude.ai/code** and the mobile app (identity `<hostname>-{{AGENT_NAME}}`). A healthcheck runs on a timer (~5 min) and warns if the login expires, auth fails, or the QMD watcher / wiki-graph unit is `failed`. Auto-recovery: if the process dies, systemd restarts it in ~10s (`Restart=always`).
+You drive the agent from **claude.ai/code** and the mobile app (identity `{{DEPLOYMENT_SESSION_NAME}}`). A healthcheck runs on a timer (~5 min) and warns if the login expires, auth fails, or the QMD watcher / wiki-graph unit is `failed`. Auto-recovery: if the process dies, systemd restarts it in ~10s (`Restart=always`).
 
 ## 3. Verification gates (on the host)
 

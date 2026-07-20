@@ -131,6 +131,46 @@ _persist_claude_cli() {
   yq -i ".deployment.claude_cli = \"$resolved\"" "$agent_yml" 2>/dev/null || true
 }
 
+# 022 (US3/FR-009): the DEFAULT for the client-visible session name
+# (`claude remote-control --name <v>`). Only computed when agent.yml carries no
+# explicit deployment.session_name; the explicit value always wins, verbatim.
+#
+# Two things this fixes. (a) The old value was composed in the template as
+# {{HOST_NAME}}-{{AGENT_NAME}} with HOST_NAME=$(hostname) at render time, so an
+# agent named after its host read `mclaren-mclaren-admin` — and moving the
+# workspace to another machine silently changed the agent's identity. (b) It
+# lived nowhere in agent.yml, so it was neither configurable nor reproducible
+# by re-rendering (Principle I).
+#
+# The host is normalized with the normalize_agent_name rules
+# (scripts/lib/wizard-validators.sh:100-108) applied to its FIRST dot-label: a
+# FQDN or an mDNS `.local` would otherwise yield `mclaren.local-mclaren-admin`
+# and break the prefix test. agent_name needs no normalization — validate_agent_name
+# already guarantees lowercase/digits/hyphens.
+#
+# The prefix test carries a FRONTIER HYPHEN on purpose. A bare prefix would make
+# host `rpi5` + agent `rpi5x` resolve to `rpi5x`, dropping the host segment on a
+# false positive.
+_resolve_session_name() {
+  local agent_name="$1" host="${2:-}" seg
+  seg="${host%%.*}"
+  # yq prints the literal string "null" for an ABSENT path; reading it without
+  # `// ""` upstream would otherwise resolve a plausible-looking "null-locbot".
+  [ "$seg" = "null" ] && seg=""
+  seg=$(printf '%s' "$seg" | tr '[:upper:]' '[:lower:]')
+  seg="${seg// /-}"
+  seg=$(printf '%s' "$seg" | tr -s '-')
+  seg="${seg#-}"
+  seg="${seg%-}"
+
+  [ -n "$seg" ] || { printf '%s\n' "$agent_name"; return 0; }
+  [ "$agent_name" != "$seg" ] || { printf '%s\n' "$agent_name"; return 0; }
+  case "$agent_name" in
+    "$seg"-*) printf '%s\n' "$agent_name"; return 0 ;;
+  esac
+  printf '%s\n' "${seg}-${agent_name}"
+}
+
 # Fetch a user's preferred SSH public key from GitHub.
 # Prefers ssh-ed25519, falls back to ssh-rsa. Returns the full key line
 # (type + base64 + comment) on stdout, or non-zero on failure / no keys.
@@ -1152,6 +1192,7 @@ deployment:
   install_service: $deploy_svc
   claude_cli: "$(detect_claude_cli)"
   mode: "$deploy_mode"
+  session_name: "$(_resolve_session_name "$agent_name" "$deploy_host")"
 
 claude:
   config_dir: "$claude_config_dir"
@@ -1959,6 +2000,26 @@ regenerate() {
     if [ -z "$_dep_mode" ] || [ "$_dep_mode" = "null" ]; then
       yq -i '.deployment.mode = "docker"' "$agent_yml"
     fi
+
+    # 022 (US3/FR-012/FR-015): backfill deployment.session_name for a pre-022
+    # workspace so it resolves EXACTLY like a fresh scaffold. Persisting it (as
+    # opposed to recomputing it on every render) is what makes the name editable
+    # by hand, survivable across --regenerate, and independent of the hostname of
+    # whatever machine happens to run the render (Principle I). An existing value
+    # — default or operator-chosen — is never touched, which is what makes a
+    # second --regenerate a byte-for-byte no-op.
+    #
+    # Must stay INSIDE this `[ -f "$agent_yml" ]` block and BEFORE the
+    # render_load_context below, or the value would not reach this same pass.
+    local _sess_name _sess_host _sess_agent
+    _sess_name=$(yq -r '.deployment.session_name // ""' "$agent_yml")
+    if [ -z "$_sess_name" ] || [ "$_sess_name" = "null" ]; then
+      _sess_host=$(yq -r '.deployment.host // ""' "$agent_yml")
+      _sess_agent=$(yq -r '.agent.name // ""' "$agent_yml")
+      if [ -n "$_sess_agent" ] && [ "$_sess_agent" != "null" ]; then
+        yq -i ".deployment.session_name = \"$(_resolve_session_name "$_sess_agent" "$_sess_host")\"" "$agent_yml"
+      fi
+    fi
   fi
 
   echo "▸ Loading context from agent.yml"
@@ -2235,6 +2296,12 @@ regenerate() {
     render_to_file "$modules_dir/local-killswitch.sh.tpl"  "$SCRIPT_DIR/scripts/local/agent-killswitch.sh"
     render_to_file "$modules_dir/local-healthcheck.sh.tpl" "$SCRIPT_DIR/scripts/local/agent-healthcheck.sh"
     render_to_file "$modules_dir/local-secret-check.sh.tpl" "$SCRIPT_DIR/scripts/local/agent-secret-check.sh"
+    # 022 (US1): the session-pointer hygiene pair. agent-session-exit.sh runs as
+    # ExecStopPost and records WHY the process stopped; agent-session-check.sh
+    # runs as the second ExecStartPre and retires a pointer that names a session
+    # which already ended. Both always exit 0.
+    render_to_file "$modules_dir/local-session-exit.sh.tpl"  "$SCRIPT_DIR/scripts/local/agent-session-exit.sh"
+    render_to_file "$modules_dir/local-session-check.sh.tpl" "$SCRIPT_DIR/scripts/local/agent-session-check.sh"
     render_to_file "$modules_dir/local-bootstrap.sh.tpl"   "$SCRIPT_DIR/scripts/local/agent-bootstrap.sh"
     # US2 (FR-004/005/006): QMD reindex entrypoint + watcher wrapper, rendered
     # only when qmd is enabled. Their systemd units are installed by install_service.
@@ -2333,6 +2400,19 @@ _export_local_context() {
   OPERATOR_USER="$(id -un)"
   OPERATOR_HOME="$HOME"
   HOST_NAME="$(hostname)"
+
+  # 022 (US3/N7b): safety belt. render.sh substitutes an UNDEFINED {{VAR}} with
+  # the empty string, so a context without DEPLOYMENT_SESSION_NAME would emit a
+  # unit reading `--name ""` — an agent with no name in claude.ai/code, and no
+  # error anywhere. This is the only correct choke point: _export_local_context
+  # is called from BOTH regenerate() and install_service(), and it is
+  # install_service that renders the unit. Next to _persist_claude_cli it would
+  # be skipped by any run that installs the unit without passing through
+  # regenerate(). Never overwrites a value that is already set.
+  export DEPLOYMENT_SESSION_NAME
+  if [ -z "${DEPLOYMENT_SESSION_NAME:-}" ] || [ "${DEPLOYMENT_SESSION_NAME:-}" = "null" ]; then
+    DEPLOYMENT_SESSION_NAME="$(_resolve_session_name "${AGENT_NAME:-agent}" "${DEPLOYMENT_HOST:-}")"
+  fi
   local _cli="${DEPLOYMENT_CLAUDE_CLI:-claude}"
   # US1/FR-001/003: resolve to an absolute, executable path against the operator
   # HOME (NOT the --regenerate shell's PATH). Fail LOUD rather than emit a unit

@@ -600,3 +600,193 @@ SH
   [ "$status" -eq 0 ]
   [[ "$output" == *"Local checks passed"* ]]
 }
+
+# ─── 022-local-session-lifecycle (US2): _local_session_doctor ───────────────
+# contracts/session-pointer-hygiene.md S16-S23. The diagnostic must report an
+# unreachable agent (FR-005) and must NEVER cry wolf on a healthy one (FR-006);
+# "cannot determine" is a WARN, never a skip, because a skip does not increment
+# a counter and would exit 0 green — the exact all-green-while-dead failure this
+# feature exists to kill.
+
+# Shared setup for the 022 doctor tests: a clean .env (so the 021 secret checks
+# stay quiet) and the shared lib inside the fake workspace.
+_022_setup() {
+  printf 'CLAUDE_CODE_OAUTH_TOKEN=\n' > "$TMP_TEST_DIR/.env"
+  chmod 600 "$TMP_TEST_DIR/.env"
+  _write_agent_yml_with_mcps "  defaults: []
+  atlassian: []
+  github: {enabled: false}"
+  mkdir -p "$TMP_TEST_DIR/.state/.claude/projects"
+}
+
+# Pointer under the naive slug of the fake workspace.
+_022_mk_pointer() {
+  local slug dir
+  slug=$(printf '%s' "$TMP_TEST_DIR" | tr -c 'a-zA-Z0-9' '-')
+  dir="$TMP_TEST_DIR/.state/.claude/projects/$slug"
+  mkdir -p "$dir"
+  printf '{"sessionId":"session_01AAA","environmentId":"env_x","source":"standalone","pid":1,"procStart":"2"}\n' \
+    > "$dir/bridge-pointer.json"
+}
+
+_022_mk_marker() {  # _022_mk_marker EXIT_CODE
+  mkdir -p "$TMP_TEST_DIR/scripts/heartbeat"
+  printf '{"schema":1,"service_result":"x","exit_code":"%s","exit_status":"0","ts":"t"}\n' "$1" \
+    > "$TMP_TEST_DIR/scripts/heartbeat/session-exit.json"
+}
+
+# A systemctl stub that reports the unit as fully upgraded (both 022 directives
+# installed) so these tests exercise the session logic, not the staleness check.
+_022_systemctl_ok() {
+  cat > "$TMP_TEST_DIR/bin/systemctl" << 'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *is-active*) exit 0 ;;
+  *is-failed*) exit 1 ;;
+  *show*EnvironmentFiles*)
+    echo "/home/op/wk/.env (ignore_errors=yes) /home/op/wk/.state/remote-control.env (ignore_errors=no)" ;;
+  *show*ExecStartPre*)
+    echo "{ path=/wk/scripts/local/agent-secret-check.sh ; ignore_errors=yes }{ path=/wk/scripts/local/agent-session-check.sh ; ignore_errors=yes }" ;;
+  *show*ExecStopPost*)
+    echo "{ path=/wk/scripts/local/agent-session-exit.sh ; ignore_errors=yes }" ;;
+  *) exit 0 ;;
+esac
+SH
+  chmod +x "$TMP_TEST_DIR/bin/systemctl"
+}
+
+@test "022 S18: pointer present + an unconsumed 'exited' marker → WARN naming the restart" {
+  _022_setup
+  _022_systemctl_ok
+  _022_mk_pointer
+  _022_mk_marker exited
+  cd "$TMP_TEST_DIR"
+  run ./scripts/agentctl doctor
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"unreachable"* ]]
+  [[ "$output" == *"systemctl restart"* ]]
+}
+
+@test "022 S19: a healthy agent produces zero session warnings across 5 runs" {
+  # SC-004. The journalctl stub prints NOTHING here on purpose: the retired
+  # journal grep would have warned on every single tick (measured false positive,
+  # modules/local-healthcheck.sh.tpl:50-64).
+  _022_setup
+  _022_systemctl_ok
+  _022_mk_pointer
+  cat > "$TMP_TEST_DIR/bin/journalctl" << 'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  chmod +x "$TMP_TEST_DIR/bin/journalctl"
+  cd "$TMP_TEST_DIR"
+  local i
+  for i in 1 2 3 4 5; do
+    run ./scripts/agentctl doctor
+    [ "$status" -eq 0 ]
+    if printf '%s' "$output" | grep -qi 'unreachable'; then false; fi
+    if printf '%s' "$output" | grep -q 'No recent connection signal'; then false; fi
+  done
+}
+
+@test "022 S20: two candidate pointers → WARN 'cannot determine', not a skip" {
+  _022_setup
+  _022_systemctl_ok
+  mkdir -p "$TMP_TEST_DIR/.state/.claude/projects/-cand-a" \
+           "$TMP_TEST_DIR/.state/.claude/projects/-cand-b"
+  printf '{}\n' > "$TMP_TEST_DIR/.state/.claude/projects/-cand-a/bridge-pointer.json"
+  printf '{}\n' > "$TMP_TEST_DIR/.state/.claude/projects/-cand-b/bridge-pointer.json"
+  cd "$TMP_TEST_DIR"
+  run ./scripts/agentctl doctor
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"cannot determine"* ]]
+  # A skip (⊝) would not increment a counter and the doctor would exit 0 green.
+  if printf '%s' "$output" | grep -q '⊝.*session'; then false; fi
+}
+
+@test "022 S21: a fresh agent with no session yet is never reported broken" {
+  _022_setup
+  _022_systemctl_ok
+  cd "$TMP_TEST_DIR"
+  run ./scripts/agentctl doctor
+  [ "$status" -eq 0 ]
+  if printf '%s' "$output" | grep -qi 'unreachable'; then false; fi
+  if printf '%s' "$output" | grep -qi 'cannot determine'; then false; fi
+}
+
+@test "022 S16: the installed unit lacks the session check → WARN with the install command" {
+  _022_setup
+  _022_mk_pointer
+  cat > "$TMP_TEST_DIR/bin/systemctl" << 'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *is-active*) exit 0 ;;
+  *is-failed*) exit 1 ;;
+  *show*EnvironmentFiles*)
+    echo "/home/op/wk/.env (ignore_errors=yes) /home/op/wk/.state/remote-control.env (ignore_errors=no)" ;;
+  *show*ExecStartPre*)
+    echo "{ path=/wk/scripts/local/agent-secret-check.sh ; ignore_errors=yes }" ;;
+  # ExecStopPost is INTACT on purpose: leaving it empty would fire the OTHER
+  # warning too, and both carry the same `daemon-reload` hint — the assertion
+  # below would then pass without the ExecStartPre check existing at all. A
+  # mutation that made this check always report "pass" went undetected until
+  # this stub was tightened.
+  *show*ExecStopPost*)
+    echo "{ path=/wk/scripts/local/agent-session-exit.sh ; ignore_errors=yes }" ;;
+  *) exit 0 ;;
+esac
+SH
+  chmod +x "$TMP_TEST_DIR/bin/systemctl"
+  cd "$TMP_TEST_DIR"
+  run ./scripts/agentctl doctor
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"does not run the session check"* ]]
+}
+
+@test "022 S17: the installed unit lacks ExecStopPost → its own WARN" {
+  _022_setup
+  _022_mk_pointer
+  cat > "$TMP_TEST_DIR/bin/systemctl" << 'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *is-active*) exit 0 ;;
+  *is-failed*) exit 1 ;;
+  *show*EnvironmentFiles*)
+    echo "/home/op/wk/.env (ignore_errors=yes) /home/op/wk/.state/remote-control.env (ignore_errors=no)" ;;
+  *show*ExecStartPre*)
+    echo "{ path=/wk/scripts/local/agent-secret-check.sh ; ignore_errors=yes }{ path=/wk/scripts/local/agent-session-check.sh ; ignore_errors=yes }" ;;
+  *show*ExecStopPost*) echo "" ;;
+  *) exit 0 ;;
+esac
+SH
+  chmod +x "$TMP_TEST_DIR/bin/systemctl"
+  cd "$TMP_TEST_DIR"
+  run ./scripts/agentctl doctor
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"exit cause"* ]]
+}
+
+@test "022 S22: the retired journal grep is gone from cmd_local_doctor" {
+  # Two scopes, both deliberate:
+  #  - the FUNCTION BODY, because cmd_local_status keeps the same pattern on
+  #    purpose and a whole-file grep would fail forever;
+  #  - CODE ONLY (comment lines stripped), because the removal is documented in
+  #    place and that comment legitimately quotes the retired predicate.
+  run bash -c "sed -n '/^cmd_local_doctor()/,/^}/p' '$REPO_ROOT/scripts/agentctl' \
+    | grep -vE '^[[:space:]]*#' | grep -c 'session url'"
+  [ "$output" = "0" ]
+}
+
+@test "022 S22b: the removed check is not merely renamed — no journalctl grep remains" {
+  # Guards against a future 'fix' that re-adds journal scraping under another
+  # name. A healthy --spawn=session is silent in the journal, so ANY predicate
+  # built on grepping it is a false positive by construction.
+  run bash -c "sed -n '/^cmd_local_doctor()/,/^}/p' '$REPO_ROOT/scripts/agentctl' \
+    | grep -vE '^[[:space:]]*#' | grep -c 'journalctl'"
+  [ "$output" = "0" ]
+}
+
+@test "022 S23: the docker doctor never calls the local session check (FR-011)" {
+  run bash -c "sed -n '/^cmd_doctor()/,/^}/p' '$REPO_ROOT/scripts/agentctl' | grep -c '_local_session_doctor'"
+  [ "$output" = "0" ]
+}

@@ -17,6 +17,7 @@ deployment:
   install_service: true
   claude_cli: "claude"
   mode: docker
+  session_name: "testhost-dockbot"
 docker:
   image_tag: "agent-admin:latest"
   uid: 1000

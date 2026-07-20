@@ -1228,6 +1228,93 @@ _local_secrets_doctor() {
   [ -z "$val" ] && echo "  ◦ CLAUDE_CODE_OAUTH_TOKEN empty — normal for a /login-based agent (info only)"
 }
 
+# 022-local-session-lifecycle (US2): is this agent actually usable from a client?
+#
+# Nothing that already existed answers that. During the measured incident
+# (mclaren, 2026-07-18) systemctl said active, NRestarts was 0, the journal had
+# no errors, and the :443 socket was ESTABLISHED with real bidirectional
+# traffic — while the agent was dead to its operator. So this check does NOT
+# probe liveness or the network; it looks at the two artifacts that actually
+# carry the answer: whether the installed unit runs the 022 hooks at all, and
+# whether an unconsumed "the process exited on its own" verdict is sitting next
+# to a live pointer.
+#
+# WARN only, never _doctor_fail: a stale pointer degrades reachability, it does
+# not make the host unhealthy. And "cannot determine" is a WARN, never
+# _doctor_skip — skip increments no counter, so the doctor would exit 0 green,
+# which is precisely the all-green-while-dead failure this feature exists to
+# kill (spec.md FR-006).
+_local_session_doctor() {
+  local agent="$1" ws="$2"
+  local unit="agent-${agent}.service"
+  local cfg="${ws}/.state/.claude"
+
+  command -v session_pointer_path >/dev/null 2>&1 || {
+    # shellcheck source=/dev/null
+    . "${ws}/scripts/lib/session_pointer.sh" 2>/dev/null
+  }
+  if ! command -v session_pointer_path >/dev/null 2>&1; then
+    _doctor_warn "cannot determine session state (scripts/lib/session_pointer.sh unavailable)" \
+      "re-run ./setup.sh --regenerate from the workspace"
+    return 0
+  fi
+
+  # D5/D6: inspect the INSTALLED unit, not the rendered template. --regenerate
+  # reinstalls only when deployment.install_service is true AND `sudo -n`
+  # succeeds, and nothing in setup.sh ever restarts the session unit — so the
+  # running unit can lag its template indefinitely (confirmed live on mclaren).
+  # `systemctl show` (not `cat`): the unit file may be root-only, and `cat` then
+  # fails "Permission denied" and silently skips the whole check (021 gate).
+  if command -v systemctl >/dev/null 2>&1; then
+    local pre post
+    pre=$(systemctl show "$unit" -p ExecStartPre --value 2>/dev/null || true)
+    # A non-empty ExecStartPre means systemd answered about this unit; only then
+    # is an empty ExecStopPost meaningful rather than "systemd told us nothing".
+    if [ -n "$pre" ]; then
+      if printf '%s' "$pre" | grep -q 'agent-session-check\.sh'; then
+        _doctor_pass "installed unit runs the boot session check"
+      else
+        _doctor_warn "installed unit does not run the session check yet (stale — regenerate ran but the unit was never reinstalled)" \
+          "sudo cp ./agent-${agent}.service /etc/systemd/system/ ; sudo systemctl daemon-reload ; sudo systemctl restart ${unit}"
+      fi
+      post=$(systemctl show "$unit" -p ExecStopPost --value 2>/dev/null || true)
+      if ! printf '%s' "$post" | grep -q 'agent-session-exit\.sh'; then
+        _doctor_warn "installed unit does not record the session exit cause (ExecStopPost missing)" \
+          "sudo cp ./agent-${agent}.service /etc/systemd/system/ ; sudo systemctl daemon-reload ; sudo systemctl restart ${unit}"
+      fi
+    fi
+  fi
+
+  local pointer state
+  pointer=$(session_pointer_path "$ws" "$cfg" 2>/dev/null)
+  case "$?" in
+    0) state="present" ;;
+    2) state="absent"  ;;
+    *) state="unknown" ;;
+  esac
+
+  if [ "$state" = "unknown" ]; then
+    _doctor_warn "cannot determine which session pointer belongs to this workspace" \
+      "more than one candidate under ${cfg}/projects/ — inspect it by hand before acting"
+    return 0
+  fi
+
+  # No pointer at all = a freshly scaffolded agent that has never announced a
+  # session. Silence is correct; warning here would train the operator to
+  # ignore this check (spec.md Edge Cases).
+  [ "$state" = "absent" ] && return 0
+
+  # A pointer plus an UNCONSUMED "exited" verdict means the boot hook never ran
+  # (stale unit) and the agent is announcing a session that already ended.
+  local marker
+  marker=$(session_exit_marker_read "$ws" 2>/dev/null) || marker=""
+  if [ "$marker" = "exited" ]; then
+    _doctor_warn "the agent is likely unreachable: it is announcing a session that already ended" \
+      "sudo systemctl restart ${unit}"
+  fi
+  return 0
+}
+
 cmd_local_status() {
   local agent unit ws
   agent=$(resolve_agent_name) || exit $?
@@ -1277,12 +1364,14 @@ cmd_local_doctor() {
     fails=1
   fi
 
-  if journalctl -u "$unit" --since "-10 min" --no-pager 2>/dev/null \
-       | grep -qE 'session url|connected|polling'; then
-    _doctor_pass "Connection signal seen in journal"
-  else
-    _doctor_warn "No recent connection signal" "journalctl -u ${unit} -f and watch for 'session url'/'connected'"
-  fi
+  # 022: the journal-grep "connection signal" check that lived here was REMOVED,
+  # not replaced in place. It grepped the journal for 'session url|connected|
+  # polling', a predicate the healthcheck had already retired as a measured
+  # false positive (modules/local-healthcheck.sh.tpl:50-64): a healthy
+  # --spawn=session is SILENT in the journal, so it warned on every run even
+  # when fully connected. Keeping it alongside a real check would violate
+  # FR-006 — a diagnostic that cries wolf trains the operator to ignore it.
+  # Session reachability is now assessed by _local_session_doctor below.
 
   if [ -r "$creds" ]; then
     local perms
@@ -1294,6 +1383,9 @@ cmd_local_doctor() {
     fails=1
   fi
 
+  # 022 (US2): session usability first — an unreachable agent matters more than
+  # a stale vault index, so the operator reads it before scrolling.
+  _local_session_doctor "$agent" "$ws"
   _local_vault_qmd_doctor "$agent" "$ws"
   _local_secrets_doctor "$agent" "$ws"
 

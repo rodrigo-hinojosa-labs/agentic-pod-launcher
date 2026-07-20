@@ -77,6 +77,7 @@ _SCHEMA_BOOLEANS=(
 # render.sh, here we only guard the YAML shape.
 _SCHEMA_OPTIONAL_NONEMPTY=(
   '.agent.role_file'
+  '.deployment.session_name'
   '.vault.path'
   '.vault.backup_schedule'
   '.vault.qmd.version'

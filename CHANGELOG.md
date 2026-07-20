@@ -3,6 +3,53 @@
 ## [Unreleased]
 
 ### Fixed
+- **Local mode: the agent no longer goes silently unreachable after a restart
+  (`022-local-session-lifecycle`)**: measured on the live mclaren host. With
+  `--spawn=session` the process exits *because its session ended*; `Restart=always`
+  revives it, and Claude Code reads a pointer whose writer is dead as "reuse the
+  environment **and** the sessionId" — so the new process re-announces a session the
+  relay has already closed. The agent is unusable while **every** health signal
+  stays green: `systemctl is-active` active, zero restarts, no journal errors, and a
+  socket to the relay ESTABLISHED with real bidirectional traffic. The reboot was
+  never the trigger; it only propagated an already-poisoned pointer. **Ending a
+  conversation from the phone is enough to poison it.**
+  - **The fix uses the one discriminator the pointer lacks: *why* the previous
+    process stopped**, which systemd knows and records. A new `ExecStopPost` hook
+    persists `$SERVICE_RESULT`/`$EXIT_CODE`/`$EXIT_STATUS`; a new `ExecStartPre` hook
+    reads that verdict before `remote-control` starts. Exited on its own ⇒ the
+    session ended ⇒ retire the pointer (renamed, never deleted). Killed by systemd ⇒
+    restart/reboot/stop ⇒ leave it alone: the session can still be live server-side
+    and the vendor's reuse restores the same client link — measured twice on
+    hardware. "Always clear the pointer at boot" would have been a regression.
+  - **No new detector.** The reverted docker bridge watchdog (`ebfe35f`) is the
+    standing precedent: it scraped tmux panes, false-positived, and killed healthy
+    sessions every ~2 minutes. Nothing here polls, samples or infers liveness — it
+    acts once per start on a fact systemd already recorded.
+  - **`agentctl doctor` (local)** now reports an unconsumed `exited` verdict sitting
+    next to a live pointer, and whether the *installed* unit runs the hooks at all.
+    It also **stops** grepping the journal for `session url|connected|polling`: a
+    healthy `--spawn=session` agent is silent in the journal, so that check cried
+    wolf on every healthy agent. The healthcheck had already retired it; the doctor
+    had not.
+
+### Changed
+- **The client-visible session name comes from `agent.yml`
+  (`deployment.session_name`)** instead of being composed as
+  `$(hostname)-<agent_name>` at render time. An agent named after its own host read
+  `mclaren-mclaren-admin`, the value was not configurable, and moving a workspace to
+  another machine silently changed the agent's identity. The default de-duplicates
+  the host segment (first dot-label, normalized, hyphen-bounded prefix test) and is
+  persisted once, so it survives `--regenerate` and can be hand-edited.
+  - **Upgrade note (one-time, accepted)**: the first `--regenerate` + restart on an
+    existing local agent backfills the field and **changes the label shown in
+    claude.ai/code** — e.g. `mclaren-mclaren-admin` → `mclaren-admin`. The unit name,
+    the healthcheck, the doctor and every companion timer are unaffected: they all
+    derive from `agent.name`, never from this label. Docker mode is untouched
+    (`--name` does not exist anywhere under `docker/`).
+  - The local kill switch used to print `$(hostname)-${AGENT_NAME}` recomposed at run
+    time. It matched by accident; with a configurable name it would have printed a
+    false identity — precisely the one the operator uses to find and stop the agent
+    remotely.
 - **Local mode: the workspace `.env` now actually reaches the agent
   (`021-local-secret-delivery`)**: measured on the live mclaren host — the
   running session had **zero** of its six declared secrets, because no

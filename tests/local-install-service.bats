@@ -16,6 +16,13 @@ setup() {
   cp -r "$REPO_ROOT/scripts" "$REPO_ROOT/modules" "$TMP_TEST_DIR/"
   cp "$REPO_ROOT/setup.sh" "$REPO_ROOT/VERSION" "$TMP_TEST_DIR/"
 
+  # 022/T044: the fixture's `deployment.session_name` is MANDATORY, not cosmetic.
+  # The byte-for-byte diff test below renders `expected.unit` BEFORE running
+  # --regenerate; without the field, setup.sh would backfill it during that run
+  # and the two units would differ — `expected` with `--name ""` (render.sh
+  # substitutes an undefined {{VAR}} with the empty string, not the literal)
+  # against an installed unit carrying the resolved value. The 022 tests that
+  # exercise the backfill delete the key first, on purpose.
   cat > "$TMP_TEST_DIR/agent.yml" << 'YML'
 version: 1
 agent:
@@ -35,6 +42,7 @@ deployment:
   install_service: true
   claude_cli: "claude"
   mode: local
+  session_name: "rpi5-locbot"
 docker:
   image_tag: "agent-admin:latest"
   uid: 1000
@@ -148,4 +156,60 @@ teardown() { teardown_tmp_dir; }
   # secrets file (or its absence) must never be touched by --regenerate.
   [ ! -e "$TMP_TEST_DIR/.env" ]
   [ -f "$TMP_TEST_DIR/.env.example" ]
+}
+
+# ─── 022 US3: session name backfill + idempotency (N8, S26) ─────────────────
+
+@test "022/N8: a pre-022 agent.yml gains deployment.session_name on --regenerate" {
+  cd "$TMP_TEST_DIR"
+  yq -i 'del(.deployment.session_name)' "$TMP_TEST_DIR/agent.yml"
+  run bash -c "echo 'n' | ./setup.sh --regenerate"
+  [ "$status" -eq 0 ]
+  run yq -r '.deployment.session_name' "$TMP_TEST_DIR/agent.yml"
+  [ "$output" = "rpi5-locbot" ]
+}
+
+@test "022/N8: the INSTALLED unit carries the backfilled name (not a bare --name)" {
+  cd "$TMP_TEST_DIR"
+  yq -i 'del(.deployment.session_name)' "$TMP_TEST_DIR/agent.yml"
+  run bash -c "echo 'n' | ./setup.sh --regenerate"
+  [ "$status" -eq 0 ]
+  grep -q -- '--name "rpi5-locbot" --spawn=session' "$SETUP_SYSTEMD_DIR/agent-locbot.service"
+}
+
+# S26 / Principle I: the backfill must converge. A second --regenerate that kept
+# rewriting agent.yml would churn the file on every run and make "what the
+# operator edited" indistinguishable from "what the tool wrote".
+#
+# `meta.regenerated_at` is excluded, and ONLY it: setup.sh stamps that field on
+# every run by design (it predates 022). Everything else — the backfilled
+# session_name included — must be byte-for-byte stable across runs.
+@test "022/S26: a second --regenerate leaves agent.yml byte-identical (bar the timestamp)" {
+  cd "$TMP_TEST_DIR"
+  yq -i 'del(.deployment.session_name)' "$TMP_TEST_DIR/agent.yml"
+  run bash -c "echo 'n' | ./setup.sh --regenerate"
+  [ "$status" -eq 0 ]
+  grep -v 'regenerated_at' "$TMP_TEST_DIR/agent.yml" > "$TMP_TEST_DIR/first.yml"
+  run bash -c "echo 'n' | ./setup.sh --regenerate"
+  [ "$status" -eq 0 ]
+  grep -v 'regenerated_at' "$TMP_TEST_DIR/agent.yml" > "$TMP_TEST_DIR/second.yml"
+  cmp "$TMP_TEST_DIR/first.yml" "$TMP_TEST_DIR/second.yml"
+  # Belt: the exclusion above must not be hiding a missing field. Read it with
+  # yq, not grep — yq emits a plain scalar (`session_name: rpi5-locbot`), so a
+  # textual assertion would be coupled to its quoting style rather than to the
+  # value we actually care about.
+  run yq -r '.deployment.session_name' "$TMP_TEST_DIR/agent.yml"
+  [ "$output" = "rpi5-locbot" ]
+}
+
+# An operator-chosen name is configuration, not a derived value: --regenerate
+# must never "correct" it back to the composed default.
+@test "022: an explicit session_name survives --regenerate untouched" {
+  cd "$TMP_TEST_DIR"
+  yq -i '.deployment.session_name = "bitacora"' "$TMP_TEST_DIR/agent.yml"
+  run bash -c "echo 'n' | ./setup.sh --regenerate"
+  [ "$status" -eq 0 ]
+  run yq -r '.deployment.session_name' "$TMP_TEST_DIR/agent.yml"
+  [ "$output" = "bitacora" ]
+  grep -q -- '--name "bitacora" --spawn=session' "$SETUP_SYSTEMD_DIR/agent-locbot.service"
 }

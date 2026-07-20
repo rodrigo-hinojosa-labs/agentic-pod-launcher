@@ -509,6 +509,28 @@ Checks over this CLI's surface:
 | QMD / wiki-graph schedule fallback marker present | warn | local |
 | wiki-graph integrity findings (broken links, frontmatter violations, index drift) | warn | local |
 | wiki-graph runner dead (last run older than 2x the schedule interval) | fail | local |
+| D1 — workspace `.env` missing, or not mode `0600` | warn | local |
+| D2 — a secret referenced by `.mcp.json` is absent from `.env` | warn | local |
+| D3 — the INSTALLED unit does not load the workspace `.env` | warn | local |
+| D4 — `.env` fails the portable-subset lint (BOM, trailing backslash, bad key) | warn | local |
+| An unconsumed `exited` verdict sits next to a live session pointer | warn | local |
+| The installed unit does not run the 022 session hooks | warn | local |
+
+Rows D1-D4 are 021 (local secret delivery); they never fail, only warn — a
+missing secret degrades one MCP, and refusing to start the agent over it would
+trade a partial outage for a total one. D3 reads `systemctl show -p
+EnvironmentFiles`, **not** `systemctl cat`, which returns *Permission denied* on
+a root-only unit and made the check skip itself in silence (caught on live
+hardware, 2026-07-18).
+
+The last two rows are 022 (local session lifecycle). What is NOT there matters as
+much: the doctor used to grep the journal for `session url|connected|polling` as
+a liveness signal. That check was **removed** — a healthy `--spawn=session` agent
+is silent in the journal, so it cried wolf on every healthy agent. During the
+measured incident every conventional signal was green (`is-active`, zero
+restarts, no journal errors, an ESTABLISHED socket with real bidirectional
+traffic) while the agent was unreachable, which is why the surviving checks
+inspect the pointer and the recorded exit cause instead of the network.
 
 The QMD and wiki-graph rows are checked by the local-mode doctor only: as of
 v0.12.0 the docker-mode doctor has no qmd/wiki-graph checks (its RAG-adjacent
