@@ -17,7 +17,7 @@ The launcher clone is disposable after scaffolding. Every subsequent operation (
 
 Both modes:
 
-- `git`, `jq`, and `bash` on the host (wizard only; `setup.sh` sets no bash version floor and uses no bash-4-only constructs, so macOS's stock bash is fine). `yq` is auto-vendored — `setup.sh` downloads mikefarah/yq v4+ to `scripts/vendor/bin/` on first run if missing or if the system yq is v3 (Debian/Ubuntu's `apt install yq` ships the Python wrapper v3; the launcher detects that and bootstraps the right one).
+- `git`, `jq`, and `bash` on the host (wizard only; supported and tested across bash 3.2–5.3, so macOS's stock bash is fine — "no bash-4-only constructs" is necessary but was not sufficient on its own: bash 5.2 changed how `&` behaves inside a substitution's replacement text, which corrupted operator values until `render.sh` stopped relying on that construct). `yq` is auto-vendored — `setup.sh` downloads mikefarah/yq v4+ to `scripts/vendor/bin/` on first run if missing or if the system yq is v3 (Debian/Ubuntu's `apt install yq` ships the Python wrapper v3; the launcher detects that and bootstraps the right one).
 - macOS or Linux for scaffolding (the wizard tolerates both BSD and GNU `sed`).
 
 Docker mode:
