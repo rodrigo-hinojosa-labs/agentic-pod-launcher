@@ -205,12 +205,40 @@ hardware, por eso "limpiar siempre al boot" habría sido regresión). Sin detect
 sano). US3: el nombre de sesión sale de `deployment.session_name` en vez de componerse con `$(hostname)`
 (un agente bautizado con su host leía `mclaren-mclaren-admin`). Suite 1141 ok / 1 not ok, y ese único
 rojo es el bug de 023, preexistente y ajeno. Mutación 5 corridas, y una destapó un test propio que
-pasaba por la razón equivocada (S16 asertaba un hint compartido por dos avisos). **T051 SIGUE ABIERTA
-y el merge ocurrió sin ella**: el gate de hardware en mclaren (necesita `sudo`) estaba planificado
-ANTES del merge, precisamente porque en 021 correrlo después costó un PR aparte (#79) con dos bugs de
-portabilidad que la suite de macOS no podía ver. Se repitió el patrón. El riesgo concreto: los hooks
-`ExecStopPost`/`ExecStartPre` solo corren en el host Linux del agente, así que su primera ejecución
-real será en producción y cualquier defecto de portabilidad ahí saldrá igual que los de 021.
+pasaba por la razón equivocada (S16 asertaba un hint compartido por dos avisos).
+
+**GATE T051 CORRIDO EN MCLAREN 2026-07-20 (post-merge) — PASA CASI TODO Y CAZA UN BUG DE DISEÑO.**
+022 no estaba desplegado (workspace en `VERSION 0.9.0` con deltas quirúrgicos de 016/017/021 encima;
+`~/apl-src` es un clon stale en `70d8f23`). Inventario de divergencia antes de tocar: 136 archivos →
+77 idénticos a main, 50 solo-workspace (backups, renderizados, vendored), 9 distintos = los 6 que toca
+022 + 3 stale desde 020 (`claude-md.tpl`, `docker-compose.yml.tpl`, `next-steps.*`), que se dejaron
+FUERA a propósito para no inyectar cambios ajenos en un regenerate de producción. Se encontró un parche
+local que anticipaba US3 (`--name {{AGENT_NAME}}` sin prefijo de host) que **nunca se había instalado**
+— la unit viva seguía con `mclaren-mclaren-admin`. Backups `.bak-pre022`, transferencia verificada por
+hash (8/8 idénticos a `ab4bb32`), `--regenerate` → unit **staged, no instalada** (la trampa D3 de 021,
+`sudo` pide contraseña). **PASAN**: SC-008 (021 intacto: `.env` primero con `ignore_errors=yes`, luego
+`remote-control.env`; `agent-secret-check.sh` antes de `agent-session-check.sh`), 9/9 secretos en el
+proceso (solo conteo), US3 (`session_name: mclaren-admin`, host des-duplicado), ambos hooks en la unit
+INSTALADA, marcador de consumo único consumido, doctor verde salvo 2 warnings ajenos.
+
+**SC-009 FALLA — BUG MEDIDO, VIVO EN MAIN.** `session_decide` (`scripts/lib/session_pointer.sh`) es
+`marker == "killed" → keep; cualquier otra cosa → retire`. El marcador es el `$EXIT_CODE` de systemd, y
+**Claude Code atrapa SIGTERM y sale con código 0**, así que un `systemctl restart` reporta `exited`,
+NO `killed` — indistinguible de "la sesión terminó sola". El discriminador elegido no discrimina.
+Medido 00:21:22: `Deactivated successfully` (salida limpia) + la sesión `session_01Fbg3Cg…` estaba
+`·✔︎· Connected` en el instante del stop + el hook la retiró igual + se anunció `session_01A1obg…`.
+Como `killed` casi nunca ocurre con un proceso bien portado, la regla se comporta como **"limpiar
+siempre"** — textualmente lo que la investigación de 022 declaró que "habría sido regresión". Y ES una
+regresión: research R2 de 022 midió que antes un restart preservaba el `sessionId` y el mismo enlace.
+Gravedad: UX, no outage (el agente queda alcanzable, en un link nuevo). **Candidato de arreglo SIN
+VERIFICAR**: `ExecStop=` solo corre cuando systemd detiene el servicio, no cuando el proceso sale solo
+→ serviría de discriminador limpio; medirlo en hardware antes de construir encima, que es la lección de
+este mismo gate. **Pendiente**: SC-001 (terminar una conversación desde el cliente) sigue sin confirmar.
+
+**La lección, por segunda vez consecutiva**: el gate de hardware estaba planificado ANTES del merge
+precisamente porque en 021 correrlo después costó el PR #79. Se mergeó igual, y el gate encontró un
+defecto en la premisa de diseño de la feature — no de portabilidad, de diseño. Correrlo antes lo habría
+atajado en revisión.
 
 **021-local-secret-delivery MERGED** (PR #78, merge `dbe8274` en main, 2026-07-18; branch desde
 main=`cd6ad89` v0.12.0, VERSION 0.12.0→0.13.0). Plan: `specs/021-local-secret-delivery/plan.md`. **BUG MEDIDO EN HARDWARE VIVO**: el
