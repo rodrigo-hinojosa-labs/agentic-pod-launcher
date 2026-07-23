@@ -1282,6 +1282,16 @@ _local_session_doctor() {
         _doctor_warn "installed unit does not record the session exit cause (ExecStopPost missing)" \
           "sudo cp ./agent-${agent}.service /etc/systemd/system/ ; sudo systemctl daemon-reload ; sudo systemctl restart ${unit}"
       fi
+      # 024: without ExecStop there is no stop CAUSE, so every start falls back
+      # to the conservative default and a genuinely ended session is never
+      # retired. Read with `show -p`, never `systemctl cat`: cat returns
+      # "Permission denied" on a root-only unit and the check would silently
+      # skip (measured during the 021 hardware gate).
+      stop=$(systemctl show "$unit" -p ExecStop --value 2>/dev/null || true)
+      if ! printf '%s' "$stop" | grep -q 'agent-session-stop\.sh'; then
+        _doctor_warn "installed unit does not classify why the agent stops (ExecStop missing); a restart cannot be told apart from a finished session" \
+          "sudo cp ./agent-${agent}.service /etc/systemd/system/ ; sudo systemctl daemon-reload ; sudo systemctl restart ${unit}"
+      fi
     fi
   fi
 
@@ -1306,11 +1316,29 @@ _local_session_doctor() {
 
   # A pointer plus an UNCONSUMED "exited" verdict means the boot hook never ran
   # (stale unit) and the agent is announcing a session that already ended.
+  # 024: report the CAUSE the stop hook recorded, and what it implies. Reading,
+  # never consuming — the boot hook is the single consumer on the decision path.
+  local cause
+  cause=$(session_exit_marker_read_cause "$ws" 2>/dev/null) || cause=""
+  case "$cause" in
+    external)
+      _doctor_pass "last stop was external (systemd) — session pointer kept"
+      return 0
+      ;;
+    session-ended)
+      _doctor_warn "the agent is likely unreachable: it is announcing a session that already ended" \
+        "sudo systemctl restart ${unit}"
+      return 0
+      ;;
+  esac
+
+  # No cause recorded. Under the pre-024 rule a bare `exited` meant "retire",
+  # so an unconsumed one next to a live pointer meant the boot hook never ran.
   local marker
   marker=$(session_exit_marker_read "$ws" 2>/dev/null) || marker=""
   if [ "$marker" = "exited" ]; then
-    _doctor_warn "the agent is likely unreachable: it is announcing a session that already ended" \
-      "sudo systemctl restart ${unit}"
+    _doctor_warn "an unconsumed exit verdict sits next to a live pointer, with no stop cause recorded" \
+      "sudo cp ./agent-${agent}.service /etc/systemd/system/ ; sudo systemctl daemon-reload ; sudo systemctl restart ${unit}"
   fi
   return 0
 }

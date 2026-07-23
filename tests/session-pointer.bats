@@ -326,3 +326,116 @@ _mk_pointer() {  # _mk_pointer [SESSION_ID]
     | grep -nE '(^|[^a-zA-Z_.])(eval|source)[[:space:]]|^[[:space:]]*\\.[[:space:]]'"
   [ "$status" -ne 0 ]
 }
+
+# ─── 024-fix-session-restart-retire ─────────────────────────────────────────
+# Oracle: specs/024-fix-session-restart-retire/contracts/session-stop-classification.md §3.1
+#
+# Every value fed to session_decide below was MEASURED against real systemd
+# (research.md R2, 5 scenarios x 3 repetitions = 15/15), not chosen by hand.
+# That distinction is the whole reason the 022 defect survived a green suite:
+# its tests asserted that the rule implemented what the author believed, not
+# that what the author believed was true.
+
+@test "024/C1 session_decide keeps the pointer when systemd initiated the stop (restart)" {
+  # MEASURED: within ExecStop, systemctl restart leaves EXIT_CODE empty because
+  # systemd runs ExecStop BEFORE killing the process. This is the regression
+  # 024 fixes: 022 read exit_code from ExecStopPost, which says "exited" here
+  # AND when the session ended on its own.
+  run session_decide_cause external present
+  [ "$status" -eq 0 ]
+  [ "$output" = "keep" ]
+}
+
+@test "024/C2 session_decide retires the pointer when the session ended on its own" {
+  run session_decide_cause session-ended present
+  [ "$status" -eq 0 ]
+  [ "$output" = "retire" ]
+}
+
+@test "024/C3 session_decide retires when the process exited on its own with a failure" {
+  # MEASURED: exiting alone with code 3 makes systemd SKIP ExecStop entirely,
+  # so there is no stop_cause; service_result=exit-code is what remains.
+  run session_decide_cause exit-code-failure present
+  [ "$status" -eq 0 ]
+  [ "$output" = "retire" ]
+}
+
+@test "024/C4 session_decide keeps the pointer when the cause is absent (conservative default)" {
+  # FR-004. This is the OPPOSITE of the pre-024 default and is the heart of the
+  # feature: over-keeping costs a dead conversation the operator can SEE and
+  # fix with a restart; over-retiring costs their work with no warning.
+  run session_decide_cause "" present
+  [ "$status" -eq 0 ]
+  [ "$output" = "keep" ]
+}
+
+@test "024/C6 session_decide keeps the pointer on an unknown cause value" {
+  run session_decide_cause some-future-systemd-token present
+  [ "$status" -eq 0 ]
+  [ "$output" = "keep" ]
+}
+
+@test "024/C7 session_decide is noop when there is no pointer" {
+  run session_decide_cause session-ended absent
+  [ "$status" -eq 0 ]
+  [ "$output" = "noop" ]
+}
+
+@test "024/C8 session_decide is noop when the pointer path is unknown" {
+  run session_decide_cause external unknown
+  [ "$status" -eq 0 ]
+  [ "$output" = "noop" ]
+}
+
+@test "024/C9 session_decide keeps the pointer for a unit that predates ExecStop" {
+  # Backward compatibility: an installed unit without the ExecStop directive
+  # never writes stop_cause. A half-applied upgrade must degrade to keeping.
+  run session_decide_cause "" present
+  [ "$status" -eq 0 ]
+  [ "$output" = "keep" ]
+}
+
+@test "024 marker: stop_cause is read back when present" {
+  session_exit_marker_write "$WS" success exited 0 external
+  run session_exit_marker_read_cause "$WS"
+  [ "$status" -eq 0 ]
+  [ "$output" = "external" ]
+}
+
+@test "024 marker: an absent stop_cause reads as rc 1, never as an empty valid value" {
+  # The pre-024 writer produced markers with no stop_cause at all. Reading one
+  # must say "cannot determine" (rc 1), which C4 then resolves as keep.
+  session_exit_marker_write "$WS" success exited 0
+  run session_exit_marker_read_cause "$WS"
+  [ "$status" -eq 1 ]
+}
+
+@test "024 marker: a truncated stop_cause reads as rc 1" {
+  printf '{"schema":1,"service_result":"success","stop_cause":"exte' \
+    > "$WS/scripts/heartbeat/session-exit.json"
+  run session_exit_marker_read_cause "$WS"
+  [ "$status" -eq 1 ]
+}
+
+@test "024 marker: ExecStopPost merges its fields and PRESERVES the cause ExecStop wrote" {
+  # The load-bearing invariant of the single-marker design: two writers, one
+  # file. If ExecStopPost overwrote the file wholesale, the cause would be lost
+  # and C1 would silently regress to retiring live sessions.
+  session_exit_marker_write "$WS" "" "" "" external          # ExecStop first
+  session_exit_marker_write "$WS" success exited 0           # then ExecStopPost
+  run session_exit_marker_read_cause "$WS"
+  [ "$status" -eq 0 ]
+  [ "$output" = "external" ]
+  run session_exit_marker_read "$WS"
+  [ "$status" -eq 0 ]
+  [ "$output" = "exited" ]
+}
+
+@test "024 marker: consume returns the cause and removes the file exactly once" {
+  session_exit_marker_write "$WS" success exited 0 session-ended
+  run session_exit_marker_consume_cause "$WS"
+  [ "$status" -eq 0 ]
+  [ "$output" = "session-ended" ]
+  run session_exit_marker_consume_cause "$WS"
+  [ "$status" -eq 1 ]
+}

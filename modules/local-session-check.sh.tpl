@@ -35,12 +35,18 @@ _info() { echo "agent-${AGENT_NAME} session-check: $1" >&2; }
 # shellcheck source=/dev/null
 . "${WORKSPACE}/scripts/lib/session_pointer.sh" 2>/dev/null
 
-command -v session_decide >/dev/null 2>&1 || exit 0
+command -v session_decide_cause >/dev/null 2>&1 || exit 0
 
 # Consume (not just read) the marker: a stale verdict must never rule a future
 # start, and consuming via an atomic rename is what makes two concurrent starts
 # safe — only one wins, the loser falls through to "cannot determine".
-marker=$(session_exit_marker_consume "$WORKSPACE" 2>/dev/null) || marker=""
+# 024: read the CAUSE, recorded one hook earlier by agent-session-stop.sh.
+# service_result comes along for the one measured case where systemd skips
+# ExecStop entirely (the process exited alone with a non-zero code), so no
+# cause exists and this is the only signal left.
+result_field=$(session_exit_marker_read_field "$WORKSPACE" service_result 2>/dev/null) || result_field=""
+cause=$(session_exit_marker_consume_cause "$WORKSPACE" 2>/dev/null) || cause=""
+[ -z "$cause" ] && [ "$result_field" = "exit-code" ] && cause="exit-code-failure"
 
 pointer=$(session_pointer_path "$WORKSPACE" "$CONFIG_DIR" 2>/dev/null)
 case "$?" in
@@ -49,20 +55,26 @@ case "$?" in
   *) state="unknown" ;;   # cannot determine WHICH file we would touch
 esac
 
-case "$(session_decide "$marker" "$state")" in
+case "$(session_decide_cause "$cause" "$state")" in
   retire)
+    case "$cause" in
+      exit-code-failure) _why="previous session exited with failure" ;;
+      *)                 _why="previous session ended" ;;
+    esac
     if session_pointer_retire "$pointer"; then
-      _info "retired a stale session pointer (previous exit_code=${marker:-unknown}); a fresh session will be announced"
+      _info "${_why} — retired stale pointer; a fresh session will be announced"
     else
-      _warn "could not retire the stale session pointer at ${pointer}"
+      _warn "${_why}, but could not retire the stale session pointer at ${pointer}"
     fi
     ;;
   keep)
-    # The previous process was killed by systemd, so the session may still be
-    # live server-side; Claude Code's own reuse then restores the same client
-    # link. Measured twice on hardware. Touching it here would be the
-    # "always renew" regression SC-009 exists to forbid.
-    :
+    # Two ways to land here, and the operator must be able to tell them apart
+    # (FR-007) — that opacity is part of why the 022 defect went unnoticed.
+    if [ "$cause" = "external" ]; then
+      _info "previous stop was external (systemd) — session pointer kept"
+    else
+      _info "stop cause undetermined — keeping the session pointer (conservative default)"
+    fi
     ;;
   noop)
     [ "$state" = "unknown" ] && \

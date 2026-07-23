@@ -2300,6 +2300,9 @@ regenerate() {
     # ExecStopPost and records WHY the process stopped; agent-session-check.sh
     # runs as the second ExecStartPre and retires a pointer that names a session
     # which already ended. Both always exit 0.
+    # 024: agent-session-stop.sh runs as ExecStop and records WHY we are
+    # stopping; it must be rendered wherever the other two are.
+    render_to_file "$modules_dir/local-session-stop.sh.tpl"  "$SCRIPT_DIR/scripts/local/agent-session-stop.sh"
     render_to_file "$modules_dir/local-session-exit.sh.tpl"  "$SCRIPT_DIR/scripts/local/agent-session-exit.sh"
     render_to_file "$modules_dir/local-session-check.sh.tpl" "$SCRIPT_DIR/scripts/local/agent-session-check.sh"
     render_to_file "$modules_dir/local-bootstrap.sh.tpl"   "$SCRIPT_DIR/scripts/local/agent-bootstrap.sh"
