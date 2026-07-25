@@ -3,6 +3,49 @@
 ## [Unreleased]
 
 ### Fixed
+- **Restarting a local agent no longer kills the operator's live conversation
+  (`024-fix-session-restart-retire`)**: measured on the mclaren host during
+  022's own hardware gate, which ran *after* that feature merged — so the
+  defect shipped. A `systemctl restart` with a session `·✔︎· Connected`
+  retired the session pointer and announced a new one; the link the operator
+  had open on their phone died with no warning, while the agent stayed
+  `active` and reachable on a *different* link.
+  - **022's discriminator did not discriminate.** It kept the pointer only
+    when systemd reported `killed`, but Claude Code traps `SIGTERM` and exits
+    0, so systemd reports `exited` both when it stops the service and when the
+    session ends on its own. Since `killed` essentially never occurs for a
+    process that traps the signal, the rule behaved as *always retire* —
+    textually the regression 022's own research had declared it must avoid.
+  - **The obvious fix was measured and REFUTED.** The candidate signal was
+    "`ExecStop` only runs on an explicit stop": it does not — it also runs
+    when the process exits by itself. What actually separates the two cases is
+    *timing*: systemd only populates `$EXIT_CODE` once the main process has
+    died, so inside `ExecStop` it is **populated** after a self-exit and
+    **empty** when systemd is initiating the stop. `ExecStopPost` — the hook
+    022 read — is identical in all three cases that must be told apart. The
+    information existed; it was one hook earlier. Verified on real systemd
+    across 5 scenarios x 3 repetitions (15/15), including the `Restart=always`
+    variant the real unit uses.
+  - **The conservative default is now inverted, deliberately.** When the cause
+    cannot be determined — no marker, a truncated one, or an installed unit
+    that predates the new hook — the pointer is **kept**. Over-keeping costs a
+    dead conversation the operator can see and fix with a restart;
+    over-retiring costs their work with no warning at all.
+  - **No new detector.** Nothing polls, samples or infers liveness; the
+    decision happens once per start on a fact systemd already recorded
+    (the reverted `ebfe35f` bridge watchdog remains the standing precedent).
+  - `agentctl doctor` now reports the recorded cause and the decision, and
+    warns when the *installed* unit lacks the `ExecStop` directive — read via
+    `systemctl show -p`, never `systemctl cat`, which returns "Permission
+    denied" on a root-only unit and would skip the check in silence.
+  - Docker mode is untouched: `session_pointer.sh` is local-mode only and is
+    not mirrored into `docker/`.
+  - **Upgrade note**: an existing workspace does **not** self-heal. Run
+    `./setup.sh --regenerate` **and reinstall the unit** — `--regenerate`
+    does not reinstall it when `sudo` is unavailable, and never restarts the
+    service. Until the unit is reinstalled the agent degrades to the safe
+    side: it keeps pointers rather than retiring them.
+
 - **The render engine no longer corrupts config values containing `&`
   (`023-fix-render-ampersand`)**: measured live in production — mclaren, an
   agent host, runs bash 5.2.37, which reproduces the bug. Since bash 5.2, an

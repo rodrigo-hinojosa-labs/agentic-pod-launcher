@@ -649,6 +649,10 @@ case "$*" in
     echo "{ path=/wk/scripts/local/agent-secret-check.sh ; ignore_errors=yes }{ path=/wk/scripts/local/agent-session-check.sh ; ignore_errors=yes }" ;;
   *show*ExecStopPost*)
     echo "{ path=/wk/scripts/local/agent-session-exit.sh ; ignore_errors=yes }" ;;
+  # 024: must come AFTER the ExecStopPost arm — that string also contains
+  # "ExecStop", and in a case statement the first matching pattern wins.
+  *show*ExecStop*)
+    echo "{ path=/wk/scripts/local/agent-session-stop.sh ; ignore_errors=yes }" ;;
   *) exit 0 ;;
 esac
 SH
@@ -656,6 +660,10 @@ SH
 }
 
 @test "022 S18: pointer present + an unconsumed 'exited' marker → WARN naming the restart" {
+  # 024 changed what this WARN can honestly claim. A bare `exited` with NO stop
+  # cause no longer proves the session ended — it is equally an old unit that
+  # never ran the ExecStop hook — so the wording no longer says "unreachable".
+  # The intent of the test is unchanged: warn, and name the fix.
   _022_setup
   _022_systemctl_ok
   _022_mk_pointer
@@ -663,8 +671,62 @@ SH
   cd "$TMP_TEST_DIR"
   run ./scripts/agentctl doctor
   [ "$status" -eq 1 ]
+  [[ "$output" == *"unconsumed exit verdict"* ]]
+  [[ "$output" == *"systemctl restart"* ]]
+}
+
+@test "024 S18b: pointer present + cause=session-ended → WARN that the agent is unreachable" {
+  # The claim S18 used to make now belongs here, where the cause PROVES it.
+  _022_setup
+  _022_systemctl_ok
+  _022_mk_pointer
+  printf '{"schema":1,"service_result":"success","exit_code":"exited","exit_status":"0","stop_cause":"session-ended","ts":"t"}\n' \
+    > "$TMP_TEST_DIR/scripts/heartbeat/session-exit.json"
+  cd "$TMP_TEST_DIR"
+  run ./scripts/agentctl doctor
+  [ "$status" -eq 1 ]
   [[ "$output" == *"unreachable"* ]]
   [[ "$output" == *"systemctl restart"* ]]
+}
+
+@test "024 S18c: pointer present + cause=external (a restart) → no session warning" {
+  # The measured defect, seen from the doctor: after a plain restart the
+  # pointer is legitimately kept and nothing here should cry wolf.
+  _022_setup
+  _022_systemctl_ok
+  _022_mk_pointer
+  printf '{"schema":1,"service_result":"success","exit_code":"exited","exit_status":"0","stop_cause":"external","ts":"t"}\n' \
+    > "$TMP_TEST_DIR/scripts/heartbeat/session-exit.json"
+  cd "$TMP_TEST_DIR"
+  run ./scripts/agentctl doctor
+  [ "$status" -eq 0 ]
+  if printf '%s' "$output" | grep -q 'unreachable'; then false; fi
+}
+
+@test "024 S18d: the installed unit lacks ExecStop → its own WARN, distinct from S17" {
+  _022_setup
+  cat > "$TMP_TEST_DIR/bin/systemctl" << 'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *is-active*) exit 0 ;;
+  *is-failed*) exit 1 ;;
+  *show*EnvironmentFiles*)
+    echo "/home/op/wk/.env (ignore_errors=yes) /home/op/wk/.state/remote-control.env (ignore_errors=no)" ;;
+  *show*ExecStartPre*)
+    echo "{ path=/wk/scripts/local/agent-secret-check.sh ; ignore_errors=yes }{ path=/wk/scripts/local/agent-session-check.sh ; ignore_errors=yes }" ;;
+  *show*ExecStopPost*)
+    echo "{ path=/wk/scripts/local/agent-session-exit.sh ; ignore_errors=yes }" ;;
+  *show*ExecStop*) echo "" ;;
+  *) exit 0 ;;
+esac
+SH
+  chmod +x "$TMP_TEST_DIR/bin/systemctl"
+  cd "$TMP_TEST_DIR"
+  run ./scripts/agentctl doctor
+  [ "$status" -eq 1 ]
+  # Its own hint, not one shared with S17 — a shared assertion is exactly how a
+  # 022 test ended up passing for the wrong reason (022 tasks.md:165).
+  [[ "$output" == *"cannot be told apart from a finished session"* ]]
 }
 
 @test "022 S19: a healthy agent produces zero session warnings across 5 runs" {

@@ -41,6 +41,11 @@ ExecStart={{CLAUDE_BIN}} remote-control --name "{{DEPLOYMENT_SESSION_NAME}}" --s
 # its own => retire the pointer) from "systemd killed us" (=> keep it; the
 # session can still be live server-side and the vendor's reuse restores the
 # same client link — measured on hardware).
+# 024: classify WHY we are stopping, while systemd still knows. ExecStop runs
+# in BOTH cases (systemd-initiated stop AND the process having exited on its
+# own) — what separates them is that $EXIT_CODE is only populated in the
+# second. See scripts/local/agent-session-stop.sh for the measurement.
+ExecStop=-{{DEPLOYMENT_WORKSPACE}}/scripts/local/agent-session-stop.sh
 ExecStopPost=-{{DEPLOYMENT_WORKSPACE}}/scripts/local/agent-session-exit.sh
 Restart=always
 RestartSec=10
