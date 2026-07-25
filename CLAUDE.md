@@ -183,10 +183,22 @@ coló 022. Medido: `systemctl --user restart` **conserva** el puntero byte-idén
 (SC-001 mecánica); un self-exit lo **retira** (SC-002, sin regresión); un marcador truncado **no**
 destruye un puntero vivo (SC-007). Las 4 cadenas de observabilidad capturadas del stderr real (SC-003).
 Delta portado con 6/6 hashes idénticos a `ab4bb32`, backups `.bak-pre024`; el `doctor` cazó EN VIVO la
-unit instalada sin ExecStop. Sondas versionadas en `probes/`. **PENDIENTE, solo operador (antes del
-merge, no del PR):** instalar la unit de PRODUCCIÓN (`sudo`) + confirmar alcance desde el cliente tras
-un restart. El journal del user-unit no es consultable en el arnés (`-- No entries --`); el del
-system-unit de producción sí (se leyó en el gate de 022). Siguiente: abrir PR (sin mergear).
+unit instalada sin ExecStop. Sondas versionadas en `probes/`.
+
+**GATE DE PRODUCCIÓN CERRADO (2026-07-24 23:28, mclaren, con `sudo` del operador) — SC-006 corrió
+ANTES del merge, rompiendo el patrón de 021/022.** El operador instaló la unit de PRODUCCIÓN
+(`sudo cp` + `daemon-reload` + `restart`). Verificado en el host (lectura, sin imprimir secretos):
+`systemctl show -p ExecStop` confirma `agent-session-stop.sh` instalado; `active/running`,
+`Result=success`. **La medición decisiva salió del journal del system-unit —que SÍ es consultable, a
+diferencia del user-unit del gate de composición—:** `agent-session-check.sh: previous stop was external
+(systemd) — session pointer kept`. El `sessionId` sobrevivió **byte-idéntico al reinicio**: pid viejo
+`claude[2118]` y pid nuevo `claude[500467]` reportan el mismo `session_01A1obgNuL2XkXLX7bdr6nQV`, y el
+`bridge-pointer.json` vivo apunta a ese — **el vendor reconectó a la misma sesión, no anunció una nueva**,
+lo contrario del bug de 022 (que el Jul 20 retiró el puntero; su `.retired.json` lleva otro `sessionId`).
+Marcador consumido por rename; `doctor` sin WARN de `ExecStop`. Falta solo la confirmación visual del
+operador desde el celular (la identidad del `sessionId` reconectado ya es prueba de alcance) y su go-ahead
+para mergear PR #82 (`main` protegida). Journal del user-unit no consultable en el arnés
+(`-- No entries --`); el del system-unit de producción sí.
 
 **023-fix-render-ampersand MERGED** (PR #81, merge `9b97654` en main, 2026-07-19; branch rebasada
 sobre main=`ab4bb32` tras el merge de 022; VERSION 0.14.0→**0.15.0**). Plan:

@@ -206,17 +206,30 @@ no apareció hermano retirado.
 - [ ] T037 `./setup.sh --regenerate` y verificar los artefactos **staged**: la unit con la
       directiva `ExecStop`, y el hook nuevo renderizado y ejecutable. `sudo` pide
       contraseña en mclaren, así que la unit queda staged y **no** instalada.
-- [ ] T038 **Requiere al operador**: instalar la unit (`sudo cp` + `daemon-reload` +
-      `restart`) en la unit de PRODUCCIÓN. Avisar que el restart corta la conversación en
-      curso. **PENDIENTE**: `sudo` pide contraseña en mclaren.
+- [X] T038 **GATE DE PRODUCCIÓN CERRADO (2026-07-24 23:28, mclaren, con `sudo` del operador).**
+      El operador instaló la unit de PRODUCCIÓN (`sudo cp` + `daemon-reload` + `restart`).
+      Verificado en el host, todo lectura, sin imprimir secretos: `systemctl show -p ExecStop`
+      confirma `agent-session-stop.sh` instalado; servicio `active/running`, `Result=success`.
+      **La medición decisiva, en el journal del system-unit (que SÍ es consultable, a diferencia
+      del user-unit del gate de composición):**
+      `agent-session-check.sh[500444]: … previous stop was external (systemd) — session pointer kept`.
+      El `sessionId` es **byte-idéntico a ambos lados del reinicio**: pid viejo `claude[2118]` y
+      pid nuevo `claude[500467]` reportan el mismo `session_01A1obgNuL2XkXLX7bdr6nQV`, y el
+      `bridge-pointer.json` vivo apunta a ese. **El vendor reconectó a la misma sesión, no anunció
+      una nueva** — exactamente lo contrario del bug de 022, que en el gate del Jul 20 retiró el
+      puntero (`.retired.json` del Jul 20 lleva otro `sessionId`, `…UsHot8`). El marcador de causa
+      fue consumido por rename (ya no existe `session-exit.json`). `agentctl doctor`: sin WARN de
+      `ExecStop` faltante.
 - [X] T039 **SC-001 (parte mecánica) CERRADA** vía gate de composición
       (`probes/compose-gate.sh`): los **tres hooks reales renderizados**, cableados a una
       unit de systemd **de usuario** (sin `sudo`, sin tocar el agente), sobre un workspace
       desechable con un `claude` falso que atrapa SIGTERM y sale 0 como el real. Medido:
       un `systemctl --user restart` **conserva** el puntero, byte-idéntico, sin hermano
       retirado. Esto valida la **composición** —el hueco exacto por el que se coló 022—.
-      **PENDIENTE (solo operador)**: confirmar alcance desde el cliente tras un restart de
-      la unit de PRODUCCIÓN, en dos reinicios consecutivos.
+      **CERRADA TAMBIÉN EN PRODUCCIÓN (T038, 2026-07-24)**: un `systemctl restart` real de la
+      unit de producción conservó el puntero con `sessionId` idéntico y el journal nombró
+      `external → session pointer kept`. Confirmación visual desde el celular: queda al operador
+      (la identidad del `sessionId` reconectado es la prueba de alcance).
 - [X] T040 **SC-002 (parte mecánica) CERRADA** por el mismo gate: un self-exit del proceso
       **retira** el puntero. Sin regresión de 022. **PENDIENTE (solo operador)**: que el
       agente quede alcanzable en una sesión nueva desde el cliente.
@@ -231,8 +244,10 @@ no apareció hermano retirado.
       vivo. Ficheros desechables; nunca se imprimió contenido del puntero real.
 - [X] T043 Resultado del gate anotado (aquí y en el cuerpo del PR): composición **7/7 en lo
       mecánico** (2 "FAIL" eran el journal del user-unit, refutados por la captura de
-      stderr). Falta el tramo de PRODUCCIÓN (T038 + confirmación de cliente), que exige
-      `sudo` y el celular del operador — **eso corre antes del merge**, no del PR.
+      stderr). **Tramo de PRODUCCIÓN CERRADO (T038, 2026-07-24 23:28):** el journal del
+      system-unit —que sí es consultable— capturó la línea del check hook real
+      (`external → session pointer kept`) y el `sessionId` sobrevivió byte-idéntico al reinicio.
+      El gate de hardware corrió **antes del merge** (SC-006), rompiendo el patrón de 021/022.
 
 ---
 
