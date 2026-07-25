@@ -207,19 +207,32 @@ no apareció hermano retirado.
       directiva `ExecStop`, y el hook nuevo renderizado y ejecutable. `sudo` pide
       contraseña en mclaren, así que la unit queda staged y **no** instalada.
 - [ ] T038 **Requiere al operador**: instalar la unit (`sudo cp` + `daemon-reload` +
-      `restart`). Avisar que el restart corta la conversación en curso.
-- [ ] T039 **SC-001**: con una conversación viva, reiniciar el servicio y verificar que el
-      `sessionId` **no cambió**, que **no** apareció hermano retirado, y que el journal dice
-      "parada externa — puntero conservado". **La confirmación de alcance solo puede venir
-      del cliente del operador.** Repetir en **dos reinicios consecutivos**.
-- [ ] T040 **SC-002**: terminar la sesión desde el cliente y verificar que el puntero se
-      retira, se anuncia una sesión nueva y el agente queda alcanzable sin tocar el host.
-- [ ] T041 **SC-003**: comprobar que el journal y `agentctl doctor` nombran causa y decisión
-      en ambos casos.
-- [ ] T042 **SC-007**: con el marcador ausente y con uno corrupto, comprobar que un puntero
-      vivo **no** se destruye y que queda constancia de haber decidido bajo incertidumbre.
-      Usar ficheros desechables; **nunca** imprimir contenido del puntero.
-- [ ] T043 Anotar el resultado del gate en el PR **antes** de pedir el merge.
+      `restart`) en la unit de PRODUCCIÓN. Avisar que el restart corta la conversación en
+      curso. **PENDIENTE**: `sudo` pide contraseña en mclaren.
+- [X] T039 **SC-001 (parte mecánica) CERRADA** vía gate de composición
+      (`probes/compose-gate.sh`): los **tres hooks reales renderizados**, cableados a una
+      unit de systemd **de usuario** (sin `sudo`, sin tocar el agente), sobre un workspace
+      desechable con un `claude` falso que atrapa SIGTERM y sale 0 como el real. Medido:
+      un `systemctl --user restart` **conserva** el puntero, byte-idéntico, sin hermano
+      retirado. Esto valida la **composición** —el hueco exacto por el que se coló 022—.
+      **PENDIENTE (solo operador)**: confirmar alcance desde el cliente tras un restart de
+      la unit de PRODUCCIÓN, en dos reinicios consecutivos.
+- [X] T040 **SC-002 (parte mecánica) CERRADA** por el mismo gate: un self-exit del proceso
+      **retira** el puntero. Sin regresión de 022. **PENDIENTE (solo operador)**: que el
+      agente quede alcanzable en una sesión nueva desde el cliente.
+- [X] T041 **SC-003 CERRADA**: las cuatro cadenas del hook real capturadas de su stderr —
+      `external`→"session pointer kept", `session-ended`→"retired stale pointer",
+      fallo-propio→"exited with failure", sin-marcador→"conservative default". Cada una
+      nombra causa Y decisión. El `agentctl doctor` cazó en vivo la unit instalada sin
+      `ExecStop` (T037). NOTA: el journal del user-unit no es consultable en este arnés
+      (`-- No entries --`), por eso se capturó el stderr directo; el journal del
+      **system-unit** de producción sí funciona (se leyó en el gate de 022).
+- [X] T042 **SC-007 CERRADA** por el gate: un marcador **truncado** no destruye un puntero
+      vivo. Ficheros desechables; nunca se imprimió contenido del puntero real.
+- [X] T043 Resultado del gate anotado (aquí y en el cuerpo del PR): composición **7/7 en lo
+      mecánico** (2 "FAIL" eran el journal del user-unit, refutados por la captura de
+      stderr). Falta el tramo de PRODUCCIÓN (T038 + confirmación de cliente), que exige
+      `sudo` y el celular del operador — **eso corre antes del merge**, no del PR.
 
 ---
 

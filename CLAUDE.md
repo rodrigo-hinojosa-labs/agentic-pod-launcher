@@ -160,7 +160,33 @@ retiene UN solo boot, ~2 días) — esta última quedó irrelevante para el dise
 discriminador real no hay que elegir qué caso romper. `session_pointer.sh` **NO** está espejado a
 `docker/` (verificado) → DOCKER_E2E fuera de alcance. Constitución 6/6 PASS, sin violaciones.
 **SC-006: el gate de hardware corre ANTES del merge** — van dos seguidas mergeadas sin él (021 costó
-el PR #79, 022 costó este defecto). Siguiente: `/speckit-tasks`.
+el PR #79, 022 costó este defecto).
+
+**IMPLEMENTADO 2026-07-24 (test-first, 43/45 tareas):** `session_pointer.sh` gana `session_classify_stop`
+(EXIT_CODE en ExecStop → `external`/`session-ended`), `session_decide_cause` (default **conservar** ante
+incertidumbre, lo contrario de hoy) y la lectura/fusión de `stop_cause` en el marcador — UN solo fichero,
+dos escritores, un consumidor por rename (el borrador de dos ficheros lo tumbó la pasada adversarial).
+Nueva plantilla `local-session-stop.sh.tpl` (ExecStop) + directiva en la unit + render en `setup.sh`;
+`local-session-check.sh.tpl` decide por causa y nombra causa Y decisión; `agentctl doctor` reporta la
+causa y avisa si la unit INSTALADA no trae ExecStop (leído con `systemctl show -p`, nunca `cat`).
+**Seis tests de 022 codificaban la política contraria** —cuatro lo decían en su nombre
+(*"indeterminacy favours availability"*)— actualizados preservando su intención, con el porqué en cada
+uno. Suite **1183 ok / 0 not ok** en bash 5.3.15 y 3.2.57 (base 1159, +24). Mutación: revertir la regla
+tumba 12 tests, dos con "restart" en el título (SC-004). `--regenerate`: única diferencia en la unit es
+la directiva ExecStop (T032). VERSION 0.15.0→**0.16.0** (verificado a mano vs origin/main). Un error
+propio corregido: la línea base en background quedó contaminada por editar en paralelo → se descartó.
+
+**GATE DE COMPOSICIÓN en mclaren (2026-07-24, sin `sudo`, agente intocado):** los TRES hooks reales
+renderizados, cableados a una unit de systemd **de usuario**, sobre un workspace desechable con un
+`claude` falso que atrapa SIGTERM y sale 0 — valida la **composición**, el hueco exacto por el que se
+coló 022. Medido: `systemctl --user restart` **conserva** el puntero byte-idéntico sin hermano retirado
+(SC-001 mecánica); un self-exit lo **retira** (SC-002, sin regresión); un marcador truncado **no**
+destruye un puntero vivo (SC-007). Las 4 cadenas de observabilidad capturadas del stderr real (SC-003).
+Delta portado con 6/6 hashes idénticos a `ab4bb32`, backups `.bak-pre024`; el `doctor` cazó EN VIVO la
+unit instalada sin ExecStop. Sondas versionadas en `probes/`. **PENDIENTE, solo operador (antes del
+merge, no del PR):** instalar la unit de PRODUCCIÓN (`sudo`) + confirmar alcance desde el cliente tras
+un restart. El journal del user-unit no es consultable en el arnés (`-- No entries --`); el del
+system-unit de producción sí (se leyó en el gate de 022). Siguiente: abrir PR (sin mergear).
 
 **023-fix-render-ampersand MERGED** (PR #81, merge `9b97654` en main, 2026-07-19; branch rebasada
 sobre main=`ab4bb32` tras el merge de 022; VERSION 0.14.0→**0.15.0**). Plan:
