@@ -253,10 +253,12 @@ no apareció hermano retirado.
 
 ## Phase 8: Cierre
 
-- [ ] T044 Abrir el PR contra `main`. **No mergear sin confirmación explícita**: `main`
-      está protegida.
-- [ ] T045 Al mergear: actualizar el bloque SPECKIT de `CLAUDE.md` marcando 024 MERGED con
-      su SHA, y registrar el resultado del gate T036-T043.
+- [X] T044 PR #82 abierto contra `main` y **MERGEADO con confirmación explícita del operador**
+      (2026-07-25). Squash `febe652`; `main` sincronizada y verificada (VERSION 0.16.0, fix
+      presente, historia lineal 022→023→024).
+- [X] T045 Bloque SPECKIT de `CLAUDE.md` marcado **024 MERGED (PR #82, merge `febe652`)** con el
+      resultado del gate T036-T043 y del gate de producción (T038). Residual no bloqueante: la
+      confirmación visual del operador desde el celular.
 
 ---
 

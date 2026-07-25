@@ -132,8 +132,8 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
-**024-fix-session-restart-retire EN CURSO** (branch `024-fix-session-restart-retire` desde
-main=`9b97654`, 2026-07-20). Plan: `specs/024-fix-session-restart-retire/plan.md`. **BUG MEDIDO EN
+**024-fix-session-restart-retire MERGED** (PR #82, merge `febe652` en main, 2026-07-25; branch desde
+main=`9b97654`, 2026-07-20; VERSION 0.15.0→**0.16.0**). Plan: `specs/024-fix-session-restart-retire/plan.md`. **BUG MEDIDO EN
 HARDWARE, VIVO EN MAIN, introducido por 022 y cazado por su propio gate T051**: un `systemctl restart`
 retira el puntero de una sesión VIVA y anuncia una nueva, matando el enlace del operador.
 `session_decide` (`scripts/lib/session_pointer.sh:212-224`) conserva solo si el marcador es `killed`,
@@ -195,10 +195,13 @@ diferencia del user-unit del gate de composición—:** `agent-session-check.sh:
 `claude[2118]` y pid nuevo `claude[500467]` reportan el mismo `session_01A1obgNuL2XkXLX7bdr6nQV`, y el
 `bridge-pointer.json` vivo apunta a ese — **el vendor reconectó a la misma sesión, no anunció una nueva**,
 lo contrario del bug de 022 (que el Jul 20 retiró el puntero; su `.retired.json` lleva otro `sessionId`).
-Marcador consumido por rename; `doctor` sin WARN de `ExecStop`. Falta solo la confirmación visual del
-operador desde el celular (la identidad del `sessionId` reconectado ya es prueba de alcance) y su go-ahead
-para mergear PR #82 (`main` protegida). Journal del user-unit no consultable en el arnés
-(`-- No entries --`); el del system-unit de producción sí.
+Marcador consumido por rename; `doctor` sin WARN de `ExecStop`. Journal del user-unit no consultable en
+el arnés (`-- No entries --`); el del system-unit de producción sí. **MERGEADO tras este gate** (squash
+`febe652`, `main` sincronizada y verificada: VERSION 0.16.0, `session_decide_cause`/`session_classify_stop`
+presentes, directiva ExecStop en el template y en el render de `setup.sh`, historia lineal 022→023→024) —
+SC-006 cumplido (el gate de hardware corrió ANTES del merge, por primera vez en tres features). Residual
+NO bloqueante: la confirmación visual del operador desde el celular (la identidad del `sessionId`
+reconectado ya es prueba de alcance). 023 T026 (medir ferrari) sigue abierta, sin relación con 024.
 
 **023-fix-render-ampersand MERGED** (PR #81, merge `9b97654` en main, 2026-07-19; branch rebasada
 sobre main=`ab4bb32` tras el merge de 022; VERSION 0.14.0→**0.15.0**). Plan:
