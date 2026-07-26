@@ -40,7 +40,7 @@ Enfoque técnico (todo MEDIDO en Fase 0, ver [research.md](./research.md)): (1) 
 - [x] **III. Test-First, Host-Runnable** — el corazón de la feature: hacer la suite host-runnable DETERMINISTA en un runner limpio. Cada fix se demuestra con la reproducción RED (PATH podado) antes del GREEN. `shellcheck -S error` se mantiene limpio. Los helpers en `tests/helper.bash` no tienen efectos al sourcear. PASS (refuerza el principio).
 - [x] **IV. Idempotent, Fail-Silent** — N/A: no toca boot/patch/install/backup ni notifiers. PASS.
 - [x] **V. Workspace-Is-the-Agent** — N/A: no toca `.state/` ni backups. Los stubs viven en `$BATS_TEST_TMPDIR` (efímero), no filtran rutas del dev-box ni secretos. PASS.
-- [x] **VI. Reproducible, Pinned Dependencies** — sin pins nuevos de producción. El runner macOS y la versión de bats se fijan explícitamente en el workflow. `CHANGELOG.md` + `VERSION` se actualizan (cambio de infra, no de contrato de usuario → bump PATCH). PASS.
+- [x] **VI. Reproducible, Pinned Dependencies** — sin pins nuevos de producción. El runner macOS y la versión de bats se fijan explícitamente en el workflow. `CHANGELOG.md` recibe entrada; **SIN bump de `VERSION`**, consistente con 019 (tests-only, PR #74): 025 no cambia el runtime de producción (SC-004 byte-idéntico), así que no es "user-facing" en el sentido del principio. PASS.
 
 **Drift de documentación registrado (no violación de principio)**: la sección *Platform & Toolchain Constraints* dice "Host (launcher): bash 4+", contradicho por la realidad (020) y por esta feature que institucionaliza 3.2 en CI. Ver Complexity Tracking; se propone enmienda PATCH de la constitución en el mismo cambio.
 
@@ -77,8 +77,7 @@ tests/
 └── test.yml                  # matriz: ubuntu-latest (5.x) + macos-13 (3.2 via PATH=/bin:$PATH)
 
 .specify/memory/constitution.md  # (opcional) enmienda PATCH "bash 3.2+, probado en ambos"
-CHANGELOG.md                   # entrada de la feature
-VERSION                        # bump PATCH
+CHANGELOG.md                   # entrada de la feature (SIN bump de VERSION, precedente 019)
 ```
 
 **Structure Decision**: Single project (launcher). Los cambios son test-infra (`tests/`) + CI config (`.github/workflows/test.yml`) + docs de versión. NINGÚN archivo de runtime de producción (`setup.sh`, `scripts/lib/*.sh`, `modules/`, `docker/`) se modifica en su comportamiento.

@@ -150,7 +150,9 @@ ejecutable SIN mirar PATH → un stub en `deployment.claude_cli` fuerza su uso a
 cambio de runtime de producción (`resolve_claude_bin`/`setup.sh`/`qmd_index.sh` intactos; SC-004
 byte-idéntico). Constitución 6/6 PASS; único ítem: la línea "bash 4+" de Platform quedó contradicha por
 esta feature (drift ya detectado por 020) → enmienda PATCH propuesta "bash 3.2+, probado en ambos".
-VERSION bump PATCH pendiente. Siguiente: `/speckit-tasks`.
+**SIN bump de VERSION** (precedente 019, tests-only: 025 no cambia runtime, SC-004 byte-idéntico).
+tasks.md: **19 tareas** test-first (RED con PATH podado → seams claude/bun → matriz de bash → mutación).
+Siguiente: `/speckit-implement`.
 
 **024-fix-session-restart-retire MERGED** (PR #82, merge `febe652` en main, 2026-07-25; branch desde
 main=`9b97654`, 2026-07-20; VERSION 0.15.0→**0.16.0**). Plan: `specs/024-fix-session-restart-retire/plan.md`. **BUG MEDIDO EN
