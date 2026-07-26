@@ -15,14 +15,30 @@ concurrency:
 
 jobs:
   bats:
-    name: bats tests/
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 025-hermetic-ci-suite: 023 measured that the same commit can be
+          # green on one bash and red on another (bash 5.2+'s `&`-in-replacement
+          # ksh93-compat change) with nothing declaring which version actually
+          # ran. macos-13 ships bash 3.2.57 as /bin/bash — the same interpreter
+          # the dev-host suite runs under (see CLAUDE.md) — with no Homebrew
+          # bash preinstalled to shadow it, so this is the real floor, not a
+          # compiled substitute.
+          - os: ubuntu-latest
+            name: "bash 5.x (ubuntu-latest)"
+          - os: macos-13
+            name: "bash 3.2 (macos-13)"
+    name: bats tests/ — ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Install yq v4 (mikefarah)
+      - name: Install yq v4 (mikefarah) — Linux
+        if: runner.os == 'Linux'
         run: |
           set -euo pipefail
           sudo curl -fsSL -o /usr/local/bin/yq \
@@ -30,7 +46,17 @@ jobs:
           sudo chmod +x /usr/local/bin/yq
           yq --version
 
-      - name: Install bats-core
+      - name: Install yq v4 (mikefarah) — macOS
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          sudo curl -fsSL -o /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_darwin_amd64
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
+
+      - name: Install bats-core — Linux
+        if: runner.os == 'Linux'
         run: |
           set -euo pipefail
           git clone --depth 1 --branch v1.11.0 \
@@ -38,7 +64,8 @@ jobs:
           sudo /tmp/bats/install.sh /usr/local
           bats --version
 
-      - name: Install age (for backup-identity encryption tests)
+      - name: Install age (for backup-identity encryption tests) — Linux
+        if: runner.os == 'Linux'
         run: |
           set -euo pipefail
           sudo apt-get update -qq
@@ -46,10 +73,28 @@ jobs:
           age --version
           age-keygen --help >/dev/null
 
-      - name: Verify deps
+      - name: Install bats-core, jq, tmux, age — macOS
+        if: runner.os == 'macOS'
         run: |
           set -euo pipefail
+          brew list bats-core &>/dev/null || brew install bats-core
+          brew list jq &>/dev/null || brew install jq
+          brew list tmux &>/dev/null || brew install tmux
+          brew list age &>/dev/null || brew install age
+          bats --version
+          jq --version
+          tmux -V
+          age --version
+
+      - name: "Verify deps + pin the bash target (025/023: never run an assumed version)"
+        run: |
+          set -euo pipefail
+          echo "runner.os=${{ runner.os }}"
           bash --version | head -1
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            echo "--- /bin/bash (the interpreter the 3.2 branch below forces) ---"
+            /bin/bash --version | head -1
+          fi
           bats --version
           yq --version
           jq --version
@@ -57,5 +102,10 @@ jobs:
           tmux -V
           age --version
 
-      - name: Run bats suite
+      - name: Run bats suite (bash 5.x)
+        if: runner.os == 'Linux'
         run: bats --print-output-on-failure tests/
+
+      - name: Run bats suite (bash 3.2, forced via PATH)
+        if: runner.os == 'macOS'
+        run: PATH="/bin:$PATH" bats --print-output-on-failure tests/
