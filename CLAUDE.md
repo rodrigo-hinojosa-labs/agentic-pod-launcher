@@ -132,6 +132,26 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
+**025-hermetic-ci-suite EN CURSO** (branch `025-hermetic-ci-suite` desde main=`febe652`+doc local
+`b6acbf3`, 2026-07-26). Plan: `specs/025-hermetic-ci-suite/plan.md`. **BUG MEDIDO (`gh run view
+--log-failed`, 2026-07-26): el job `tests` de CI está ROJO en cada commit de main por 16 tests NO
+herméticos**; `shellcheck` VERDE; `docker-e2e` nocturno rojo aparte por `exit 141` (SIGPIPE, fuera de
+alcance). Los 16: 14 corren `--regenerate` en modo local y necesitan `claude` resoluble (post-015
+`resolve_claude_bin`); 2 (`qmd-reindex-cmd.bats` 685/686) por el guard `command -v bun`
+(`qmd_index.sh:544`) que corta antes del `_qmd_run` stubbeado. Pasa en una máquina con `claude`/`bun` y
+falla en un runner limpio — la clase que 023 midió. **FASE 0 MIDIÓ ambas incógnitas y refutó una del
+spec**: 685/686 NO era un subshell que pierde el override (hipótesis del spec), era el guard `:544`
+(reproducido: bun presente→GREEN, PATH podado→RED idéntico a CI); y bash 3.2 en CI = runner macOS +
+`PATH=/bin:$PATH` fuerza `/bin/bash` 3.2.57 (medido; `env bash` resuelve al Homebrew 5.x sin eso, la
+trampa de 023). Seam Clase 1: `resolve_claude_bin` Caso 1 (`setup.sh:92`) resuelve un absoluto
+ejecutable SIN mirar PATH → un stub en `deployment.claude_cli` fuerza su uso aun con claude real
+(FR-004). Alcance (elegido por el usuario): sellar los 16 (helper compartido `install_claude_stub`/
+`install_bun_stub`) + matriz de bash 3.2/5.x en `test.yml`, cada brazo imprime `bash --version`. CERO
+cambio de runtime de producción (`resolve_claude_bin`/`setup.sh`/`qmd_index.sh` intactos; SC-004
+byte-idéntico). Constitución 6/6 PASS; único ítem: la línea "bash 4+" de Platform quedó contradicha por
+esta feature (drift ya detectado por 020) → enmienda PATCH propuesta "bash 3.2+, probado en ambos".
+VERSION bump PATCH pendiente. Siguiente: `/speckit-tasks`.
+
 **024-fix-session-restart-retire MERGED** (PR #82, merge `febe652` en main, 2026-07-25; branch desde
 main=`9b97654`, 2026-07-20; VERSION 0.15.0→**0.16.0**). Plan: `specs/024-fix-session-restart-retire/plan.md`. **BUG MEDIDO EN
 HARDWARE, VIVO EN MAIN, introducido por 022 y cazado por su propio gate T051**: un `systemctl restart`
