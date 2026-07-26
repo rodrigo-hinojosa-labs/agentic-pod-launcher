@@ -170,9 +170,19 @@ un nombre de step) detectado y corregido antes de commitear. Constitución **enm
 ("bash 4+"→"bash 3.2+, tested in both"). `shellcheck.yml` confirmado que EXCLUYE `tests/*` por
 diseño → cero archivo de esta feature entra a ese gate; corrido el comando exacto de CI igual,
 `rc=0`. CHANGELOG con entrada, **sin bump de VERSION**. README gana un puntero de repro hermético
-(comando `env -i` verificado copy-paste-funcional). **Pendiente, solo push+PR**: T013 (gate de CI
-real en GitHub Actions, ambos brazos) y T019 (abrir PR; `main` protegida, no mergear sin
-confirmación explícita).
+(comando `env -i` verificado copy-paste-funcional). **PR #83 ABIERTO (sin mergear) y GATE PARCIAL CONFIRMADO EN CI REAL**: el commit `eb49524` (14
+archivos, SIN el cambio de `test.yml`) se empujó y disparó un run real de GitHub Actions —
+**`tests` en `ubuntu-latest` salió VERDE por primera vez en la historia del repo** (`1189 ok / 0 not
+ok`, run 30221199153, byte-idéntico a la medición local); `shellcheck` también verde; PR
+`mergeStateStatus: CLEAN`/`MERGEABLE`. **BLOQUEO real, no resuelto**: el token de `gh` activo
+(`rodrigo-hinojosa`) tiene scopes `admin:public_key,gist,read:org,repo` — SIN `workflow` — así que
+GitHub rechaza cualquier push que toque `.github/workflows/*.yml` ("refusing to allow an OAuth App
+to create or update workflow ... without `workflow` scope"). La cuenta alterna
+(`rodrigo-hinojosa_cencosud`) SÍ tiene `workflow` pero no tiene acceso a este repo privado.
+`gh auth refresh --scopes workflow` exige un flujo OAuth interactivo por navegador — no ejecutable
+sin el operador. La matriz de bash 3.2/5.x (`.github/workflows/test.yml`) quedó modificada en el
+árbol de trabajo, SIN commitear, a la espera de esa autorización; T013 (brazo 3.2) y T019 (merge)
+siguen pendientes.
 
 **024-fix-session-restart-retire MERGED** (PR #82, merge `febe652` en main, 2026-07-25; branch desde
 main=`9b97654`, 2026-07-20; VERSION 0.15.0→**0.16.0**). Plan: `specs/024-fix-session-restart-retire/plan.md`. **BUG MEDIDO EN

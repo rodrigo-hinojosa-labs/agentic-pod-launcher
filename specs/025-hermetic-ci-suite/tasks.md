@@ -71,10 +71,14 @@ runner macOS + `PATH=/bin:$PATH`.
       sin comillas en un nombre de step rompía el parseo) detectado y corregido antes de commitear.
 - [X] T012 [US2] Proxy local confirmado: suite COMPLETA bajo `PATH=/bin:$PATH` (3.2.57) → **1189 ok / 0
       not ok**, byte-idéntico al resultado bajo 5.x (T008). Cero skips necesarios.
-- [ ] T013 [US2] **GATE de CI (post-push, ANTES del merge — disciplina SC-006 de features previas)**:
-      tras empujar la rama, confirmar en la corrida de `tests` que aparecen los dos brazos, ambos verdes,
-      y que el brazo 3.2 imprime `GNU bash, version 3.2.x` (autoverificación SC-003). Si mostrara 5.x, el
-      cableado está mal.
+- [~] T013 [US2] **GATE de CI parcial CONFIRMADO en PR real #83 (2026-07-26, run 30221199153)**: el
+      job `tests` en `ubuntu-latest` (bash 5.x) salió **VERDE por primera vez en la historia del repo**
+      — `1189 ok / 0 not ok`, byte-idéntico a la medición local. `shellcheck` también verde. PR
+      `mergeStateStatus: CLEAN`. **BLOQUEADO para el brazo 3.2/macOS**: el token de `gh` en uso carece
+      del scope `workflow` que GitHub exige para tocar `.github/workflows/*.yml` (rechazo medido:
+      "refusing to allow an OAuth App to... without `workflow` scope"); `gh auth refresh` requiere
+      autorización interactiva por navegador que solo el operador puede completar. El cambio de matriz
+      quedó separado, sin commitear a esta rama, a la espera de esa autorización.
 
 ---
 
