@@ -152,7 +152,27 @@ byte-idéntico). Constitución 6/6 PASS; único ítem: la línea "bash 4+" de Pl
 esta feature (drift ya detectado por 020) → enmienda PATCH propuesta "bash 3.2+, probado en ambos".
 **SIN bump de VERSION** (precedente 019, tests-only: 025 no cambia runtime, SC-004 byte-idéntico).
 tasks.md: **19 tareas** test-first (RED con PATH podado → seams claude/bun → matriz de bash → mutación).
-Siguiente: `/speckit-implement`.
+
+**IMPLEMENTADO 2026-07-24→26 (16/19 tareas; T013/T019 pendientes de push+PR).** T001 trajo una
+CORRECCIÓN sobre research.md: el PATH podado solo no reproduce la RED en un host con Claude Code
+nativo — `resolve_claude_bin` Caso 4 encuentra `$HOME/.local/bin/claude` igual; hace falta
+`env -i PATH=<podado> HOME=<tmpdir>`, que sí reproduce los 16 `not ok` exactos medidos en CI.
+`install_claude_stub`/`install_bun_stub` en `tests/helper.bash` (guard test propio,
+`tests/hermetic-seam.bats`, 6 tests). Cableados en `deployment-mode.bats`, `local-vault-seed.bats`
+(2 ocurrencias), `regenerate.bats` (SOLO el test `:135`, sin tocar los de docker) y
+`qmd-reindex-cmd.bats` (retirado el `bunx` obsoleto). **Gate GREEN: 1189 ok / 0 not ok en bash 5.x Y
+en 3.2.57 (`PATH=/bin:$PATH`), byte-idéntico** (1183 base + 6 nuevos). **Mutación confirmada**
+(`git stash` del cableado): reaparecen los 16 `not ok` byte-idénticos a la RED; restaurado. **SC-004
+confirmado**: `git diff` fuera de `tests/`+`specs/` está vacío — cero archivo de runtime tocado.
+`.github/workflows/test.yml` reescrito como matriz `ubuntu-latest`(5.x)/`macos-13`(3.2 vía
+`PATH=/bin:$PATH`), cada brazo imprime `bash --version`; un bug de YAML propio (`:` sin comillas en
+un nombre de step) detectado y corregido antes de commitear. Constitución **enmendada 1.0.0→1.0.1**
+("bash 4+"→"bash 3.2+, tested in both"). `shellcheck.yml` confirmado que EXCLUYE `tests/*` por
+diseño → cero archivo de esta feature entra a ese gate; corrido el comando exacto de CI igual,
+`rc=0`. CHANGELOG con entrada, **sin bump de VERSION**. README gana un puntero de repro hermético
+(comando `env -i` verificado copy-paste-funcional). **Pendiente, solo push+PR**: T013 (gate de CI
+real en GitHub Actions, ambos brazos) y T019 (abrir PR; `main` protegida, no mergear sin
+confirmación explícita).
 
 **024-fix-session-restart-retire MERGED** (PR #82, merge `febe652` en main, 2026-07-25; branch desde
 main=`9b97654`, 2026-07-20; VERSION 0.15.0→**0.16.0**). Plan: `specs/024-fix-session-restart-retire/plan.md`. **BUG MEDIDO EN

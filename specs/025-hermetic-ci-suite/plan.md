@@ -42,7 +42,7 @@ Enfoque técnico (todo MEDIDO en Fase 0, ver [research.md](./research.md)): (1) 
 - [x] **V. Workspace-Is-the-Agent** — N/A: no toca `.state/` ni backups. Los stubs viven en `$BATS_TEST_TMPDIR` (efímero), no filtran rutas del dev-box ni secretos. PASS.
 - [x] **VI. Reproducible, Pinned Dependencies** — sin pins nuevos de producción. El runner macOS y la versión de bats se fijan explícitamente en el workflow. `CHANGELOG.md` recibe entrada; **SIN bump de `VERSION`**, consistente con 019 (tests-only, PR #74): 025 no cambia el runtime de producción (SC-004 byte-idéntico), así que no es "user-facing" en el sentido del principio. PASS.
 
-**Drift de documentación registrado (no violación de principio)**: la sección *Platform & Toolchain Constraints* dice "Host (launcher): bash 4+", contradicho por la realidad (020) y por esta feature que institucionaliza 3.2 en CI. Ver Complexity Tracking; se propone enmienda PATCH de la constitución en el mismo cambio.
+**Drift de documentación (no violación de principio) — ENMENDADO**: la sección *Platform & Toolchain Constraints* decía "Host (launcher): bash 4+", contradicho por la realidad (020) y por esta feature que institucionaliza 3.2 en CI. Enmienda PATCH aplicada: constitución 1.0.0→1.0.1 (ver Complexity Tracking y `.specify/memory/constitution.md`).
 
 **Veredicto**: 6/6 PASS, sin violaciones de principio.
 

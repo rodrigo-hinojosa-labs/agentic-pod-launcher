@@ -53,6 +53,10 @@ plugins:
   - claude-mem@thedotmack
 EOF
   touch "$TMP_TEST_DIR/.env"
+  # 025: only the deployment.mode=local test below needs a resolvable
+  # claude_cli (resolve_claude_bin only gates local mode); seed a
+  # deterministic stub so that test doesn't depend on the host's claude/PATH.
+  CLAUDE_STUB=$(install_claude_stub)
 }
 
 teardown() { teardown_tmp_dir; }
@@ -135,6 +139,10 @@ teardown() { teardown_tmp_dir; }
 @test "--regenerate preserves an existing deployment.mode" {
   cd "$TMP_TEST_DIR"
   yq -i '.deployment.mode = "local"' agent.yml
+  # 025: local mode resolves claude_cli (resolve_claude_bin); without a
+  # deterministic stub this test only passed by accident on hosts with a
+  # real claude installed (or ~/.local/bin/claude present).
+  yq -i ".deployment.claude_cli = \"$CLAUDE_STUB\"" agent.yml
   echo 'n' | ./setup.sh --regenerate
   [ "$(yq -r '.deployment.mode' agent.yml)" = "local" ]
 }

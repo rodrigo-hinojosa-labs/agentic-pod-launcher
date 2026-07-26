@@ -31,6 +31,40 @@ load_lib() {
   source "$lib"
 }
 
+# ── Hermeticity seam (025) ───────────────────────────────────────────────────
+# The suite must be DETERMINISTIC on a clean runner: it must not pass only
+# because the dev host happens to have `claude`/`bun` installed. These two
+# stubs let a test force a fake binary instead of depending on host state.
+# Contract: specs/025-hermetic-ci-suite/contracts/hermetic-seam.md
+
+# install_claude_stub [DEST_DIR] — prints the ABSOLUTE path of a trivial,
+# executable fake `claude`. Callers put that path (not the bare literal
+# "claude") into deployment.claude_cli. resolve_claude_bin's Case 1
+# (setup.sh) accepts an already-absolute + executable value WITHOUT
+# consulting PATH, so this forces the stub even on a host with a real
+# `claude` installed (FR-004) — it never depends on "is claude on PATH".
+install_claude_stub() {
+  local dir="${1:-$TMP_TEST_DIR/bin}"
+  mkdir -p "$dir"
+  printf '#!/bin/sh\nexit 0\n' > "$dir/claude"
+  chmod +x "$dir/claude"
+  printf '%s\n' "$dir/claude"
+}
+
+# install_bun_stub [DEST_DIR] — prints a directory containing a trivial,
+# executable fake `bun`. Callers prepend that directory to PATH before
+# exercising code that only checks `command -v bun` (e.g.
+# scripts/lib/qmd_index.sh's reindex guard) — the real qmd invocation is
+# expected to already be stubbed separately (_qmd_run override), so this
+# binary is never actually executed; it only needs to exist and be `-x`.
+install_bun_stub() {
+  local dir="${1:-$TMP_TEST_DIR/bin}"
+  mkdir -p "$dir"
+  printf '#!/bin/sh\nexit 0\n' > "$dir/bun"
+  chmod +x "$dir/bun"
+  printf '%s\n' "$dir"
+}
+
 # ── Canonical QMD engine seam (019) ─────────────────────────────────────────
 # Post-016, _qmd_run executes $(_qmd_prefix)/node_modules/.bin/qmd DIRECTLY —
 # a PATH-level `bunx` stub is dead code. These helpers plant a fake engine

@@ -2,15 +2,23 @@
 
 ## 1. Reproducir la RED (runner limpio simulado, antes del fix)
 
-Con un PATH podado que excluye `claude` y `bun` (deja `bats`/`yq`/`jq`/`git`/`tmux`):
+Podar el PATH NO BASTA en un host con Claude Code instalado nativamente: `resolve_claude_bin` Caso 4
+(`setup.sh:104-106`) también prueba `"$HOME/.local/bin/claude"`, que existe de verdad en ese host y
+enmascara el bug. Hay que neutralizar TAMBIÉN `$HOME` con `env -i`:
 
 ```bash
 CLEAN_PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"   # ajustar a donde vivan bats/yq/jq
-PATH="$CLEAN_PATH" bash -c 'command -v bun || echo "bun ausente (como CI)"'
-PATH="$CLEAN_PATH" bats tests/deployment-mode.bats tests/qmd-reindex-cmd.bats
+FAKE_HOME=$(mktemp -d)
+env -i PATH="$CLEAN_PATH" HOME="$FAKE_HOME" bash -c 'command -v bun || echo "bun ausente (como CI)"'
+env -i PATH="$CLEAN_PATH" HOME="$FAKE_HOME" bats tests/deployment-mode.bats tests/local-vault-seed.bats tests/regenerate.bats tests/qmd-reindex-cmd.bats
+rm -rf "$FAKE_HOME"
 ```
 
-Esperado ANTES del fix: los 14 de Clase 1 abortan con "could not resolve an absolute, executable path to the Claude CLI"; 685/686 fallan (`grep -q "config not found"` falla) por el guard `qmd_index.sh:544`. (685/686 ya medido en research.md.)
+Esperado ANTES del fix: 16 `not ok` exactos (medido T001) — los 14 de Clase 1 abortan con "could not
+resolve an absolute, executable path to the Claude CLI"; 685/686 fallan (`grep -q "config not found"`
+falla) por el guard `qmd_index.sh:544`. Un runner real de GitHub Actions no tiene `$HOME/.local/bin/claude`,
+así que ahí el simple PATH podado ya reproducía la RED — la neutralización de `$HOME` es solo necesaria
+para reproducirla fielmente en un host de dev con Claude Code instalado.
 
 ## 2. Verificar la GREEN (después del fix)
 

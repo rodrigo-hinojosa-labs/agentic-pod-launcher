@@ -14,6 +14,10 @@ setup() {
   cp -r "$REPO_ROOT/scripts" "$REPO_ROOT/modules" "$TMP_TEST_DIR/"
   cp "$REPO_ROOT/setup.sh" "$TMP_TEST_DIR/"
   touch "$TMP_TEST_DIR/.env"
+  # 025: force a deterministic claude_cli regardless of the host's real
+  # PATH/HOME — resolve_claude_bin Case 1 (an already-absolute, executable
+  # value) resolves this without consulting PATH.
+  CLAUDE_STUB=$(install_claude_stub)
 }
 
 teardown() { teardown_tmp_dir; }
@@ -39,7 +43,7 @@ deployment:
   host: "h"
   workspace: "/tmp/mode-bot"
   install_service: false
-  claude_cli: "claude"
+  claude_cli: "${CLAUDE_STUB}"
   mode: ${mode}
 docker:
   image_tag: "agent-admin:latest"

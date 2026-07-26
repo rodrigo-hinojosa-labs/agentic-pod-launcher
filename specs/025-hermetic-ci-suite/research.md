@@ -16,6 +16,8 @@ command -v bun >/dev/null 2>&1 || { _qmd_log "reindex: bun unavailable — skip"
 - Con `bun` en PATH (host dev): `ok 1` / `ok 2` — los dos pasan.
 - Con PATH podado sin `bun` (= runner limpio, `/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin`): `not ok 1` (`grep -q "config not found"` falla) / `not ok 2`. El tercer test del archivo (redacción de límite de 500 bytes) pasa en ambos porque no depende del path gateado por bun.
 
+**CORRECCIÓN (T001, durante implementación)**: reproducir la RED completa (los 16) exige TAMBIÉN neutralizar `$HOME`, no solo podar el PATH. `resolve_claude_bin` (`setup.sh:104-106`, Caso 4) prueba `"$home/.local/bin/claude"` con `home="${2:-$HOME}"` — en un host de dev con Claude Code instalado nativamente, `$HOME/.local/bin/claude` existe de verdad y el Caso 4 lo resuelve aunque el PATH esté podado, enmascarando el bug de los 14 tests de Clase 1. Medido: `PATH=<podado> bats ...` da solo 2 `not ok` (los de bun); `env -i PATH=<podado> HOME=<tmpdir> bats ...` da los 16 exactos que mide CI (un runner de GitHub Actions no tiene `$HOME/.local/bin/claude`, así que ahí el Caso 4 nunca aplicaba — la discrepancia era solo del intento de reproducción local, no de la medición de CI original). El oráculo local correcto es `env -i PATH=<podado> HOME=<tmpdir>`, actualizado en quickstart.md.
+
 **Rationale**: El fix correcto es sembrar un `bun` falso ejecutable en el PATH del test para que :544 pase y el stub de `_qmd_run` se ejerza — mismo patrón de seam que el `claude` falso. NO se toca `qmd_index.sh` (el guard `command -v bun` es correcto en producción: sin bun no hay reindex posible; el bug es que el test no le da un bun).
 
 **Alternativas consideradas**:
