@@ -74,7 +74,7 @@ cd ~/agents/my-agent
 ./setup.sh --login
 
 systemctl status agent-my-agent.service      # session state
-journalctl -u agent-my-agent.service -f      # logs (look for 'session url' / 'connected')
+journalctl -u agent-my-agent.service -f      # logs (a healthy --spawn=session run is quiet here — silence is normal, not a stall)
 ./scripts/agentctl status                    # reads systemd instead of a container
 ./scripts/agentctl doctor                    # local checks, same 0/1/2 exit contract
 ```
@@ -312,12 +312,63 @@ docker exec -u agent my-agent heartbeatctl set-interval 15m
 
 Mutations propagate via `agent.yml` → `heartbeat.conf` → staging crontab → `/etc/crontabs/agent` (root sync loop) within ~75 seconds, no container restart needed.
 
+## Upgrade an existing agent to a newer launcher version
+
+A scaffolded workspace is a **self-contained copy** of the launcher's system files — `setup.sh`, `VERSION`, `modules/`, `scripts/`, and (docker mode only) `docker/` — alongside your `agent.yml`, `.env`, and `.state/`. It is its own git repo (for the fork backups), **not** a clone of the launcher, so there is no `git pull` inside the workspace and no first-class `--upgrade` command. Upgrading is a deliberate, manual swap: replace the system files with a newer launcher's, keep your state, then re-render.
+
+```bash
+# 0. Read the CHANGELOG for the target version first — most releases only need
+#    a re-render, but any that require a manual migration step say so there.
+
+# 1. Get the newer launcher (a fresh clone, or `git pull` in your launcher checkout).
+cd ~/agentic-pod-launcher && git pull        # now at the version you want to run
+
+# 2. Overwrite ONLY the system files in the workspace. Never touch agent.yml,
+#    .env, or .state/ — those carry your config, secrets, OAuth login and
+#    sessions. `rm -rf` before copying each dir so deletions between versions
+#    propagate. These are exactly the paths setup.sh copies at scaffold time.
+DEST=~/agents/my-agent
+cp setup.sh VERSION .gitignore LICENSE "$DEST/"
+for d in modules scripts docker; do          # drop 'docker' for a local-mode agent
+  [ -d "$d" ] && { rm -rf "$DEST/$d"; cp -R "$d" "$DEST/"; }
+done
+
+# 3. Re-render the derived set (docker-compose.yml, .mcp.json, CLAUDE.md, the
+#    local wrappers/units, …) from your agent.yml with the new templates.
+cd "$DEST"
+./setup.sh --regenerate
+```
+
+Then pick up the runtime for your mode:
+
+- **Docker mode** — the agent code is baked into the image, so rebuild and recreate:
+
+  ```bash
+  docker compose build && ./scripts/agentctl up
+  ./scripts/agentctl doctor            # verify; agentctl versions --check compares the toolchain
+  ```
+
+- **Local mode** — `--regenerate` reinstalls the systemd units when non-interactive `sudo` is available (otherwise it prints the exact commands). Restart the session to pick up the new code:
+
+  ```bash
+  sudo systemctl restart agent-<name>.service
+  ./scripts/agentctl doctor
+  ```
+
+  Restarting is safe for a live conversation: since `024-fix-session-restart-retire`, an external restart **keeps** the session pointer instead of retiring it, so the operator's chat link survives the bounce.
+
+Caveats worth knowing:
+
+- **Back up first if you hand-edited system files in the workspace.** Step 2 overwrites `setup.sh`/`scripts/`/`modules/`/`docker/` wholesale; any local edits there are lost. Config lives in `agent.yml` (survives) — keep it that way.
+- **`VERSION` must ship with the swap.** `--regenerate` stamps `meta.launcher_version` from the workspace `VERSION`; copying it in step 2 keeps that honest.
+- **Moving hosts is different** — that's a `rsync`/`cp -a` of the whole workspace directory (see *Self-contained workspace* and *Restore from the fork*), not this in-place swap.
+
 ## Testing
 
 The test suite uses `bats-core` and runs entirely on the host (no Docker required for the default suite; `yq` v4+, `jq`, `git` and `tmux` are the other host deps). Coverage spans the render engine, YAML lib, interval-to-cron converter, state-lib helpers, notifier contracts, the heartbeat runner, the plugin and MCP catalogs, the Telegram patcher, the heartbeat config-dir isolation, every `heartbeatctl` subcommand, the deployment-mode branch (local render, bootstrap, systemd schedule conversion, kill switch, healthcheck), the QMD/RAG stack (index lib, embed-completion loop, sqlite-vec, wiki-graph), the three backup primitives, and token health.
 
 ```bash
-bats tests/                                       # full suite (1052 tests as of v0.13.0)
+bats tests/                                       # full suite (1189 tests as of v0.16.0)
 bats tests/heartbeatctl.bats                      # single file
 bats tests/render.bats -f "substitutes"           # single test by name fragment
 
