@@ -132,8 +132,10 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
-**025-hermetic-ci-suite EN CURSO** (branch `025-hermetic-ci-suite` desde main=`febe652`+doc local
-`b6acbf3`, 2026-07-26). Plan: `specs/025-hermetic-ci-suite/plan.md`. **BUG MEDIDO (`gh run view
+**025-hermetic-ci-suite MERGED** (PR #83, squash `bb85914` en main, 2026-07-27; branch desde
+main=`febe652`+doc local `b6acbf3`, 2026-07-26; **VERSION sin cambio en 0.16.0** — tests-only,
+precedente 019). Post-merge: ramas 021-025 (locales + remotas) limpiadas, main reconciliada a
+`bb85914`. Plan: `specs/025-hermetic-ci-suite/plan.md`. **BUG MEDIDO (`gh run view
 --log-failed`, 2026-07-26): el job `tests` de CI está ROJO en cada commit de main por 16 tests NO
 herméticos**; `shellcheck` VERDE; `docker-e2e` nocturno rojo aparte por `exit 141` (SIGPIPE, fuera de
 alcance). Los 16: 14 corren `--regenerate` en modo local y necesitan `claude` resoluble (post-015
@@ -186,8 +188,14 @@ a `macos-latest` (commit `0e690a8`), que aprovisionó de inmediato; el paso de y
 para el bash del PATH Y `/bin/bash`; suite `1..1189`, **0 líneas `not ok`** → 1189/0 byte-idéntico a
 `ubuntu-latest` y a la medición local. **La matriz entera VERDE en CI real por primera vez.** Docs
 durables (CHANGELOG/README/constitución) y los internos de la feature actualizados `macos-13`→
-`macos-latest`. **ÚNICO PENDIENTE: T019 — mergear PR #83 a `main` (protegida), a la espera de la
-confirmación explícita del operador; no mergear sin ella.**
+`macos-latest`. **T019 CERRADO: el operador mergeó (squash `bb85914`); main sincronizada y verificada
+(historia lineal 022→023→024→025, VERSION 0.16.0 sin cambio). Post-merge se limpiaron las ramas
+021-025 y se reconcilió main local.** Refresh de docs post-025 (este trabajo, rama
+`docs/post-025-refresh`): README gana sección **Upgrade an existing agent** (swap manual de archivos
+de sistema + `--regenerate` + rebuild/reinstalar units, verificado contra `setup.sh:1843-1850` y el
+nombre real de la unit `agent-<name>.service`), conteo de tests 1052→1189, y se corrige un drift de
+022 (el README mandaba a grepear el journal por `session url`/`connected`, que un `--spawn=session`
+sano no imprime).
 
 **024-fix-session-restart-retire MERGED** (PR #82, merge `febe652` en main, 2026-07-25; branch desde
 main=`9b97654`, 2026-07-20; VERSION 0.15.0→**0.16.0**). Plan: `specs/024-fix-session-restart-retire/plan.md`. **BUG MEDIDO EN
