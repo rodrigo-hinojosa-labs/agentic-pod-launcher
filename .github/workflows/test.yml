@@ -22,14 +22,19 @@ jobs:
           # 025-hermetic-ci-suite: 023 measured that the same commit can be
           # green on one bash and red on another (bash 5.2+'s `&`-in-replacement
           # ksh93-compat change) with nothing declaring which version actually
-          # ran. macos-13 ships bash 3.2.57 as /bin/bash — the same interpreter
-          # the dev-host suite runs under (see CLAUDE.md) — with no Homebrew
-          # bash preinstalled to shadow it, so this is the real floor, not a
-          # compiled substitute.
+          # ran. Every macOS ships bash 3.2.57 as /bin/bash (Apple froze it at
+          # the last GPLv2 release) — the same interpreter the dev-host suite
+          # runs under (see CLAUDE.md). We force it below via PATH=/bin:$PATH,
+          # so this is the real floor, not a compiled substitute. Uses
+          # macos-latest rather than macos-13: the older macos-13 image is being
+          # retired and its runners queue indefinitely (measured ~1h twice,
+          # never provisioned); macos-latest carries the same /bin/bash 3.2.57.
+          # macos-latest is Apple Silicon (arm64) — the yq step below selects
+          # the matching binary; /bin/bash is a universal binary, still 3.2.57.
           - os: ubuntu-latest
             name: "bash 5.x (ubuntu-latest)"
-          - os: macos-13
-            name: "bash 3.2 (macos-13)"
+          - os: macos-latest
+            name: "bash 3.2 (macos-latest)"
     name: bats tests/ — ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
@@ -50,8 +55,15 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           set -euo pipefail
+          # macos-latest is Apple Silicon (arm64); older Intel runners are
+          # x86_64. Pick the matching pinned binary so it runs without Rosetta.
+          case "$(uname -m)" in
+            arm64) yq_arch=arm64 ;;
+            x86_64) yq_arch=amd64 ;;
+            *) echo "unsupported macOS arch: $(uname -m)" >&2; exit 1 ;;
+          esac
           sudo curl -fsSL -o /usr/local/bin/yq \
-            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_darwin_amd64
+            "https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_darwin_${yq_arch}"
           sudo chmod +x /usr/local/bin/yq
           yq --version
 
