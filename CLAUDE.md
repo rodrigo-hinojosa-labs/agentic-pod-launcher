@@ -132,8 +132,65 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
-**024-fix-session-restart-retire EN CURSO** (branch `024-fix-session-restart-retire` desde
-main=`9b97654`, 2026-07-20). Plan: `specs/024-fix-session-restart-retire/plan.md`. **BUG MEDIDO EN
+**025-hermetic-ci-suite EN CURSO** (branch `025-hermetic-ci-suite` desde main=`febe652`+doc local
+`b6acbf3`, 2026-07-26). Plan: `specs/025-hermetic-ci-suite/plan.md`. **BUG MEDIDO (`gh run view
+--log-failed`, 2026-07-26): el job `tests` de CI está ROJO en cada commit de main por 16 tests NO
+herméticos**; `shellcheck` VERDE; `docker-e2e` nocturno rojo aparte por `exit 141` (SIGPIPE, fuera de
+alcance). Los 16: 14 corren `--regenerate` en modo local y necesitan `claude` resoluble (post-015
+`resolve_claude_bin`); 2 (`qmd-reindex-cmd.bats` 685/686) por el guard `command -v bun`
+(`qmd_index.sh:544`) que corta antes del `_qmd_run` stubbeado. Pasa en una máquina con `claude`/`bun` y
+falla en un runner limpio — la clase que 023 midió. **FASE 0 MIDIÓ ambas incógnitas y refutó una del
+spec**: 685/686 NO era un subshell que pierde el override (hipótesis del spec), era el guard `:544`
+(reproducido: bun presente→GREEN, PATH podado→RED idéntico a CI); y bash 3.2 en CI = runner macOS +
+`PATH=/bin:$PATH` fuerza `/bin/bash` 3.2.57 (medido; `env bash` resuelve al Homebrew 5.x sin eso, la
+trampa de 023). Seam Clase 1: `resolve_claude_bin` Caso 1 (`setup.sh:92`) resuelve un absoluto
+ejecutable SIN mirar PATH → un stub en `deployment.claude_cli` fuerza su uso aun con claude real
+(FR-004). Alcance (elegido por el usuario): sellar los 16 (helper compartido `install_claude_stub`/
+`install_bun_stub`) + matriz de bash 3.2/5.x en `test.yml`, cada brazo imprime `bash --version`. CERO
+cambio de runtime de producción (`resolve_claude_bin`/`setup.sh`/`qmd_index.sh` intactos; SC-004
+byte-idéntico). Constitución 6/6 PASS; único ítem: la línea "bash 4+" de Platform quedó contradicha por
+esta feature (drift ya detectado por 020) → enmienda PATCH propuesta "bash 3.2+, probado en ambos".
+**SIN bump de VERSION** (precedente 019, tests-only: 025 no cambia runtime, SC-004 byte-idéntico).
+tasks.md: **19 tareas** test-first (RED con PATH podado → seams claude/bun → matriz de bash → mutación).
+
+**IMPLEMENTADO 2026-07-24→26 (16/19 tareas; T013/T019 pendientes de push+PR).** T001 trajo una
+CORRECCIÓN sobre research.md: el PATH podado solo no reproduce la RED en un host con Claude Code
+nativo — `resolve_claude_bin` Caso 4 encuentra `$HOME/.local/bin/claude` igual; hace falta
+`env -i PATH=<podado> HOME=<tmpdir>`, que sí reproduce los 16 `not ok` exactos medidos en CI.
+`install_claude_stub`/`install_bun_stub` en `tests/helper.bash` (guard test propio,
+`tests/hermetic-seam.bats`, 6 tests). Cableados en `deployment-mode.bats`, `local-vault-seed.bats`
+(2 ocurrencias), `regenerate.bats` (SOLO el test `:135`, sin tocar los de docker) y
+`qmd-reindex-cmd.bats` (retirado el `bunx` obsoleto). **Gate GREEN: 1189 ok / 0 not ok en bash 5.x Y
+en 3.2.57 (`PATH=/bin:$PATH`), byte-idéntico** (1183 base + 6 nuevos). **Mutación confirmada**
+(`git stash` del cableado): reaparecen los 16 `not ok` byte-idénticos a la RED; restaurado. **SC-004
+confirmado**: `git diff` fuera de `tests/`+`specs/` está vacío — cero archivo de runtime tocado.
+`.github/workflows/test.yml` reescrito como matriz `ubuntu-latest`(5.x)/`macos-latest`(3.2.57 arm64 vía
+`PATH=/bin:$PATH`), cada brazo imprime `bash --version`; un bug de YAML propio (`:` sin comillas en
+un nombre de step) detectado y corregido antes de commitear. Constitución **enmendada 1.0.0→1.0.1**
+("bash 4+"→"bash 3.2+, tested in both"). `shellcheck.yml` confirmado que EXCLUYE `tests/*` por
+diseño → cero archivo de esta feature entra a ese gate; corrido el comando exacto de CI igual,
+`rc=0`. CHANGELOG con entrada, **sin bump de VERSION**. README gana un puntero de repro hermético
+(comando `env -i` verificado copy-paste-funcional). **PR #83 ABIERTO (sin mergear) — GATE DE CI
+COMPLETO Y VERDE EN AMBOS BRAZOS (2026-07-27, run 30226974940, commit `0e690a8`)**, cerrando T013.
+Historia del desbloqueo: el commit `eb49524` (14 archivos, SIN `test.yml`) ya había dado
+`ubuntu-latest` VERDE (`1189 ok / 0 not ok`, run 30221199153) — primera vez en la historia del repo.
+El scope `workflow` que GitHub exige para pushear `.github/workflows/*.yml` FALTABA en la cuenta
+`rodrigo-hinojosa`; **lo autorizó el operador con su cuenta personal vía device-flow**
+(`gh auth refresh --scopes workflow`), y la matriz se commiteó (`b616f07`) y pusheó. **PIVOTE DE
+RUNNER MEDIDO**: el brazo `macos-13` quedó **atascado en cola ~1h en DOS intentos, sin aprovisionar
+jamás** (imagen en retiro por GitHub). Como el requisito real es bash 3.2.57 —no la etiqueta del
+runner, y Apple lo congeló en `/bin/bash` en TODA versión de macOS, incluido Apple Silicon— se movió
+a `macos-latest` (commit `0e690a8`), que aprovisionó de inmediato; el paso de yq se volvió arch-aware
+(`uname -m` → `yq_darwin_arm64`, sin Rosetta). **Evidencia dura del brazo `macos-latest`**: runner
+`macos-26-arm64`; "Verify deps" imprimió `GNU bash, version 3.2.57(1)-release (arm64-apple-darwin25)`
+para el bash del PATH Y `/bin/bash`; suite `1..1189`, **0 líneas `not ok`** → 1189/0 byte-idéntico a
+`ubuntu-latest` y a la medición local. **La matriz entera VERDE en CI real por primera vez.** Docs
+durables (CHANGELOG/README/constitución) y los internos de la feature actualizados `macos-13`→
+`macos-latest`. **ÚNICO PENDIENTE: T019 — mergear PR #83 a `main` (protegida), a la espera de la
+confirmación explícita del operador; no mergear sin ella.**
+
+**024-fix-session-restart-retire MERGED** (PR #82, merge `febe652` en main, 2026-07-25; branch desde
+main=`9b97654`, 2026-07-20; VERSION 0.15.0→**0.16.0**). Plan: `specs/024-fix-session-restart-retire/plan.md`. **BUG MEDIDO EN
 HARDWARE, VIVO EN MAIN, introducido por 022 y cazado por su propio gate T051**: un `systemctl restart`
 retira el puntero de una sesión VIVA y anuncia una nueva, matando el enlace del operador.
 `session_decide` (`scripts/lib/session_pointer.sh:212-224`) conserva solo si el marcador es `killed`,
@@ -195,10 +252,13 @@ diferencia del user-unit del gate de composición—:** `agent-session-check.sh:
 `claude[2118]` y pid nuevo `claude[500467]` reportan el mismo `session_01A1obgNuL2XkXLX7bdr6nQV`, y el
 `bridge-pointer.json` vivo apunta a ese — **el vendor reconectó a la misma sesión, no anunció una nueva**,
 lo contrario del bug de 022 (que el Jul 20 retiró el puntero; su `.retired.json` lleva otro `sessionId`).
-Marcador consumido por rename; `doctor` sin WARN de `ExecStop`. Falta solo la confirmación visual del
-operador desde el celular (la identidad del `sessionId` reconectado ya es prueba de alcance) y su go-ahead
-para mergear PR #82 (`main` protegida). Journal del user-unit no consultable en el arnés
-(`-- No entries --`); el del system-unit de producción sí.
+Marcador consumido por rename; `doctor` sin WARN de `ExecStop`. Journal del user-unit no consultable en
+el arnés (`-- No entries --`); el del system-unit de producción sí. **MERGEADO tras este gate** (squash
+`febe652`, `main` sincronizada y verificada: VERSION 0.16.0, `session_decide_cause`/`session_classify_stop`
+presentes, directiva ExecStop en el template y en el render de `setup.sh`, historia lineal 022→023→024) —
+SC-006 cumplido (el gate de hardware corrió ANTES del merge, por primera vez en tres features). Residual
+NO bloqueante: la confirmación visual del operador desde el celular (la identidad del `sessionId`
+reconectado ya es prueba de alcance). 023 T026 (medir ferrari) sigue abierta, sin relación con 024.
 
 **023-fix-render-ampersand MERGED** (PR #81, merge `9b97654` en main, 2026-07-19; branch rebasada
 sobre main=`ab4bb32` tras el merge de 022; VERSION 0.14.0→**0.15.0**). Plan:

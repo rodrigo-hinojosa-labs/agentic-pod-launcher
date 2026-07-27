@@ -32,6 +32,28 @@ Templates requiring updates:
 Follow-up TODOs: none. All placeholders resolved; dates set to 2026-06-18.
 -->
 
+<!--
+SYNC IMPACT REPORT (1.0.0 → 1.0.1)
+===================================
+Version change: 1.0.0 → 1.0.1
+Bump rationale: PATCH — clarification, no principle added/removed/redefined.
+  Feature 020 (2026-07-13) had already measured that the code requires no
+  bash-4-only construct and the suite runs correctly on macOS's stock 3.2,
+  correcting CLAUDE.md/README at the time — but this constitution's Platform
+  line still said "bash 4+", left uncorrected. Feature 025 (2026-07-26)
+  institutionalizes that reality by running the CI `tests` job in a matrix
+  across bash 3.2 (macos-latest) and bash 5.x (ubuntu-latest), so a constitution
+  that still claimed "4+" would openly contradict its own quality gate.
+
+Section changed:
+  Platform & Toolchain Constraints → "Host (launcher): bash 4+" → "bash 3.2+,
+  tested in both 3.2 (macOS stock) and 5.x (CI matrix, feature 025)".
+
+Templates requiring updates: none (no template references "bash 4+").
+
+Follow-up TODOs: none.
+-->
+
 # agentic-pod-launcher Constitution
 
 `agentic-pod-launcher` is a bash wizard that scaffolds self-contained, Dockerized
@@ -161,7 +183,8 @@ between duplicated pins is a latent bug; a deliberate, single-sourced pin makes
 
 ## Platform & Toolchain Constraints
 
-- **Host (launcher)**: `bash` 4+, `git`, `jq`, BSD/GNU `sed`; `yq` v4+
+- **Host (launcher)**: `bash` 3.2+, tested in both 3.2 (macOS stock) and 5.x (CI
+  matrix, feature 025); `git`, `jq`, BSD/GNU `sed`; `yq` v4+
   (auto-vendored to `scripts/vendor/bin/` when missing/old); `gum` optional with a
   non-gum `read`-based fallback in `scripts/lib/wizard.sh` (no gum-only behavior).
 - **Image**: Alpine-based, single-stage; UID/GID baked at build from the host;
@@ -211,4 +234,4 @@ in `modules/claude-md.tpl` and each agent's own `agent.yml`).
 - **Runtime guidance**: `CLAUDE.md` (repo root) remains the operational guide for
   working in this codebase and is read alongside this constitution.
 
-**Version**: 1.0.0 | **Ratified**: 2026-06-18 | **Last Amended**: 2026-06-18
+**Version**: 1.0.1 | **Ratified**: 2026-06-18 | **Last Amended**: 2026-07-26

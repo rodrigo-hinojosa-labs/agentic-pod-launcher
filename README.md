@@ -325,6 +325,21 @@ DOCKER_E2E=1 bats tests/docker-e2e-heartbeat.bats # opt-in: builds image + boots
 DOCKER_E2E=1 bats tests/docker-e2e-qmd.bats       # opt-in: real qmd index + embed inside the image
 ```
 
+The suite is hermetic: it never depends on the host actually having Claude Code or `bun`
+installed (`tests/helper.bash::install_claude_stub`/`install_bun_stub` plant deterministic
+fakes), so it passes the same way on a machine with neither. To reproduce that on your own
+box — or to debug a CI-only failure — neutralize `HOME` too, since a native Claude Code
+install leaves `~/.local/bin/claude` resolvable even with `claude` off PATH:
+
+```bash
+env -i PATH="/usr/bin:/bin:$(dirname "$(command -v bats)"):$(dirname "$(command -v yq)")" \
+  HOME="$(mktemp -d)" bats tests/
+```
+
+CI runs this same suite in a matrix across bash 5.x (`ubuntu-latest`) and bash 3.2
+(`macos-latest`'s stock `/bin/bash` 3.2.57, forced via `PATH=/bin:$PATH`) — the same floor
+the codebase has supported all along (see the bash note under Prerequisites above).
+
 ## Uninstall
 
 ```bash

@@ -99,8 +99,12 @@ YAML
   export QMD_CACHE_HOME="$BATS_TEST_TMPDIR/cache"; mkdir -p "$QMD_CACHE_HOME"
   export QMD_INDEX_STATE_FILE="$BATS_TEST_TMPDIR/qmd-index.json"   # absent → hash differs → not skipped
   local vault="$BATS_TEST_TMPDIR/vault"; mkdir -p "$vault"; printf '# n\nhi\n' > "$vault/a.md"
-  mkdir -p "$BATS_TEST_TMPDIR/bin"; printf '#!/bin/sh\nexit 0\n' > "$BATS_TEST_TMPDIR/bin/bunx"; chmod +x "$BATS_TEST_TMPDIR/bin/bunx"
-  PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+  # 025: _qmd_reindex_locked returns early at qmd_index.sh:544 ("bun
+  # unavailable — skip") BEFORE ever calling _qmd_run when `bun` isn't on
+  # PATH — the obsolete `bunx` stub this test used to seed never satisfied
+  # that guard (post-016 _qmd_run doesn't invoke bunx at all). A real `bun`
+  # stub is required for the _qmd_run override below to actually be reached.
+  PATH="$(install_bun_stub "$BATS_TEST_TMPDIR/bin"):$PATH"
   # stub the qmd invocation to fail with a secret-bearing stderr
   _qmd_run() { echo "qmd: fatal: config not found (sk-ant-oat01-LEAKME999)" >&2; return 1; }
   run _qmd_reindex_locked "$HEARTBEATCTL_WORKSPACE/agent.yml" "$vault"
@@ -116,8 +120,9 @@ YAML
   export QMD_CACHE_HOME="$BATS_TEST_TMPDIR/cache2"; mkdir -p "$QMD_CACHE_HOME"
   export QMD_INDEX_STATE_FILE="$BATS_TEST_TMPDIR/qmd-index2.json"
   local vault="$BATS_TEST_TMPDIR/vault2"; mkdir -p "$vault"; printf '# n\nhi\n' > "$vault/a.md"
-  mkdir -p "$BATS_TEST_TMPDIR/bin2"; printf '#!/bin/sh\nexit 0\n' > "$BATS_TEST_TMPDIR/bin2/bunx"; chmod +x "$BATS_TEST_TMPDIR/bin2/bunx"
-  PATH="$BATS_TEST_TMPDIR/bin2:$PATH"
+  # 025: same as above — a real `bun` stub is needed to pass the
+  # qmd_index.sh:544 guard so _qmd_reindex_locked reaches _qmd_run.
+  PATH="$(install_bun_stub "$BATS_TEST_TMPDIR/bin2"):$PATH"
   _qmd_run() { echo "boom" >&2; return 1; }
   _qmd_reindex_locked "$HEARTBEATCTL_WORKSPACE/agent.yml" "$vault" 2>/dev/null
   run jq -r '.last_status' "$QMD_INDEX_STATE_FILE"

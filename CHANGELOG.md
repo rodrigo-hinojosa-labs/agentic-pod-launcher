@@ -3,6 +3,47 @@
 ## [Unreleased]
 
 ### Fixed
+- **CI `tests` job stopped being permanently red — the suite is now hermetic
+  and runs in a bash 3.2/5.x matrix (`025-hermetic-ci-suite`)**: measured
+  (`gh run view --log-failed`) that the job failed on every commit to `main`
+  with exactly 16 `not ok`, not from a missing `claude` CLI as previously
+  believed, but from two classes of test that depended on whatever the host
+  happened to have installed. Test-only change — no production behavior,
+  `setup.sh`, or `scripts/lib/*.sh` touched; no VERSION bump (same precedent
+  as `019-fix-qmd-test-drift`).
+  - **Class 1 (14 tests)**: `deployment-mode.bats`, `local-vault-seed.bats`,
+    and one `regenerate.bats` test exercise `./setup.sh --regenerate` in local
+    mode with a bare `deployment.claude_cli: "claude"`. Feature 015's
+    `resolve_claude_bin` correctly refuses to emit a systemd unit it cannot
+    resolve to an absolute, executable path — on a clean runner (no `claude`
+    on PATH, no `~/.local/bin/claude`) `--regenerate` aborts as designed.
+  - **Class 2 (2 tests, `qmd-reindex-cmd.bats`)**: the spec's own hypothesis
+    (a subshell losing a stubbed `_qmd_run`) was measured and refuted. The
+    real cause is the `command -v bun` guard at `qmd_index.sh:544`, which
+    returns *before* the stubbed `_qmd_run` is ever reached when `bun` isn't
+    on PATH; the `bunx` fixture these tests planted was already dead code
+    post-016 (`_qmd_run` never invokes `bunx`).
+  - **Shared hermeticity seam.** New `tests/helper.bash::install_claude_stub`
+    / `install_bun_stub` plant a trivial, absolute, executable fake binary
+    per test. `resolve_claude_bin`'s Case 1 (already-absolute + executable)
+    resolves the stub *without consulting PATH*, so it is exercised even on a
+    dev host with a real `claude` installed — the suite can no longer pass
+    "by accident" on one machine and fail on another.
+  - **bash 3.2/5.x matrix.** `.github/workflows/test.yml` now runs `bats
+    tests/` on both `ubuntu-latest` (bash 5.x) and `macos-latest`, whose stock
+    `/bin/bash` is 3.2.57 — the same interpreter the dev-host suite has run
+    under all along, forced explicitly via `PATH=/bin:$PATH` rather than
+    assumed, with `bash --version` printed on every run (the observability
+    lesson from `023-fix-render-ampersand`, where the same commit was green
+    under one bash and red under another with nothing declaring which ran).
+    `macos-latest` (Apple Silicon, arm64) is used rather than `macos-13`: the
+    older image's runners never provisioned (measured ~1h queued, twice), while
+    `macos-latest` carries the same frozen `/bin/bash` 3.2.57; the yq install
+    step detects the arch (`uname -m`) to fetch the matching pinned binary.
+  - Constitution amended 1.0.0→1.0.1 (PATCH): the Platform line claimed
+    "bash 4+", already contradicted by measurement in `020-docs-refresh` and
+    now openly false once CI itself gates on bash 3.2.
+
 - **Restarting a local agent no longer kills the operator's live conversation
   (`024-fix-session-restart-retire`)**: measured on the mclaren host during
   022's own hardware gate, which ran *after* that feature merged — so the

@@ -16,6 +16,8 @@ setup() {
   cp "$REPO_ROOT/VERSION" "$TMP_TEST_DIR/" 2>/dev/null || true
   touch "$TMP_TEST_DIR/.env"
   mkdir -p "$TMP_TEST_DIR/.state"
+  # 025: deterministic claude_cli, independent of the host's real PATH/HOME.
+  CLAUDE_STUB=$(install_claude_stub)
 }
 
 teardown() { teardown_tmp_dir; }
@@ -27,7 +29,7 @@ _seed() {
 version: 1
 agent: {name: locbot, display_name: "L", role: "r", vibe: "v"}
 user: {name: A, nickname: A, timezone: UTC, email: a@b.com, language: en}
-deployment: {host: rpi5, workspace: "$TMP_TEST_DIR", install_service: false, claude_cli: claude, mode: local}
+deployment: {host: rpi5, workspace: "$TMP_TEST_DIR", install_service: false, claude_cli: "$CLAUDE_STUB", mode: local}
 docker: {image_tag: "x:latest", uid: 1000, gid: 1000, base_image: "alpine:3.20"}
 notifications: {channel: none}
 features: {heartbeat: {enabled: false, interval: "30m", timeout: 300, retries: 1, default_prompt: "ok"}}
@@ -81,7 +83,7 @@ _regen() { ( cd "$TMP_TEST_DIR" && echo 'n' | ./setup.sh --regenerate ); }
 version: 1
 agent: {name: locbot, display_name: "L", role: "r", vibe: "v"}
 user: {name: A, nickname: A, timezone: UTC, email: a@b.com, language: en}
-deployment: {host: rpi5, workspace: "$TMP_TEST_DIR", install_service: false, claude_cli: claude, mode: local}
+deployment: {host: rpi5, workspace: "$TMP_TEST_DIR", install_service: false, claude_cli: "$CLAUDE_STUB", mode: local}
 docker: {image_tag: "x:latest", uid: 1000, gid: 1000, base_image: "alpine:3.20"}
 notifications: {channel: none}
 features: {heartbeat: {enabled: false, interval: "30m", timeout: 300, retries: 1, default_prompt: "ok"}}
