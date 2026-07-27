@@ -25,7 +25,7 @@ Esta feature no tiene modelo de datos de dominio (es test-infra + CI). Las "enti
 ## Entidad: Brazo de matriz de bash (CI)
 
 - **Qué es**: una instancia parametrizada del job `tests` en `.github/workflows/test.yml`.
-- **Atributos**: `runner` (`ubuntu-latest` | `macos-13`), `bash_target` (`5.x` | `3.2`), `invocación` (`bats tests/` | `PATH=/bin:$PATH bats tests/`).
+- **Atributos**: `runner` (`ubuntu-latest` | `macos-latest`), `bash_target` (`5.x` | `3.2`), `invocación` (`bats tests/` | `PATH=/bin:$PATH bats tests/`).
 - **Invariantes**:
   - Cada brazo imprime `bash --version` antes de correr la suite (FR-007); el brazo 3.2 debe imprimir una versión que empieza con `3.2` (autoverificación, FR-006/SC-003).
   - Ambos brazos corren la MISMA suite sellada; ambos deben quedar verdes salvo skips nombrados explícitamente (FR-008).

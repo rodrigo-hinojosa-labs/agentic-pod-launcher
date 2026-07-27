@@ -46,7 +46,7 @@ git stash   # o checkout del árbol pre-feature
 ## 5. Verificar los dos brazos de CI (SC-001/SC-003)
 
 Tras el push de la rama, en la corrida del workflow `tests`:
-- Aparecen dos brazos: `bash 5.x` (ubuntu-latest) y `bash 3.2` (macos-13).
+- Aparecen dos brazos: `bash 5.x` (ubuntu-latest) y `bash 3.2` (macos-latest).
 - Cada brazo imprime `bash --version` en su log.
 - El brazo 3.2 muestra `GNU bash, version 3.2.x` (autoverificación; si mostrara 5.x, el cableado está mal).
 - Ambos terminan verdes (0 not ok), salvo skips nombrados explícitamente.

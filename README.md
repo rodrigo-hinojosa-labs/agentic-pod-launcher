@@ -337,8 +337,8 @@ env -i PATH="/usr/bin:/bin:$(dirname "$(command -v bats)"):$(dirname "$(command 
 ```
 
 CI runs this same suite in a matrix across bash 5.x (`ubuntu-latest`) and bash 3.2
-(`macos-13`'s stock `/bin/bash`) — the same floor the codebase has supported all along
-(see the bash note under Prerequisites above).
+(`macos-latest`'s stock `/bin/bash` 3.2.57, forced via `PATH=/bin:$PATH`) — the same floor
+the codebase has supported all along (see the bash note under Prerequisites above).
 
 ## Uninstall
 

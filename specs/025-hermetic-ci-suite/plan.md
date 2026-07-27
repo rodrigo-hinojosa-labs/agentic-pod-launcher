@@ -8,7 +8,7 @@
 
 El job `tests` de CI está rojo en cada commit de `main` por 16 tests no herméticos (medido 2026-07-26): 14 corren `./setup.sh --regenerate` en modo local y necesitan `claude` resoluble (post-015 `resolve_claude_bin`); 2 (`qmd-reindex-cmd.bats` 685/686) retornan temprano por el guard `command -v bun` (`qmd_index.sh:544`) antes del `_qmd_run` stubbeado. Además el CI corre en un solo bash (5.x), dejando viva la clase de defecto que 023 midió.
 
-Enfoque técnico (todo MEDIDO en Fase 0, ver [research.md](./research.md)): (1) sembrar un `claude` falso ejecutable a un path absoluto e inyectarlo en `deployment.claude_cli` de los tests de modo local, vía un helper compartido en `tests/helper.bash` — `resolve_claude_bin` Caso 1 lo resuelve sin mirar PATH, forzando el stub aun en un host con claude real; (2) sembrar un `bun` falso ejecutable en el PATH de 685/686 para que el guard `:544` pase; (3) reescribir `.github/workflows/test.yml` como matriz de dos brazos: `ubuntu-latest` (bash 5.x) y `macos-13` (bash 3.2.57, forzado con `PATH=/bin:$PATH`), cada uno imprimiendo `bash --version`. CERO cambio de runtime de producción.
+Enfoque técnico (todo MEDIDO en Fase 0, ver [research.md](./research.md)): (1) sembrar un `claude` falso ejecutable a un path absoluto e inyectarlo en `deployment.claude_cli` de los tests de modo local, vía un helper compartido en `tests/helper.bash` — `resolve_claude_bin` Caso 1 lo resuelve sin mirar PATH, forzando el stub aun en un host con claude real; (2) sembrar un `bun` falso ejecutable en el PATH de 685/686 para que el guard `:544` pase; (3) reescribir `.github/workflows/test.yml` como matriz de dos brazos: `ubuntu-latest` (bash 5.x) y `macos-latest` (bash 3.2.57, forzado con `PATH=/bin:$PATH`), cada uno imprimiendo `bash --version`. CERO cambio de runtime de producción.
 
 ## Technical Context
 
@@ -20,7 +20,7 @@ Enfoque técnico (todo MEDIDO en Fase 0, ver [research.md](./research.md)): (1) 
 
 **Testing**: `bats tests/` host-runnable; oráculo de hermeticidad = correr con PATH podado sin `claude`/`bun`.
 
-**Target Platform**: Runners hospedados por GitHub (`ubuntu-latest`, `macos-13`) + host dev macOS/Linux.
+**Target Platform**: Runners hospedados por GitHub (`ubuntu-latest`, `macos-latest`) + host dev macOS/Linux.
 
 **Project Type**: CLI/bash launcher (single project).
 
@@ -74,7 +74,7 @@ tests/
 └── qmd-reindex-cmd.bats       # 685/686 siembran un bun falso (guard :544)
 
 .github/workflows/
-└── test.yml                  # matriz: ubuntu-latest (5.x) + macos-13 (3.2 via PATH=/bin:$PATH)
+└── test.yml                  # matriz: ubuntu-latest (5.x) + macos-latest (3.2 via PATH=/bin:$PATH)
 
 .specify/memory/constitution.md  # (opcional) enmienda PATCH "bash 3.2+, probado en ambos"
 CHANGELOG.md                   # entrada de la feature (SIN bump de VERSION, precedente 019)

@@ -30,12 +30,16 @@
     dev host with a real `claude` installed — the suite can no longer pass
     "by accident" on one machine and fail on another.
   - **bash 3.2/5.x matrix.** `.github/workflows/test.yml` now runs `bats
-    tests/` on both `ubuntu-latest` (bash 5.x) and `macos-13`, whose stock
+    tests/` on both `ubuntu-latest` (bash 5.x) and `macos-latest`, whose stock
     `/bin/bash` is 3.2.57 — the same interpreter the dev-host suite has run
     under all along, forced explicitly via `PATH=/bin:$PATH` rather than
     assumed, with `bash --version` printed on every run (the observability
     lesson from `023-fix-render-ampersand`, where the same commit was green
     under one bash and red under another with nothing declaring which ran).
+    `macos-latest` (Apple Silicon, arm64) is used rather than `macos-13`: the
+    older image's runners never provisioned (measured ~1h queued, twice), while
+    `macos-latest` carries the same frozen `/bin/bash` 3.2.57; the yq install
+    step detects the arch (`uname -m`) to fetch the matching pinned binary.
   - Constitution amended 1.0.0→1.0.1 (PATCH): the Platform line claimed
     "bash 4+", already contradicted by measurement in `020-docs-refresh` and
     now openly false once CI itself gates on bash 3.2.

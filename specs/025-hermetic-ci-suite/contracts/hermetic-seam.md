@@ -26,7 +26,7 @@
 ## Brazo de matriz de CI (`.github/workflows/test.yml`)
 
 **Contrato del workflow**:
-- `strategy.matrix` con al menos dos entradas: `{ runner: ubuntu-latest, name: "bash 5.x" }` y `{ runner: macos-13, name: "bash 3.2" }`.
+- `strategy.matrix` con al menos dos entradas: `{ runner: ubuntu-latest, name: "bash 5.x" }` y `{ runner: macos-latest, name: "bash 3.2" }`.
 - `runs-on: ${{ matrix.runner }}`.
 - Paso obligatorio ANTES de correr la suite: imprimir `bash --version` (y, en el brazo 3.2, `/bin/bash --version`) → FR-007.
 - Brazo 5.x: `bats --print-output-on-failure tests/`.

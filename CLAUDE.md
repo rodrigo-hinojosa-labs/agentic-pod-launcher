@@ -164,25 +164,30 @@ nativo — `resolve_claude_bin` Caso 4 encuentra `$HOME/.local/bin/claude` igual
 en 3.2.57 (`PATH=/bin:$PATH`), byte-idéntico** (1183 base + 6 nuevos). **Mutación confirmada**
 (`git stash` del cableado): reaparecen los 16 `not ok` byte-idénticos a la RED; restaurado. **SC-004
 confirmado**: `git diff` fuera de `tests/`+`specs/` está vacío — cero archivo de runtime tocado.
-`.github/workflows/test.yml` reescrito como matriz `ubuntu-latest`(5.x)/`macos-13`(3.2 vía
+`.github/workflows/test.yml` reescrito como matriz `ubuntu-latest`(5.x)/`macos-latest`(3.2.57 arm64 vía
 `PATH=/bin:$PATH`), cada brazo imprime `bash --version`; un bug de YAML propio (`:` sin comillas en
 un nombre de step) detectado y corregido antes de commitear. Constitución **enmendada 1.0.0→1.0.1**
 ("bash 4+"→"bash 3.2+, tested in both"). `shellcheck.yml` confirmado que EXCLUYE `tests/*` por
 diseño → cero archivo de esta feature entra a ese gate; corrido el comando exacto de CI igual,
 `rc=0`. CHANGELOG con entrada, **sin bump de VERSION**. README gana un puntero de repro hermético
-(comando `env -i` verificado copy-paste-funcional). **PR #83 ABIERTO (sin mergear) y GATE PARCIAL CONFIRMADO EN CI REAL**: el commit `eb49524` (14
-archivos, SIN el cambio de `test.yml`) se empujó y disparó un run real de GitHub Actions —
-**`tests` en `ubuntu-latest` salió VERDE por primera vez en la historia del repo** (`1189 ok / 0 not
-ok`, run 30221199153, byte-idéntico a la medición local); `shellcheck` también verde; PR
-`mergeStateStatus: CLEAN`/`MERGEABLE`. **BLOQUEO real, no resuelto**: el token de `gh` activo
-(`rodrigo-hinojosa`) tiene scopes `admin:public_key,gist,read:org,repo` — SIN `workflow` — así que
-GitHub rechaza cualquier push que toque `.github/workflows/*.yml` ("refusing to allow an OAuth App
-to create or update workflow ... without `workflow` scope"). La cuenta alterna
-(`rodrigo-hinojosa_cencosud`) SÍ tiene `workflow` pero no tiene acceso a este repo privado.
-`gh auth refresh --scopes workflow` exige un flujo OAuth interactivo por navegador — no ejecutable
-sin el operador. La matriz de bash 3.2/5.x (`.github/workflows/test.yml`) quedó modificada en el
-árbol de trabajo, SIN commitear, a la espera de esa autorización; T013 (brazo 3.2) y T019 (merge)
-siguen pendientes.
+(comando `env -i` verificado copy-paste-funcional). **PR #83 ABIERTO (sin mergear) — GATE DE CI
+COMPLETO Y VERDE EN AMBOS BRAZOS (2026-07-27, run 30226974940, commit `0e690a8`)**, cerrando T013.
+Historia del desbloqueo: el commit `eb49524` (14 archivos, SIN `test.yml`) ya había dado
+`ubuntu-latest` VERDE (`1189 ok / 0 not ok`, run 30221199153) — primera vez en la historia del repo.
+El scope `workflow` que GitHub exige para pushear `.github/workflows/*.yml` FALTABA en la cuenta
+`rodrigo-hinojosa`; **lo autorizó el operador con su cuenta personal vía device-flow**
+(`gh auth refresh --scopes workflow`), y la matriz se commiteó (`b616f07`) y pusheó. **PIVOTE DE
+RUNNER MEDIDO**: el brazo `macos-13` quedó **atascado en cola ~1h en DOS intentos, sin aprovisionar
+jamás** (imagen en retiro por GitHub). Como el requisito real es bash 3.2.57 —no la etiqueta del
+runner, y Apple lo congeló en `/bin/bash` en TODA versión de macOS, incluido Apple Silicon— se movió
+a `macos-latest` (commit `0e690a8`), que aprovisionó de inmediato; el paso de yq se volvió arch-aware
+(`uname -m` → `yq_darwin_arm64`, sin Rosetta). **Evidencia dura del brazo `macos-latest`**: runner
+`macos-26-arm64`; "Verify deps" imprimió `GNU bash, version 3.2.57(1)-release (arm64-apple-darwin25)`
+para el bash del PATH Y `/bin/bash`; suite `1..1189`, **0 líneas `not ok`** → 1189/0 byte-idéntico a
+`ubuntu-latest` y a la medición local. **La matriz entera VERDE en CI real por primera vez.** Docs
+durables (CHANGELOG/README/constitución) y los internos de la feature actualizados `macos-13`→
+`macos-latest`. **ÚNICO PENDIENTE: T019 — mergear PR #83 a `main` (protegida), a la espera de la
+confirmación explícita del operador; no mergear sin ella.**
 
 **024-fix-session-restart-retire MERGED** (PR #82, merge `febe652` en main, 2026-07-25; branch desde
 main=`9b97654`, 2026-07-20; VERSION 0.15.0→**0.16.0**). Plan: `specs/024-fix-session-restart-retire/plan.md`. **BUG MEDIDO EN

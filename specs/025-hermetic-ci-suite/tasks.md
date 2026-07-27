@@ -71,14 +71,20 @@ runner macOS + `PATH=/bin:$PATH`.
       sin comillas en un nombre de step rompía el parseo) detectado y corregido antes de commitear.
 - [X] T012 [US2] Proxy local confirmado: suite COMPLETA bajo `PATH=/bin:$PATH` (3.2.57) → **1189 ok / 0
       not ok**, byte-idéntico al resultado bajo 5.x (T008). Cero skips necesarios.
-- [~] T013 [US2] **GATE de CI parcial CONFIRMADO en PR real #83 (2026-07-26, run 30221199153)**: el
-      job `tests` en `ubuntu-latest` (bash 5.x) salió **VERDE por primera vez en la historia del repo**
-      — `1189 ok / 0 not ok`, byte-idéntico a la medición local. `shellcheck` también verde. PR
-      `mergeStateStatus: CLEAN`. **BLOQUEADO para el brazo 3.2/macOS**: el token de `gh` en uso carece
-      del scope `workflow` que GitHub exige para tocar `.github/workflows/*.yml` (rechazo medido:
-      "refusing to allow an OAuth App to... without `workflow` scope"); `gh auth refresh` requiere
-      autorización interactiva por navegador que solo el operador puede completar. El cambio de matriz
-      quedó separado, sin commitear a esta rama, a la espera de esa autorización.
+- [X] T013 [US2] **GATE de CI COMPLETO y VERDE en PR real #83 — LA MATRIZ ENTERA (2026-07-27, run
+      30226974940, commit `0e690a8`)**: ambos brazos `success`. `ubuntu-latest` (bash 5.x): `1189 ok /
+      0 not ok`. `macos-latest` (bash 3.2): el paso "Verify deps" imprimió `GNU bash, version
+      3.2.57(1)-release (arm64-apple-darwin25)` para el bash del PATH Y para `/bin/bash`, y la suite dio
+      `1..1189` con **0 líneas `not ok`** → 1189/0, byte-idéntico a la medición local. Es la primera
+      vez en la historia del repo que la matriz completa sale verde en CI real.
+      **PIVOTE DE RUNNER medido durante la implementación (macos-13 → macos-latest, commit `0e690a8`)**:
+      el brazo `macos-13` original quedó **atascado en cola ~1h en DOS intentos, sin aprovisionar jamás**
+      (imagen en retiro por GitHub, runners escasos). Como el requisito real es bash 3.2.57 —no la etiqueta
+      del runner— y Apple congeló `/bin/bash` en 3.2.57 en TODA versión de macOS (incluido Apple Silicon),
+      se movió a `macos-latest`, que aprovisionó de inmediato y confirmó 3.2.57 arm64. `macos-latest` es
+      arm64: el paso de yq detecta la arch (`uname -m`) y baja el binario pinneado correcto
+      (`yq_darwin_arm64`), sin Rosetta. El desbloqueo del scope `workflow` (T013 previo) lo hizo el operador
+      con su cuenta personal vía device-flow.
 
 ---
 

@@ -42,7 +42,7 @@ Bump rationale: PATCH — clarification, no principle added/removed/redefined.
   correcting CLAUDE.md/README at the time — but this constitution's Platform
   line still said "bash 4+", left uncorrected. Feature 025 (2026-07-26)
   institutionalizes that reality by running the CI `tests` job in a matrix
-  across bash 3.2 (macos-13) and bash 5.x (ubuntu-latest), so a constitution
+  across bash 3.2 (macos-latest) and bash 5.x (ubuntu-latest), so a constitution
   that still claimed "4+" would openly contradict its own quality gate.
 
 Section changed:
