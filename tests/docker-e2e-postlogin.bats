@@ -142,3 +142,54 @@ CL
   [ "$tg" -eq 1 ]
   [ "$cm" -eq 1 ]
 }
+
+# Feature 026 (DOCKER_E2E): the operator's CHANNEL_HEALTH_TIMEOUT override lives
+# in the workspace .env and must reach the container watchdog via env_file. The
+# verify-timeout LOGIC is unit-covered host-side in start-services-watchdog.bats;
+# this proves the .env → env_file delivery chain end-to-end.
+@test "channel timeout: CHANNEL_HEALTH_TIMEOUT from .env reaches the container (feature 026)" {
+  mkdir -p "$DEST"
+  cat > "$DEST/agent.yml" <<YML
+version: 1
+agent: {name: $AGENT_NAME, display_name: "chtimeout e2e", role: "test", vibe: "terse"}
+user: {name: "Tester", nickname: "Tester", timezone: "UTC", email: "t@e.x", language: "en"}
+deployment: {host: "test", workspace: "$DEST", install_service: false, claude_cli: "claude"}
+docker: {image_tag: "agent-admin:chtimeout-e2e", uid: $(id -u), gid: $(id -g), state_volume: "${AGENT_NAME}-state", base_image: "alpine:3.24.1"}
+claude: {config_dir: "/home/agent/.claude", profile_new: true}
+notifications: {channel: none}
+features:
+  heartbeat: {enabled: true, interval: "30m", timeout: 30, retries: 0, default_prompt: "echo pong"}
+mcps: {defaults: [], atlassian: [], github: {enabled: false, email: ""}}
+vault: {enabled: false}
+plugins: ["telegram@claude-plugins-official"]
+YML
+  cp -R "$REPO_ROOT/modules" "$REPO_ROOT/scripts" "$REPO_ROOT/docker" "$DEST/"
+  cp "$REPO_ROOT/setup.sh" "$DEST/"; chmod +x "$DEST/setup.sh"
+  (cd "$DEST" && ./setup.sh --regenerate --non-interactive)
+  # The override the operator would add by hand.
+  printf 'CHANNEL_HEALTH_TIMEOUT=45\n' > "$DEST/.env"; chmod 0600 "$DEST/.env"
+  # Idle claude stub so the watchdog keeps a live tmux session.
+  python3 - "$DEST/docker-compose.yml" <<'PY'
+import sys
+path = sys.argv[1]; txt = open(path).read()
+needle = '      - ./:/workspace'
+inject = '      - ./bin/claude:/usr/local/bin/claude:ro'
+if inject not in txt:
+    txt = txt.replace(needle, needle + '\n' + inject, 1)
+open(path, 'w').write(txt)
+PY
+  mkdir -p "$DEST/bin"
+  printf '#!/bin/bash\nexec sleep 86400\n' > "$DEST/bin/claude"; chmod +x "$DEST/bin/claude"
+  (cd "$DEST" && docker compose build)
+  (cd "$DEST" && docker compose up -d)
+  # 2>/dev/null so a compose warning on stderr can't contaminate $output.
+  in_container() { (cd "$DEST" && docker compose exec -T -u agent "$AGENT_NAME" "$@" 2>/dev/null); }
+  sleep 10
+  # (a) the .env override reached the container environment via env_file.
+  run in_container printenv CHANNEL_HEALTH_TIMEOUT
+  [ "$status" -eq 0 ]
+  [ "$output" = "45" ]
+  # (b) the baked watchdog carries the configurable helper, not the old 20s literal.
+  run in_container grep -c 'channel_health_timeout' /opt/agent-admin/scripts/start_services.sh
+  [ "$output" -ge 1 ]
+}

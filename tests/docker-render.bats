@@ -158,8 +158,9 @@ teardown() { teardown_tmp_dir; }
   [[ "$content" == *"verify_channel_healthy"* ]]
   [[ "$content" == *"bun server.ts"* ]]
   # start_session must kill the tmux session when verify fails so the
-  # watchdog picks it up as a crash and respawns with fresh state.
-  [[ "$content" == *"never appeared within 20s"* ]]
+  # watchdog picks it up as a crash and respawns with fresh state. The WARN
+  # names the effective timeout (feature 026, FR-005), not a hardcoded 20s.
+  [[ "$content" == *'never appeared within $(channel_health_timeout)s'* ]]
 }
 
 @test "start_services.sh pre-accepts bypass dialog before every session launch" {

@@ -3,6 +3,21 @@
 ## [Unreleased]
 
 ### Fixed
+- **Docker agents stopped flapping at boot when the channel plugin is slow to
+  start — the watchdog's channel health-check timeout is now configurable
+  (`026-channel-watchdog-timeout`)**: `verify_channel_healthy` waited a
+  hardcoded 20s for `bun server.ts` after a `--channels` launch
+  (`docker/scripts/start_services.sh`); under MCP contention on a slow host
+  (measured on a Raspberry Pi 5 with ~7 MCPs, where the plugin took ~22-25s to
+  appear) it lost the race on every boot, so the watchdog killed and respawned
+  the session in a permanent loop. The wait now defaults to **60s** and is
+  overridable via `CHANNEL_HEALTH_TIMEOUT` (seconds) in the workspace `.env`,
+  delivered to the container by `env_file` (same channel as
+  `TELEGRAM_TYPING_MAX_MS`); an absent/empty/non-numeric/`<=0` value degrades to
+  60. The watchdog's WARN log now names the effective value, and an override
+  `>=65s` logs a boot warning that the crash budget may no longer escalate a
+  genuinely-dead channel to a container restart. Docker-only; no `agent.yml`,
+  schema, or render change. VERSION 0.16.0 → 0.17.0.
 - **CI `tests` job stopped being permanently red — the suite is now hermetic
   and runs in a bash 3.2/5.x matrix (`025-hermetic-ci-suite`)**: measured
   (`gh run view --log-failed`) that the job failed on every commit to `main`

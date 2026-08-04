@@ -716,10 +716,42 @@ _channel_plugin_ready() {
 #     prompt we couldn't pre-accept),
 #   - bun cached stale channel state from a previous boot, or
 #   - the plugin MCP failed to init and its retry loop got wedged.
+# Resolve the channel-plugin health-check timeout (seconds). Default 60s
+# (embedded); an operator can override it via CHANNEL_HEALTH_TIMEOUT in the
+# workspace .env, delivered to the container by docker-compose env_file, the
+# same path as TELEGRAM_TYPING_MAX_MS. An absent/empty/non-numeric, over-6-digit
+# (implausibly large), or <=0 value falls back to 60. Read at call time so tests
+# can override by environment and so the value stays single-sourced between
+# verify_channel_healthy and the log.
+channel_health_timeout() {
+  local t="${CHANNEL_HEALTH_TIMEOUT:-}"
+  if ! [[ "$t" =~ ^[0-9]{1,6}$ ]] || [ "$t" -le 0 ]; then
+    t=60
+  fi
+  printf '%s\n' "$t"
+}
+
+# Warn once at boot when the resolved channel timeout is long enough to erode the
+# crash budget's ability to escalate a genuinely-dead channel to a container
+# restart. A sustained failure cycle costs ~T+5s, so MAX_CRASHES of them fit
+# WINDOW only while T stays under the break-even (WINDOW/(MAX_CRASHES-1) - 5,
+# ~70s with the defaults); we warn a little before that. No cap — the operator's
+# value is used as-is (feature 026, decision D).
+warn_if_channel_timeout_risky() {
+  local t breakeven
+  t="$(channel_health_timeout)"
+  breakeven=$(( WINDOW / (MAX_CRASHES - 1) - 5 ))
+  if [ "$t" -ge $(( breakeven - 5 )) ]; then
+    log "WARN: CHANNEL_HEALTH_TIMEOUT=${t}s — at/near this length ${MAX_CRASHES} consecutive channel failures stop fitting the crash-budget window (${WINDOW}s), so the container may not escalate to a restart. Intentional; the value is used as-is."
+  fi
+}
+
 # In any of those cases the right move is to kill the session and let the
-# watchdog respawn with fresh state. We give it up to 20s.
+# watchdog respawn with fresh state. We wait channel_health_timeout seconds
+# (default 60, override via CHANNEL_HEALTH_TIMEOUT in the workspace .env).
 verify_channel_healthy() {
-  local timeout=20
+  local timeout
+  timeout="$(channel_health_timeout)"
   local elapsed=0
   while [ "$elapsed" -lt "$timeout" ]; do
     if pgrep -f "bun server.ts" >/dev/null 2>&1; then
@@ -757,7 +789,7 @@ start_session() {
 
   if [[ "$cmd" == *"--channels "* ]]; then
     if ! verify_channel_healthy; then
-      log "WARN: --channels launched but bun server.ts never appeared within 20s — killing for respawn"
+      log "WARN: --channels launched but bun server.ts never appeared within $(channel_health_timeout)s — killing for respawn"
       tmux kill-session -t "$SESSION" 2>/dev/null || true
       return 1
     fi
@@ -1190,6 +1222,8 @@ _run_watchdog() {
 
 main() {
   boot_side_effects
+
+  warn_if_channel_timeout_risky
 
   log "starting tmux session '$SESSION'"
   if ! start_session; then
