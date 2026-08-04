@@ -134,7 +134,7 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
-**026-channel-watchdog-timeout — IMPLEMENTADO (pendiente de commit)** (rama
+**026-channel-watchdog-timeout — PR #86 ABIERTO contra main (sin mergear)** (commit `e312b82`, rama
 `026-channel-watchdog-timeout` desde main=`cebd8b7`, VERSION 0.16.0→**0.17.0** hecho). Plan:
 `specs/026-channel-watchdog-timeout/plan.md`. **BUG MEDIDO EN FERRARI (2026-08-02, tras el upgrade a
 v0.16.0):** el watchdog `verify_channel_healthy` (`docker/scripts/start_services.sh`) tenía
@@ -162,8 +162,8 @@ sourcean `verify_channel_healthy` con `START_SERVICES_NO_RUN=1` + stub `pgrep`/`
 del regex acotado; `unset` en un test; orden del párrafo README; `2>/dev/null` en el e2e). Docs
 README/CLAUDE.md/architecture.md/CHANGELOG (NO `env-example.tpl`). Retiro del override de ferrari
 planificado post-deploy (preservar `CHANNEL_HEALTH_TIMEOUT=90`; ver `quickstart.md` §3). DOCKER_E2E real
-diferido a un host Docker. Fase spec-kit: **specify+clarify+plan+tasks+implement completos; pendiente
-commit + PR + merge (main protegida) + despliegue.**
+diferido a un host Docker. Fase spec-kit: **specify+clarify+plan+tasks+implement completos; commit
+`e312b82` + push + PR #86 ABIERTO contra main; pendiente merge (main protegida) + despliegue.**
 
 **025-hermetic-ci-suite MERGED** (PR #83, squash `bb85914` en main, 2026-07-27; branch desde
 main=`febe652`+doc local `b6acbf3`, 2026-07-26; **VERSION sin cambio en 0.16.0** — tests-only,
