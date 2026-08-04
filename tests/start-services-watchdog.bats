@@ -317,3 +317,113 @@ STUB
   [ "$(jq -r '.skipDangerousModePermissionPrompt' "$HOME/.claude/settings.json")" = "true" ]
   [ "$(jq -r '.permissions.defaultMode' "$HOME/.claude/settings.json")" = "auto" ]
 }
+
+# ── 026-channel-watchdog-timeout: configurable channel verify timeout ──
+# verify_channel_healthy's wait was hardcoded to 20s (start_services.sh:722),
+# flapping the boot when bun server.ts takes longer under MCP contention.
+# CHANNEL_HEALTH_TIMEOUT (from the workspace .env) makes it configurable;
+# channel_health_timeout() resolves it with a 60s default + safe degradation.
+
+@test "channel_health_timeout defaults to 60 when unset/empty/non-numeric/<=0" {
+  unset CHANNEL_HEALTH_TIMEOUT
+  run channel_health_timeout
+  [ "$output" -eq 60 ]
+  CHANNEL_HEALTH_TIMEOUT="" run channel_health_timeout
+  [ "$output" -eq 60 ]
+  CHANNEL_HEALTH_TIMEOUT="abc" run channel_health_timeout
+  [ "$output" -eq 60 ]
+  CHANNEL_HEALTH_TIMEOUT="1.5" run channel_health_timeout
+  [ "$output" -eq 60 ]
+  CHANNEL_HEALTH_TIMEOUT="-5" run channel_health_timeout
+  [ "$output" -eq 60 ]
+  CHANNEL_HEALTH_TIMEOUT="0" run channel_health_timeout
+  [ "$output" -eq 60 ]
+}
+
+@test "channel_health_timeout echoes a valid positive integer verbatim" {
+  CHANNEL_HEALTH_TIMEOUT="20" run channel_health_timeout
+  [ "$output" -eq 20 ]
+  CHANNEL_HEALTH_TIMEOUT="45" run channel_health_timeout
+  [ "$output" -eq 45 ]
+  CHANNEL_HEALTH_TIMEOUT="90" run channel_health_timeout
+  [ "$output" -eq 90 ]
+}
+
+# Seam: a fake pgrep that "finds bun server.ts" only on its K-th call, plus a
+# no-op sleep, both shadowing the real commands via PATH (same pattern as the
+# channel_plugin_alive tests above). Drives verify_channel_healthy's loop to a
+# chosen elapsed without burning wall-clock. pgrep runs at elapsed=2*(n-1), so
+# K=12 lands at elapsed=22 — past the old 20s cap, inside the new 60s default.
+_stub_pgrep_after() {
+  local k="$1"
+  mkdir -p "$TMP_TEST_DIR/bin"
+  : > "$TMP_TEST_DIR/pgrep.count"
+  cat > "$TMP_TEST_DIR/bin/pgrep" <<STUB
+#!/bin/bash
+c=\$(cat "$TMP_TEST_DIR/pgrep.count" 2>/dev/null || echo 0)
+c=\$((c + 1))
+echo "\$c" > "$TMP_TEST_DIR/pgrep.count"
+[ "\$c" -ge $k ] && exit 0
+exit 1
+STUB
+  printf '#!/bin/bash\nexit 0\n' > "$TMP_TEST_DIR/bin/sleep"
+  chmod +x "$TMP_TEST_DIR/bin/pgrep" "$TMP_TEST_DIR/bin/sleep"
+}
+
+@test "verify_channel_healthy: channel at elapsed=22s passes with 60s default, fails when capped at 20" {
+  _stub_pgrep_after 12
+  unset CHANNEL_HEALTH_TIMEOUT
+  PATH="$TMP_TEST_DIR/bin:$PATH" run verify_channel_healthy
+  [ "$status" -eq 0 ]
+  : > "$TMP_TEST_DIR/pgrep.count"
+  CHANNEL_HEALTH_TIMEOUT=20 PATH="$TMP_TEST_DIR/bin:$PATH" run verify_channel_healthy
+  [ "$status" -ne 0 ]
+}
+
+@test "verify_channel_healthy: returns 1 without sleeping the full timeout when bun never appears" {
+  _stub_pgrep_after 9999
+  local start end
+  start=$(date +%s)
+  CHANNEL_HEALTH_TIMEOUT=60 PATH="$TMP_TEST_DIR/bin:$PATH" run verify_channel_healthy
+  end=$(date +%s)
+  [ "$status" -ne 0 ]
+  [ $((end - start)) -lt 3 ]
+}
+
+# Characterization of the crash-budget interaction (research (h)): a sustained
+# channel-failure cycle costs ~T+5s. The 5th crash must land within WINDOW=300
+# for the budget to fire and escalate to a container restart. This holds at the
+# 60s default but breaks for overrides >=70s — which is why the WARN below
+# exists. Uses the existing crash_budget_check with synthetic timestamps.
+@test "crash budget: 5 failures fit the window at the 60s default (fires) but not at 90s (backstop lost)" {
+  # T=60 → cadence 65 → 5 crashes at 0..260, all within 300 of now=260 → fires.
+  run crash_budget_check 260 "0 65 130 195 260"
+  [ "$status" -ne 0 ]
+  # T=90 → cadence 95 → 5th crash at 380; oldest (0) is >300s back → only 4 in
+  # window → budget does NOT fire (indefinite flap instead of a clean restart).
+  run crash_budget_check 380 "0 95 190 285 380"
+  [ "$status" -eq 0 ]
+}
+
+@test "warn_if_channel_timeout_risky: silent for the 60s default, warns for an override past the threshold" {
+  unset CHANNEL_HEALTH_TIMEOUT
+  run warn_if_channel_timeout_risky
+  [ -z "$output" ]
+  export CHANNEL_HEALTH_TIMEOUT=90
+  run warn_if_channel_timeout_risky
+  [ -n "$output" ]
+  [[ "$output" == *"crash"* ]]
+}
+
+# US2 acceptance: a freshly-deployed agent with no CHANNEL_HEALTH_TIMEOUT set
+# must NOT flap — the default is 60, not the old 20, so the ~22s contention
+# peak is tolerated; an invalid override degrades to the same 60.
+@test "US2: default (unset) tolerates the 22s contention peak; invalid override degrades to 60" {
+  _stub_pgrep_after 12
+  unset CHANNEL_HEALTH_TIMEOUT
+  PATH="$TMP_TEST_DIR/bin:$PATH" run verify_channel_healthy
+  [ "$status" -eq 0 ]
+  : > "$TMP_TEST_DIR/pgrep.count"
+  CHANNEL_HEALTH_TIMEOUT=notanum PATH="$TMP_TEST_DIR/bin:$PATH" run verify_channel_healthy
+  [ "$status" -eq 0 ]
+}

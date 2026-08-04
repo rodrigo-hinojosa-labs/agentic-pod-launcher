@@ -116,6 +116,8 @@ The agent ships with the `claude-plugins-official/telegram` channel plugin enabl
 
 All four hooks are idempotent (each guarded by a marker comment) and fail-silent if any anchor in the upstream plugin source drifts — the plugin keeps its default behavior in that case.
 
+Separately, the supervisor guards the channel's **boot health check**: after a `--channels` launch it waits for the plugin's `bun server.ts` to come up before marking the session healthy, and kills + respawns the session if it never appears. That wait defaults to **60 seconds** and is tunable with the `CHANNEL_HEALTH_TIMEOUT` env var (seconds) in the workspace `.env` — raise it on a slow host or one running many MCPs, where the plugin can take longer to start under boot contention (a hardcoded 20s used to flap such hosts in a permanent restart loop). An absent or invalid value falls back to 60; a value of `65` or higher logs a boot warning that the container's crash budget may no longer escalate a genuinely-dead channel to a restart.
+
 For the silent-stuck case where the bun process is alive but its MCP notifications stop reaching Claude (an upstream-bridge bug), `heartbeatctl kick-channel` forces a clean respawn of the channel session.
 
 ### Heartbeat with structured observability (docker mode)

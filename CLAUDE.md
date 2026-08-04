@@ -74,6 +74,8 @@ Polls every 2s. Three failure modes it handles:
 
 Crash budget: 5 crashes per 300s window → exit. Docker restarts the container, restarting the budget. There used to be a "bridge watchdog" that detected the silent-stuck case (bun alive but MCP notifications dropped); it was reverted in commit `ebfe35f` because tmux pane scraping produced too many false positives. Manual recovery for that case is `heartbeatctl kick-channel`. **Don't re-add automated detection for this without solving the false-positive problem first** — it killed sessions every ~2 minutes during normal operation.
 
+After a `--channels` launch the watchdog first waits for `bun server.ts` to appear before marking the session healthy (`verify_channel_healthy`). Since `026-channel-watchdog-timeout` (v0.17.0) that wait is **not** hardcoded: it defaults to 60s and is overridable via `CHANNEL_HEALTH_TIMEOUT` (seconds) in the workspace `.env` (delivered by compose `env_file`, same channel as `TELEGRAM_TYPING_MAX_MS`), resolved at call time by `channel_health_timeout()` (absent/invalid → 60). The old hardcoded 20s flapped ferrari at boot (bun took ~22-25s under MCP contention). **The timeout interacts with the crash budget**: a sustained failure cycle costs ~T+5s, so 5 failures only fit the 300s window while T stays under ~70s; the default 60 is safe, and `warn_if_channel_timeout_risky` logs a boot WARN once for an override `≥65s` (no cap — the operator's value is used as-is). Docker-only; `start_services.sh` is image-baked, not mirrored to `scripts/lib/`.
+
 ### Heartbeat data contract
 
 `scripts/heartbeat/heartbeat.sh` (workspace-templated, runs as agent under crond) emits per-tick:
@@ -132,6 +134,37 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
+**026-channel-watchdog-timeout — IMPLEMENTADO (pendiente de commit)** (rama
+`026-channel-watchdog-timeout` desde main=`cebd8b7`, VERSION 0.16.0→**0.17.0** hecho). Plan:
+`specs/026-channel-watchdog-timeout/plan.md`. **BUG MEDIDO EN FERRARI (2026-08-02, tras el upgrade a
+v0.16.0):** el watchdog `verify_channel_healthy` (`docker/scripts/start_services.sh`) tenía
+`local timeout=20` hardcodeado; bajo contención de ~7 MCPs al arrancar, `bun server.ts` tarda ~22-25s
+en aparecer (medido: ~3s en calma) → el watchdog lo mata y respawnea → **flapeo permanente**
+(RestartCount 14→53, NO OOM). Workaround VIVO en ferrari: `docker-compose.override.yml` monta un
+`start_services.sh` parcheado a `timeout=90` (`.override/`, bind-mount). **FIX (docker-only, el script
+es image-baked `Dockerfile:231`, sin mirror):** helper `channel_health_timeout()` (`:726`) lee
+`CHANNEL_HEALTH_TIMEOUT` del `.env` del workspace (`env_file` de `docker-compose.yml.tpl:67`, patrón
+`TELEGRAM_TYPING_MAX_MS`), **default 60s** embebido, valida entero>0 acotado a 6 dígitos con
+`=~ ^[0-9]{1,6}$` sin comillas (bash 3.2+5.x); `verify_channel_healthy` (`:752`) usa el helper y el log
+de `:792` nombra el valor efectivo (FR-005). **HALLAZGO de Fase 0 (workflow `wf_922c62d5-f37`):**
+interacción con el crash budget (`MAX_CRASHES=5`/`WINDOW=300`, `:245-246`) — un timeout `≥70s` haría que
+5 fallos consecutivos no quepan en la ventana y el backstop de restart NO escale; el default 60 es seguro
+(5º fallo a ~260s<300s). **DECISIÓN DEL USUARIO (clarify+plan):** default=60s; override por env var (no
+`agent.yml`); **WARN sin cap** al boot (`warn_if_channel_timeout_risky` `:740`, umbral derivado
+`WINDOW/(MAX_CRASHES-1)-5 -5` = 65s) + documentar, sin tocar el crash budget. Constitución **6/6 PASS**.
+**Test-first (7 tests nuevos en `start-services-watchdog.bats` + 1 e2e en `docker-e2e-postlogin.bats`):**
+sourcean `verify_channel_healthy` con `START_SERVICES_NO_RUN=1` + stub `pgrep`/`sleep` (K=12 discrimina
+20 vs 60); edición cruzada `tests/docker-render.bats:163` (assert del mensaje dinámico, ya no `"within
+20s"`). **GATES VERDES:** suite completa **1197 ok / 0 not ok en bash 5.3.15 Y 3.2.57**; mutación
+(revertir `:752` tumba US1+US2); `shellcheck -S error` limpio; **revisión adversarial pre-commit
+(workflow `wf_d4343179-37c`, 5 agentes): 0 ALTA, 0 regresión — 2 MEDIA + BAJA triviales arreglados**
+(mensaje del WARN reformulado a lenguaje veraz de proximidad + umbral derivado de las constantes; rango
+del regex acotado; `unset` en un test; orden del párrafo README; `2>/dev/null` en el e2e). Docs
+README/CLAUDE.md/architecture.md/CHANGELOG (NO `env-example.tpl`). Retiro del override de ferrari
+planificado post-deploy (preservar `CHANNEL_HEALTH_TIMEOUT=90`; ver `quickstart.md` §3). DOCKER_E2E real
+diferido a un host Docker. Fase spec-kit: **specify+clarify+plan+tasks+implement completos; pendiente
+commit + PR + merge (main protegida) + despliegue.**
+
 **025-hermetic-ci-suite MERGED** (PR #83, squash `bb85914` en main, 2026-07-27; branch desde
 main=`febe652`+doc local `b6acbf3`, 2026-07-26; **VERSION sin cambio en 0.16.0** — tests-only,
 precedente 019). Post-merge: ramas 021-025 (locales + remotas) limpiadas, main reconciliada a
