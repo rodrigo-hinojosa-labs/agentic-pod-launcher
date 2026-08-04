@@ -323,15 +323,24 @@ A scaffolded workspace is a **self-contained copy** of the launcher's system fil
 # 1. Get the newer launcher (a fresh clone, or `git pull` in your launcher checkout).
 cd ~/agentic-pod-launcher && git pull        # now at the version you want to run
 
-# 2. Overwrite ONLY the system files in the workspace. Never touch agent.yml,
-#    .env, or .state/ — those carry your config, secrets, OAuth login and
-#    sessions. `rm -rf` before copying each dir so deletions between versions
-#    propagate. These are exactly the paths setup.sh copies at scaffold time.
+# 2. Overwrite the system files in the workspace. Never touch agent.yml, .env,
+#    or .state/ — those carry your config, secrets, OAuth login and sessions.
 DEST=~/agents/my-agent
 cp setup.sh VERSION .gitignore LICENSE "$DEST/"
-for d in modules scripts docker; do          # drop 'docker' for a local-mode agent
+
+# modules/ and docker/ are pure code/templates with no runtime state, so wipe
+# them first — that way a file the new version removed does not linger.
+for d in modules docker; do                   # drop 'docker' for a local-mode agent
   [ -d "$d" ] && { rm -rf "$DEST/$d"; cp -R "$d" "$DEST/"; }
 done
+
+# scripts/ MIXES launcher code with LIVE STATE that a re-render does NOT rebuild:
+# scripts/heartbeat/{logs/,state.json,qmd-index.json,wiki-graph.json,token-health/}
+# and scripts/vendor/bin/ (the vendored yq/gum). Copy OVER it — never `rm -rf` —
+# so the swap keeps your RAG index progress, heartbeat history and vendored tools.
+# Trade-off: a helper the new version deleted survives as an orphan; if the
+# CHANGELOG names one as removed, delete just that file by hand.
+[ -d scripts ] && cp -R scripts "$DEST/"
 
 # 3. Re-render the derived set (docker-compose.yml, .mcp.json, CLAUDE.md, the
 #    local wrappers/units, …) from your agent.yml with the new templates.
@@ -359,7 +368,7 @@ Then pick up the runtime for your mode:
 
 Caveats worth knowing:
 
-- **Back up first if you hand-edited system files in the workspace.** Step 2 overwrites `setup.sh`/`scripts/`/`modules/`/`docker/` wholesale; any local edits there are lost. Config lives in `agent.yml` (survives) — keep it that way.
+- **Back up first if you hand-edited system files in the workspace.** Step 2 wipes `modules/`/`docker/` wholesale and copies over `setup.sh`/`scripts/`; any local edits to launcher code there are lost (the state under `scripts/heartbeat/` and `scripts/vendor/bin/` is preserved, but code files are overwritten). Config lives in `agent.yml` (survives) — keep it that way.
 - **`VERSION` must ship with the swap.** `--regenerate` stamps `meta.launcher_version` from the workspace `VERSION`; copying it in step 2 keeps that honest.
 - **Moving hosts is different** — that's a `rsync`/`cp -a` of the whole workspace directory (see *Self-contained workspace* and *Restore from the fork*), not this in-place swap.
 
