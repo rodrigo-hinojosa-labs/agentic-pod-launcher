@@ -33,6 +33,14 @@ prompts. Everything below is exactly what the wizard writes, authored by hand.
   (`docker-compose.yml`, `.mcp.json`, `CLAUDE.md`, `.env.example`,
   `scripts/heartbeat/heartbeat.conf`, `NEXT_STEPS.md`) is rendered from it. Never
   hand-edit a derived file — change `agent.yml` and re-render.
+  - `CLAUDE.md` is _generated once, then yours_: a re-render preserves an
+    operator-edited agent doc. The launcher clone ships the launcher's OWN
+    `CLAUDE.md`, so a **local** declarative render replaces that inherited dev
+    doc with the agent's automatically (027 — no manual `rm`). In **docker**
+    mode the inherited doc is still preserved; delete it once before the first
+    render so the agent gets its own.
+  - `NEXT_STEPS.md` is rendered by `--non-interactive` / `--regenerate` in
+    **local** mode (027); in **docker** mode only the wizard emits it today.
 - **You author exactly three files by hand:** `agent.yml`, `personas/<name>.md`
   (the persona), and `.env` (secrets). Everything else is generated.
 - **`.env` must be a _real file_ in the workspace, never a symlink** (see

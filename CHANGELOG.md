@@ -3,6 +3,45 @@
 ## [Unreleased]
 
 ### Fixed
+- **A fresh declarative (non-interactive) local scaffold now comes up fully
+  working — four gaps measured on `ferrari-admin`
+  (`027-declarative-scaffold-parity`)**: cloning the launcher as the workspace,
+  hand-authoring `agent.yml` + persona, and running `./setup.sh --non-interactive`
+  then `--login` left four things broken that a wizard or earlier-era agent had
+  working. All four are **local-mode only**; docker rendering/provisioning is
+  byte-for-byte unchanged, and the interactive wizard path is unchanged.
+  VERSION 0.17.0 → 0.18.0.
+  - **US1 — the agent gets its OWN `CLAUDE.md`, not the launcher's.** The
+    declarative clone ships the launcher's force-committed root `CLAUDE.md`, and
+    `--regenerate` preserved it (the overwrite was gated behind a no-TTY prompt
+    defaulting to "no"), so the agent silently ran on the launcher's developer
+    doc. `regenerate()` now re-renders the agent's doc when the current
+    `CLAUDE.md` is the launcher's own dev doc, detected by the stable sentinel
+    `This is **the launcher**, not an agent` (`_is_launcher_own_claude_md`) — a
+    genuine operator-authored agent doc (no sentinel) is still preserved. Local
+    mode only, so docker render stays byte-identical.
+  - **US2 — QMD works after a fresh scaffold.** The runtime provisioner installed
+    `bun` only when it saw a literal `bunx` command in `.mcp.json`, but in local
+    mode the QMD MCP command is the wrapper `agent-qmd-mcp.sh`, so a fresh
+    scaffold never provisioned `bun` and both the QMD reindex and MCP were dead.
+    The trigger (`modules/local-bootstrap.sh.tpl`) now also fires on the qmd
+    wrapper.
+  - **US3 — the `fetch`/`git`/`atlassian` MCPs connect deterministically.** The
+    provisioner warmed the uvx MCP servers with no version pins, so a fresh
+    scaffold could resolve a newer `mcp` SDK (McpError→MCPError) that broke
+    `fetch`/`git` at import. It now installs each at a pinned version with a
+    compatible `mcp` lib (`--with mcp==<pin>`), single-sourced in
+    `scripts/lib/versions.sh` (`AGENTIC_FLOOR_MCP_FETCH`/`_GIT`/`_ATLASSIAN`/`_LIB`
+    = `2026.6.4`/`2026.6.16`/`0.21.1`/`1.28.1`) and injected into the rendered
+    provisioner at render time.
+  - **US4 — the declarative operator gets `NEXT_STEPS.md`.** It was produced only
+    by the interactive wizard; `--non-interactive`/`--regenerate` now render it
+    as a derived file (local mode) from the existing `next-steps` template,
+    reproducible across regenerations.
+  - No `docker/` file is touched → no `DOCKER_E2E`. The identical unpinned-uvx
+    drift in `docker/Dockerfile` is tracked as a separate follow-up. Host bats
+    coverage (US1/US4 via `regenerate.bats`, US2/US3 via `local-bootstrap.bats`'s
+    `BOOTSTRAP_DRY_RUN=1` plan lines) + a mutation check per fix.
 - **Docker agents stopped flapping at boot when the channel plugin is slow to
   start — the watchdog's channel health-check timeout is now configurable
   (`026-channel-watchdog-timeout`)**: `verify_channel_healthy` waited a

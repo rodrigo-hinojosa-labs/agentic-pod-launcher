@@ -1409,8 +1409,12 @@ build_plugins_block() {
 
 # Render NEXT_STEPS.md from the i18n template matching user.language and
 # print it to stdout. Templates live at modules/next-steps.{es,en}.tpl.
+# 027 US4: a second arg of "quiet" writes the file WITHOUT the interactive stdout
+# dump, so regenerate() can produce it for the declarative/non-interactive path
+# while the wizard keeps printing it (FR-013).
 render_next_steps() {
   local dest="$1"
+  local quiet="${2:-}"
   local lang template
   lang=$(yq '.user.language // "en"' "$dest/agent.yml")
   case "$lang" in
@@ -1453,6 +1457,7 @@ render_next_steps() {
   PLUGINS_BLOCK=$(build_plugins_block "$dest/agent.yml" "$lang")
   render_to_file "$template" "$dest/NEXT_STEPS.md"
 
+  [ "$quiet" = "quiet" ] && return 0
   echo ""
   echo "═══════════════════════════════════════════════════"
   echo " Next steps (also saved to $dest/NEXT_STEPS.md)"
@@ -1938,6 +1943,16 @@ scaffold_destination() {
   cd "$dest"
 }
 
+# 027 US1: distinguish the launcher's OWN developer CLAUDE.md — force-committed to
+# this repo (per its own gotcha), so the declarative "clone-is-the-workspace"
+# method inherits it — from a genuine operator-authored agent CLAUDE.md. The
+# launcher doc carries a stable sentence the agent template (modules/claude-md.tpl)
+# never emits. Pure content check via grep -F (the sentinel has literal `**`):
+# deterministic, no mtime, no interactive input (FR-003).
+_is_launcher_own_claude_md() {
+  grep -qF 'This is **the launcher**, not an agent' "${1:-}" 2>/dev/null
+}
+
 regenerate() {
   local agent_yml="$SCRIPT_DIR/agent.yml"
   local modules_dir="$SCRIPT_DIR/modules"
@@ -2224,19 +2239,24 @@ regenerate() {
 
   echo "▸ Rendering modules"
 
-  # CLAUDE.md — only if missing or --force-claude-md
-  if [ ! -f "$SCRIPT_DIR/CLAUDE.md" ] || [ "$FORCE_CLAUDE_MD" = true ]; then
-    if [ -f "$SCRIPT_DIR/CLAUDE.md" ] && [ "$FORCE_CLAUDE_MD" = true ]; then
-      if [ "$(ask_yn 'Overwrite existing CLAUDE.md? THIS IS DESTRUCTIVE' 'n')" = "false" ]; then
-        echo "  skipping CLAUDE.md (preserved)"
-      else
-        render_to_file "$modules_dir/claude-md.tpl" "$SCRIPT_DIR/CLAUDE.md"
-        echo "  ✓ CLAUDE.md (overwritten)"
-      fi
+  # CLAUDE.md — render if missing, if --force-claude-md, or (local mode) if the
+  # current file is the launcher's OWN dev doc wrongly inherited by a declarative
+  # clone (027 US1). A genuine operator agent doc (no launcher sentinel) is
+  # preserved (FR-002). The launcher-doc branch is local-gated so docker render
+  # stays byte-identical (FR-012).
+  if [ -f "$SCRIPT_DIR/CLAUDE.md" ] && [ "$FORCE_CLAUDE_MD" = true ]; then
+    if [ "$(ask_yn 'Overwrite existing CLAUDE.md? THIS IS DESTRUCTIVE' 'n')" = "false" ]; then
+      echo "  skipping CLAUDE.md (preserved)"
     else
       render_to_file "$modules_dir/claude-md.tpl" "$SCRIPT_DIR/CLAUDE.md"
-      echo "  ✓ CLAUDE.md"
+      echo "  ✓ CLAUDE.md (overwritten)"
     fi
+  elif [ ! -f "$SCRIPT_DIR/CLAUDE.md" ]; then
+    render_to_file "$modules_dir/claude-md.tpl" "$SCRIPT_DIR/CLAUDE.md"
+    echo "  ✓ CLAUDE.md"
+  elif [ "$DEPLOYMENT_MODE_IS_DOCKER" != true ] && _is_launcher_own_claude_md "$SCRIPT_DIR/CLAUDE.md"; then
+    render_to_file "$modules_dir/claude-md.tpl" "$SCRIPT_DIR/CLAUDE.md"
+    echo "  ✓ CLAUDE.md (replaced the launcher's own dev doc with this agent's identity)"
   else
     echo "  ◦ CLAUDE.md (preserved — use --force-claude-md to overwrite)"
   fi
@@ -2349,6 +2369,15 @@ regenerate() {
     echo "         (or run ./scripts/local/agent-qmd-reindex.sh --setup-only by hand)."
   fi
 
+  # 027 US4: give the declarative/non-interactive operator the same post-scaffold
+  # NEXT_STEPS guidance a wizard user gets (login command, unit-install path,
+  # validation). Derived file, reproducible on every --regenerate (FR-010/011).
+  # Local mode only — docker regenerate stays byte-identical (FR-012); the wizard
+  # path already prints it. `quiet` writes the file without the stdout dump.
+  if [ "$DEPLOYMENT_MODE_IS_DOCKER" != true ]; then
+    render_next_steps "$SCRIPT_DIR" quiet && echo "  ✓ NEXT_STEPS.md"
+  fi
+
   echo ""
   echo "✓ Regeneration complete."
   maybe_print_plugin_hints
@@ -2403,6 +2432,15 @@ _export_local_context() {
   OPERATOR_USER="$(id -un)"
   OPERATOR_HOME="$HOME"
   HOST_NAME="$(hostname)"
+
+  # 027 US3: inject the uvx MCP + `mcp` lib pins into the rendered
+  # local-bootstrap.sh at render time. Single-sourced in scripts/lib/versions.sh
+  # (sourced by setup.sh); the standalone provisioner can't read the lib at
+  # runtime, so it carries the literal pins. Empty-safe if versions.sh drifts.
+  export MCP_FETCH_VERSION="${AGENTIC_FLOOR_MCP_FETCH:-}"
+  export MCP_GIT_VERSION="${AGENTIC_FLOOR_MCP_GIT:-}"
+  export MCP_ATLASSIAN_VERSION="${AGENTIC_FLOOR_MCP_ATLASSIAN:-}"
+  export MCP_LIB_VERSION="${AGENTIC_FLOOR_MCP_LIB:-}"
 
   # 022 (US3/N7b): safety belt. render.sh substitutes an UNDEFINED {{VAR}} with
   # the empty string, so a context without DEPLOYMENT_SESSION_NAME would emit a

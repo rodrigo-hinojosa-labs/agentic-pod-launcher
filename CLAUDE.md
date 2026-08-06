@@ -134,8 +134,49 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
-**026-channel-watchdog-timeout — PR #86 ABIERTO contra main (sin mergear)** (commit `e312b82`, rama
-`026-channel-watchdog-timeout` desde main=`cebd8b7`, VERSION 0.16.0→**0.17.0** hecho). Plan:
+**027-declarative-scaffold-parity IMPLEMENTADO — PR ABIERTO (sin mergear)** (branch desde
+main=`cd85bb2` v0.17.0; spec+clarify+plan+tasks+implement hechos 2026-08-06). Plan:
+`specs/027-declarative-scaffold-parity/plan.md`.
+Trae al launcher, test-first, los 4 huecos MEDIDOS en el scaffold declarativo de `ferrari-admin`
+(2026-08-05, ver [[ferrari-admin-agent]] en memoria): **US1 (P1)** el render no-interactivo debe
+dar el CLAUDE.md del AGENTE, no el del launcher — discriminador `_is_launcher_own_claude_md` por el
+sentinel `This is **the launcher**, not an agent` en `regenerate()` (`setup.sh:2228`); preserva un
+CLAUDE.md editado por el operador (sin sentinel). **US2 (P1)** provisionar `bun` cuando el MCP qmd
+está como wrapper `agent-qmd-mcp.sh` (no gateado a `bunx` literal, `local-bootstrap.sh.tpl:219`).
+**US3 (P2)** pinnear los uvx `fetch`/`git`/`atlassian` + la lib `mcp` a la combo validada de mclaren
+(fetch 2026.6.4/git 2026.6.16/atlassian 0.21.1/mcp 1.28.1), single-sourced en `versions.sh`
+(`AGENTIC_FLOOR_MCP_FETCH/_GIT/_ATLASSIAN/_LIB`, junto a los `_FILESYSTEM/_VAULT/_GH_MCP` existentes);
+inyectados al bootstrap en render. **US4 (P3)** rendear `NEXT_STEPS.md` como derivado en `regenerate()`
+reusando `render_next_steps()` (templates ya usan sólo vars de agent.yml). **local-only** (decisión
+2026-08-06: el MISMO drift de US3 vive en `docker/Dockerfile:122-124` sin pin → follow-up aparte;
+sin tocar `docker/` → **sin DOCKER_E2E**, docker byte-idéntico FR-012). Constitución **6/6 PASS**
+(II/V N/A). VERSION 0.17.0→**0.18.0** (MINOR, precedente 015). Test-first host bats (US2/US3 vía
+`BOOTSTRAP_DRY_RUN=1` plan lines; US1/US4 vía aserciones de archivo), mutación SC-007. 3 clarify
+integrados (rendear NEXT_STEPS; pinnear los 3 uvx; discriminador quirúrgico).
+**IMPLEMENTADO 2026-08-06 (test-first, 20/21 tareas; T021 diferido):** US1 helper
+`_is_launcher_own_claude_md` (grep -F del sentinel) + condición de render reestructurada en
+`regenerate()` (`setup.sh`), local-gateada (docker preservado, FR-012); US2 trigger de bun por el
+wrapper `agent-qmd-mcp.sh` además de `bunx`; US3 pins `AGENTIC_FLOOR_MCP_FETCH/_GIT/_ATLASSIAN/_LIB`
+en `versions.sh`, exportados por `_export_local_context`, `provision_uv_tools` instala
+`pkg==<pin> --with mcp==<lib>` (cableado verificado end-to-end en un scaffold local real: bootstrap
+con los 4 pins, `PLAN bun` por wrapper, `NEXT_STEPS.md` 94 líneas); US4 `render_next_steps` con modo
+`quiet` llamado desde `regenerate()` en local. Touchpoint conocido: los 4 nuevos `{{MCP_*_VERSION}}`
+agregados a `known_external` de `schema.bats`. **GATES VERDES:** suite completa **1207 ok / 0 not ok
+en bash 5.3.15 Y 3.2.57** (secuencial; baseline 1197 + 10 tests nuevos); mutación **4/4 RED**
+(revertir cada fix tumba ≥1 test, SC-007); `shellcheck -S error` limpio (comando exacto de CI); docker
+byte-idéntico (cero archivo `docker/` tocado → sin DOCKER_E2E). Observado: 2 tests de heartbeat flakean
+si se corren las dos suites CONCURRENTES (contención de CPU sobre timeouts); pasan 0/0 en aislamiento y
+secuencial — ajeno a 027. VERSION 0.17.0→**0.18.0**; CHANGELOG + `docs/creating-an-agent.md`
+actualizados. **PENDIENTE NO BLOQUEANTE — T021 (gate en vivo):** `uv tool install` + `claude mcp list`
+Connected necesita host con `uv`/systemd (esta Mac no tiene `uv`); ferrari ya validó los 4 fixes a mano
+el 05-08; el residual es la compat explícita atlassian 0.21.1 ↔ mcp 1.28.1. Siguiente: correr T021 contra
+ferrari/mclaren ANTES del merge (SC-006).
+
+**026-channel-watchdog-timeout MERGED** (PR #86, squash `f827c31` en main, 2026-08-04; branch desde
+main=`cebd8b7`, VERSION 0.16.0→**0.17.0**). Post-merge: ramas 026 (local + remota) y
+`docs/fix-upgrade-preserve-scripts-state` (#85, squash `11244fd`) limpiadas; main sincronizada y
+verificada (`f827c31`, VERSION 0.17.0, helper `channel_health_timeout()` presente, literal `timeout=20`
+ausente, historia lineal 084→085→086). Plan:
 `specs/026-channel-watchdog-timeout/plan.md`. **BUG MEDIDO EN FERRARI (2026-08-02, tras el upgrade a
 v0.16.0):** el watchdog `verify_channel_healthy` (`docker/scripts/start_services.sh`) tenía
 `local timeout=20` hardcodeado; bajo contención de ~7 MCPs al arrancar, `bun server.ts` tarda ~22-25s
@@ -162,8 +203,9 @@ sourcean `verify_channel_healthy` con `START_SERVICES_NO_RUN=1` + stub `pgrep`/`
 del regex acotado; `unset` en un test; orden del párrafo README; `2>/dev/null` en el e2e). Docs
 README/CLAUDE.md/architecture.md/CHANGELOG (NO `env-example.tpl`). Retiro del override de ferrari
 planificado post-deploy (preservar `CHANNEL_HEALTH_TIMEOUT=90`; ver `quickstart.md` §3). DOCKER_E2E real
-diferido a un host Docker. Fase spec-kit: **specify+clarify+plan+tasks+implement completos; commit
-`e312b82` + push + PR #86 ABIERTO contra main; pendiente merge (main protegida) + despliegue.**
+diferido a un host Docker. Fase spec-kit: **completa y MERGEADA (PR #86, squash `f827c31`).** Pendiente
+NO bloqueante: el despliegue de v0.17.0 a ferrari, que retira el `docker-compose.override.yml` manual
+preservando `CHANNEL_HEALTH_TIMEOUT=90` en el `.env` (ver `quickstart.md` §3), y el DOCKER_E2E real.
 
 **025-hermetic-ci-suite MERGED** (PR #83, squash `bb85914` en main, 2026-07-27; branch desde
 main=`febe652`+doc local `b6acbf3`, 2026-07-26; **VERSION sin cambio en 0.16.0** — tests-only,
