@@ -22,6 +22,16 @@ setup() {
   load_lib yaml
   yaml_require_yq >/dev/null
 
+  # 027 US3: _export_local_context injects the uvx MCP pins into the rendered
+  # provisioner at render time (the standalone script can't source launcher
+  # libs). Simulate that here so every render in this file carries the pins,
+  # tying the assertions to versions.sh — the single source (FR-008).
+  load_lib versions
+  export MCP_FETCH_VERSION="$AGENTIC_FLOOR_MCP_FETCH"
+  export MCP_GIT_VERSION="$AGENTIC_FLOOR_MCP_GIT"
+  export MCP_ATLASSIAN_VERSION="$AGENTIC_FLOOR_MCP_ATLASSIAN"
+  export MCP_LIB_VERSION="$AGENTIC_FLOOR_MCP_LIB"
+
   WS="$TMP_TEST_DIR/ws"; mkdir -p "$WS"
   export OPERATOR_HOME="$TMP_TEST_DIR/home"; mkdir -p "$OPERATOR_HOME/.local/bin"
 
@@ -56,9 +66,10 @@ _write_mcp() { printf '{ "mcpServers": { %s } }\n' "$1" > "$WS/.mcp.json"; }
   run env BOOTSTRAP_DRY_RUN=1 "$BOOT"
   [ "$status" -eq 0 ]
   echo "$output" | grep -q '^PLAN uv$'
-  echo "$output" | grep -q '^PLAN uv-tool mcp-server-fetch$'
-  echo "$output" | grep -q '^PLAN uv-tool mcp-server-git$'
-  echo "$output" | grep -q '^PLAN uv-tool mcp-atlassian$'
+  # 027 US3: uv-tool plan lines now carry the pinned version + the mcp lib pin.
+  echo "$output" | grep -qF "PLAN uv-tool mcp-server-fetch==${AGENTIC_FLOOR_MCP_FETCH} (mcp==${AGENTIC_FLOOR_MCP_LIB})"
+  echo "$output" | grep -qF "PLAN uv-tool mcp-server-git==${AGENTIC_FLOOR_MCP_GIT} (mcp==${AGENTIC_FLOOR_MCP_LIB})"
+  echo "$output" | grep -qF "PLAN uv-tool mcp-atlassian==${AGENTIC_FLOOR_MCP_ATLASSIAN} (mcp==${AGENTIC_FLOOR_MCP_LIB})"
   # no node / github / bun for a uvx-only config
   ! echo "$output" | grep -q '^PLAN node-links'
   ! echo "$output" | grep -q '^PLAN github-mcp-server'
@@ -137,4 +148,46 @@ _write_mcp() { printf '{ "mcpServers": { %s } }\n' "$1" > "$WS/.mcp.json"; }
   [ ! -f "$WS/.mcp.json" ]
   run env BOOTSTRAP_DRY_RUN=1 "$BOOT"
   [ "$status" -eq 0 ]
+}
+
+# ── 027 US2: bun is provisioned when the QMD MCP is present as its wrapper ────
+# In local mode the qmd MCP command is the wrapper scripts/local/agent-qmd-mcp.sh
+# (feature 016/T036), NOT literal `bunx`. The bun trigger used to be gated on
+# `grep -qx bunx`, so a fresh local scaffold never got bun and the QMD reindex +
+# MCP were both dead. The trigger must also fire on the wrapper; the literal
+# `bunx` trigger (test above) is the regression guard. FR-004/005/006.
+
+@test "027 US2: dry-run plans bun when the qmd wrapper MCP is present (not literal bunx)" {
+  _write_mcp '"qmd": {"command":"/home/agent/ws/scripts/local/agent-qmd-mcp.sh","args":[]}'
+  run env BOOTSTRAP_DRY_RUN=1 "$BOOT"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qE '^PLAN bun '
+}
+
+@test "027 US2: dry-run does NOT plan bun when neither qmd wrapper nor bunx is present (FR-005)" {
+  _write_mcp '"fetch": {"command":"uvx","args":["mcp-server-fetch"]}'
+  run env BOOTSTRAP_DRY_RUN=1 "$BOOT"
+  [ "$status" -eq 0 ]
+  ! echo "$output" | grep -q '^PLAN bun'
+}
+
+# ── 027 US3: uvx MCP servers + the mcp lib are pinned, single-sourced ─────────
+# provision_uv_tools installed each uvx server unpinned; a fresh scaffold then
+# resolved a newer `mcp` SDK that broke fetch/git at import. Each plan line must
+# now carry `==<version>` matching versions.sh AND `(mcp==<lib>)`, never
+# unpinned. FR-007/008/009.
+
+@test "027 US3: dry-run surfaces the versions.sh pins for each uvx MCP + the mcp lib" {
+  _write_mcp '
+    "fetch": {"command":"uvx","args":["mcp-server-fetch"]},
+    "git": {"command":"uvx","args":["mcp-server-git","--repository","/x"]},
+    "atlassian-work": {"command":"uvx","args":["mcp-atlassian"]}
+  '
+  run env BOOTSTRAP_DRY_RUN=1 "$BOOT"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qF "PLAN uv-tool mcp-server-fetch==${AGENTIC_FLOOR_MCP_FETCH} (mcp==${AGENTIC_FLOOR_MCP_LIB})"
+  echo "$output" | grep -qF "PLAN uv-tool mcp-server-git==${AGENTIC_FLOOR_MCP_GIT} (mcp==${AGENTIC_FLOOR_MCP_LIB})"
+  echo "$output" | grep -qF "PLAN uv-tool mcp-atlassian==${AGENTIC_FLOOR_MCP_ATLASSIAN} (mcp==${AGENTIC_FLOOR_MCP_LIB})"
+  # no warmed uvx tool is left unpinned (bare `PLAN uv-tool <pkg>`)
+  ! echo "$output" | grep -qE '^PLAN uv-tool [A-Za-z0-9._-]+$'
 }

@@ -70,6 +70,9 @@ teardown() { teardown_tmp_dir; }
   known_external="${known_external} QMD_MCP_ENV QMD_MCP_COMMAND "
   # 014: derived in setup.sh (default-true enable, schedule default, local OnCalendar).
   known_external="${known_external} WIKI_GRAPH_ENABLED WIKI_GRAPH_SCHEDULE WIKI_GRAPH_TIMER_ONCALENDAR "
+  # 027 (US3): uvx MCP + `mcp` lib pins, injected into local-bootstrap.sh.tpl by
+  # _export_local_context from scripts/lib/versions.sh (AGENTIC_FLOOR_MCP_*).
+  known_external="${known_external} MCP_FETCH_VERSION MCP_GIT_VERSION MCP_ATLASSIAN_VERSION MCP_LIB_VERSION "
 
   # Capture the env shape produced by render_load_context with the fixture.
   local before_env after_env produced

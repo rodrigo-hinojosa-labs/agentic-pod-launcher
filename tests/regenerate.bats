@@ -158,3 +158,109 @@ teardown() { teardown_tmp_dir; }
   # …and its content is re-read into the rendered CLAUDE.md (FR-I1/FR-X1).
   grep -q "PERSONA_REGEN_MARKER" CLAUDE.md
 }
+
+# ── 027 US1: the scaffolded agent gets its OWN CLAUDE.md, not the launcher's ──
+# The declarative method clones the launcher as the workspace, so the workspace
+# CLAUDE.md is the launcher's own dev doc (force-committed; it carries a stable
+# sentinel the agent template never emits). A local non-interactive render must
+# replace that inherited doc with the AGENT's — no TTY, no --force-claude-md, no
+# manual rm. A genuine operator agent doc (no sentinel) stays preserved, and
+# docker mode is untouched (the discriminator is local-gated, FR-012).
+
+# The exact sentinel _is_launcher_own_claude_md keys on.
+_LAUNCHER_SENTINEL='This is **the launcher**, not an agent'
+
+# Minimal faithful launcher-own CLAUDE.md fixture (framing + the sentinel).
+_write_launcher_claude_md() {
+  cat > "$TMP_TEST_DIR/CLAUDE.md" <<EOF
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this repo is
+
+${_LAUNCHER_SENTINEL}. \`./setup.sh\` is a bash wizard that scaffolds a separate agent workspace.
+EOF
+}
+
+@test "027 US1: local non-interactive render replaces the launcher's own CLAUDE.md with the agent's" {
+  cd "$TMP_TEST_DIR"
+  yq -i '.deployment.mode = "local"' agent.yml
+  yq -i ".deployment.claude_cli = \"$CLAUDE_STUB\"" agent.yml
+  _write_launcher_claude_md
+  run ./setup.sh --non-interactive
+  [ "$status" -eq 0 ]
+  # the agent's own identity is now in CLAUDE.md …
+  grep -q '## Identity' CLAUDE.md
+  grep -q 'RegenBot' CLAUDE.md
+  # … and the launcher sentinel is gone — with no prompt, no manual delete.
+  ! grep -qF "$_LAUNCHER_SENTINEL" CLAUDE.md
+}
+
+@test "027 US1: a genuine operator CLAUDE.md (no sentinel) is preserved byte-for-byte (local --regenerate)" {
+  cd "$TMP_TEST_DIR"
+  yq -i '.deployment.mode = "local"' agent.yml
+  yq -i ".deployment.claude_cli = \"$CLAUDE_STUB\"" agent.yml
+  printf '# CLAUDE.md\n\n## Identity\nName: HandWritten\n\nOPERATOR_ONLY_MARKER\n' > CLAUDE.md
+  cp CLAUDE.md CLAUDE.md.before
+  echo 'n' | ./setup.sh --regenerate
+  grep -q 'OPERATOR_ONLY_MARKER' CLAUDE.md
+  cmp -s CLAUDE.md CLAUDE.md.before
+}
+
+@test "027 US1: docker mode preserves an inherited launcher CLAUDE.md (local gate, FR-012)" {
+  cd "$TMP_TEST_DIR"
+  # the seed agent.yml is docker mode; the discriminator must NOT fire here.
+  _write_launcher_claude_md
+  echo 'n' | ./setup.sh --regenerate
+  grep -qF "$_LAUNCHER_SENTINEL" CLAUDE.md
+}
+
+# ── 027 US4: the declarative operator gets NEXT_STEPS guidance ────────────────
+# NEXT_STEPS.md is produced only inside the interactive wizard today, so a
+# non-interactive/declarative scaffold got none. regenerate() must render it as
+# a derived file in local mode (docker regenerate stays byte-identical, FR-012),
+# reusing the existing next-steps template + PLUGINS_BLOCK.
+
+@test "027 US4: local --non-interactive renders NEXT_STEPS.md with the login + unit-install guidance" {
+  cd "$TMP_TEST_DIR"
+  yq -i '.deployment.mode = "local"' agent.yml
+  yq -i ".deployment.claude_cli = \"$CLAUDE_STUB\"" agent.yml
+  run ./setup.sh --non-interactive
+  [ "$status" -eq 0 ]
+  [ -f NEXT_STEPS.md ]
+  grep -q './setup.sh --login' NEXT_STEPS.md
+  grep -q 'agent-regen-bot.service' NEXT_STEPS.md
+}
+
+@test "027 US4: NEXT_STEPS.md is idempotent across a second --regenerate (local)" {
+  cd "$TMP_TEST_DIR"
+  yq -i '.deployment.mode = "local"' agent.yml
+  yq -i ".deployment.claude_cli = \"$CLAUDE_STUB\"" agent.yml
+  ./setup.sh --non-interactive
+  cp NEXT_STEPS.md NEXT_STEPS.md.first
+  echo 'n' | ./setup.sh --regenerate
+  cmp -s NEXT_STEPS.md NEXT_STEPS.md.first
+}
+
+@test "027 US4: docker --regenerate does NOT create NEXT_STEPS.md (local gate, FR-012)" {
+  cd "$TMP_TEST_DIR"
+  # seed is docker mode; regenerate must not add NEXT_STEPS in docker.
+  echo 'n' | ./setup.sh --regenerate
+  [ ! -f NEXT_STEPS.md ]
+}
+
+@test "027 FR-012: docker --regenerate renders its files, no local bootstrap, .mcp.json byte-stable" {
+  cd "$TMP_TEST_DIR"
+  # docker-mode regenerate is untouched: it still renders CLAUDE.md/.mcp.json,
+  # never the local provisioner (US2/US3 only touch local-bootstrap.sh.tpl), and
+  # re-renders identically (US1/US4 are local-gated).
+  echo 'n' | ./setup.sh --regenerate
+  [ -f CLAUDE.md ]
+  [ -f .mcp.json ]
+  [ ! -f scripts/local/agent-bootstrap.sh ]
+  [ ! -f NEXT_STEPS.md ]
+  cp .mcp.json .mcp.json.first
+  echo 'n' | ./setup.sh --regenerate
+  cmp -s .mcp.json .mcp.json.first
+}

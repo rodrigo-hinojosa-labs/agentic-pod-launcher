@@ -29,6 +29,14 @@ UV_VERSION="0.11.22"
 BUN_VERSION="1.3.14"
 GH_MCP_VERSION="1.4.0"
 
+# 027 US3: uvx MCP server + `mcp` protocol-lib pins, injected at render time from
+# scripts/lib/versions.sh (AGENTIC_FLOOR_MCP_*). The standalone provisioner can't
+# source launcher libs, so it carries literal versions. Empty when unset.
+MCP_FETCH_VERSION="{{MCP_FETCH_VERSION}}"
+MCP_GIT_VERSION="{{MCP_GIT_VERSION}}"
+MCP_ATLASSIAN_VERSION="{{MCP_ATLASSIAN_VERSION}}"
+MCP_LIB_VERSION="{{MCP_LIB_VERSION}}"
+
 DRY_RUN="${BOOTSTRAP_DRY_RUN:-0}"
 
 log()  { printf '  %s\n' "$*"; }
@@ -62,21 +70,42 @@ provision_uv() {
   rm -rf "$tmp"
 }
 
+# 027 US3: map a warmed uvx package to its pinned version (empty = not pinned).
+_mcp_pin() {
+  case "$1" in
+    mcp-server-fetch) printf '%s' "$MCP_FETCH_VERSION" ;;
+    mcp-server-git)   printf '%s' "$MCP_GIT_VERSION" ;;
+    mcp-atlassian)    printf '%s' "$MCP_ATLASSIAN_VERSION" ;;
+    *)                printf '' ;;
+  esac
+}
+
 # Warm the uv tool cache for each uvx package the .mcp.json references, so the
 # first MCP handshake does not race a PyPI download (the Dockerfile pre-installs
 # the same tools into /opt/uv for the same reason).
+#
+# 027 US3: install each server at its PINNED version plus a compatible `mcp` lib
+# (`--with mcp==<pin>`). Unpinned, a fresh scaffold resolved a newer mcp SDK that
+# renamed McpError→MCPError, so fetch/git failed at import (measured on ferrari).
 provision_uv_tools() {
-  local pkgs pkg py_flag
+  local pkgs pkg py_flag pin spec mcp_arg mcp_note
   pkgs="$(jq -r '.mcpServers // {} | to_entries[] | select(.value.command=="uvx") | .value.args[0] // empty' "$MCP_JSON" 2>/dev/null | sort -u)"
   [ -n "$pkgs" ] || return 0
   py_flag=""
   have python3 && py_flag="--python python3"
+  mcp_arg=""; mcp_note=""
+  if [ -n "$MCP_LIB_VERSION" ]; then
+    mcp_arg="--with mcp==${MCP_LIB_VERSION}"
+    mcp_note=" (mcp==${MCP_LIB_VERSION})"
+  fi
   for pkg in $pkgs; do
-    if [ "$DRY_RUN" = 1 ]; then echo "PLAN uv-tool $pkg"; continue; fi
-    have uv || { warn "uv missing — cannot warm ${pkg}"; continue; }
-    log "warming uv tool: ${pkg}"
+    pin="$(_mcp_pin "$pkg")"
+    if [ -n "$pin" ]; then spec="${pkg}==${pin}"; else spec="$pkg"; fi
+    if [ "$DRY_RUN" = 1 ]; then echo "PLAN uv-tool ${spec}${mcp_note}"; continue; fi
+    have uv || { warn "uv missing — cannot warm ${spec}"; continue; }
+    log "warming uv tool: ${spec}${mcp_note}"
     # shellcheck disable=SC2086
-    uv tool install $py_flag "$pkg" >/dev/null 2>&1 || warn "uv tool install ${pkg} failed (will resolve on first use)"
+    uv tool install $py_flag "$spec" $mcp_arg >/dev/null 2>&1 || warn "uv tool install ${spec} failed (will resolve on first use)"
   done
 }
 
@@ -216,7 +245,12 @@ main() {
   printf '%s\n' "$cmds" | grep -qx "uvx"              && { provision_uv; provision_uv_tools; }
   printf '%s\n' "$cmds" | grep -qx "npx"              && provision_node_links
   printf '%s\n' "$cmds" | grep -qx "github-mcp-server" && provision_github_mcp
-  printf '%s\n' "$cmds" | grep -qx "bunx"             && provision_bun
+  # 027 US2: bun is needed for the qmd MCP. In local mode the qmd command is the
+  # wrapper agent-qmd-mcp.sh (feature 016/T036), not literal `bunx`, so trigger
+  # on either — otherwise a fresh local scaffold never provisions bun.
+  if printf '%s\n' "$cmds" | grep -qx "bunx" || printf '%s\n' "$cmds" | grep -q "agent-qmd-mcp.sh"; then
+    provision_bun
+  fi
 
   return 0
 }

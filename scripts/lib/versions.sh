@@ -46,6 +46,27 @@ AGENTIC_FLOOR_MCP_FILESYSTEM="2026.1.14"
 AGENTIC_FLOOR_MCP_VAULT="0.12.0"
 AGENTIC_FLOOR_GH_MCP="1.4.0"
 
+# uvx (Python tool-runner) MCP servers + the `mcp` protocol library
+# (feature 027-declarative-scaffold-parity). These are HARD pins for the
+# LOCAL-mode runtime provisioner (modules/local-bootstrap.sh.tpl → the rendered
+# scripts/local/agent-bootstrap.sh), injected at render time so the standalone
+# provisioner carries literal versions (it cannot source this lib at runtime).
+#
+# Why pinned: an unpinned `uv tool install mcp-server-fetch` on a fresh scaffold
+# resolves the newest server together with a newer `mcp` SDK that renamed
+# McpError→MCPError, so fetch/git fail at import (measured on ferrari, 2026-08-05:
+# `ImportError: cannot import name 'McpError'`). The combo below is the one the
+# working mclaren host runs and the ferrari manual fix restored
+# (`--with mcp==1.28.1`); see specs/027-declarative-scaffold-parity/research.md.
+# Docker mode is unaffected (it bakes its own uvx tools in docker/Dockerfile —
+# that path has the identical latent drift, tracked as a separate follow-up).
+# Bump deliberately (re-confirm the four form a mutually-compatible set:
+# `uv tool install <pkg>==<ver> --with mcp==<lib>` connects).
+AGENTIC_FLOOR_MCP_FETCH="2026.6.4"
+AGENTIC_FLOOR_MCP_GIT="2026.6.16"
+AGENTIC_FLOOR_MCP_ATLASSIAN="0.21.1"
+AGENTIC_FLOOR_MCP_LIB="1.28.1"
+
 # _versions_fetch URL -> stdout
 # Best-effort HTTP GET (curl). Dependency-injection seam: tests override
 # this to return fixture payloads with no live network. Returns non-zero
