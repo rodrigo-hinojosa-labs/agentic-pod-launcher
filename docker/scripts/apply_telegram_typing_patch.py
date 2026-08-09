@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Patch the upstream claude-plugins-official/telegram `server.ts` with four
+Patch the upstream claude-plugins-official/telegram `server.ts` with five
 independent fixes that improve Telegram chat reliability + observability:
 
 1. Typing refresh patch (v3) — refreshes the "typing..." action every 4s
@@ -44,10 +44,16 @@ independent fixes that improve Telegram chat reliability + observability:
    primary), and a setInterval that refreshes PID_FILE every 5s so
    secondaries see a recent mtime.
 
+5. Pending-reply marker patch (v1, feature 028) — writes a tiny
+   pending-reply.json on inbound and deletes it on the reply tool, as the
+   channel-origin + unreplied signal the reply-guard Stop hook reads at
+   turn-end. The typing patch also ratchets v4 → v5 here, rewording the
+   timeout warning so it no longer asserts OAuth as the cause.
+
 Each patch is independently idempotent (own marker comment) and fail-silent
 on anchor drift (logs WARN to stderr, skips THAT patch only, leaves the
 others free to apply). A single run applies whichever patches haven't yet
-been applied; repeated runs are no-ops if all four markers are present.
+been applied; repeated runs are no-ops if all markers are present.
 
 Usage:
     apply_telegram_typing_patch.py /path/to/server.ts
@@ -58,13 +64,15 @@ import re
 import sys
 from pathlib import Path
 
-MARKER_TYPING = "agentic-pod-launcher: typing refresh patch v4"
+MARKER_TYPING = "agentic-pod-launcher: typing refresh patch v5"
+MARKER_TYPING_V4 = "agentic-pod-launcher: typing refresh patch v4"
 MARKER_TYPING_V3 = "agentic-pod-launcher: typing refresh patch v3"
 MARKER_TYPING_V2 = "agentic-pod-launcher: typing refresh patch v2"
 MARKER_TYPING_V1 = "agentic-pod-launcher: typing refresh patch v1"
 MARKER_OFFSET = "agentic-pod-launcher: offset persistence patch v1"
 MARKER_STDERR = "agentic-pod-launcher: stderr-capture patch v1"
 MARKER_PRIMARY = "agentic-pod-launcher: primary lock patch v1"
+MARKER_PENDING = "agentic-pod-launcher: pending-reply marker patch v1"
 
 # V3 helpers — used by the v2→v3 upgrade ONLY. Fresh installs and v3→v4
 # upgrades use TYPING_HELPERS (v4 — anti-zombie). Without this separation,
@@ -103,6 +111,23 @@ TYPING_HELPERS_V3 = (
     "}\n"
 )
 
+# 028 (US2): the typing-timeout warning line. v4 asserted OAuth as the likely
+# cause; v5 states the real uncertainty (a long turn still in progress, an answer
+# produced WITHOUT calling the reply tool, or an expired login) so the operator is
+# not sent down the wrong diagnostic path. _V4_WARNMSG must match the v4 source
+# byte-for-byte so the v4→v5 upgrade and the TYPING_HELPERS_V4 derivation can swap it.
+_V4_WARNMSG = (
+    "      const warnMsg = `⚠️ Tardé más de ${minutes} min en responder. "
+    "Es probable que el OAuth de Claude haya expirado o haya un error de conectividad. "
+    "Revisa: agentctl doctor.`\n"
+)
+_V5_WARNMSG = (
+    "      const warnMsg = `⚠️ Llevo más de ${minutes} min sin entregar la respuesta "
+    "a este chat. Puede deberse a: una respuesta larga aún en curso, a que respondí "
+    "sin usar la herramienta de envío, o a que el login de Claude haya expirado. "
+    "Revisa: agentctl doctor.`\n"
+)
+
 TYPING_HELPERS = (
     "\n// " + MARKER_TYPING + "\n"
     "const _typingIntervals = new Map<string | number, ReturnType<typeof setInterval>>()\n"
@@ -136,7 +161,7 @@ TYPING_HELPERS = (
     "      // would have left the typing tick spinning indefinitely.\n"
     "      _typingStop(chat_id)\n"
     "      const minutes = Math.round(elapsed / 60000)\n"
-    "      const warnMsg = `⚠️ Tardé más de ${minutes} min en responder. Es probable que el OAuth de Claude haya expirado o haya un error de conectividad. Revisa: agentctl doctor.`\n"
+    + _V5_WARNMSG +
     "      bot.api.sendMessage(chat_id, warnMsg)\n"
     "        .catch((err: any) => {\n"
     "          const msg = err && (err.message || err.description || String(err))\n"
@@ -172,6 +197,13 @@ TYPING_HELPERS = (
     "  _typingStartedAt.delete(chat_id)\n"
     "}\n"
 )
+
+# 028 (US2): the v4 helper block = the v5 block with the marker + message reverted.
+# Injected by the v3→v4 upgrade ONLY, so a v3 file lands at v4 (then v4→v5 swaps the
+# message), preserving the no-mis-stamp upgrade history (mirrors TYPING_HELPERS_V3).
+TYPING_HELPERS_V4 = TYPING_HELPERS.replace(
+    MARKER_TYPING, MARKER_TYPING_V4
+).replace(_V5_WARNMSG, _V4_WARNMSG)
 
 OFFSET_HELPERS = (
     "\n// " + MARKER_OFFSET + "\n"
@@ -226,6 +258,41 @@ OFFSET_MARK = (
 OFFSET_ACK = (
     "        // " + MARKER_OFFSET + " — ack pending update; advances disk offset only after a successful reply\n"
     "        _ackPending(chat_id)\n"
+)
+
+# 028: pending-reply marker. A tiny disk file that says "a channel message is
+# awaiting a reply" — written on inbound, deleted on the reply tool. It is the
+# ORIGIN + unreplied signal the reply-guard Stop hook reads at turn-end (the Stop
+# payload carries no turn origin; the hook runs in the claude process and cannot
+# read this plugin's in-memory _pendingUpdates Map). Same file family + ack-on-reply
+# timing as the offset patch; independent marker so it applies/skips on its own.
+PENDING_HELPERS = (
+    "\n// " + MARKER_PENDING + "\n"
+    "const _PENDING_REPLY_FILE = '/home/agent/.claude/channels/telegram/pending-reply.json'\n"
+    "function _markPendingReply(chatId: string | number, updateId: number): void {\n"
+    "  try {\n"
+    "    const fs = require('node:fs')\n"
+    "    const path = require('node:path')\n"
+    "    fs.mkdirSync(path.dirname(_PENDING_REPLY_FILE), { recursive: true })\n"
+    "    fs.writeFileSync(_PENDING_REPLY_FILE, JSON.stringify({ chat_id: chatId, update_id: updateId, ts: Date.now() }))\n"
+    "  } catch {}\n"
+    "}\n"
+    "function _clearPendingReply(): void {\n"
+    "  try {\n"
+    "    const fs = require('node:fs')\n"
+    "    fs.rmSync(_PENDING_REPLY_FILE, { force: true })\n"
+    "  } catch {}\n"
+    "}\n"
+)
+
+PENDING_MARK = (
+    "  // " + MARKER_PENDING + " — record the channel turn as awaiting a reply\n"
+    "  if (typeof ctx.update?.update_id === 'number') _markPendingReply(chat_id, ctx.update.update_id)\n"
+)
+
+PENDING_CLEAR = (
+    "        // " + MARKER_PENDING + " — the reply tool fired; clear the awaiting-reply marker\n"
+    "        _clearPendingReply()\n"
 )
 
 PRIMARY_GUARD = (
@@ -437,7 +504,7 @@ def upgrade_typing_v3_to_v4(src: str) -> tuple[str, bool]:
         r"(?:[^\n]*\n)+?"
         r"\}\n"
     )
-    new_src, n = re.subn(pattern, TYPING_HELPERS, src, count=1)
+    new_src, n = re.subn(pattern, TYPING_HELPERS_V4, src, count=1)
     if n != 1:
         warn("v3→v4 upgrade anchors not found (helpers may have been edited out-of-band) — leaving v3 in place")
         return src, False
@@ -448,6 +515,37 @@ def upgrade_typing_v3_to_v4(src: str) -> tuple[str, bool]:
         "  // Patched by agentic-pod-launcher (telegram-typing v3 — instrumented).\n",
         "// Typing indicator — refreshed every 4s until reply fires; aborts after _TYPING_MAX_DURATION_MS (default 5min) with user-facing warning.\n"
         "  // Patched by agentic-pod-launcher (telegram-typing v4 — anti-zombie).\n",
+    )
+    return new_src, True
+
+
+def upgrade_typing_v4_to_v5(src: str) -> tuple[str, bool]:
+    """Migrate a server.ts already patched with typing v4 to v5 in-place.
+
+    The behavioral diff between v4 and v5 is ONLY the timeout warning wording: v4
+    asserted "es probable que el OAuth de Claude haya expirado"; v5 states the real
+    uncertainty (a long turn still running, an answer produced WITHOUT calling the
+    reply tool, or an expired login) + the diagnostic. Surgical, like v1→v2: swap the
+    warnMsg line + bump the marker, without re-injecting the whole helper block.
+
+    Defensive: if the v4 warnMsg was edited out-of-band the swap won't match and we
+    leave the file at v4 (WARN). Returns (new_src, applied).
+    """
+    if MARKER_TYPING in src:                # already at v5
+        return src, False
+    if MARKER_TYPING_V4 not in src:         # not at v4 → a v1/v2/v3 must upgrade first
+        return src, False
+
+    new_src = src.replace(_V4_WARNMSG, _V5_WARNMSG)
+    if new_src == src:
+        warn("v4→v5 upgrade: warnMsg anchor not found (message may have been edited out-of-band) — leaving v4 in place")
+        return src, False
+
+    # Bump the helper marker v4 → v5 and the call-site comment.
+    new_src = new_src.replace(MARKER_TYPING_V4, MARKER_TYPING)
+    new_src = new_src.replace(
+        "  // Patched by agentic-pod-launcher (telegram-typing v4 — anti-zombie).\n",
+        "  // Patched by agentic-pod-launcher (telegram-typing v5 — honest timeout).\n",
     )
     return new_src, True
 
@@ -470,7 +568,7 @@ def apply_typing(src: str) -> tuple[str, bool]:
         r"  void bot\.api\.sendChatAction\(chat_id, 'typing'\)\.catch\(\(\) => \{\}\)",
         (
             "  // Typing indicator — refreshed every 4s until reply fires; aborts after _TYPING_MAX_DURATION_MS (default 5min) with user-facing warning.\n"
-            "  // Patched by agentic-pod-launcher (telegram-typing v4 — anti-zombie).\n"
+            "  // Patched by agentic-pod-launcher (telegram-typing v5 — honest timeout).\n"
             "  _typingKeepAlive(chat_id)"
         ),
         new_src,
@@ -575,6 +673,54 @@ def apply_offset(src: str) -> tuple[str, bool]:
     return new_src, True
 
 
+def apply_pending_marker(src: str) -> tuple[str, bool]:
+    """Write/clear the pending-reply marker (028). Returns (new_src, applied).
+
+    Three hunks, all gated by MARKER_PENDING and fail-silent on anchor drift:
+      P1 — helpers (_markPendingReply / _clearPendingReply), anchored on
+            `let botUsername = ''` (same top-level anchor as typing/offset; all
+            stack after that line, order-independent).
+      P2 — write the marker in handleInbound, at the same `chat_id` binding the
+            offset patch marks pending at (so every inbound is covered).
+      P3 — clear the marker in case 'reply', right before the offset ack site, so
+            a successful reply removes the awaiting-reply signal.
+
+    The Stop hook (scripts/hooks/stop-redeliver.sh) keys on this marker's existence.
+    If any anchor drifts, this patch skips (WARN) and the reply guard degrades to a
+    no-op (marker never appears → hook never fires) — safe, not broken.
+    """
+    if MARKER_PENDING in src:
+        return src, False
+    new_src, n1 = re.subn(
+        r"(let botUsername = ''\n)",
+        r"\1" + PENDING_HELPERS,
+        src,
+        count=1,
+    )
+    if n1 != 1:
+        warn("pending-marker hunk1 anchor (let botUsername) not found — skipping pending-reply marker patch (reply guard has no channel-origin signal)")
+        return src, False
+    new_src, n2 = re.subn(
+        r"(  const chat_id = String\(ctx\.chat!\.id\)\n)",
+        r"\1" + PENDING_MARK,
+        new_src,
+        count=1,
+    )
+    if n2 != 1:
+        warn("pending-marker hunk2 anchor (handleInbound chat_id) not found — skipping pending-reply marker patch")
+        return src, False
+    new_src, n3 = re.subn(
+        r"(        const result =\n          sentIds\.length === 1\n)",
+        PENDING_CLEAR + r"\1",
+        new_src,
+        count=1,
+    )
+    if n3 != 1:
+        warn("pending-marker hunk3 anchor (case 'reply' result) not found — skipping pending-reply marker patch")
+        return src, False
+    return new_src, True
+
+
 def apply_stderr(src: str) -> tuple[str, bool]:
     """Tee process.stderr to disk + log uncaught/unhandled. Returns (new_src, applied)."""
     if MARKER_STDERR in src:
@@ -661,19 +807,22 @@ def main(argv: list[str]) -> int:
 
     # Run the typing upgrades BEFORE apply_typing, in cascade:
     #   v1 → v2 (cap removed) → v3 (instrumented) → v4 (anti-zombie timeout)
+    #     → v5 (honest timeout message, no OAuth assertion)
     # If a step's source marker isn't present, that step is a no-op and the
-    # next step picks up. apply_typing then short-circuits on the v4 marker
+    # next step picks up. apply_typing then short-circuits on the v5 marker
     # if anything ran. If no markers were present at all, apply_typing
-    # installs v4 fresh.
+    # installs v5 fresh.
     new_src, tu1 = upgrade_typing_v1_to_v2(new_src)
     new_src, tu2 = upgrade_typing_v2_to_v3(new_src)
     new_src, tu3 = upgrade_typing_v3_to_v4(new_src)
+    new_src, tu4 = upgrade_typing_v4_to_v5(new_src)
     new_src, t = apply_typing(new_src)
     new_src, o = apply_offset(new_src)
+    new_src, pm = apply_pending_marker(new_src)
     new_src, s = apply_stderr(new_src)
     new_src, p = apply_primary(new_src)
 
-    if not (tu1 or tu2 or tu3 or t or o or s or p):
+    if not (tu1 or tu2 or tu3 or tu4 or t or o or pm or s or p):
         # Either everything is already patched, or every set of anchors missed.
         return 0
 
@@ -688,10 +837,14 @@ def main(argv: list[str]) -> int:
         parts.append("typing-upgrade-v2→v3")
     if tu3:
         parts.append("typing-upgrade-v3→v4")
+    if tu4:
+        parts.append("typing-upgrade-v4→v5")
     if t:
         parts.append("typing")
     if o:
         parts.append("offset")
+    if pm:
+        parts.append("pending-marker")
     if s:
         parts.append("stderr")
     if p:

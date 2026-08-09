@@ -1154,6 +1154,12 @@ $atlassian_entries"
     done
   fi
 
+  # 028: the reply guard defaults ON when the Telegram plugin is in the set (the
+  # reply path it protects). telegram is a mandatory default plugin, so a fresh
+  # scaffold is always true; the check only matters for a hand-trimmed plugin list.
+  local _rg_enabled=false
+  case "$plugins_yaml" in *"telegram@"*) _rg_enabled=true ;; esac
+
   # Optional persona: when --role-file is set, store the workspace-relative
   # path (the file itself is copied in by scaffold_destination). The key is
   # omitted entirely when unset — schema rejects an empty role_file.
@@ -1220,6 +1226,9 @@ features:
     timeout: 300
     retries: 1
     default_prompt: "$hb_prompt"
+  reply_guard:
+    enabled: $_rg_enabled
+    max_attempts: 1
 
 mcps:
   defaults:
@@ -2035,6 +2044,20 @@ regenerate() {
         yq -i ".deployment.session_name = \"$(_resolve_session_name "$_sess_agent" "$_sess_host")\"" "$agent_yml"
       fi
     fi
+
+    # 028: backfill features.reply_guard for a pre-028 workspace. Default enabled
+    # derives from the Telegram plugin being present in plugins[] (the reply path
+    # the guard protects); max_attempts defaults to 1. Only writes when the block
+    # is ABSENT — an operator's enabled:false or max_attempts:2 survives untouched
+    # (byte-stable second pass). has() avoids the `//` false-collapse gotcha.
+    if [ "$(yq -r '(.features | has("reply_guard")) // false' "$agent_yml" 2>/dev/null)" != "true" ]; then
+      local _rg_bf=false
+      if yq -r '.plugins[]?' "$agent_yml" 2>/dev/null | grep -qE '^telegram@'; then
+        _rg_bf=true
+      fi
+      yq -i ".features.reply_guard.enabled = $_rg_bf" "$agent_yml"
+      yq -i '.features.reply_guard.max_attempts = 1' "$agent_yml"
+    fi
   fi
 
   echo "▸ Loading context from agent.yml"
@@ -2268,6 +2291,19 @@ regenerate() {
   # .env.example
   render_to_file "$modules_dir/env-example.tpl" "$SCRIPT_DIR/.env.example"
   echo "  ✓ .env.example"
+
+  # 028: reply-guard Stop hook — the hook script + the settings.json install helper.
+  # Rendered in BOTH modes (docker reaches them via the /workspace bind-mount; local
+  # uses the on-disk workspace). Gated on FEATURES_REPLY_GUARD_ENABLED so a
+  # non-channel agent's regenerate stays byte-identical (FR-012). The per-mode
+  # settings.json registration is applied at boot (docker) / login (local), not here.
+  if [ "${FEATURES_REPLY_GUARD_ENABLED:-false}" = "true" ]; then
+    mkdir -p "$SCRIPT_DIR/scripts/hooks"
+    render_to_file "$modules_dir/stop-hook.sh.tpl"         "$SCRIPT_DIR/scripts/hooks/stop-redeliver.sh"
+    render_to_file "$modules_dir/stop-hook-install.sh.tpl" "$SCRIPT_DIR/scripts/hooks/install-stop-hook.sh"
+    chmod +x "$SCRIPT_DIR/scripts/hooks/stop-redeliver.sh" "$SCRIPT_DIR/scripts/hooks/install-stop-hook.sh"
+    echo "  ✓ scripts/hooks/ (stop-redeliver.sh + install-stop-hook.sh)"
+  fi
 
   # Docker-only artifacts (011): the compose file + the mirrored build context
   # are rendered ONLY in docker mode. Local mode skips them entirely (no Docker)

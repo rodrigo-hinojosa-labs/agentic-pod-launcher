@@ -134,8 +134,61 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
-**027-declarative-scaffold-parity IMPLEMENTADO — PR ABIERTO (sin mergear)** (branch desde
-main=`cd85bb2` v0.17.0; spec+clarify+plan+tasks+implement hechos 2026-08-06). Plan:
+**028-channel-reply-guard IMPLEMENTADO (test-first, PR ABIERTO 2026-08-08; branch desde
+main=`5871405` v0.18.0→0.19.0).** Plan: `specs/028-channel-reply-guard/plan.md`. **BUG MEDIDO EN
+PRODUCCIÓN (ferrari, agente donna, 2026-08-08):** un agente Telegram (docker) VIVO dejó de
+responder por Telegram — procesó los mensajes y generó las respuestas, pero las escribió como
+texto plano en la TUI en vez de llamar `plugin:telegram:telegram`, así que nunca salieron del
+contenedor; el typing patch v4 luego disparó el warning MENTIROSO "es probable OAuth expirado"
+(76 ticks × 4). Causa raíz: comportamiento del modelo con contexto largo (~106k en `--continue`),
+NO infra → guardia determinista, no más prompt. **GATE DE FACTIBILIDAD DE FASE 0 — MEDIDO EN
+ESTE HOST (captura real del payload del Stop hook vía `claude -p --settings`):** el payload
+`{session_id, transcript_path, cwd, prompt_id, stop_hook_active, last_assistant_message, …}`
+**NO expone el origen** del turno (canal vs consola) → el Stop hook solo no basta; SÍ trae
+`last_assistant_message` (la respuesta no entregada) y `stop_hook_active` (loop guard nativo).
+**DISEÑO (research.md, 6/6 constitución PASS):** guardia COOPERATIVA en dos partes forzada por
+la arquitectura — (1) el plugin persiste un **marcador `pending-reply.json`** en disco (write
+on-inbound / delete on-reply, espeja la persistencia de offset) = señal de origen+unreplied; (2)
+un **Stop hook** (`modules/stop-hook.sh.tpl` → `scripts/hooks/stop-redeliver.sh`, rendered en
+`regenerate()`) lee el marcador al fin de turno y, si existe y `stop_hook_active=false`, re-inyecta
+`{"decision":"block","reason":…}` para que el agente reenvíe vía la tool (max_attempts=1, log a
+stderr); fail-silent (exit 0 siempre). Config del hook = merge jq aditivo per-modo (docker
+`start_services.sh::pre_install_stop_hook` tras `pre_accept_bypass_permissions`; local en
+`agent-login.sh`); leak encontrado → heartbeat debe `del(.hooks.Stop)`. **US2:** el mensaje
+mentiroso (`apply_telegram_typing_patch.py:139`) se reescribe honesto vía **bump v4→v5 +
+`upgrade_typing_v4_to_v5`** (idempotencia por marcador). Toggle `features.reply_guard:{enabled,
+max_attempts}` (mirror de heartbeat), on-by-default derivado de presencia del plugin telegram en
+`plugins[]`, backfill en `regenerate()`. **Decisiones clarify (2026-08-08):** 1 reintento;
+on-by-default; log a stderr. **Residual a host vivo (donna/rodri):** confirmar
+`{decision:block}`+cap del loop en el Claude del contenedor, y (opcional) si el transcript marca
+el origen de canal (habilitaría la variante sin cambio de plugin). **Scope:** docker/Telegram el
+comportamiento real; local (relay remote-control, sin tool telegram) el hook queda inerte.
+**IMPLEMENTADO 2026-08-08 (test-first, 24/25 tareas; T025 diferido):** Foundational toggle
+`features.reply_guard:{enabled,max_attempts}` (schema `_SCHEMA_BOOLEANS`, heredoc del wizard con
+`enabled` derivado de `^telegram@`, backfill en `regenerate()` con `has()` — evita el gotcha del
+`//`). US1: `modules/stop-hook.sh.tpl` (hook fail-silent, `stop_hook_active` como loop guard, log
+stderr, `max_attempts` horneado por `{{VAR}}` — sin `.conf`) + helper compartido
+`modules/stop-hook-install.sh.tpl` (merge jq aditivo, testeable) rendered en ambos modos; hunks del
+marcador `pending-reply` (write on-inbound `/home/agent/.claude/channels/telegram/`, delete on-reply)
+en el patcher; `del(.hooks.Stop)` en el aislamiento de heartbeat. US2: bump typing **v4→v5** +
+`upgrade_typing_v4_to_v5` (quirúrgico, `TYPING_HELPERS_V4` derivado por `.replace`, idempotente).
+**GATES HOST VERDES (T022-T024):** suite completa **1225 ok / 0 not ok byte-idéntico en bash 5.3.15
+Y 3.2.57** (baseline 027 = 1207, +18 nuevos: reply-guard-config 3, stop-hook-guard 11, apply-telegram
++4); shellcheck CI `rc=0` + hooks renderizados shellcheck-limpios; **mutación 5/5** (A marcador-origen
+→ casos 1/2/3/8; B loop-guard → caso 4; C mensaje v5 → US2; D clear del marcador → pending-marker; E
+detección telegram del backfill → reply-guard-config); regenerate-safety (dos `--regenerate` byte-
+idénticos + agente sin canal SIN `scripts/hooks/`). VERSION 0.19.0, CHANGELOG/README/architecture.md.
+`/speckit-analyze`: 0 CRITICAL/HIGH, 4 drifts de doc (plan/data-model/contract) corregidos in-situ.
+**T025 DIFERIDO:** DOCKER_E2E (sin daemon aquí) + cola de host vivo (donna/rodri) = el despliegue de
+v0.19.0, paso separado gateado por el operador. **PR ABIERTO contra main (NO mergeado — main
+protegido).** Siguiente: gate DOCKER_E2E/host vivo en el deploy; luego merge con confirmación.
+
+**027-declarative-scaffold-parity MERGED** (PR #88, squash `5871405` en main, 2026-08-06; branch
+desde main=`cd85bb2` v0.17.0→**0.18.0**; mergeado por `rodrigo-hinojosa`). Post-merge: rama 027
+(local + remota auto-eliminada en el merge) limpiada, main sincronizada y verificada (`5871405`,
+VERSION 0.18.0, símbolos presentes: `_is_launcher_own_claude_md`, `agent-qmd-mcp.sh` en el trigger,
+`AGENTIC_FLOOR_MCP_FETCH/_GIT/_ATLASSIAN/_LIB`, `MCP_FETCH_VERSION` export, `render_next_steps quiet`;
+historia lineal 087→088). Plan:
 `specs/027-declarative-scaffold-parity/plan.md`.
 Trae al launcher, test-first, los 4 huecos MEDIDOS en el scaffold declarativo de `ferrari-admin`
 (2026-08-05, ver [[ferrari-admin-agent]] en memoria): **US1 (P1)** el render no-interactivo debe
@@ -167,10 +220,15 @@ en bash 5.3.15 Y 3.2.57** (secuencial; baseline 1197 + 10 tests nuevos); mutaci�
 byte-idéntico (cero archivo `docker/` tocado → sin DOCKER_E2E). Observado: 2 tests de heartbeat flakean
 si se corren las dos suites CONCURRENTES (contención de CPU sobre timeouts); pasan 0/0 en aislamiento y
 secuencial — ajeno a 027. VERSION 0.17.0→**0.18.0**; CHANGELOG + `docs/creating-an-agent.md`
-actualizados. **PENDIENTE NO BLOQUEANTE — T021 (gate en vivo):** `uv tool install` + `claude mcp list`
-Connected necesita host con `uv`/systemd (esta Mac no tiene `uv`); ferrari ya validó los 4 fixes a mano
-el 05-08; el residual es la compat explícita atlassian 0.21.1 ↔ mcp 1.28.1. Siguiente: correr T021 contra
-ferrari/mclaren ANTES del merge (SC-006).
+actualizados. **T021 — residual de compat de pins CERRADO (2026-08-07, ferrari real, Linux aarch64/musl, uv
+0.11.22):** `uv run --isolated --with <pkg>==<pin> --with mcp==1.28.1` resolvió e importó los TRES
+uvx bajo un mismo `mcp==1.28.1` (atlassian 0.21.1 / fetch 2026.6.4 / git 2026.6.16, con `McpError`
+importable) → la combo de `versions.sh` es mutuamente compatible en host real, sin override
+per-server; validación aislada, sin tocar el agente vivo. **Falta (más pesado, separado):** la
+aceptación completa SC-001/SC-002 "sin pasos manuales, 4 fixes desde el código del launcher" = el
+**despliegue de v0.18.0** a ferrari/mclaren (re-scaffold o `--regenerate` + `--login`). **Follow-up
+docker:** el MISMO drift sin pin de US3 vive en `docker/Dockerfile:122-124` → feature aparte
+(tocaría `docker/` + DOCKER_E2E; los pins de `versions.sh` quedan de fuente).
 
 **026-channel-watchdog-timeout MERGED** (PR #86, squash `f827c31` en main, 2026-08-04; branch desde
 main=`cebd8b7`, VERSION 0.16.0→**0.17.0**). Post-merge: ramas 026 (local + remota) y

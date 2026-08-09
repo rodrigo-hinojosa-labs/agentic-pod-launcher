@@ -101,13 +101,58 @@ TS
 
 teardown() { teardown_tmp_dir; }
 
-@test "patcher applies all 4 markers on a fresh fixture" {
+@test "patcher applies all 5 markers on a fresh fixture" {
   run python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
   [ "$status" -eq 0 ]
-  grep -q "agentic-pod-launcher: typing refresh patch v4" "$TMP_TEST_DIR/server.ts"
+  grep -q "agentic-pod-launcher: typing refresh patch v5" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: offset persistence patch v1" "$TMP_TEST_DIR/server.ts"
+  grep -q "agentic-pod-launcher: pending-reply marker patch v1" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: stderr-capture patch v1" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: primary lock patch v1" "$TMP_TEST_DIR/server.ts"
+}
+
+# ── 028 US1: pending-reply marker hunks (contracts/pending-reply-marker.md) ───────
+
+@test "028 pending-marker: helpers declare _markPendingReply / _clearPendingReply + file path" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  grep -q "function _markPendingReply(chatId: string | number, updateId: number): void" "$TMP_TEST_DIR/server.ts"
+  grep -q "function _clearPendingReply(): void" "$TMP_TEST_DIR/server.ts"
+  grep -q "/home/agent/.claude/channels/telegram/pending-reply.json" "$TMP_TEST_DIR/server.ts"
+}
+
+@test "028 pending-marker: write injected in handleInbound, clear injected in case 'reply'" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  grep -A 4 "  const chat_id = String(ctx.chat!.id)" "$TMP_TEST_DIR/server.ts" \
+    | grep -q "_markPendingReply(chat_id, ctx.update.update_id)"
+  grep -B 4 "        const result =" "$TMP_TEST_DIR/server.ts" \
+    | grep -q "_clearPendingReply()"
+}
+
+# ── 028 US2: honest timeout message (typing v5) ──────────────────────────────────
+
+@test "028 US2: fresh install carries the honest timeout message, not an OAuth assertion" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  # names more than one cause + a diagnostic …
+  grep -q "sin usar la herramienta de envío" "$TMP_TEST_DIR/server.ts"
+  grep -q "agentctl doctor" "$TMP_TEST_DIR/server.ts"
+  # … and does NOT assert OAuth as the definite cause (negative last).
+  ! grep -q "Es probable que el OAuth de Claude haya expirado o haya un error de conectividad" "$TMP_TEST_DIR/server.ts"
+}
+
+@test "028 US2: a v4-patched server.ts ratchets to v5 with the honest message" {
+  # Fresh → v5, then revert marker + comment + message to simulate an existing v4 agent.
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  perl -0pi -e 's/typing refresh patch v5/typing refresh patch v4/g; s/telegram-typing v5 — honest timeout/telegram-typing v4 — anti-zombie/g' "$TMP_TEST_DIR/server.ts"
+  perl -0pi -e 's/⚠️ Llevo más de \$\{minutes\} min sin entregar la respuesta a este chat\. Puede deberse a: una respuesta larga aún en curso, a que respondí sin usar la herramienta de envío, o a que el login de Claude haya expirado\. Revisa: agentctl doctor\./⚠️ Tardé más de \${minutes} min en responder. Es probable que el OAuth de Claude haya expirado o haya un error de conectividad. Revisa: agentctl doctor./g' "$TMP_TEST_DIR/server.ts"
+  grep -q "typing refresh patch v4" "$TMP_TEST_DIR/server.ts"
+  run grep -q "typing refresh patch v5" "$TMP_TEST_DIR/server.ts"; [ "$status" -ne 0 ]
+  # re-run → v4→v5 upgrade
+  run python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  [ "$status" -eq 0 ]
+  grep -q "typing refresh patch v5" "$TMP_TEST_DIR/server.ts"
+  grep -q "sin usar la herramienta de envío" "$TMP_TEST_DIR/server.ts"
+  run grep -q "typing refresh patch v4" "$TMP_TEST_DIR/server.ts"; [ "$status" -ne 0 ]
+  ! grep -q "Es probable que el OAuth de Claude haya expirado" "$TMP_TEST_DIR/server.ts"
 }
 
 @test "patcher is idempotent — second run is a no-op" {
@@ -140,16 +185,17 @@ teardown() { teardown_tmp_dir; }
 @test "offset patch: _markPending injected after handleInbound chat_id binding" {
   python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
   # OFFSET_MARK is a 2-line block (marker comment + the _markPending call) inserted
-  # right after the chat_id binding. -A 2 covers both lines.
-  grep -A 2 "  const chat_id = String(ctx.chat!.id)" "$TMP_TEST_DIR/server.ts" \
+  # after the chat_id binding. 028's pending-reply marker also anchors on that line
+  # (independent patch), so widen the window to -A 4 to clear both blocks.
+  grep -A 4 "  const chat_id = String(ctx.chat!.id)" "$TMP_TEST_DIR/server.ts" \
     | grep -q "_markPending(chat_id, ctx.update.update_id)"
 }
 
 @test "offset patch: _ackPending injected immediately before const result in case 'reply'" {
   python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
-  # The ack line must appear right before `const result =` in case 'reply'.
-  # grep -B 1 the result line and confirm previous line calls _ackPending.
-  grep -B 1 "        const result =" "$TMP_TEST_DIR/server.ts" \
+  # The ack line appears before `const result =` in case 'reply'. 028's pending
+  # marker also clears before that line (independent patch), so widen to -B 3.
+  grep -B 3 "        const result =" "$TMP_TEST_DIR/server.ts" \
     | grep -q "_ackPending(chat_id)"
 }
 
@@ -195,7 +241,7 @@ teardown() { teardown_tmp_dir; }
   rm -f "$TMP_TEST_DIR/server.ts.bak"
   run python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
   [ "$status" -eq 0 ]
-  ! grep -q "agentic-pod-launcher: typing refresh patch v4" "$TMP_TEST_DIR/server.ts"
+  ! grep -q "agentic-pod-launcher: typing refresh patch v5" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: offset persistence patch v1" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: stderr-capture patch v1" "$TMP_TEST_DIR/server.ts"
 }
@@ -206,7 +252,7 @@ teardown() { teardown_tmp_dir; }
   rm -f "$TMP_TEST_DIR/server.ts.bak"
   run python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
   [ "$status" -eq 0 ]
-  grep -q "agentic-pod-launcher: typing refresh patch v4" "$TMP_TEST_DIR/server.ts"
+  grep -q "agentic-pod-launcher: typing refresh patch v5" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: offset persistence patch v1" "$TMP_TEST_DIR/server.ts"
   ! grep -q "agentic-pod-launcher: stderr-capture patch v1" "$TMP_TEST_DIR/server.ts"
 }
@@ -221,7 +267,7 @@ teardown() { teardown_tmp_dir; }
   [ "$status" -eq 0 ]
   ! grep -q "agentic-pod-launcher: offset persistence patch v1" "$TMP_TEST_DIR/server.ts"
   ! grep -q "_pendingUpdates" "$TMP_TEST_DIR/server.ts"
-  grep -q "agentic-pod-launcher: typing refresh patch v4" "$TMP_TEST_DIR/server.ts"
+  grep -q "agentic-pod-launcher: typing refresh patch v5" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: stderr-capture patch v1" "$TMP_TEST_DIR/server.ts"
 }
 
@@ -284,7 +330,7 @@ teardown() { teardown_tmp_dir; }
   ! grep -q "_ageMs" "$TMP_TEST_DIR/server.ts"
   # Other patches still apply (independent groups).
   grep -q "agentic-pod-launcher: offset persistence patch v1" "$TMP_TEST_DIR/server.ts"
-  grep -q "agentic-pod-launcher: typing refresh patch v4" "$TMP_TEST_DIR/server.ts"
+  grep -q "agentic-pod-launcher: typing refresh patch v5" "$TMP_TEST_DIR/server.ts"
 }
 
 # ─── typing v3: cap removal + observability ──────────────────────────────────
@@ -389,13 +435,16 @@ TS
   echo "$output" | grep -q "typing-upgrade-v1"
   echo "$output" | grep -q "typing-upgrade-v2"
   echo "$output" | grep -q "typing-upgrade-v3"
+  echo "$output" | grep -q "typing-upgrade-v4"
 
-  # Post-upgrade: marker bumped to v4, v1 cap stripped, comment refreshed,
-  # v3 instrumentation preserved, v4 anti-zombie cap in place.
+  # Post-upgrade: marker bumped to v5 (cascade v1→v2→v3→v4→v5), v1 cap stripped,
+  # comment refreshed, v3 instrumentation preserved, v4 anti-zombie cap in place,
+  # v5 honest timeout message.
   ! grep -q "typing refresh patch v1" "$TMP_TEST_DIR/server.v1.ts"
   ! grep -q "typing refresh patch v2" "$TMP_TEST_DIR/server.v1.ts"
   ! grep -q "typing refresh patch v3" "$TMP_TEST_DIR/server.v1.ts"
-  grep -q "typing refresh patch v4" "$TMP_TEST_DIR/server.v1.ts"
+  ! grep -q "typing refresh patch v4" "$TMP_TEST_DIR/server.v1.ts"
+  grep -q "typing refresh patch v5" "$TMP_TEST_DIR/server.v1.ts"
   ! grep -q "_TYPING_MAX_MS = 120000" "$TMP_TEST_DIR/server.v1.ts"
   grep -q "_TYPING_MAX_DURATION_MS" "$TMP_TEST_DIR/server.v1.ts"
   ! grep -qE "setTimeout\(\(\) => _typingStop" "$TMP_TEST_DIR/server.v1.ts"
@@ -448,17 +497,19 @@ TS
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "typing-upgrade-v2"
   echo "$output" | grep -q "typing-upgrade-v3"
+  echo "$output" | grep -q "typing-upgrade-v4"
   ! echo "$output" | grep -q "typing-upgrade-v1"
 
-  # Post-upgrade: v4 marker, v3 instrumentation preserved, v4 cap in place,
-  # call-site comment refreshed.
+  # Post-upgrade: v5 marker (cascade v2→v3→v4→v5), v3 instrumentation preserved,
+  # v4 cap in place, call-site comment refreshed to v5, honest timeout message.
   ! grep -q "typing refresh patch v2" "$TMP_TEST_DIR/server.v2.ts"
   ! grep -q "typing refresh patch v3" "$TMP_TEST_DIR/server.v2.ts"
-  grep -q "typing refresh patch v4" "$TMP_TEST_DIR/server.v2.ts"
+  ! grep -q "typing refresh patch v4" "$TMP_TEST_DIR/server.v2.ts"
+  grep -q "typing refresh patch v5" "$TMP_TEST_DIR/server.v2.ts"
   grep -q "typing tick" "$TMP_TEST_DIR/server.v2.ts"
   grep -q "sendChatAction failed" "$TMP_TEST_DIR/server.v2.ts"
   grep -q "_TYPING_MAX_DURATION_MS" "$TMP_TEST_DIR/server.v2.ts"
-  grep -q "telegram-typing v4 — anti-zombie" "$TMP_TEST_DIR/server.v2.ts"
+  grep -q "telegram-typing v5 — honest timeout" "$TMP_TEST_DIR/server.v2.ts"
 }
 
 @test "typing v3→v4 upgrade: rewrites a v3-patched server.ts in place" {
@@ -518,30 +569,33 @@ TS
   run python3 "$PATCHER" "$TMP_TEST_DIR/server.v3.ts"
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "typing-upgrade-v3"
+  echo "$output" | grep -q "typing-upgrade-v4"
   ! echo "$output" | grep -q "typing-upgrade-v1"
   ! echo "$output" | grep -q "typing-upgrade-v2"
 
-  # Post-upgrade: v4 marker, v4 cap in place, instrumentation preserved.
+  # Post-upgrade: v5 marker (cascade v3→v4→v5), v4 cap in place, instrumentation
+  # preserved, call-site comment at v5.
   ! grep -q "typing refresh patch v3" "$TMP_TEST_DIR/server.v3.ts"
-  grep -q "typing refresh patch v4" "$TMP_TEST_DIR/server.v3.ts"
+  ! grep -q "typing refresh patch v4" "$TMP_TEST_DIR/server.v3.ts"
+  grep -q "typing refresh patch v5" "$TMP_TEST_DIR/server.v3.ts"
   grep -q "_TYPING_MAX_DURATION_MS" "$TMP_TEST_DIR/server.v3.ts"
   grep -q "TELEGRAM_TYPING_MAX_MS" "$TMP_TEST_DIR/server.v3.ts"
-  grep -q "telegram-typing v4 — anti-zombie" "$TMP_TEST_DIR/server.v3.ts"
+  grep -q "telegram-typing v5 — honest timeout" "$TMP_TEST_DIR/server.v3.ts"
   grep -q "typing tick" "$TMP_TEST_DIR/server.v3.ts"
   grep -q "sendChatAction failed" "$TMP_TEST_DIR/server.v3.ts"
 }
 
-@test "typing v4: idempotent re-run on already-v4 server.ts is a no-op" {
-  # First run: install v4 fresh.
+@test "typing v5: idempotent re-run on already-v5 server.ts is a no-op" {
+  # First run: install v5 fresh.
   run python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
   [ "$status" -eq 0 ]
-  local v4_count_before
-  v4_count_before=$(grep -c "typing refresh patch v4" "$TMP_TEST_DIR/server.ts")
+  local v5_count_before
+  v5_count_before=$(grep -c "typing refresh patch v5" "$TMP_TEST_DIR/server.ts")
 
   # Second run: should be a no-op (output empty, file unchanged).
   run python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
   [ "$status" -eq 0 ]
-  local v4_count_after
-  v4_count_after=$(grep -c "typing refresh patch v4" "$TMP_TEST_DIR/server.ts")
-  [ "$v4_count_before" -eq "$v4_count_after" ]
+  local v5_count_after
+  v5_count_after=$(grep -c "typing refresh patch v5" "$TMP_TEST_DIR/server.ts")
+  [ "$v5_count_before" -eq "$v5_count_after" ]
 }
