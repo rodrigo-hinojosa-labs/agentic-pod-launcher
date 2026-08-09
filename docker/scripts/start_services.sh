@@ -763,12 +763,24 @@ verify_channel_healthy() {
   return 1
 }
 
+# 028: register the reply-guard Stop hook in the user settings.json BEFORE the
+# session starts, so it lands in Claude's startup hook snapshot. The jq merge
+# logic lives in the rendered workspace helper (testable, regenerate-safe); this
+# only invokes it, guarded. A pre-028 workspace (no helper) is a no-op. Runs on
+# boot AND every watchdog respawn (idempotent, self-healing).
+pre_install_stop_hook() {
+  local helper="/workspace/scripts/hooks/install-stop-hook.sh"
+  [ -x "$helper" ] || return 0
+  "$helper" "$HOME/.claude/settings.json" "/workspace/scripts/hooks/stop-redeliver.sh" || true
+}
+
 start_session() {
   # Pre-accept the bypass-permissions dialog unconditionally so ANY launch
   # that ends up passing --dangerously-skip-permissions boots cleanly,
   # regardless of which case next_tmux_cmd picked.
   pre_accept_bypass_permissions
   pre_seed_onboarding
+  pre_install_stop_hook
 
   local cmd
   cmd=$(next_tmux_cmd)

@@ -65,6 +65,18 @@ fi
 local_merge_trust "$CLAUDE_JSON" "$WORKSPACE"
 echo "  ✓ workspace trust applied for ${WORKSPACE}"
 
+# 4c. 028: register the reply-guard Stop hook in this workspace's settings.json. The
+#     jq merge logic lives in the rendered helper (testable, regenerate-safe); the
+#     merged file is durable under .state, so it survives a plain systemctl restart.
+#     A pre-028 workspace lacks the helper → skip (fail-silent). Local mode uses the
+#     remote-control relay (not the telegram plugin), so the hook is present-but-inert
+#     unless the operator adds the telegram plugin.
+if [ -x "${WORKSPACE}/scripts/hooks/install-stop-hook.sh" ]; then
+  "${WORKSPACE}/scripts/hooks/install-stop-hook.sh" \
+    "${CONFIG_DIR}/settings.json" "${WORKSPACE}/scripts/hooks/stop-redeliver.sh" || true
+  echo "  ✓ reply-guard Stop hook registered in ${CONFIG_DIR}/settings.json"
+fi
+
 # 4b. Pre-accept the "Enable Remote Control? (y/n)" prompt (gotcha #7). The login
 #     resets remoteDialogSeen; without it the systemd unit blocks on the prompt
 #     (no TTY) and never becomes controllable. Non-destructive; runs after login.

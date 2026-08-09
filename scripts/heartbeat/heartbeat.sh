@@ -143,7 +143,10 @@ ensure_heartbeat_config_dir() {
   if [ -f "$src/settings.json" ] && command -v jq >/dev/null 2>&1; then
     local tmp_settings
     tmp_settings=$(mktemp 2>/dev/null) || tmp_settings="$dst/.settings.json.tmp"
-    if jq '.enabledPlugins = {} | .extraKnownMarketplaces = {}' \
+    # 028: also drop .hooks.Stop — the reply-guard redelivery hook must never
+    # fire on plugin-less cron ticks (no telegram plugin, no channel to deliver
+    # to). Belt-and-suspenders: the hook itself no-ops on an absent marker.
+    if jq '.enabledPlugins = {} | .extraKnownMarketplaces = {} | del(.hooks.Stop)' \
         "$src/settings.json" > "$tmp_settings" 2>/dev/null; then
       mv "$tmp_settings" "$dst/settings.json"
       chmod 0644 "$dst/settings.json" 2>/dev/null || true

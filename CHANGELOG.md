@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+### Added
+- **Channel reply-delivery guard for Telegram agents — `028-channel-reply-guard`**:
+  a deterministic guard against a measured production failure where a live, healthy
+  agent under a long conversation answered as plain text in its terminal instead of
+  calling the `plugin:telegram:telegram` reply tool, so the reply never left the
+  container — while the typing indicator fired a misleading "OAuth expired" warning.
+  Docker/Telegram is where the real behaviour lives; local mode installs the guard
+  but it is present-but-inert (the relay is not the telegram plugin). VERSION
+  0.18.0 → 0.19.0.
+  - **US1 — the answer always reaches the operator.** The Telegram plugin now
+    writes a `pending-reply.json` marker on each inbound and deletes it when the
+    reply tool fires (mirrors the offset-persistence patch). A Claude Code **Stop
+    hook** (`scripts/hooks/stop-redeliver.sh`, rendered from
+    `modules/stop-hook.sh.tpl`, registered in `settings.json` at docker boot / local
+    login via `scripts/hooks/install-stop-hook.sh`) fires at turn-end and, when a
+    channel turn ended with the marker still present, re-injects one corrective
+    nudge (`{"decision":"block", …}`) so the agent resends through the tool.
+    Bounded to one attempt by default (loop-safe via `stop_hook_active`),
+    fail-silent, logged once to the plugin stderr file, and never firing on
+    console/heartbeat turns. Toggle `features.reply_guard.{enabled,max_attempts}` in
+    `agent.yml` (on by default when the Telegram plugin is present); the heartbeat's
+    isolated config now drops `.hooks.Stop` so cron ticks never carry it.
+  - **US2 — the stuck-turn warning stops lying.** The typing-timeout message
+    (telegram patch bumped **v4 → v5**) no longer asserts OAuth as the cause; it
+    names the real alternatives (a slow turn still running, an answer produced
+    without the reply tool, or an expired login) and points to `agentctl doctor`.
+    Already-patched agents ratchet v4 → v5 on the next boot.
+
 ### Fixed
 - **A fresh declarative (non-interactive) local scaffold now comes up fully
   working — four gaps measured on `ferrari-admin`

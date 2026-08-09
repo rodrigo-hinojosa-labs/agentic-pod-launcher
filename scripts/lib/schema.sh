@@ -64,6 +64,7 @@ _SCHEMA_ENUMS=(
 # (yq parses "yes" as a string in YAML 1.2 mode).
 _SCHEMA_BOOLEANS=(
   '.features.heartbeat.enabled'
+  '.features.reply_guard.enabled'
   '.vault.enabled'
   '.vault.mcp.enabled'
   '.vault.qmd.enabled'
