@@ -84,7 +84,9 @@
 - [X] T018 Full host suite green on bash 5.x AND bash 3.2 (`PATH=/bin:$PATH bats tests/`), `ok` count = baseline (T001) + the new tests, `0 not ok`, byte-identical across both bash versions (SC-006).
 - [X] T019 Bump `VERSION` `0.17.0 → 0.18.0`; add a `CHANGELOG.md` entry (US1-US4, local-only, docker follow-up noted) (Principle VI).
 - [X] T020 [P] Update `docs/creating-an-agent.md` (and remove the now-obsolete "manual gotchas" it documents): the declarative scaffold now renders the agent's `CLAUDE.md`, provisions `bun`, pins uvx, and emits `NEXT_STEPS.md` automatically — keep only guidance that stays true.
-- [ ] T021 Live-host acceptance (SC-001/SC-002; deferred to a local systemd host): on a throwaway local scaffold (or a ferrari `--regenerate` + `--login`), confirm NO manual runtime steps are needed — agent `CLAUDE.md` correct, QMD `last_status=indexed`, `claude mcp list` 7/7 Connected, `NEXT_STEPS.md` present.
+- [~] T021 Live-host acceptance (SC-001/SC-002; deferred to a local systemd host): on a throwaway local scaffold (or a ferrari `--regenerate` + `--login`), confirm NO manual runtime steps are needed — agent `CLAUDE.md` correct, QMD `last_status=indexed`, `claude mcp list` 7/7 Connected, `NEXT_STEPS.md` present.
+  - **US3 pin-compat residual CLOSED (2026-08-07, ferrari, Linux aarch64/musl, uv 0.11.22):** isolated `uv run --isolated --with <pkg>==<pin> --with mcp==1.28.1` resolved and imported all three under a SINGLE shared `mcp==1.28.1` — `mcp-atlassian=0.21.1`, `mcp-server-fetch=2026.6.4`, `mcp-server-git=2026.6.16`, each with `McpError` importable. No per-server `mcp` override needed; the `versions.sh` combo is a mutually-compatible set on a real host. Did NOT touch the live agent (ephemeral envs only).
+  - **Still pending (the heavier part):** the full SC-001/SC-002 "no manual runtime steps, all 4 fixes from launcher code" acceptance = the v0.18.0 **deployment** to a live host (re-scaffold or `--regenerate` + `--login`), which touches the running agent. Separate, out of this session's low-risk scope.
 
 ---
 
