@@ -64,6 +64,14 @@ teardown() { teardown_tmp_dir; }
   [[ "$result" == *'TZ: "UTC"'* ]]
 }
 
+@test "docker-compose.yml.tpl propagates claude.mcp_timeout_ms via MCP_TIMEOUT env var (029)" {
+  # The MCP startup-handshake window (env MCP_TIMEOUT) is delivered to claude
+  # through the compose environment: block, like TZ. Fixture has
+  # claude.mcp_timeout_ms=120000 → rendered file must carry MCP_TIMEOUT: "120000".
+  result=$(render_template "$REPO_ROOT/modules/docker-compose.yml.tpl")
+  [[ "$result" == *'MCP_TIMEOUT: "120000"'* ]]
+}
+
 @test "systemd unit has Type=oneshot RemainAfterExit=yes" {
   result=$(render_template "$REPO_ROOT/modules/systemd.service.tpl")
   [[ "$result" == *"Type=oneshot"* ]]

@@ -265,6 +265,16 @@ teardown() { teardown_tmp_dir; }
   ! grep -q 'ANTHROPIC_API_KEY' "$TMP_TEST_DIR/env"
 }
 
+@test "env file: MCP_TIMEOUT from claude.mcp_timeout_ms (029, local mode)" {
+  # The MCP startup-handshake window reaches the systemd session process via the
+  # second EnvironmentFile (remote-control.env), from the SAME agent.yml field as
+  # docker's compose environment (FR-004). setup.sh exports the sanitised value
+  # after render_load_context; here we export it directly to exercise the template.
+  export CLAUDE_MCP_TIMEOUT_MS=120000
+  render_to_file "$REPO_ROOT/modules/remote-control.env.tpl" "$TMP_TEST_DIR/env"
+  grep -q '^MCP_TIMEOUT=120000$' "$TMP_TEST_DIR/env"
+}
+
 @test "env file: PATH prepends the operator ~/.local/bin so systemd finds uv/npx/github-mcp-server (RC-B)" {
   # The unit inherits systemd's minimal default PATH (/usr/local/bin:/usr/bin:…),
   # which excludes the operator's ~/.local/bin, nvm node, etc. Without this line

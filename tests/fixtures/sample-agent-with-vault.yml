@@ -31,6 +31,7 @@ docker:
 claude:
   config_dir: "/home/agent/.claude"
   profile_new: true
+  mcp_timeout_ms: 120000
 notifications:
   channel: telegram
 features:

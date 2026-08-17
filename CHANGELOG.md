@@ -3,6 +3,22 @@
 ## [Unreleased]
 
 ### Added
+- **Configurable MCP startup-handshake window — `029-mcp-handshake-timeout`**:
+  a measured production failure (ferrari, agent `donna`, 2026-08-16) where an MCP
+  whose first launch downloaded its package from PyPI (~50 s) exceeded Claude Code's
+  fixed 30 s startup-handshake window (`MCP_TIMEOUT`), got marked failed and was
+  never retried for the rest of the session — the agent told the operator for
+  ~40 min that it "would reconnect soon"; it never would. New
+  `claude.mcp_timeout_ms` in `agent.yml` (default **120000**, ~2.4× the measured
+  cold download and >4× the binary's 30 s default) is the single source of truth and
+  renders to **both** modes from the same field (no duplicated literal): the docker
+  `docker-compose.yml` `environment:` block (like `TZ`) and the local
+  `remote-control.env` `EnvironmentFile`. The value is sanitised at render time
+  (positive integer of up to 7 digits → the value, anything else → the default,
+  never ≤ 0) and backfilled for pre-029 workspaces via `has()` (an operator's `0` is
+  not silently rewritten). No change under `docker/`: the compose environment
+  reaches `claude` intact, so a rebuild is not required for the value to take effect.
+  VERSION 0.19.0 → 0.20.0.
 - **Channel reply-delivery guard for Telegram agents — `028-channel-reply-guard`**:
   a deterministic guard against a measured production failure where a live, healthy
   agent under a long conversation answered as plain text in its terminal instead of

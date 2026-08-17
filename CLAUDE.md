@@ -134,8 +134,55 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
-**028-channel-reply-guard IMPLEMENTADO (test-first, PR ABIERTO 2026-08-08; branch desde
-main=`5871405` v0.18.0→0.19.0).** Plan: `specs/028-channel-reply-guard/plan.md`. **BUG MEDIDO EN
+**029-mcp-handshake-timeout — SPEC + PLAN COMPLETOS (rama `029-mcp-handshake-timeout` desde main
+=`7334d58` v0.19.0; 1ª de tres features del incidente ferrari 16-08-2026; las otras dos son 030
+warm-cache y 031 guardia AskUserQuestion, specs separadas).** Plan:
+`specs/029-mcp-handshake-timeout/plan.md`. **BUG MEDIDO (ferrari, agente donna, 16-08-2026):** un MCP
+(`google-workspace`, inyectado por el overlay externo `custom-apply`) quedó muerto tras un reinicio —
+descargó su wheel de PyPI durante el boot (~50 s medido), excedió la ventana de handshake de arranque
+y Claude Code lo marcó failed **sin reintento** por el resto de la sesión (le dijo al usuario ~40 min
+"ya va a volver"; nunca iba a volver). `docker restart` lo resolvió (2º arranque con cache caliente,
+3 s). **FASE 0 — MEDIDO EN EL BINARIO (`strings` de claude 2.1.223, ≈ la 2.1.220 pineada), no
+inferido:** la ventana de **arranque** del MCP es la env var **`MCP_TIMEOUT`, default 30000 ms**
+(`qw(){ e=MCP_TIMEOUT; return e&&e>0?e:30000 }`); `MCP_TOOL_TIMEOUT` es de tool-calls y
+`MCP_CONNECT_TIMEOUT_MS`(5000) es el dial de remotos — NO son la del incidente. 50 s > 30 s = el bug.
+**DISEÑO (research.md, constitución 6/6 PASS):** campo `claude.mcp_timeout_ms` en `agent.yml` (fuente
+única cross-mode, flatten `CLAUDE_MCP_TIMEOUT_MS`; el bloque `claude:` es config del binario, mejor que
+`docker:`/`mcps:`/bloque nuevo), default **120000 ms** (holgura ~2.4x sobre los 50 s). Entrega a DOS
+artefactos del mismo placeholder (FR-004): docker `environment:` de `docker-compose.yml.tpl` (como el
+`TZ` existente) + local `remote-control.env.tpl` (2º EnvironmentFile de la unit de sesión, se re-rendea
+en cada `--regenerate` sin sudo). **Saneo en el render host** (`setup.sh`, patrón
+`channel_health_timeout`: entero>0 → valor, inválido → 120000, nunca ≤0), no en runtime (claude caería
+a SU default 30000). **Backfill `has()`** (patrón 028, evita el gotcha del `//` que colapsaría un `0`).
+**SIN DOCKER_E2E requerido** (mapeo verificó: agregar la var al `environment:` NO toca `docker/`
+image-baked; `su-exec`/tmux entregan el env intacto a `claude`; consumidor = binario nativo, sin lector
+baked nuevo). Alcance local: solo la unit de sesión corre `claude` (los demás timers no). Tests host
+bats (render docker+local, saneo, backfill, schema). VERSION bump MINOR + CHANGELOG.
+**IMPLEMENTADO 2026-08-17 (test-first, 22/23 tareas; T015 diferido a hardware).** Foundational: campo
+`claude.mcp_timeout_ms: 120000` en el heredoc de `agent.yml` (setup.sh ~:1206); helper
+`mcp_timeout_effective()` (~:1972, molde `channel_health_timeout`: `^[0-9]{1,7}$` y `>0` → valor,
+inválido/ausente → 120000); backfill `has()` (~:2082, NO `//`) y **re-export de `CLAUDE_MCP_TIMEOUT_MS`
+saneado tras `render_load_context`** (~:2095) para que ambos renders usen el mismo valor. US1:
+`MCP_TIMEOUT: "{{CLAUDE_MCP_TIMEOUT_MS}}"` en `docker-compose.yml.tpl:73` (junto a `TZ`) +
+`MCP_TIMEOUT={{CLAUDE_MCP_TIMEOUT_MS}}` en `remote-control.env.tpl:19`; single-source (ninguna plantilla
+horneó el literal). Tests: `tests/mcp-handshake-timeout.bats` (12, con `_write_agent_yml`
+parametrizado value/OMIT/NULL), +1 en `docker-render.bats`, +1 en `local-render.bats`, fixtures
+`sample-agent{,-with-vault}.yml` con el campo (with-vault exigido por `schema.bats:52`). **GATES
+VERDES:** suite completa **1239 ok / 0 not ok byte-idéntico en bash 5.3.15 Y 3.2.57** (baseline 1225,
++14 nuevos), `shellcheck -S error` rc=0 (comando exacto de CI); **mutación 4/4** (revertir render
+docker → 10 not ok, render local → 2, saneo → 5, backfill → 1; cada restauración vuelve a 0). VERSION
+0.19.0→**0.20.0** (MINOR, precedente 026), CHANGELOG + README (sub-sección + puntero de diagnóstico).
+`/speckit-analyze`: 0 CRITICAL/HIGH. **T015 DIFERIDO:** gate de despliegue a `donna` (ferrari, cache
+`workspace-mcp` frío → `google-workspace` conecta en 120 s), paso separado gateado por el operador en el
+deploy de v0.20.0. **Pendiente inmediato: commit + PR contra main (no ejecutado — falta confirmación del
+operador). Siguiente feature: 030 warm-cache declarativo.**
+
+**028-channel-reply-guard MERGED (PR #89, squash `f2bfd77` en main, 2026-08-08; branch desde
+main=`5871405` v0.18.0→0.19.0; historia lineal 087→088→089).** Post-merge: rama 028 (local +
+remota auto-eliminada en el merge) limpiada, main sincronizada a `f2bfd77` y verificada (VERSION
+0.19.0, archivos `modules/stop-hook{,-install}.sh.tpl` presentes, símbolos `pre_install_stop_hook`
+/ `del(.hooks.Stop)` / `reply_guard` en schema / `typing refresh patch v5` / `MARKER_PENDING`).
+Plan: `specs/028-channel-reply-guard/plan.md`. **BUG MEDIDO EN
 PRODUCCIÓN (ferrari, agente donna, 2026-08-08):** un agente Telegram (docker) VIVO dejó de
 responder por Telegram — procesó los mensajes y generó las respuestas, pero las escribió como
 texto plano en la TUI en vez de llamar `plugin:telegram:telegram`, así que nunca salieron del
@@ -179,9 +226,12 @@ Y 3.2.57** (baseline 027 = 1207, +18 nuevos: reply-guard-config 3, stop-hook-gua
 detección telegram del backfill → reply-guard-config); regenerate-safety (dos `--regenerate` byte-
 idénticos + agente sin canal SIN `scripts/hooks/`). VERSION 0.19.0, CHANGELOG/README/architecture.md.
 `/speckit-analyze`: 0 CRITICAL/HIGH, 4 drifts de doc (plan/data-model/contract) corregidos in-situ.
-**T025 DIFERIDO:** DOCKER_E2E (sin daemon aquí) + cola de host vivo (donna/rodri) = el despliegue de
-v0.19.0, paso separado gateado por el operador. **PR ABIERTO contra main (NO mergeado — main
-protegido).** Siguiente: gate DOCKER_E2E/host vivo en el deploy; luego merge con confirmación.
+**T025 DIFERIDO (sigue abierto tras el merge):** DOCKER_E2E (sin daemon aquí) + cola de host vivo
+(donna/rodri) = el despliegue de v0.19.0, paso separado gateado por el operador; confirma en el
+Claude del contenedor que `{decision:block}` reinyecta y que `stop_hook_active` corta el loop.
+**MERGEADO por el operador (squash `f2bfd77`, #89); main sincronizada y verificada.** shellcheck de
+CI pasó pre-merge; los dos brazos de bats (5.x ubuntu / 3.2 macos) quedaron corriendo al abrir el PR.
+Pendiente NO bloqueante: el despliegue de v0.19.0 a donna/rodri (cierra T025 en hardware real).
 
 **027-declarative-scaffold-parity MERGED** (PR #88, squash `5871405` en main, 2026-08-06; branch
 desde main=`cd85bb2` v0.17.0→**0.18.0**; mergeado por `rodrigo-hinojosa`). Post-merge: rama 027
