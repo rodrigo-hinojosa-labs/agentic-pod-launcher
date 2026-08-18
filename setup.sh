@@ -1203,6 +1203,7 @@ deployment:
 claude:
   config_dir: "$claude_config_dir"
   profile_new: $claude_profile_new
+  mcp_timeout_ms: 120000
 
 docker:
 $docker_yaml
@@ -1962,6 +1963,21 @@ _is_launcher_own_claude_md() {
   grep -qF 'This is **the launcher**, not an agent' "${1:-}" 2>/dev/null
 }
 
+# 029: effective MCP startup-handshake window (ms). A positive integer of up to
+# 7 digits wins; anything else (empty, non-numeric, 0, negative, oversized)
+# degrades to the 120000 default. Mirrors channel_health_timeout
+# (docker/scripts/start_services.sh) but runs at render time on the host — claude
+# reads MCP_TIMEOUT natively, there is no runtime bash reader to sanitise it.
+# Never emits a value <= 0.
+mcp_timeout_effective() {
+  local v="${1:-}"
+  if [[ "$v" =~ ^[0-9]{1,7}$ ]] && [ "$v" -gt 0 ]; then
+    printf '%s' "$v"
+  else
+    printf '120000'
+  fi
+}
+
 regenerate() {
   local agent_yml="$SCRIPT_DIR/agent.yml"
   local modules_dir="$SCRIPT_DIR/modules"
@@ -2058,10 +2074,26 @@ regenerate() {
       yq -i ".features.reply_guard.enabled = $_rg_bf" "$agent_yml"
       yq -i '.features.reply_guard.max_attempts = 1' "$agent_yml"
     fi
+
+    # 029: backfill claude.mcp_timeout_ms for a pre-029 workspace (the MCP
+    # startup-handshake window, ms). Default 120000. has() (not `//`) so an
+    # operator's 0 — a present-but-invalid value the render sanitiser degrades —
+    # is not silently overwritten. Only writes when absent; byte-stable 2nd pass.
+    if [ "$(yq -r '((.claude // {}) | has("mcp_timeout_ms")) // false' "$agent_yml" 2>/dev/null)" != "true" ]; then
+      yq -i '.claude.mcp_timeout_ms = 120000' "$agent_yml"
+    fi
   fi
 
   echo "▸ Loading context from agent.yml"
   render_load_context "$agent_yml"
+
+  # 029: MCP handshake window. render_load_context exported the raw flatten
+  # CLAUDE_MCP_TIMEOUT_MS; sanitise it (positive int <=7 digits -> value, else the
+  # 120000 default) so BOTH the docker compose environment: and the local
+  # remote-control.env receive a safe integer > 0 from the SAME field (FR-004/006).
+  # Claude Code would otherwise fall back to ITS 30000 default on garbage, not ours.
+  CLAUDE_MCP_TIMEOUT_MS="$(mcp_timeout_effective "${CLAUDE_MCP_TIMEOUT_MS:-}")"
+  export CLAUDE_MCP_TIMEOUT_MS
 
   # Deployment mode (011): single source of truth in agent.yml. Default docker
   # (legacy + backfill above). DEPLOYMENT_MODE_IS_DOCKER gates the {{#if}} /

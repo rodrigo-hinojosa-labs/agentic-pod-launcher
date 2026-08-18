@@ -64,5 +64,12 @@ services:
       # heartbeat / agent timestamp logs in the wrong zone — surfaces as
       # "I logged this row at GMT-4 but the heartbeat says GMT+0" noise.
       TZ: "{{USER_TIMEZONE}}"
+      # MCP startup-handshake window (ms), single-sourced from
+      # agent.yml::claude.mcp_timeout_ms (029). Claude Code's default is 30000;
+      # an MCP whose first launch downloads its package (cold cache, ~50s
+      # measured) would exceed it, get marked failed and never retry for the rest
+      # of the session. The launcher sanitises the value (positive int → default
+      # 120000) before rendering, so this is always a safe integer > 0.
+      MCP_TIMEOUT: "{{CLAUDE_MCP_TIMEOUT_MS}}"
     env_file:
       - ./.env

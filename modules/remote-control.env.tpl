@@ -11,4 +11,10 @@ HOME={{OPERATOR_HOME}}
 # (uv/uvx, node/npx symlinks, github-mcp-server, bun) into ~/.local/bin, so without
 # this line every MCP spawn fails with ENOENT (validated on mclaren).
 PATH={{OPERATOR_HOME}}/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+# MCP startup-handshake window (ms), single-sourced from agent.yml::claude.mcp_timeout_ms
+# (029). Unlike config_dir above, this is NOT docker-only: the same value the docker
+# compose environment: block carries. Delivered here to the `claude remote-control`
+# session so every MCP it spawns inherits it. Sanitised by setup.sh (positive int →
+# default 120000) before render, so it is always a safe integer > 0.
+MCP_TIMEOUT={{CLAUDE_MCP_TIMEOUT_MS}}
 # Intentionally no API key here: Remote Control uses the full-scope OAuth login.
