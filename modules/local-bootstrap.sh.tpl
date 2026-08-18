@@ -37,6 +37,15 @@ MCP_GIT_VERSION="{{MCP_GIT_VERSION}}"
 MCP_ATLASSIAN_VERSION="{{MCP_ATLASSIAN_VERSION}}"
 MCP_LIB_VERSION="{{MCP_LIB_VERSION}}"
 
+# 030: the shared, args-aware MCP warm-cache derivation. It lives in the
+# workspace scripts/lib (placed by scaffold / a system-file upgrade, alongside
+# this bootstrap). Sourcing it lets provision_uv_tools cover the wrapper-command
+# shape (google-workspace = command=seed-creds.sh, args=[uvx, workspace-mcp])
+# that the old command=="uvx" selector missed. Fail-soft: if absent, the
+# provisioner falls back to that pre-030 selector (no regression).
+# shellcheck source=/dev/null
+[ -f "${WORKSPACE}/scripts/lib/mcp_warm.sh" ] && . "${WORKSPACE}/scripts/lib/mcp_warm.sh"
+
 DRY_RUN="${BOOTSTRAP_DRY_RUN:-0}"
 
 log()  { printf '  %s\n' "$*"; }
@@ -89,7 +98,16 @@ _mcp_pin() {
 # renamed McpError→MCPError, so fetch/git failed at import (measured on ferrari).
 provision_uv_tools() {
   local pkgs pkg py_flag pin spec mcp_arg mcp_note
-  pkgs="$(jq -r '.mcpServers // {} | to_entries[] | select(.value.command=="uvx") | .value.args[0] // empty' "$MCP_JSON" 2>/dev/null | sort -u)"
+  if command -v mcp_warm_targets >/dev/null 2>&1; then
+    # 030: args-aware derivation — uvx packages only for local mode (D5). Covers
+    # the wrapper-command shape (google-workspace) the old selector could not see.
+    pkgs="$(mcp_warm_targets "$MCP_JSON" | awk -F'\t' '$1=="uvx"{print $2}' | sort -u)"
+  else
+    # Fallback: pre-030 selector for a workspace whose scripts/lib was not
+    # upgraded alongside this bootstrap. Misses wrapper-shaped uvx MCPs but keeps
+    # the catalog warm — no regression from before 030.
+    pkgs="$(jq -r '.mcpServers // {} | to_entries[] | select(.value.command=="uvx") | .value.args[0] // empty' "$MCP_JSON" 2>/dev/null | sort -u)"
+  fi
   [ -n "$pkgs" ] || return 0
   py_flag=""
   have python3 && py_flag="--python python3"

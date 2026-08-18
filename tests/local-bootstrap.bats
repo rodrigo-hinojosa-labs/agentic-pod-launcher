@@ -191,3 +191,36 @@ _write_mcp() { printf '{ "mcpServers": { %s } }\n' "$1" > "$WS/.mcp.json"; }
   # no warmed uvx tool is left unpinned (bare `PLAN uv-tool <pkg>`)
   ! echo "$output" | grep -qE '^PLAN uv-tool [A-Za-z0-9._-]+$'
 }
+
+# ── 030 US2: args-aware derivation covers the wrapper-command shape ───────────
+# With scripts/lib/mcp_warm.sh present in the workspace (as after scaffold),
+# provision_uv_tools derives uvx packages via mcp_warm_targets, so a
+# wrapper-shaped uvx MCP (google-workspace = command=seed-creds.sh,
+# args=[uvx, workspace-mcp]) — invisible to the old command=="uvx" selector —
+# is planned for warming.
+@test "bootstrap dry-run (030): args-aware — plans the wrapper-shaped uvx MCP" {
+  mkdir -p "$WS/scripts/lib"
+  cp "$REPO_ROOT/scripts/lib/mcp_warm.sh" "$WS/scripts/lib/mcp_warm.sh"
+  _write_mcp '
+    "fetch": {"command":"uvx","args":["mcp-server-fetch"]},
+    "google-workspace": {"command":"/w/.custom/seed-google-creds.sh","args":["uvx","workspace-mcp"]}
+  '
+  run env BOOTSTRAP_DRY_RUN=1 "$BOOT"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qF "PLAN uv-tool workspace-mcp"    # the incident MCP
+  echo "$output" | grep -qF "PLAN uv-tool mcp-server-fetch==${AGENTIC_FLOOR_MCP_FETCH} (mcp==${AGENTIC_FLOOR_MCP_LIB})"
+}
+
+# The npx-based overlay MCPs are NOT warmed in local mode (D5 scope: uvx-only).
+@test "bootstrap dry-run (030): local stays uvx-only — no npx warm planned" {
+  mkdir -p "$WS/scripts/lib"
+  cp "$REPO_ROOT/scripts/lib/mcp_warm.sh" "$WS/scripts/lib/mcp_warm.sh"
+  _write_mcp '
+    "fetch": {"command":"uvx","args":["mcp-server-fetch"]},
+    "brave": {"command":"npx","args":["-y","@brave/brave-search-mcp-server@2.1.0"]}
+  '
+  run env BOOTSTRAP_DRY_RUN=1 "$BOOT"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qF "PLAN uv-tool mcp-server-fetch==${AGENTIC_FLOOR_MCP_FETCH} (mcp==${AGENTIC_FLOOR_MCP_LIB})"
+  ! echo "$output" | grep -qi 'brave'
+}
