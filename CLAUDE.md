@@ -134,9 +134,40 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
-**029-mcp-handshake-timeout — SPEC + PLAN COMPLETOS (rama `029-mcp-handshake-timeout` desde main
-=`7334d58` v0.19.0; 1ª de tres features del incidente ferrari 16-08-2026; las otras dos son 030
-warm-cache y 031 guardia AskUserQuestion, specs separadas).** Plan:
+**030-mcp-warm-cache — MERGED-PENDING (rama `030-mcp-warm-cache`, PR #92 ABIERTO contra main,
+rebasada sobre main=`a90fbd6` v0.20.0 tras el merge de 029; VERSION 0.20.0→**0.21.0**; 2ª de las
+3 features del incidente ferrari 16-08-2026; la 1ª es 029 MERGED, la 3ª es 031 guardia
+AskUserQuestion, spec separada).** Plan: `specs/030-mcp-warm-cache/plan.md`. **PROBLEMA:** 029
+ensancha la ventana de handshake (mitigación); 030 ataca la causa raíz — que el paquete uvx/npx del
+MCP ya esté tibio antes de que `claude` arranque, para que un recreate no dispare descarga en frío
+desde PyPI/npm dentro de la ventana. El pre-warm previo era una lista HARDCODEADA de 3 paquetes en
+`docker/Dockerfile`; cualquier MCP fuera del catálogo (p. ej. `google-workspace`=`uvx workspace-mcp`,
+inyectado por el overlay externo `custom-apply`) quedaba expuesto. **DISEÑO (Fase 0, workflow
+`wf_fe741b61-a1a`; constitución 6/6 PASS):** (D1) fix **100% del launcher, cero cambio obligatorio en
+el overlay** — tras `custom-apply` el `.mcp.json` del agente ya contiene los MCP de overlay (fuente
+única). (D2) **warm en BOOT, no en build** (el overlay inyecta en el HOST post-build → un warm de
+build jamás los cubre); el catálogo baked del Dockerfile se CONSERVA (no-regresión). (D3) **derivación
+args-aware**: escanear `[command]+args` por el token `uvx`/`npx` y tomar el siguiente token no-flag —
+cubre `command=seed-google-creds.sh, args=[uvx, workspace-mcp]`, que el selector `command=="uvx"` NO
+veía (el MCP del incidente). (D4) warm síncrono pre-`claude` en `start_services.sh`, timeout por
+paquete, fail-soft, como `agent`, a `/opt/uv`+`/opt/npm-cache` (fuera del montaje de estado). (D6)
+single-source `scripts/lib/mcp_warm.sh` (`mcp_warm_targets` pura + `mcp_warm_run`), mirroreada a docker
+y usada por local. **DECISIÓN DEL OPERADOR (2026-08-17): paridad de derivación** — docker warma uvx+npx
+en boot; local corrige su selector a args-aware (uvx-only). **IMPLEMENTADO 2026-08-17 (test-first,
+25/27 tareas; T025 DOCKER_E2E y T026 hardware ferrari DIFERIDOS al deploy).** `scripts/lib/mcp_warm.sh`
+nueva; `pre_warm_mcps` en `start_services.sh` (source cascade + llamada pre-tmux); mirror en
+`setup.sh::mirror_catalog_to_docker` + COPY en `docker/Dockerfile`; `provision_uv_tools` args-aware con
+fallback pre-030 en `local-bootstrap.sh.tpl`. Tests: `mcp-warm.bats` (14), `start-services-warm.bats`
+(8), +2 en `local-bootstrap.bats`, `docker-e2e-warm-cache.bats` (3, gated). **GATES VERDES (host):**
+suite completa **1252 ok / 0 not ok byte-idéntico en bash 3.2.57 Y 5.3.15** (baseline 1225 + 27
+nuevos); `shellcheck -S error` rc=0; **mutación 3/3**; regenerate-safety por `regenerate.bats`.
+VERSION 0.20.0→**0.21.0** (rebase sobre 029; VERSION verificado contra `origin/main`, lección 023).
+`/speckit-analyze`: 0 CRITICAL/HIGH. **PR #92 ABIERTO contra main (NO mergeado). Siguiente: gate
+DOCKER_E2E/hardware ferrari en el deploy; luego merge con confirmación. Después: 031.**
+
+**029-mcp-handshake-timeout MERGED (PR #91, squash `a90fbd6` en main, 2026-08-17; branch desde
+main=`7334d58` v0.19.0→**0.20.0**; 1ª de tres features del incidente ferrari 16-08-2026; las otras
+dos son 030 warm-cache y 031 guardia AskUserQuestion, specs separadas).** Plan:
 `specs/029-mcp-handshake-timeout/plan.md`. **BUG MEDIDO (ferrari, agente donna, 16-08-2026):** un MCP
 (`google-workspace`, inyectado por el overlay externo `custom-apply`) quedó muerto tras un reinicio —
 descargó su wheel de PyPI durante el boot (~50 s medido), excedió la ventana de handshake de arranque

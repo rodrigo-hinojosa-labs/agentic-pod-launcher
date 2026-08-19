@@ -61,6 +61,19 @@ elif [ -f "$(dirname "${BASH_SOURCE[0]}")/lib/plugin-install.sh" ]; then
   source "$(dirname "${BASH_SOURCE[0]}")/lib/plugin-install.sh"
 fi
 
+# MCP warm-cache derivation + warmer (030). Provides mcp_warm_targets /
+# mcp_warm_run. Image path first; fall back to the repo-relative path so host
+# bats tests that source this script get the helpers too (mirrored into the
+# image by setup.sh, like mcp-catalog.sh). Sourced no-op if missing.
+# shellcheck source=/dev/null
+if [ -f /opt/agent-admin/scripts/lib/mcp_warm.sh ]; then
+  source /opt/agent-admin/scripts/lib/mcp_warm.sh
+elif [ -f "$(dirname "${BASH_SOURCE[0]}")/lib/mcp_warm.sh" ]; then
+  source "$(dirname "${BASH_SOURCE[0]}")/lib/mcp_warm.sh"
+elif [ -f "$(dirname "${BASH_SOURCE[0]}")/../../scripts/lib/mcp_warm.sh" ]; then
+  source "$(dirname "${BASH_SOURCE[0]}")/../../scripts/lib/mcp_warm.sh"
+fi
+
 # seed_vault_if_needed — at first boot, copy the skeleton into the per-agent
 # vault dir if vault.enabled + vault.seed_skeleton and the target is empty.
 # Honors vault.force_reseed: when true, the existing vault is moved aside to
@@ -774,6 +787,19 @@ pre_install_stop_hook() {
   "$helper" "$HOME/.claude/settings.json" "/workspace/scripts/hooks/stop-redeliver.sh" || true
 }
 
+# 030: warm the uvx/npx package cache for every MCP the effective .mcp.json
+# declares — catalog AND overlay-injected (e.g. google-workspace, merged by the
+# external custom-apply into .mcp.json AFTER the image build) — SYNCHRONOUSLY,
+# before claude launches its MCPs. This is what closes the ferrari incident: a
+# first-boot `uvx <pkg>` no longer races a cold PyPI download inside the handshake
+# window. Fail-soft (mcp_warm_run always returns 0); a package that can't warm
+# degrades to the wider 029 handshake window. Runs as the agent user, writing the
+# off-mount caches /opt/uv and /opt/npm-cache. No-op if the lib didn't load.
+pre_warm_mcps() {
+  command -v mcp_warm_run >/dev/null 2>&1 || return 0
+  mcp_warm_run "$WORKDIR/.mcp.json" || true
+}
+
 start_session() {
   # Pre-accept the bypass-permissions dialog unconditionally so ANY launch
   # that ends up passing --dangerously-skip-permissions boots cleanly,
@@ -781,6 +807,7 @@ start_session() {
   pre_accept_bypass_permissions
   pre_seed_onboarding
   pre_install_stop_hook
+  pre_warm_mcps
 
   local cmd
   cmd=$(next_tmux_cmd)

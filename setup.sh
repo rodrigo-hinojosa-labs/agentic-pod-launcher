@@ -1605,6 +1605,9 @@ mirror_catalog_to_docker() {
   # feature 015: shared observability helper (redact + host-backed scratch),
   # sourced by qmd_index.sh and wiki_graph.sh — mirrored so the image finds it.
   local src_rag_obs="$dest/scripts/lib/rag_obs.sh"
+  # feature 030: MCP warm-cache derivation + warmer, sourced by start_services.sh
+  # at boot — mirrored so the Dockerfile COPY finds it.
+  local src_mcp_warm="$dest/scripts/lib/mcp_warm.sh"
   [ -f "$src_lib" ] || return 0
   [ -d "$src_plugins" ] || return 0
   mkdir -p "$dest/docker/scripts/lib" "$dest/docker/modules"
@@ -1625,6 +1628,9 @@ mirror_catalog_to_docker() {
   fi
   if [ -f "$src_rag_obs" ]; then
     cp "$src_rag_obs" "$dest/docker/scripts/lib/rag_obs.sh"
+  fi
+  if [ -f "$src_mcp_warm" ]; then
+    cp "$src_mcp_warm" "$dest/docker/scripts/lib/mcp_warm.sh"
   fi
   if [ -d "$src_vault_deltas" ]; then
     rm -rf "$dest/docker/modules/vault-deltas"
@@ -1665,6 +1671,8 @@ mirror_catalog_to_docker() {
     || missing="${missing}\n  - docker/scripts/qmd_watch.sh"
   [ -f "$dest/docker/scripts/lib/mcp-catalog.sh" ] \
     || missing="${missing}\n  - docker/scripts/lib/mcp-catalog.sh"
+  [ -f "$dest/docker/scripts/lib/mcp_warm.sh" ] \
+    || missing="${missing}\n  - docker/scripts/lib/mcp_warm.sh"
   if [ ! -d "$dest/docker/modules/plugins" ] \
     || [ -z "$(ls -A "$dest/docker/modules/plugins" 2>/dev/null)" ]; then
     missing="${missing}\n  - docker/modules/plugins/ (empty or missing)"

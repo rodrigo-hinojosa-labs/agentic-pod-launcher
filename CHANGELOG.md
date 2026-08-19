@@ -3,6 +3,32 @@
 ## [Unreleased]
 
 ### Added
+- **Boot-time warm cache for out-of-catalog MCPs — `030-mcp-warm-cache`**: closes the
+  root cause of the ferrari incident that `029` only mitigated. An MCP injected by the
+  external `custom-apply` overlay (e.g. `google-workspace` = `uvx workspace-mcp`) used
+  to download its package from PyPI/npm during container boot, exceed the handshake
+  window, and be marked dead for the session. The launcher now **derives the set of
+  uvx/npx packages to pre-warm from the effective `.mcp.json`** (no hardcoded list) and
+  warms them into the persistent off-mount caches (`/opt/uv`, `/opt/npm-cache`) **before
+  `claude` starts its MCPs**, so a recreate — even with PyPI/npm unreachable — no longer
+  races the handshake. VERSION 0.20.0 → 0.21.0.
+  - **New shared derivation `scripts/lib/mcp_warm.sh`** (`mcp_warm_targets` — pure,
+    host-testable — and `mcp_warm_run` — fail-soft, idempotent, timeout-bounded, reads
+    no secrets). It scans each server's `command` + `args` for a `uvx`/`npx` token and
+    takes the package spec **literally** (pin-faithful), covering the wrapper-command
+    shape (`command=seed-creds.sh, args=[uvx, workspace-mcp]`) that a `command=="uvx"`
+    selector missed — the exact MCP that caused the incident. Mirrored into the image
+    (`docker/scripts/lib/`, like `mcp-catalog.sh`) and sourced by `start_services.sh`.
+  - **Docker (US1):** a synchronous `pre_warm_mcps` step in
+    `docker/scripts/start_services.sh` warms both uvx and npx packages before the tmux
+    launch, as the `agent` user. Fail-soft: a package that can't warm degrades to the
+    wider `029` handshake window; the step never aborts boot.
+  - **Local (US2):** `provision_uv_tools` now derives its uvx packages via the same
+    args-aware helper (uvx-only in local mode by design), so `--login` warms the
+    wrapper-shaped MCP too; falls back to the pre-030 selector on a workspace whose
+    `scripts/lib` was not upgraded alongside the bootstrap (no regression).
+  - Requires `DOCKER_E2E` (touches image-baked `start_services.sh`/`Dockerfile`);
+    the offline recreate gate and the ferrari hardware gate are deferred to deploy.
 - **Configurable MCP startup-handshake window — `029-mcp-handshake-timeout`**:
   a measured production failure (ferrari, agent `donna`, 2026-08-16) where an MCP
   whose first launch downloaded its package from PyPI (~50 s) exceeded Claude Code's
