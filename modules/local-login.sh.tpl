@@ -77,6 +77,16 @@ if [ -x "${WORKSPACE}/scripts/hooks/install-stop-hook.sh" ]; then
   echo "  ✓ reply-guard Stop hook registered in ${CONFIG_DIR}/settings.json"
 fi
 
+# 4d. 031: register the AskUserQuestion guard PreToolUse hook, same rationale as
+#     the reply-guard Stop hook above. Local mode uses the remote-control relay
+#     (no telegram plugin, no pending-reply marker), so the hook is
+#     present-but-inert here unless the operator adds the telegram plugin.
+if [ -x "${WORKSPACE}/scripts/hooks/install-askq-guard-hook.sh" ]; then
+  "${WORKSPACE}/scripts/hooks/install-askq-guard-hook.sh" \
+    "${CONFIG_DIR}/settings.json" "${WORKSPACE}/scripts/hooks/askq-guard.sh" || true
+  echo "  ✓ AskUserQuestion guard hook registered in ${CONFIG_DIR}/settings.json"
+fi
+
 # 4b. Pre-accept the "Enable Remote Control? (y/n)" prompt (gotcha #7). The login
 #     resets remoteDialogSeen; without it the systemd unit blocks on the prompt
 #     (no TTY) and never becomes controllable. Non-destructive; runs after login.

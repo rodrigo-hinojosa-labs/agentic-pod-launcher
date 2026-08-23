@@ -39,6 +39,9 @@ features:
   reply_guard:
     enabled: true
     max_attempts: 1
+  askuserquestion_guard:
+    enabled: true
+    max_attempts: 1
   identity_backup:
     enabled: true
     schedule: "30 3 * * *"

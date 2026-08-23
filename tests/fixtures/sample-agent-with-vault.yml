@@ -44,6 +44,9 @@ features:
   reply_guard:
     enabled: true
     max_attempts: 1
+  askuserquestion_guard:
+    enabled: true
+    max_attempts: 1
 mcps:
   defaults:
     - fetch

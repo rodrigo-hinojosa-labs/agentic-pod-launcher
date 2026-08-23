@@ -787,6 +787,16 @@ pre_install_stop_hook() {
   "$helper" "$HOME/.claude/settings.json" "/workspace/scripts/hooks/stop-redeliver.sh" || true
 }
 
+# 031: register the AskUserQuestion guard PreToolUse hook in the user
+# settings.json BEFORE the session starts, so it lands in Claude's startup hook
+# snapshot — same rationale and idempotent/self-healing shape as
+# pre_install_stop_hook above. A pre-031 workspace (no helper) is a no-op.
+pre_install_askq_hook() {
+  local helper="/workspace/scripts/hooks/install-askq-guard-hook.sh"
+  [ -x "$helper" ] || return 0
+  "$helper" "$HOME/.claude/settings.json" "/workspace/scripts/hooks/askq-guard.sh" || true
+}
+
 # 030: warm the uvx/npx package cache for every MCP the effective .mcp.json
 # declares — catalog AND overlay-injected (e.g. google-workspace, merged by the
 # external custom-apply into .mcp.json AFTER the image build) — SYNCHRONOUSLY,
@@ -807,6 +817,7 @@ start_session() {
   pre_accept_bypass_permissions
   pre_seed_onboarding
   pre_install_stop_hook
+  pre_install_askq_hook
   pre_warm_mcps
 
   local cmd

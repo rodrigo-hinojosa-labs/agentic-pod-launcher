@@ -50,6 +50,19 @@ independent fixes that improve Telegram chat reliability + observability:
    turn-end. The typing patch also ratchets v4 → v5 here, rewording the
    timeout warning so it no longer asserts OAuth as the cause.
 
+6. AskUserQuestion guard give-up delivery patch (v1, feature 031) — checks
+   the askq-guard-giveup.json marker (written by the PreToolUse guard hook
+   when it stops redirecting a channel turn away from the console-only
+   interactive prompt) on every typing keep-alive tick AND at the start of
+   the next inbound turn's keep-alive, delivers exactly one give-up chat
+   message via the existing bot.api.sendMessage path, and deletes the
+   marker (delete-on-send makes the two triggers mutually exclusive — never
+   double-sent). The hook itself never sends to the channel (Principle II);
+   only this plugin-side check does, deterministically, independent of
+   whether the model complies. The typing patch also ratchets v5 → v6 here,
+   naming "blocked in an interactive prompt the channel can't answer" among
+   the timeout warning's possible causes.
+
 Each patch is independently idempotent (own marker comment) and fail-silent
 on anchor drift (logs WARN to stderr, skips THAT patch only, leaves the
 others free to apply). A single run applies whichever patches haven't yet
@@ -64,7 +77,8 @@ import re
 import sys
 from pathlib import Path
 
-MARKER_TYPING = "agentic-pod-launcher: typing refresh patch v5"
+MARKER_TYPING = "agentic-pod-launcher: typing refresh patch v6"
+MARKER_TYPING_V5 = "agentic-pod-launcher: typing refresh patch v5"
 MARKER_TYPING_V4 = "agentic-pod-launcher: typing refresh patch v4"
 MARKER_TYPING_V3 = "agentic-pod-launcher: typing refresh patch v3"
 MARKER_TYPING_V2 = "agentic-pod-launcher: typing refresh patch v2"
@@ -73,6 +87,7 @@ MARKER_OFFSET = "agentic-pod-launcher: offset persistence patch v1"
 MARKER_STDERR = "agentic-pod-launcher: stderr-capture patch v1"
 MARKER_PRIMARY = "agentic-pod-launcher: primary lock patch v1"
 MARKER_PENDING = "agentic-pod-launcher: pending-reply marker patch v1"
+MARKER_ASKQ_GIVEUP = "agentic-pod-launcher: askq-guard give-up delivery patch v1"
 
 # V3 helpers — used by the v2→v3 upgrade ONLY. Fresh installs and v3→v4
 # upgrades use TYPING_HELPERS (v4 — anti-zombie). Without this separation,
@@ -127,6 +142,17 @@ _V5_WARNMSG = (
     "sin usar la herramienta de envío, o a que el login de Claude haya expirado. "
     "Revisa: agentctl doctor.`\n"
 )
+# 031 (US2): v6 adds one more possible cause — a turn blocked in the console-only
+# AskUserQuestion prompt the channel can't answer (the failure mode 031's
+# PreToolUse guard intercepts; this warning still fires in the degraded path where
+# the guard is absent/disabled/its anchors drifted). Still no single definite cause.
+_V6_WARNMSG = (
+    "      const warnMsg = `⚠️ Llevo más de ${minutes} min sin entregar la respuesta "
+    "a este chat. Puede deberse a: una respuesta larga aún en curso, a que respondí "
+    "sin usar la herramienta de envío, a que el login de Claude haya expirado, o a que "
+    "la sesión quedó bloqueada en un menú interactivo que el canal no puede responder. "
+    "Revisa: agentctl doctor.`\n"
+)
 
 TYPING_HELPERS = (
     "\n// " + MARKER_TYPING + "\n"
@@ -161,7 +187,7 @@ TYPING_HELPERS = (
     "      // would have left the typing tick spinning indefinitely.\n"
     "      _typingStop(chat_id)\n"
     "      const minutes = Math.round(elapsed / 60000)\n"
-    + _V5_WARNMSG +
+    + _V6_WARNMSG +
     "      bot.api.sendMessage(chat_id, warnMsg)\n"
     "        .catch((err: any) => {\n"
     "          const msg = err && (err.message || err.description || String(err))\n"
@@ -198,12 +224,14 @@ TYPING_HELPERS = (
     "}\n"
 )
 
-# 028 (US2): the v4 helper block = the v5 block with the marker + message reverted.
-# Injected by the v3→v4 upgrade ONLY, so a v3 file lands at v4 (then v4→v5 swaps the
-# message), preserving the no-mis-stamp upgrade history (mirrors TYPING_HELPERS_V3).
+# 028 (US2): the v4 helper block = the latest block with the marker + message
+# reverted to v4. Injected by the v3→v4 upgrade ONLY, so a v3 file lands at v4
+# (then v4→v5→v6 swap the message twice more), preserving the no-mis-stamp
+# upgrade history (mirrors TYPING_HELPERS_V3). MARKER_TYPING/_V6_WARNMSG are the
+# CURRENT latest (v6) — this derivation always reverts from whatever "latest" is.
 TYPING_HELPERS_V4 = TYPING_HELPERS.replace(
     MARKER_TYPING, MARKER_TYPING_V4
-).replace(_V5_WARNMSG, _V4_WARNMSG)
+).replace(_V6_WARNMSG, _V4_WARNMSG)
 
 OFFSET_HELPERS = (
     "\n// " + MARKER_OFFSET + "\n"
@@ -293,6 +321,49 @@ PENDING_MARK = (
 PENDING_CLEAR = (
     "        // " + MARKER_PENDING + " — the reply tool fired; clear the awaiting-reply marker\n"
     "        _clearPendingReply()\n"
+)
+
+# 031: AskUserQuestion guard give-up delivery. The PreToolUse hook (a separate
+# as-`agent` process) writes askq-guard-giveup.json when it stops redirecting a
+# channel turn away from the console-only interactive prompt (Q1: the hook itself
+# never gains channel-send capability). This plugin-side check — wired into the
+# EXISTING typing keep-alive, which already owns bot.api.sendMessage — reads the
+# marker, delivers exactly one give-up message, and deletes it. Two call sites
+# (both inserted below): every keep-alive tick (the common path — the guard's
+# terminal deny keeps the turn running, so a tick reliably follows the write) and
+# at keep-alive START for the next inbound turn (the safety net for the narrow
+# race where a marker is written after the last tick of the current turn).
+# Delete-on-send is the idempotency key: whichever trigger runs first clears the
+# marker, so the two can never double-send.
+ASKQ_GIVEUP_HELPERS = (
+    "\n// " + MARKER_ASKQ_GIVEUP + "\n"
+    "const _ASKQ_GIVEUP_FILE = '/home/agent/.claude/channels/telegram/askq-guard-giveup.json'\n"
+    "function _checkAskqGiveup(): void {\n"
+    "  try {\n"
+    "    const fs = require('node:fs')\n"
+    "    if (!fs.existsSync(_ASKQ_GIVEUP_FILE)) return\n"
+    "    const j = JSON.parse(fs.readFileSync(_ASKQ_GIVEUP_FILE, 'utf8'))\n"
+    "    fs.rmSync(_ASKQ_GIVEUP_FILE, { force: true })\n"
+    "    const chatId = j.chat_id\n"
+    "    if (!chatId) return\n"
+    "    const giveupMsg = 'Intenté abrir un menú interactivo que no puedo mostrarte por acá; no pude completar la acción. ¿Me lo confirmas por mensaje?'\n"
+    "    bot.api.sendMessage(chatId, giveupMsg)\n"
+    "      .catch((err: any) => {\n"
+    "        const msg = err && (err.message || err.description || String(err))\n"
+    "        process.stderr.write(`telegram channel: askq-guard give-up sendMessage failed for chat ${chatId}: ${msg}\\n`)\n"
+    "      })\n"
+    "  } catch {}\n"
+    "}\n"
+)
+
+ASKQ_GIVEUP_TICK_CHECK = (
+    "    _checkAskqGiveup()\n"
+    "    bot.api.sendChatAction(chat_id, 'typing')\n"
+)
+
+ASKQ_GIVEUP_START_CHECK = (
+    "function _typingKeepAlive(chat_id: string | number): void {\n"
+    "  _checkAskqGiveup()\n"
 )
 
 PRIMARY_GUARD = (
@@ -531,7 +602,7 @@ def upgrade_typing_v4_to_v5(src: str) -> tuple[str, bool]:
     Defensive: if the v4 warnMsg was edited out-of-band the swap won't match and we
     leave the file at v4 (WARN). Returns (new_src, applied).
     """
-    if MARKER_TYPING in src:                # already at v5
+    if MARKER_TYPING_V5 in src or MARKER_TYPING in src:  # already at v5 or beyond
         return src, False
     if MARKER_TYPING_V4 not in src:         # not at v4 → a v1/v2/v3 must upgrade first
         return src, False
@@ -542,10 +613,41 @@ def upgrade_typing_v4_to_v5(src: str) -> tuple[str, bool]:
         return src, False
 
     # Bump the helper marker v4 → v5 and the call-site comment.
-    new_src = new_src.replace(MARKER_TYPING_V4, MARKER_TYPING)
+    new_src = new_src.replace(MARKER_TYPING_V4, MARKER_TYPING_V5)
     new_src = new_src.replace(
         "  // Patched by agentic-pod-launcher (telegram-typing v4 — anti-zombie).\n",
         "  // Patched by agentic-pod-launcher (telegram-typing v5 — honest timeout).\n",
+    )
+    return new_src, True
+
+
+def upgrade_typing_v5_to_v6(src: str) -> tuple[str, bool]:
+    """Migrate a server.ts already patched with typing v5 to v6 in-place (031).
+
+    The behavioral diff between v5 and v6 is ONLY the timeout warning wording: v6
+    additionally names "la sesión quedó bloqueada en un menú interactivo que el canal
+    no puede responder" among the possible causes, still asserting no single definite
+    one. Surgical, like v4→v5: swap the warnMsg line + bump the marker, without
+    re-injecting the whole helper block.
+
+    Defensive: if the v5 warnMsg was edited out-of-band the swap won't match and we
+    leave the file at v5 (WARN). Returns (new_src, applied).
+    """
+    if MARKER_TYPING in src:                # already at v6
+        return src, False
+    if MARKER_TYPING_V5 not in src:         # not at v5 → a v1/v2/v3/v4 must upgrade first
+        return src, False
+
+    new_src = src.replace(_V5_WARNMSG, _V6_WARNMSG)
+    if new_src == src:
+        warn("v5→v6 upgrade: warnMsg anchor not found (message may have been edited out-of-band) — leaving v5 in place")
+        return src, False
+
+    # Bump the helper marker v5 → v6 and the call-site comment.
+    new_src = new_src.replace(MARKER_TYPING_V5, MARKER_TYPING)
+    new_src = new_src.replace(
+        "  // Patched by agentic-pod-launcher (telegram-typing v5 — honest timeout).\n",
+        "  // Patched by agentic-pod-launcher (telegram-typing v6 — names interactive-prompt cause).\n",
     )
     return new_src, True
 
@@ -568,7 +670,7 @@ def apply_typing(src: str) -> tuple[str, bool]:
         r"  void bot\.api\.sendChatAction\(chat_id, 'typing'\)\.catch\(\(\) => \{\}\)",
         (
             "  // Typing indicator — refreshed every 4s until reply fires; aborts after _TYPING_MAX_DURATION_MS (default 5min) with user-facing warning.\n"
-            "  // Patched by agentic-pod-launcher (telegram-typing v5 — honest timeout).\n"
+            "  // Patched by agentic-pod-launcher (telegram-typing v6 — names interactive-prompt cause).\n"
             "  _typingKeepAlive(chat_id)"
         ),
         new_src,
@@ -721,6 +823,57 @@ def apply_pending_marker(src: str) -> tuple[str, bool]:
     return new_src, True
 
 
+def apply_askq_giveup(src: str) -> tuple[str, bool]:
+    """Wire the AskUserQuestion guard give-up delivery into the typing keep-alive
+    (031). Returns (new_src, applied).
+
+    Three hunks, all gated by MARKER_ASKQ_GIVEUP and rolled back together on any
+    anchor miss (an unpaired trigger would silently never deliver a give-up, or
+    would try to send from a helper that was never injected):
+      G1 — helpers (_checkAskqGiveup / _ASKQ_GIVEUP_FILE), anchored on
+            `let botUsername = ''` (same top-level anchor as every other patch;
+            all stack after that line, order-independent).
+      G2 — check on every keep-alive tick, anchored on the sendChatAction call
+            inside the (already-installed, v4/v5/v6-shape) typing helpers.
+      G3 — check at the START of _typingKeepAlive, the safety net for a marker
+            written after the current turn's last tick.
+
+    Runs AFTER the typing upgrade cascade + apply_typing in main(), so by the
+    time this fires the file's typing helpers are always in their final v6-era
+    shape (v4→v5→v6 are surgical text swaps that don't touch these anchors).
+    """
+    if MARKER_ASKQ_GIVEUP in src:
+        return src, False
+    new_src, n1 = re.subn(
+        r"(let botUsername = ''\n)",
+        r"\1" + ASKQ_GIVEUP_HELPERS,
+        src,
+        count=1,
+    )
+    if n1 != 1:
+        warn("askq give-up hunk1 anchor (let botUsername) not found — skipping askq-guard give-up patch (give-up would never be delivered)")
+        return src, False
+    new_src, n2 = re.subn(
+        r"    bot\.api\.sendChatAction\(chat_id, 'typing'\)\n",
+        ASKQ_GIVEUP_TICK_CHECK,
+        new_src,
+        count=1,
+    )
+    if n2 != 1:
+        warn("askq give-up hunk2 anchor (sendChatAction tick) not found — skipping askq-guard give-up patch")
+        return src, False
+    new_src, n3 = re.subn(
+        r"function _typingKeepAlive\(chat_id: string \| number\): void \{\n",
+        ASKQ_GIVEUP_START_CHECK,
+        new_src,
+        count=1,
+    )
+    if n3 != 1:
+        warn("askq give-up hunk3 anchor (_typingKeepAlive start) not found — skipping askq-guard give-up patch")
+        return src, False
+    return new_src, True
+
+
 def apply_stderr(src: str) -> tuple[str, bool]:
     """Tee process.stderr to disk + log uncaught/unhandled. Returns (new_src, applied)."""
     if MARKER_STDERR in src:
@@ -808,21 +961,27 @@ def main(argv: list[str]) -> int:
     # Run the typing upgrades BEFORE apply_typing, in cascade:
     #   v1 → v2 (cap removed) → v3 (instrumented) → v4 (anti-zombie timeout)
     #     → v5 (honest timeout message, no OAuth assertion)
+    #     → v6 (names the interactive-prompt cause, 031)
     # If a step's source marker isn't present, that step is a no-op and the
-    # next step picks up. apply_typing then short-circuits on the v5 marker
+    # next step picks up. apply_typing then short-circuits on the v6 marker
     # if anything ran. If no markers were present at all, apply_typing
-    # installs v5 fresh.
+    # installs v6 fresh.
     new_src, tu1 = upgrade_typing_v1_to_v2(new_src)
     new_src, tu2 = upgrade_typing_v2_to_v3(new_src)
     new_src, tu3 = upgrade_typing_v3_to_v4(new_src)
     new_src, tu4 = upgrade_typing_v4_to_v5(new_src)
+    new_src, tu5 = upgrade_typing_v5_to_v6(new_src)
     new_src, t = apply_typing(new_src)
     new_src, o = apply_offset(new_src)
     new_src, pm = apply_pending_marker(new_src)
     new_src, s = apply_stderr(new_src)
     new_src, p = apply_primary(new_src)
+    # 031: give-up delivery wiring runs LAST — it anchors on the typing helpers'
+    # final (post-cascade/post-apply_typing) shape, which by this point is stable
+    # regardless of which upgrade path the file took.
+    new_src, ag = apply_askq_giveup(new_src)
 
-    if not (tu1 or tu2 or tu3 or tu4 or t or o or pm or s or p):
+    if not (tu1 or tu2 or tu3 or tu4 or tu5 or t or o or pm or s or p or ag):
         # Either everything is already patched, or every set of anchors missed.
         return 0
 
@@ -839,6 +998,8 @@ def main(argv: list[str]) -> int:
         parts.append("typing-upgrade-v3→v4")
     if tu4:
         parts.append("typing-upgrade-v4→v5")
+    if tu5:
+        parts.append("typing-upgrade-v5→v6")
     if t:
         parts.append("typing")
     if o:
@@ -849,6 +1010,8 @@ def main(argv: list[str]) -> int:
         parts.append("stderr")
     if p:
         parts.append("primary")
+    if ag:
+        parts.append("askq-giveup")
     log(f"applied {'+'.join(parts)} patch(es) to {path}")
     return 0
 
