@@ -1160,6 +1160,13 @@ $atlassian_entries"
   local _rg_enabled=false
   case "$plugins_yaml" in *"telegram@"*) _rg_enabled=true ;; esac
 
+  # 031: the AskUserQuestion guard defaults ON under the same condition as the
+  # reply guard — it protects a Telegram channel turn from a console-only
+  # interactive prompt, so it is only meaningful (and only installed) when the
+  # Telegram plugin is present.
+  local _aq_enabled=false
+  case "$plugins_yaml" in *"telegram@"*) _aq_enabled=true ;; esac
+
   # Optional persona: when --role-file is set, store the workspace-relative
   # path (the file itself is copied in by scaffold_destination). The key is
   # omitted entirely when unset — schema rejects an empty role_file.
@@ -1229,6 +1236,9 @@ features:
     default_prompt: "$hb_prompt"
   reply_guard:
     enabled: $_rg_enabled
+    max_attempts: 1
+  askuserquestion_guard:
+    enabled: $_aq_enabled
     max_attempts: 1
 
 mcps:
@@ -2083,6 +2093,18 @@ regenerate() {
       yq -i '.features.reply_guard.max_attempts = 1' "$agent_yml"
     fi
 
+    # 031: backfill features.askuserquestion_guard for a pre-031 workspace. Same
+    # derivation and has()-guard shape as reply_guard above (independent block,
+    # not folded under reply_guard, so the two guards stay separately toggleable).
+    if [ "$(yq -r '(.features | has("askuserquestion_guard")) // false' "$agent_yml" 2>/dev/null)" != "true" ]; then
+      local _aq_bf=false
+      if yq -r '.plugins[]?' "$agent_yml" 2>/dev/null | grep -qE '^telegram@'; then
+        _aq_bf=true
+      fi
+      yq -i ".features.askuserquestion_guard.enabled = $_aq_bf" "$agent_yml"
+      yq -i '.features.askuserquestion_guard.max_attempts = 1' "$agent_yml"
+    fi
+
     # 029: backfill claude.mcp_timeout_ms for a pre-029 workspace (the MCP
     # startup-handshake window, ms). Default 120000. has() (not `//`) so an
     # operator's 0 — a present-but-invalid value the render sanitiser degrades —
@@ -2343,6 +2365,17 @@ regenerate() {
     render_to_file "$modules_dir/stop-hook-install.sh.tpl" "$SCRIPT_DIR/scripts/hooks/install-stop-hook.sh"
     chmod +x "$SCRIPT_DIR/scripts/hooks/stop-redeliver.sh" "$SCRIPT_DIR/scripts/hooks/install-stop-hook.sh"
     echo "  ✓ scripts/hooks/ (stop-redeliver.sh + install-stop-hook.sh)"
+  fi
+
+  # 031: AskUserQuestion channel guard — a PreToolUse hook + its settings.json
+  # install helper. Same rendering shape as the 028 block above (both modes,
+  # gated so a non-channel agent's regenerate stays byte-identical, FR-007/SC-006).
+  if [ "${FEATURES_ASKUSERQUESTION_GUARD_ENABLED:-false}" = "true" ]; then
+    mkdir -p "$SCRIPT_DIR/scripts/hooks"
+    render_to_file "$modules_dir/askq-guard.sh.tpl"         "$SCRIPT_DIR/scripts/hooks/askq-guard.sh"
+    render_to_file "$modules_dir/askq-guard-install.sh.tpl" "$SCRIPT_DIR/scripts/hooks/install-askq-guard-hook.sh"
+    chmod +x "$SCRIPT_DIR/scripts/hooks/askq-guard.sh" "$SCRIPT_DIR/scripts/hooks/install-askq-guard-hook.sh"
+    echo "  ✓ scripts/hooks/ (askq-guard.sh + install-askq-guard-hook.sh)"
   fi
 
   # Docker-only artifacts (011): the compose file + the mirrored build context

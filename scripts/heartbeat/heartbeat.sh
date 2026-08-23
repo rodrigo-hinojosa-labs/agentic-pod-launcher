@@ -146,7 +146,9 @@ ensure_heartbeat_config_dir() {
     # 028: also drop .hooks.Stop — the reply-guard redelivery hook must never
     # fire on plugin-less cron ticks (no telegram plugin, no channel to deliver
     # to). Belt-and-suspenders: the hook itself no-ops on an absent marker.
-    if jq '.enabledPlugins = {} | .extraKnownMarketplaces = {} | del(.hooks.Stop)' \
+    # 031: same for .hooks.PreToolUse — the AskUserQuestion guard has nothing
+    # to redirect to on an isolated cron tick either.
+    if jq '.enabledPlugins = {} | .extraKnownMarketplaces = {} | del(.hooks.Stop) | del(.hooks.PreToolUse)' \
         "$src/settings.json" > "$tmp_settings" 2>/dev/null; then
       mv "$tmp_settings" "$dst/settings.json"
       chmod 0644 "$dst/settings.json" 2>/dev/null || true

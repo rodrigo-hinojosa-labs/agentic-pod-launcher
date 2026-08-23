@@ -3,6 +3,47 @@
 ## [Unreleased]
 
 ### Added
+- **Channel AskUserQuestion guard — `031-channel-askuserquestion-guard`**: closes the
+  third and last failure mode of the ferrari incident family (2026-08-16, `donna`) —
+  anticipated, same class as `028`, no forensic capture of its own. A Telegram-channel
+  turn that calls the interactive `AskUserQuestion` tool renders a console-only menu
+  the operator can never see or answer, hanging the turn mid-way; `028`'s Stop hook
+  cannot cover it because the turn never reaches Stop. The feasibility gate was
+  **resolved by direct measurement** (real Claude Code 2.1.223, interactive PTY
+  session), refuting a documentation claim that `AskUserQuestion` does not fire
+  `PreToolUse` — it does, and a `permissionDecision:"deny"` reason reaches the model,
+  which redirects to text on its own. Docker/Telegram is where the real behaviour
+  lives; local mode installs the guard but it is present-but-inert (the relay has no
+  channel reply tool). VERSION 0.21.0 → 0.22.0.
+  - **US1 — the turn never hangs on a console-only prompt.** A new **PreToolUse**
+    hook (`scripts/hooks/askq-guard.sh`, rendered from `modules/askq-guard.sh.tpl`,
+    matcher `AskUserQuestion`, registered in `settings.json` at docker boot / local
+    login) reuses `028`'s `pending-reply.json` marker as the channel-origin signal —
+    present ⇒ intercept and redirect the agent to answer via
+    `plugin:telegram:telegram`; absent (console/local/already-replied) ⇒ **fail
+    open**, the OPPOSITE fail-safe direction from `028` (blocking a legitimate console
+    prompt is worse than the pre-existing, still-warned-about channel hang). Bounded
+    by a per-turn redirection counter (`features.askuserquestion_guard.max_attempts`,
+    default 1, no native re-entrancy signal exists for `PreToolUse`); at the cap the
+    hook switches to a **terminal deny** — it keeps blocking the console-only prompt
+    (never allows it through, so the hang can never reappear) while telling the model
+    to stop retrying — and writes a give-up marker.
+  - **US1 (give-up delivery).** The give-up marker is delivered by the Telegram
+    plugin's *existing* send path (the same `bot.api.sendMessage` the typing warning
+    already uses) — checked on every typing keep-alive tick and at the start of the
+    next inbound turn's keep-alive (a safety net for the narrow race where the marker
+    is written after the current turn's last tick), delete-on-send so the two
+    triggers can never double-send. The hook itself never gains channel-send
+    capability (Principle II) — deterministic even when the model no longer complies.
+  - **US2 — the typing-timeout warning names the cause.** Typing patch bumped
+    **v5 → v6** (`upgrade_typing_v5_to_v6` in `apply_telegram_typing_patch.py`):
+    the warning now additionally names "blocked in an interactive prompt the channel
+    can't answer" among its causes, without asserting a single definite one.
+  - Toggle `features.askuserquestion_guard.{enabled,max_attempts}` in `agent.yml`
+    (single source of truth), mirroring `028`'s `reply_guard` shape; enabled by
+    default for any Telegram-configured agent, backfilled for pre-031 workspaces.
+  - Requires `DOCKER_E2E` (touches the image-baked plugin patcher + boot install);
+    the live-interception ferrari deploy gate is deferred to deploy.
 - **Boot-time warm cache for out-of-catalog MCPs — `030-mcp-warm-cache`**: closes the
   root cause of the ferrari incident that `029` only mitigated. An MCP injected by the
   external `custom-apply` overlay (e.g. `google-workspace` = `uvx workspace-mcp`) used

@@ -65,6 +65,7 @@ _SCHEMA_ENUMS=(
 _SCHEMA_BOOLEANS=(
   '.features.heartbeat.enabled'
   '.features.reply_guard.enabled'
+  '.features.askuserquestion_guard.enabled'
   '.vault.enabled'
   '.vault.mcp.enabled'
   '.vault.qmd.enabled'

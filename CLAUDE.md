@@ -134,10 +134,68 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
-**030-mcp-warm-cache — MERGED-PENDING (rama `030-mcp-warm-cache`, PR #92 ABIERTO contra main,
-rebasada sobre main=`a90fbd6` v0.20.0 tras el merge de 029; VERSION 0.20.0→**0.21.0**; 2ª de las
-3 features del incidente ferrari 16-08-2026; la 1ª es 029 MERGED, la 3ª es 031 guardia
-AskUserQuestion, spec separada).** Plan: `specs/030-mcp-warm-cache/plan.md`. **PROBLEMA:** 029
+**031-channel-askuserquestion-guard — IMPLEMENTADO (rama
+`031-channel-askuserquestion-guard` desde main=`d55a734` v0.21.0→**0.22.0**; 3ª y última feature del
+incidente ferrari 16-08-2026; 028 reply-guard y 029/030 MCP ya MERGED).** Plan:
+`specs/031-channel-askuserquestion-guard/plan.md`. **BUG (anticipado, misma clase que 028, SIN captura
+forense propia — marcado así en la spec):** un turno de canal que llama `AskUserQuestion` abre un menú
+console-only que el usuario de Telegram no ve → el turno se cuelga A MITAD; la 028 (Stop hook) NO lo
+cubre porque el turno no TERMINA, se bloquea antes. **GATE DE FACTIBILIDAD RESUELTO POR MEDICIÓN (no por
+doc):** en claude **2.1.223** (≈ imagen ~2.1.220), sesión interactiva por PTY con `--settings` temporal
+(técnica de 028) — **`PreToolUse` SÍ dispara para `AskUserQuestion`** (`tool_name="AskUserQuestion"`,
+payload keys `cwd/effort/permission_mode=auto/prompt_id/session_id/tool_input{questions}/tool_use_id/
+transcript_path`, **SIN campo de origen**); el deny (`hookSpecificOutput.permissionDecision:"deny"`+reason,
+exit 0) bloquea y el reason llega al modelo, que **redirige a texto por sí solo**. Refutó la afirmación
+doc "AUQ no dispara PreToolUse" (el `-p` headless NO expone AUQ; por eso hubo que medir interactivo/PTY).
+**DISEÑO (research.md, constitución 6/6 PASS):** hook `modules/askq-guard.sh.tpl` → `scripts/hooks/
+askq-guard.sh` con matcher `AskUserQuestion`; ORIGEN = reusar el marcador `pending-reply.json` de 028
+(vivo a mitad de turno); **FAIL-OPEN** si el marcador falta (romper un AUQ de consola legítimo es peor
+que el cuelgue de canal — al revés que 028); loop guard con contador propio por `prompt_id` (NO hay
+`stop_hook_active` en PreToolUse); en give-up el hook escribe `askq-guard-giveup.json` y el **plugin**
+(su vía `bot.api.sendMessage` existente, sin privilegio nuevo = Principio II) manda UN mensaje honesto;
+US2 = bump typing **v5→v6** (`upgrade_typing_v5_to_v6`) que nombra la 3ª causa. Config
+`features.askuserquestion_guard.{enabled,max_attempts}` espejo de `reply_guard` (backfill `has()`,
+on-by-default por presencia del plugin telegram). **DOCKER_E2E requerido** (toca image-baked patcher +
+boot install). **CLARIFY 2026-08-19:** Q1 agent-driven (sin privilegio nuevo en el guard); Q2 mensaje de
+give-up al canal (determinista, vía el plugin). Artefactos:
+`specs/031-channel-askuserquestion-guard/{spec,plan,research,data-model,quickstart}.md` +
+`contracts/{pretooluse-guard-io,hook-install-and-config,giveup-and-warning}.md`.
+**`/speckit-analyze` (2026-08-22) encontró 2 MEDIUM, 0 CRITICAL/HIGH:** (I1) el contrato original de C6
+decía "allow" en give-up, lo que reabría el menú console-only y reintroducía el cuelgue exacto que la
+feature previene; (U1) el disparador de entrega del give-up ("tick o fin de turno") no estaba fijado,
+con riesgo de perder el mensaje si el turno terminaba justo entre el write del marcador y el próximo
+tick. **Ambos remediados en spec/contratos/data-model ANTES de implementar:** C6 pasó a **deny-terminal**
+(sigue denegando con una razón terminal "no reintentes esta tool" — el prompt nunca abre, ni en give-up);
+el disparador de entrega quedó fijado en DOS puntos (cada tick del keep-alive + arranque del keep-alive
+del siguiente turno entrante), con delete-on-send como llave de idempotencia entre ambos.
+**IMPLEMENTADO 2026-08-23 (test-first, 24/24 tareas Fase 1-6 + T024 ya hecha; T022/T023 DIFERIDAS al
+deploy, por diseño).** `modules/askq-guard.sh.tpl` (hook PreToolUse, C1-C6, fail-open en C4, deny-terminal
+en C6) + `modules/askq-guard-install.sh.tpl` (installer sibling del de 028, NO se tocó el original);
+`setup.sh` gana el bloque `features.askuserquestion_guard` (heredoc + backfill `has()` + render gate,
+mismo patrón que `reply_guard`); `docker/scripts/start_services.sh::pre_install_askq_hook` (llamada en
+`start_session`); `modules/local-login.sh.tpl` con el install call local; `scripts/heartbeat/heartbeat.sh`
+ahora también dropea `.hooks.PreToolUse` en el aislamiento. `docker/scripts/apply_telegram_typing_patch.py`
+gana el 6º patch (`MARKER_ASKQ_GIVEUP`, `apply_askq_giveup`, wired en los dos triggers) + typing
+**v5→v6** (`upgrade_typing_v5_to_v6`, nombra la causa de menú interactivo). Tests nuevos:
+`askq-guard.bats` (13), `askq-guard-config.bats` (6), +19 en `apply-telegram-patches.bats` (6→43 total,
+incluye 3 cascadas v1/v2/v3 actualizadas a terminar en v6), +1 en `heartbeat-isolation.bats`,
+`docker-e2e-askq-guard.bats` (3, gated, parsea y skippea limpio sin `DOCKER_E2E`). Fixtures
+`sample-agent{,-with-vault}.yml` ganan el bloque (exigido por `schema.bats` — placeholder-drift real
+cazado por el propio T001 baseline, no un mock). **GATES:** `shellcheck -S error` (comando exacto de CI)
+rc=0; **mutación 6/6** (incluye revertir C6 a allow-through — el fix de I1 tiene cobertura real; y la
+derivación de telegram del T003 correcta es la del BACKFILL, no la del heredoc del wizard — la primera
+mutación contra el heredoc no rompió nada porque ese código no es el que corren los tests de
+`--regenerate` sobre un agent.yml preexistente); regenerate byte-idéntico 2 pasadas; baseline T001
+1262/4 (los 4 pre-existentes: 3 flakes de contención confirmados en aislamiento + 1 drift real de
+`schema.bats` cerrado con las fixtures). VERSION 0.21.0→**0.22.0** (verificado contra `origin/main`).
+CHANGELOG + README (6º hook de la sección Telegram). **Pendiente: commit + PR contra main (sin
+confirmación del operador todavía — no comitear sin pedirlo explícitamente). Después: gate DOCKER_E2E +
+ferrari en el deploy (T022/T023).**
+
+**030-mcp-warm-cache MERGED (PR #92, squash `d55a734` en main, 2026-08-19; rama desde main=`a90fbd6`
+v0.20.0→**0.21.0** tras el merge de 029; 2ª de las 3 features del incidente ferrari 16-08-2026; la 1ª
+es 029 MERGED, la 3ª es 031, esta rama en curso).** Plan: `specs/030-mcp-warm-cache/plan.md`.
+**PROBLEMA:** 029
 ensancha la ventana de handshake (mitigación); 030 ataca la causa raíz — que el paquete uvx/npx del
 MCP ya esté tibio antes de que `claude` arranque, para que un recreate no dispare descarga en frío
 desde PyPI/npm dentro de la ventana. El pre-warm previo era una lista HARDCODEADA de 3 paquetes en
