@@ -212,6 +212,12 @@ wizard_answers() {
   else
     printf 'n\n'
   fi
+  # Voice roundtrip (032) — docker-mode only; local-mode answer streams get
+  # NO prompt here at all (the wizard skips asking entirely, not just defaults
+  # to "n"). Canonical test path declines (opt-in, off by default).
+  if [ "$deployment_mode" = "docker" ]; then
+    printf 'n\n'
+  fi
   # Optional plugins, alphabetical: code-simplifier, commit-commands, github, skill-creator, superpowers
   printf 'n\nn\nn\nn\n'
   if [ "$superpowers" = "on" ]; then printf 'y\n'; else printf 'n\n'; fi

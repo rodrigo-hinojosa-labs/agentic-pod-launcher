@@ -71,5 +71,16 @@ services:
       # of the session. The launcher sanitises the value (positive int → default
       # 120000) before rendering, so this is always a safe integer > 0.
       MCP_TIMEOUT: "{{CLAUDE_MCP_TIMEOUT_MS}}"
+      # Round-trip voice over Telegram (032), single-sourced from
+      # agent.yml::features.voice.*, sanitized at render time. Rendered
+      # UNCONDITIONALLY (MCP_TIMEOUT precedent — no {{#if}} exists here and
+      # no flattened var expresses plugin presence); a voice-disabled or
+      # non-telegram agent simply carries inert env. The API key lives only
+      # in .env (below), never here.
+      TELEGRAM_VOICE_ENABLED: "{{FEATURES_VOICE_ENABLED}}"
+      TELEGRAM_VOICE_REPLY_MODE: "{{FEATURES_VOICE_REPLY_MODE}}"
+      TELEGRAM_VOICE_ID: "{{FEATURES_VOICE_VOICE_ID}}"
+      TELEGRAM_VOICE_PROVIDER: "{{FEATURES_VOICE_PROVIDER}}"
+      TELEGRAM_VOICE_STT_LANG: "{{VOICE_STT_LANG}}"
     env_file:
       - ./.env

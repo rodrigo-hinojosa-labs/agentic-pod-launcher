@@ -134,7 +134,104 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
-**031-channel-askuserquestion-guard — IMPLEMENTADO (rama
+**032-telegram-voice-roundtrip SPEC + CLARIFY + PLAN + TASKS + ANALYZE + IMPLEMENT COMPLETOS
+(2026-09-06/07; rama `032-telegram-voice-roundtrip` desde main=`076bb4e` v0.22.0→**0.23.0**).** Plan:
+`specs/032-telegram-voice-roundtrip/plan.md`. **FEATURE:** voz ida-y-vuelta ASÍNCRONA sobre el canal
+Telegram existente (notas de voz, NO llamadas en tiempo real — inviables para bots en Bot API 10.3 y
+desajustadas a turnos agénticos de 10-120s; análisis de 7 investigadores 2026-09-06, workflow
+`wf_b1eb3359-319`, decidido por el operador: Opción A). **DISEÑO (post-revisión adversarial):** 7º
+grupo de parches `MARKER_VOICE = "agentic-pod-launcher: telegram voice roundtrip patch v1"` en
+`apply_telegram_typing_patch.py` (6 hunks: V1 reemplazo del body de `bot.on('message:voice')` — STT
+ElevenLabs `scribe_v2` multipart con el OGG/Opus directo, pre-check DM-ONLY read-only
+(`chat.type==='private'` + `dmPolicy!=='disabled'` + sender en `allowFrom` vía `loadAccess()`, jamás
+`gate()` — transcripción DM-only en v1, grupos = placeholder por diseño), caps safe ante metadata
+ausente (cap real post-descarga), typing action al arrancar, y **pipeline DESPRENDIDO** — el handler
+NUNCA hace await del STT porque grammY procesa updates SECUENCIALMENTE y un await de 30s congelaría
+TODO el canal (hallazgo HIGH de la revisión); V2 bloque sendVoice anclado DESPUÉS del
+clear/ack del marcador 028 y el offset (inmediatamente antes del return del case) — timing del
+marker byte-idéntico a hoy, un crash en síntesis ya no puede causar reentrega+turno duplicado;
+V3 `voice_text` opcional en el inputSchema de reply; V4 línea en el instructions array; V5 helpers
+con línea de config a NIVEL MÓDULO (observable en fault-injection e2e) y redacción dura — la URL de
+getFile lleva el BOT TOKEN, jamás interpolar `${err}` crudo; V6 wrap de `message:text` que limpia
+VoiceOrigin — "voz responde a voz" honesto). **Señal de origen-voz al agente = el meta EXISTENTE
+`attachment_kind: 'voice'` + contenido ≠ placeholder — CERO campos nuevos, `handleInbound` NO se
+toca.** Formato TTS (incógnita E1 neutralizada por diseño): pedir `opus_48000_64`, sniff de magic
+bytes `OggS` → `.ogg`; si no → re-pedir `mp3_44100_128` (Bot API 10.3 acepta MP3 como voz), UN solo
+presupuesto de 30s para ambos intentos — SIN ffmpeg, SIN tocar Dockerfile. Config:
+`features.voice.{enabled,reply_mode,voice_id,provider}` en agent.yml (clarify 2026-09-06: **opt-in
+explícito, backfill y wizard DISABLED por default** — gasta plata por mensaje, al revés que 028/031;
+modo `auto` = voz responde a voz, texto SIEMPRE acompaña; locución = "agente propone `voice_text`,
+plugin trunca a ~1200 chars como piso"; SIN eco de transcripción) → compose `environment:`
+`TELEGRAM_VOICE_*` INCONDICIONAL (patrón MCP_TIMEOUT de 029) + `ELEVENLABS_API_KEY` solo en `.env`;
+**sanitizador de idioma STT: `user.language` `mixed` (valor LEGAL del wizard) → vacío = autodetect
+(sin él, feature muerta-al-nacer en agentes `mixed` — hallazgo HIGH)**; wizard gateado por
+`deployment.mode==docker` (telegram es plugin default mandatorio — la presencia no discrimina nada;
+prompts en setup.sh con primitivas existentes, wizard.sh/wizard-gum.sh NO se tocan). VoiceOrigin map
+en memoria (consume-on-read ANTES de sintetizar, fallo TTS NO lo restaura; TTL 5 min; restart ⇒ una
+respuesta solo-texto, fail-open deliberado — NO extender el marcador de 028, acoplamiento entre
+grupos prohibido). Modo local inerte con ORÁCULO: +1 en local-render.bats (invariante = cero
+`TELEGRAM_VOICE_` en artefactos RUNTIME locales; .env.example documenta nombres en ambos modos).
+**REVISIÓN ADVERSARIAL DEL PLAN (2026-09-06, workflow `wf_315ab832-0f5`, 4 revisores contra el
+código real): 4 HIGH + 12 MEDIUM, TODOS remediados en spec/plan/research/data-model/contracts antes
+de tasks** — los otros dos HIGH: el fixture de apply-telegram-patches.bats NO tiene las anclas que
+los hunks de voz necesitan (extenderlo es tarea propia con checkpoint de los 43 verdes) y FR-011
+sin oráculo. Constitución 6/6 PASS (re-check post-diseño), Complexity Tracking vacío.
+**DOCKER_E2E REQUERIDO** (patcher image-baked). Touchpoints de wizard conocidos: `wizard_answers` +
+array de e2e-smoke + `known_external` de schema.bats + fixtures con el bloque. Artefactos:
+`specs/032-telegram-voice-roundtrip/{spec,plan,research,data-model,quickstart,tasks}.md` +
+`contracts/{voice-inbound-stt,voice-outbound-tts,voice-config-and-render}.md`.
+**TASKS (2026-09-07):** 26 tareas test-first (Setup T001-T002 incl. extensión del fixture con anclas
+V1-V6 y checkpoint 43-verdes; Foundational T003 schema+fixtures juntos; US1 T004-T008 inbound;
+US2 T009-T012 outbound; US3 T013-T019 superficie declarativa; Polish T020-T026 con T025/T026
+DIFERIDAS al deploy — precedente 031). **`/speckit-analyze` (2026-09-07, workflow `wf_2b92de97-23f`,
+3 analistas): 0 CRITICAL, 2 HIGH, 2 MEDIUM, 11 LOW — TODOS remediados en artefactos.** Los 2 HIGH:
+(F1) el hint STT reusaba `{{USER_LANGUAGE}}`, que también consume `claude-md.tpl` → sanearlo por
+re-export habría vaciado el "Preferred language" del CLAUDE.md de un agente `mixed`; fix =
+placeholder derivado DEDICADO `{{VOICE_STT_LANG}}` (USER_LANGUAGE intacto, entra a `known_external`,
+test en T013 de que el CLAUDE.md de un `mixed` sigue diciendo mixed); (F2) slip de remediación en
+data-model §1 que conservaba el gate refutado del wizard por presencia de telegram → corregido a
+modo docker. Cobertura FR 13/13; SC-002/003/006 ahora nombradas en T026 con pasos concretos de
+quickstart (timing + no-bloqueo, render multi-cliente incondicional, chequeo de costo); oráculo de
+redacción endurecido a campos whitelisted (una interpolación de `${fileUrl}` filtraría el BOT TOKEN
+pasando el test de `${err}`); diferimiento DOCKER_E2E ahora declarado en el gate III del plan.
+**IMPLEMENTADO 2026-09-07 (test-first, 24/26 tareas; T025/T026 DIFERIDAS al deploy por diseño, precedente
+031).** `docker/scripts/apply_telegram_typing_patch.py` gana el 7º grupo (`MARKER_VOICE`, seis hunks
+V1-V6 vía `apply_voice()`, wired al final de `main()`, docstring extendido a 7 grupos). **Bug propio
+autodetectado y corregido (misma clase que 023, otro lenguaje):** las seis constantes de reemplazo
+contienen `\n`/`\d` literales (newlines de template-literal JS, una regex JS); pasadas como string
+crudo a `re.subn`, el propio parser de templates de Python las reinterpreta (`\n`→newline real, `\d`→
+crash "bad escape"). Arreglo estructural: los seis `re.subn` de `apply_voice` usan `lambda m: ...`
+como reemplazo (cero procesamiento de escapes), nunca un string crudo. `setup.sh` gana el prompt del
+wizard (gateado a `deploy_mode==docker`, heredoc con `voice_enabled`/`voice_id`), el bloque
+`features.voice` en el heredoc de `agent.yml`, el backfill disabled-siempre en `regenerate()`, y los
+saneadores post-`render_load_context` (incluye el placeholder dedicado `VOICE_STT_LANG`, `USER_LANGUAGE`
+intocado). `scripts/lib/schema.sh` gana `.features.voice.enabled` en `_SCHEMA_BOOLEANS`.
+`modules/docker-compose.yml.tpl` gana las 5 líneas `TELEGRAM_VOICE_*` incondicionales;
+`modules/env-example.tpl` gana `ELEVENLABS_API_KEY=` + las 2 perillas de tuning, nombre-only, en ambos
+modos. Fixtures `sample-agent{,-with-vault}.yml` con el bloque. Tests nuevos: 20 en
+`apply-telegram-patches.bats` (12 inbound + 8 outbound, 43→64), `voice-config.bats` (9, nuevo),
++2 en `docker-render.bats`, +1 en `local-render.bats` (oráculo FR-011: cero `TELEGRAM_VOICE_` en
+artefactos runtime locales), +1 `known_external` en `schema.bats`, `docker-e2e-voice.bats` (4, gated,
+parsea y skippea limpio sin `DOCKER_E2E`). **Verificado a mano end-to-end en ambos modos del wizard**
+(docker: un `n` extra en el punto correcto de `wizard_answers`; local: cero prompt, bloque disabled
+igual escrito) — el array de e2e-smoke.bats NO necesitó tocarse (su stream ya corre en seco antes de
+la ronda de vault/plugins/review y depende del fallback EOF→default de `ask_yn`, que sigue funcionando
+igual con el nuevo prompt intercalado). **GATES:** `shellcheck -S error` (comando exacto de CI) rc=0;
+**mutación 6/6** (quitar el try/catch de fail-open del inbound — destapó una aserción propia demasiado
+débil, `-ge 4` en vez de `-eq 7`, ya reforzada; mover el bloque V2 entre chunks y files; quitar el guard
+`dmPolicy`; revertir el backfill a enabled-por-defecto; re-throw en fallo de TTS; setear VoiceOrigin en
+el path del placeholder — las 6 rompieron el test correcto y se revirtieron limpio); suite completa
+**1336/0 en bash 3.2.57 Y 1334/2 en bash 5.3.15 concurrente** (los 2 rojos son el flake de contención
+conocido de `heartbeat-auth-detection.bats`, confirmado 7/7 en aislamiento — ajeno a 032, mismo patrón
+documentado en 027/025). VERSION 0.22.0→**0.23.0** (verificado contra `origin/main` antes y después).
+CHANGELOG + README (7º hook de la sección Telegram, puntero al quickstart). **Pendiente NO bloqueante:**
+T025 (DOCKER_E2E real) + T026 (ferrari en vivo: SC-001/002/003/006, fault-injection, A/B es-CL) —
+diferidos al despliegue de v0.23.0, precedente 031. Nada comiteado todavía — falta confirmación del
+operador. NO mezclar con la actualización de flota pendiente (donna/linus 0.19.0, admins 0.17.0,
+mclaren-admin CAÍDO por OAuth vencido desde 2026-09-02) — el deploy de 032 se monta sobre esa
+actualización, operación aparte.**
+
+**031-channel-askuserquestion-guard MERGED (PR #93, squash `076bb4e` en main, 2026-08-23; rama
 `031-channel-askuserquestion-guard` desde main=`d55a734` v0.21.0→**0.22.0**; 3ª y última feature del
 incidente ferrari 16-08-2026; 028 reply-guard y 029/030 MCP ya MERGED).** Plan:
 `specs/031-channel-askuserquestion-guard/plan.md`. **BUG (anticipado, misma clase que 028, SIN captura
@@ -188,9 +285,15 @@ mutación contra el heredoc no rompió nada porque ese código no es el que corr
 `--regenerate` sobre un agent.yml preexistente); regenerate byte-idéntico 2 pasadas; baseline T001
 1262/4 (los 4 pre-existentes: 3 flakes de contención confirmados en aislamiento + 1 drift real de
 `schema.bats` cerrado con las fixtures). VERSION 0.21.0→**0.22.0** (verificado contra `origin/main`).
-CHANGELOG + README (6º hook de la sección Telegram). **Pendiente: commit + PR contra main (sin
-confirmación del operador todavía — no comitear sin pedirlo explícitamente). Después: gate DOCKER_E2E +
-ferrari en el deploy (T022/T023).**
+CHANGELOG + README (6º hook de la sección Telegram). **PR #93 abierto y MERGEADO por el operador
+(2026-08-23, squash `076bb4e`); CI verde en los tres checks (shellcheck + bats bash 5.x ubuntu +
+bash 3.2 macos) confirmado vía `gh pr view` antes de la limpieza post-merge. main sincronizada y
+verificada (VERSION 0.22.0, símbolos `MARKER_ASKQ_GIVEUP`/`typing refresh patch v6`/
+`pre_install_askq_hook`/`askuserquestion_guard` en schema.sh, `askq-guard.sh.tpl` presentes; diff
+`076bb4e` vs el commit local `7bf3ad5` vacío = contenido idéntico, solo el squash reescribió el SHA).
+Rama local + remota limpiadas. Las tres features del incidente ferrari (029, 030, 031) están MERGEADAS.
+Pendiente NO bloqueante: gate DOCKER_E2E (host con Docker) + gate ferrari en vivo (T022/T023), ambos
+diferidos al despliegue de v0.22.0.**
 
 **030-mcp-warm-cache MERGED (PR #92, squash `d55a734` en main, 2026-08-19; rama desde main=`a90fbd6`
 v0.20.0→**0.21.0** tras el merge de 029; 2ª de las 3 features del incidente ferrari 16-08-2026; la 1ª

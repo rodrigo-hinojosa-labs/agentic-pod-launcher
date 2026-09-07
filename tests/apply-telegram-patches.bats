@@ -15,15 +15,20 @@ setup() {
   setup_tmp_dir
   # Synthetic server.ts containing the anchors the patcher targets:
   #   1. `const TOKEN = process.env.TELEGRAM_BOT_TOKEN`        → stderr hunk
-  #   2. `let botUsername = ''`                                → typing+offset helpers
+  #   2. `let botUsername = ''`                                → typing+offset+voice helpers
   #   3. `  const chat_id = String(ctx.chat!.id)` (2-sp ind.)  → offset mark hunk
   #   4. `  // Typing indicator — signals "processing" ...`    → typing hunk2
   #   5. `      case 'reply': {`                               → typing hunk3
   #   6. `        const result = …\n          sentIds.length === 1` → offset ack hunk
   #   7. `      await bot.start({`                             → offset replay hunk
+  #   8. `bot.on('message:voice', ...)` (real 0.0.6 shape)      → voice hunk V1
+  #   9. `bot.on('message:text', ...)` (real 0.0.6 shape)       → voice hunk V6
+  #  10. `        return { content: [...text: result...] }`    → voice hunk V2
+  #  11. reply tool inputSchema (real ListToolsRequestSchema shape) → voice hunk V3
+  #  12. `    instructions: [`                                 → voice hunk V4
   cat > "$TMP_TEST_DIR/server.ts" <<'TS'
 #!/usr/bin/env bun
-import { Bot } from 'grammy'
+import { Bot, InputFile } from 'grammy'
 import { readFileSync, writeFileSync, statSync, mkdirSync } from 'fs'
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN
@@ -48,7 +53,11 @@ writeFileSync(PID_FILE, String(process.pid))
 const bot = new Bot(TOKEN)
 let botUsername = ''
 
-async function handleInbound(ctx: any) {
+function loadAccess(): any {
+  return { dmPolicy: 'open', allowFrom: ['111'], groups: {} }
+}
+
+async function handleInbound(ctx: any, text?: string, downloadImage?: any, attachment?: any) {
   const from = ctx.from!
   const chat_id = String(ctx.chat!.id)
   const msgId = ctx.message?.message_id
@@ -60,11 +69,74 @@ bot.on('message', async (ctx: any) => {
   await handleInbound(ctx)
 })
 
+bot.on('message:text', async ctx => {
+  await handleInbound(ctx, ctx.message.text, undefined)
+})
+
+bot.on('message:voice', async ctx => {
+  const voice = ctx.message.voice
+  const text = ctx.message.caption ?? '(voice message)'
+  await handleInbound(ctx, text, undefined, {
+    kind: 'voice',
+    file_id: voice.file_id,
+    size: voice.file_size,
+    mime: voice.mime_type,
+  })
+})
+
+const mcp = {
+  setRequestHandler: (_schema: any, _handler: any) => {},
+}
+
+mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
+  tools: [
+    {
+      name: 'reply',
+      description: 'Reply on Telegram.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          chat_id: { type: 'string' },
+          text: { type: 'string' },
+          reply_to: {
+            type: 'string',
+            description: 'Message ID to thread under.',
+          },
+          files: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Absolute file paths to attach.',
+          },
+          format: {
+            type: 'string',
+            enum: ['text', 'markdownv2'],
+            description: 'Rendering mode.',
+          },
+        },
+        required: ['chat_id', 'text'],
+      },
+    },
+  ],
+}))
+
+const mcpServer = new Server(
+  { name: 'telegram', version: '1.0.0' },
+  {
+    capabilities: { tools: {} },
+    instructions: [
+      'The sender reads Telegram, not this session.',
+      '',
+      'Access is managed by the /telegram:access skill.',
+    ].join('\n'),
+  },
+)
+
 async function handleReply(args: any) {
   switch (args.tool) {
       case 'reply': {
         const chat_id = args.chat_id as string
         const text = args.text as string
+        const files = (args.files as string[] | undefined) ?? []
         const sentIds: number[] = []
         try {
           for (let i = 0; i < 1; i++) {
@@ -73,6 +145,11 @@ async function handleReply(args: any) {
           }
         } catch (err) {
           throw err
+        }
+
+        for (const f of files) {
+          const sent = await bot.api.sendDocument(chat_id, f)
+          sentIds.push(sent.message_id)
         }
 
         const result =
@@ -694,4 +771,228 @@ TS
   local v6_count_after
   v6_count_after=$(grep -c "typing refresh patch v6" "$TMP_TEST_DIR/server.ts")
   [ "$v6_count_before" -eq "$v6_count_after" ]
+}
+
+# ── 032 US1: inbound voice → transcript (contracts/voice-inbound-stt.md) ─────────
+
+@test "032 inbound: marker present exactly once on a fresh fixture" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  local count
+  count=$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v1" "$TMP_TEST_DIR/server.ts")
+  [ "$count" -eq 1 ]
+}
+
+@test "032 inbound: double-apply is idempotent (voice marker count stable, file unchanged)" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  local sha1
+  sha1=$(shasum "$TMP_TEST_DIR/server.ts" | awk '{print $1}')
+  run python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  [ "$status" -eq 0 ]
+  local sha2
+  sha2=$(shasum "$TMP_TEST_DIR/server.ts" | awk '{print $1}')
+  [ "$sha1" = "$sha2" ]
+  local count
+  count=$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v1" "$TMP_TEST_DIR/server.ts")
+  [ "$count" -eq 1 ]
+}
+
+@test "032 inbound: anchor drift on message:voice handler → voice skipped, other groups still apply" {
+  sed -i.bak "s|bot.on('message:voice', async ctx => {|bot.on('message:voicex', async ctx => {|" "$TMP_TEST_DIR/server.ts"
+  rm -f "$TMP_TEST_DIR/server.ts.bak"
+  run python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  [ "$status" -eq 0 ]
+  ! grep -q "agentic-pod-launcher: telegram voice roundtrip patch v1" "$TMP_TEST_DIR/server.ts"
+  grep -q "agentic-pod-launcher: offset persistence patch v1" "$TMP_TEST_DIR/server.ts"
+  grep -q "agentic-pod-launcher: pending-reply marker patch v1" "$TMP_TEST_DIR/server.ts"
+  grep -q "agentic-pod-launcher: askq-guard give-up delivery patch v1" "$TMP_TEST_DIR/server.ts"
+}
+
+@test "032 inbound: DM-only pre-check (incl. dmPolicy guard) appears before any fetch/getFile call" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  local dm_line file_line fetch_line
+  dm_line=$(grep -n "access.dmPolicy !== 'disabled'" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  file_line=$(grep -n "ctx.api.getFile(voice.file_id)" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  fetch_line=$(grep -n "const res = await fetch(url" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  [ -n "$dm_line" ]
+  [ "$dm_line" -lt "$file_line" ]
+  [ "$dm_line" -lt "$fetch_line" ]
+}
+
+@test "032 inbound: pipeline is detached — void(async) scheduling, handler never awaits the STT helper" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  grep -q "void (async () => {" "$TMP_TEST_DIR/server.ts"
+  local async_line transcribe_line
+  async_line=$(grep -n "void (async () => {" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  transcribe_line=$(grep -n "await _voiceTranscribe(buf" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  [ "$transcribe_line" -gt "$async_line" ]
+  # No top-level (handler-scope) await of the STT helper outside the IIFE.
+  ! grep -qE "^  const transcript = await _voiceTranscribe" "$TMP_TEST_DIR/server.ts"
+}
+
+@test "032 inbound: typing action fires before the detached download+STT pipeline" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  local voice_start async_start
+  voice_start=$(grep -n "^bot.on('message:voice'" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  async_start=$(grep -n "void (async () => {" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  local typing_lines l found
+  typing_lines=$(grep -n "void bot.api.sendChatAction(chat_id, 'typing')" "$TMP_TEST_DIR/server.ts" | cut -d: -f1)
+  found=0
+  for l in $typing_lines; do
+    if [ "$l" -gt "$voice_start" ] && [ "$l" -lt "$async_start" ]; then
+      found=1
+    fi
+  done
+  [ "$found" -eq 1 ]
+}
+
+@test "032 inbound: caps are absent-metadata-safe and the over-cap floor is distinguishable" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  grep -q "voice.duration && voice.duration > VOICE_MAX_NOTE_SECONDS" "$TMP_TEST_DIR/server.ts"
+  grep -q "voice.file_size && voice.file_size > VOICE_MAX_BYTES" "$TMP_TEST_DIR/server.ts"
+  grep -q "buf.length > VOICE_MAX_BYTES" "$TMP_TEST_DIR/server.ts"
+  grep -q "voice stt skip: over-cap" "$TMP_TEST_DIR/server.ts"
+  grep -q "(voice note over the transcription limit)" "$TMP_TEST_DIR/server.ts"
+}
+
+@test "032 inbound: every failure path converges on the placeholder call (fail-open floor)" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  # Exact count (mutation target): inactive, not-DM, duration-cap,
+  # file_size-cap, post-download-cap, empty-transcript, and the generic
+  # network/timeout catch — 7 call sites total. Dropping any one of them
+  # (e.g. the catch block) must fail this test.
+  local count
+  count=$(grep -c "await placeholder(" "$TMP_TEST_DIR/server.ts")
+  [ "$count" -eq 7 ]
+  grep -q "ctx.message.caption ?? '(voice message)'" "$TMP_TEST_DIR/server.ts"
+  # The generic network/timeout catch specifically must fall through to the
+  # placeholder — not just swallow the error and go silent.
+  grep -A 4 "^    } catch (err) {" "$TMP_TEST_DIR/server.ts" | grep -q "await placeholder()"
+}
+
+@test "032 inbound: stt failure lines never interpolate a raw error object or a URL" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  awk '/^bot\.on\(.message:voice./{f=1} f{print; if (/^\}\)$/) exit}' \
+    "$TMP_TEST_DIR/server.ts" > "$TMP_TEST_DIR/voice_inbound_snippet.txt"
+  ! grep -q '${err}' "$TMP_TEST_DIR/voice_inbound_snippet.txt"
+  ! grep -q '${url}' "$TMP_TEST_DIR/voice_inbound_snippet.txt"
+  ! grep -q 'file/bot' "$TMP_TEST_DIR/voice_inbound_snippet.txt"
+  grep -q 'voice stt fail: ${cls} status=${status}' "$TMP_TEST_DIR/voice_inbound_snippet.txt"
+}
+
+@test "032 inbound: the voice handler never calls sendMessage or ctx.reply — no transcript echo" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  awk '/^bot\.on\(.message:voice./{f=1} f{print; if (/^\}\)$/) exit}' \
+    "$TMP_TEST_DIR/server.ts" > "$TMP_TEST_DIR/voice_inbound_snippet.txt"
+  ! grep -q 'sendMessage(' "$TMP_TEST_DIR/voice_inbound_snippet.txt"
+  ! grep -q 'ctx.reply(' "$TMP_TEST_DIR/voice_inbound_snippet.txt"
+}
+
+@test "032 inbound: config/WARN line sits at module scope, before any bot.on handler" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  local config_line first_handler_line
+  config_line=$(grep -n "voice active mode=" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  first_handler_line=$(grep -n "^bot.on(" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  [ -n "$config_line" ]
+  [ "$config_line" -lt "$first_handler_line" ]
+}
+
+@test "032 inbound/V6: voice-origin is set only on success, cleared when a typed message arrives" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  local count
+  count=$(grep -c "_voiceOriginSet(chat_id)" "$TMP_TEST_DIR/server.ts")
+  [ "$count" -eq 1 ]
+  local voice_start set_line
+  voice_start=$(grep -n "^bot.on('message:voice'" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  set_line=$(grep -n "_voiceOriginSet(chat_id)" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  [ "$set_line" -gt "$voice_start" ]
+  grep -q "_voiceOriginClear(String(ctx.chat!.id))" "$TMP_TEST_DIR/server.ts"
+}
+
+@test "032 inbound: typing cascade v1→…→v6 is unaffected by the voice group" {
+  # Simulate an existing v4-patched agent, same technique as the 028/031 cascade test
+  # (test "028/031: a v4-patched server.ts cascades through v5 all the way to v6").
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  perl -0pi -e 's/typing refresh patch v6/typing refresh patch v4/g; s/telegram-typing v6 — names interactive-prompt cause/telegram-typing v4 — anti-zombie/g' "$TMP_TEST_DIR/server.ts"
+  perl -0pi -e 's/⚠️ Llevo más de \$\{minutes\} min sin entregar la respuesta a este chat\. Puede deberse a: una respuesta larga aún en curso, a que respondí sin usar la herramienta de envío, a que el login de Claude haya expirado, o a que la sesión quedó bloqueada en un menú interactivo que el canal no puede responder\. Revisa: agentctl doctor\./⚠️ Tardé más de \${minutes} min en responder. Es probable que el OAuth de Claude haya expirado o haya un error de conectividad. Revisa: agentctl doctor./g' "$TMP_TEST_DIR/server.ts"
+  run python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  [ "$status" -eq 0 ]
+  grep -q "typing refresh patch v6" "$TMP_TEST_DIR/server.ts"
+  local voice_count
+  voice_count=$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v1" "$TMP_TEST_DIR/server.ts")
+  [ "$voice_count" -eq 1 ]
+}
+
+# ── 032 US2: reply → voice bubble (contracts/voice-outbound-tts.md) ──────────────
+
+@test "032 outbound: voice block anchors AFTER the 028 marker-clear/offset-ack site, before return" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  local ack_line clear_line result_line consume_line return_line
+  ack_line=$(grep -n "_ackPending(chat_id)" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  clear_line=$(grep -n "_clearPendingReply()" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  result_line=$(grep -n "        const result =" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  consume_line=$(grep -n "_voiceOriginConsume(chat_id)" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  return_line=$(grep -n "return { content: \[{ type: 'text', text: result }\] }" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  [ "$ack_line" -lt "$result_line" ]
+  [ "$clear_line" -lt "$result_line" ]
+  [ "$result_line" -lt "$consume_line" ]
+  [ "$consume_line" -lt "$return_line" ]
+}
+
+@test "032 outbound: consume-on-read — the origin flag is deleted before synthesis is attempted" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  local consume_line synth_line
+  consume_line=$(grep -n "_voiceOriginConsume(chat_id)" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  synth_line=$(grep -n "await _voiceSynthesize(spoken" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  [ "$consume_line" -lt "$synth_line" ]
+}
+
+@test "032 outbound: truncation helper honors the char cap with word-boundary + ellipsis" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  grep -q "function _voiceTruncate(text: string, cap: number): string" "$TMP_TEST_DIR/server.ts"
+  grep -q "text.lastIndexOf(' ', cap)" "$TMP_TEST_DIR/server.ts"
+  grep -q "TELEGRAM_VOICE_SPOKEN_CHAR_CAP" "$TMP_TEST_DIR/server.ts"
+  grep -q "_voiceTruncate(text, VOICE_SPOKEN_CHAR_CAP)" "$TMP_TEST_DIR/server.ts"
+}
+
+@test "032 outbound: reply tool inputSchema gains the optional voice_text property" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  grep -A 3 "voice_text: {" "$TMP_TEST_DIR/server.ts" | grep -q "type: 'string'"
+  local voice_text_line required_line
+  voice_text_line=$(grep -n "voice_text: {" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  required_line=$(grep -n "        required: \['chat_id', 'text'\]," "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  [ "$voice_text_line" -lt "$required_line" ]
+}
+
+@test "032 outbound: instructions array gains the voice-reply convention line" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  grep -A 2 "    instructions: \[" "$TMP_TEST_DIR/server.ts" | grep -q 'attachment_kind="voice"'
+  grep -q "include voice_text with a concise speakable version" "$TMP_TEST_DIR/server.ts"
+}
+
+@test "032 outbound: format strategy is OggS sniff with a single-budget mp3 fallback" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  grep -q "opus_48000_64" "$TMP_TEST_DIR/server.ts"
+  grep -q "buf.toString('ascii', 0, 4) === 'OggS'" "$TMP_TEST_DIR/server.ts"
+  grep -q "mp3_44100_128" "$TMP_TEST_DIR/server.ts"
+  # One shared 30s deadline for the whole synthesis step (reply-block scoped).
+  local voice_timer_count
+  voice_timer_count=$(grep -c "_voiceTimer = setTimeout(() => _voiceController.abort(), 30000)" "$TMP_TEST_DIR/server.ts")
+  [ "$voice_timer_count" -eq 1 ]
+}
+
+@test "032 outbound: sendVoice appears only in the patched voice group, never in the baseline" {
+  ! grep -q "sendVoice" "$TMP_TEST_DIR/server.ts"
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  local count
+  count=$(grep -c "bot.api.sendVoice(chat_id" "$TMP_TEST_DIR/server.ts")
+  [ "$count" -eq 1 ]
+}
+
+@test "032 outbound: a synthesis/send failure never throws — it logs and falls through to return" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  awk '/agentic-pod-launcher: voice roundtrip outbound synthesis/{f=1} f{print; if (/^        \}$/) exit}' \
+    "$TMP_TEST_DIR/server.ts" > "$TMP_TEST_DIR/voice_outbound_snippet.txt"
+  ! grep -q '^\s*throw ' "$TMP_TEST_DIR/voice_outbound_snippet.txt"
+  grep -q "voice tts fail: \${cls} status=\${status}" "$TMP_TEST_DIR/voice_outbound_snippet.txt"
+  ! grep -q '${err}' "$TMP_TEST_DIR/voice_outbound_snippet.txt"
 }

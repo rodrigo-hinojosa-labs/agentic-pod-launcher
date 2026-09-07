@@ -42,6 +42,11 @@ features:
   askuserquestion_guard:
     enabled: true
     max_attempts: 1
+  voice:
+    enabled: false
+    reply_mode: auto
+    voice_id: ""
+    provider: elevenlabs
   identity_backup:
     enabled: true
     schedule: "30 3 * * *"

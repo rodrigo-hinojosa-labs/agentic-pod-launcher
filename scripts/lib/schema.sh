@@ -66,6 +66,7 @@ _SCHEMA_BOOLEANS=(
   '.features.heartbeat.enabled'
   '.features.reply_guard.enabled'
   '.features.askuserquestion_guard.enabled'
+  '.features.voice.enabled'
   '.vault.enabled'
   '.vault.mcp.enabled'
   '.vault.qmd.enabled'

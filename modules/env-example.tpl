@@ -24,3 +24,11 @@ ATLASSIAN_{{NAME}}_TOKEN=
 # GitHub MCP
 GITHUB_PAT=
 {{/if}}
+
+# Round-trip voice over Telegram (032, opt-in via features.voice.enabled).
+# Required to activate; a missing key degrades to today's text-only behaviour
+# with a one-time boot WARN. Optional tuning knobs override the built-in
+# defaults (transcription cap: 300s; spoken-reply truncation floor: 1200 chars).
+ELEVENLABS_API_KEY=
+# TELEGRAM_VOICE_MAX_NOTE_SECONDS=300
+# TELEGRAM_VOICE_SPOKEN_CHAR_CAP=1200

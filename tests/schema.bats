@@ -73,6 +73,11 @@ teardown() { teardown_tmp_dir; }
   # 027 (US3): uvx MCP + `mcp` lib pins, injected into local-bootstrap.sh.tpl by
   # _export_local_context from scripts/lib/versions.sh (AGENTIC_FLOOR_MCP_*).
   known_external="${known_external} MCP_FETCH_VERSION MCP_GIT_VERSION MCP_ATLASSIAN_VERSION MCP_LIB_VERSION "
+  # 032: derived in setup.sh from user.language (es|en pass, else empty =
+  # autodetect) for the voice STT language hint. A DEDICATED placeholder —
+  # USER_LANGUAGE itself is never re-sanitized (claude-md.tpl also consumes
+  # it and a `mixed` agent's CLAUDE.md must keep saying `mixed`).
+  known_external="${known_external} VOICE_STT_LANG "
 
   # Capture the env shape produced by render_load_context with the fixture.
   local before_env after_env produced

@@ -63,6 +63,25 @@ independent fixes that improve Telegram chat reliability + observability:
    naming "blocked in an interactive prompt the channel can't answer" among
    the timeout warning's possible causes.
 
+7. Telegram voice roundtrip patch (v1, feature 032) — closes the voice loop
+   asynchronously over the existing channel. Six hunks under one marker:
+   V1 replaces the `bot.on('message:voice')` handler body with a DM-only
+   read-only pre-check, absent-metadata-safe caps, and a DETACHED
+   download+STT pipeline (ElevenLabs Scribe v2) — the handler never awaits
+   the network work because grammY processes updates sequentially and an
+   in-handler await would freeze the whole channel; on any failure it falls
+   back to today's exact placeholder. V2 extends `case 'reply'` with a
+   voice-synthesis block anchored AFTER the 028 marker-clear/offset-ack site
+   (immediately before the case's return), so a synthesis crash can't strand
+   the marker or the offset ack; failures never throw, they just skip the
+   voice bubble. V3/V4 add the optional `voice_text` reply-tool property and
+   an instructions-array line steering the agent to provide it for
+   voice-originated exchanges. V5 adds the module-scope helpers (config read
+   + a ONE-TIME boot line, redacting stderr helpers, the in-memory
+   voice-origin map, the TTS format sniff cache). V6 wraps
+   `bot.on('message:text')` to clear the voice-origin flag when the operator
+   types instead of speaking. Everything fails open to v0.22.0 behaviour.
+
 Each patch is independently idempotent (own marker comment) and fail-silent
 on anchor drift (logs WARN to stderr, skips THAT patch only, leaves the
 others free to apply). A single run applies whichever patches haven't yet
@@ -88,6 +107,7 @@ MARKER_STDERR = "agentic-pod-launcher: stderr-capture patch v1"
 MARKER_PRIMARY = "agentic-pod-launcher: primary lock patch v1"
 MARKER_PENDING = "agentic-pod-launcher: pending-reply marker patch v1"
 MARKER_ASKQ_GIVEUP = "agentic-pod-launcher: askq-guard give-up delivery patch v1"
+MARKER_VOICE = "agentic-pod-launcher: telegram voice roundtrip patch v1"
 
 # V3 helpers — used by the v2→v3 upgrade ONLY. Fresh installs and v3→v4
 # upgrades use TYPING_HELPERS (v4 — anti-zombie). Without this separation,
@@ -411,6 +431,253 @@ STDERR_HOOK = (
     "    } catch {}\n"
     "  })\n"
     "} catch {}\n"
+)
+
+
+# 032: voice roundtrip. Module-scope helpers — config read (with a ONE-TIME
+# boot-time line so fault-injection e2e can observe it, emitted before any
+# token/network use), a redacting error-class helper (never the key, never a
+# raw error object, never a URL — the getFile download URL embeds the
+# Telegram BOT TOKEN), the STT/TTS fetch helpers, the in-memory voice-origin
+# map (consume-on-read, 5-minute TTL), the TTS format sniff cache, and the
+# reply-fallback truncation helper.
+VOICE_HELPERS = (
+    "\n// " + MARKER_VOICE + "\n"
+    "const VOICE_ENABLED = process.env.TELEGRAM_VOICE_ENABLED === 'true'\n"
+    "const VOICE_KEY = process.env.ELEVENLABS_API_KEY ?? ''\n"
+    "const VOICE_ACTIVE = VOICE_ENABLED && VOICE_KEY.length > 0\n"
+    "const VOICE_REPLY_MODE = (['auto', 'always', 'never'].includes(process.env.TELEGRAM_VOICE_REPLY_MODE ?? '')\n"
+    "  ? (process.env.TELEGRAM_VOICE_REPLY_MODE as 'auto' | 'always' | 'never')\n"
+    "  : 'auto')\n"
+    "const VOICE_ID = process.env.TELEGRAM_VOICE_ID || 'Rachel'\n"
+    "const VOICE_STT_LANG = process.env.TELEGRAM_VOICE_STT_LANG ?? ''\n"
+    "const VOICE_MAX_NOTE_SECONDS = Number(process.env.TELEGRAM_VOICE_MAX_NOTE_SECONDS) > 0\n"
+    "  ? Number(process.env.TELEGRAM_VOICE_MAX_NOTE_SECONDS)\n"
+    "  : 300\n"
+    "const VOICE_SPOKEN_CHAR_CAP = Number(process.env.TELEGRAM_VOICE_SPOKEN_CHAR_CAP) > 0\n"
+    "  ? Number(process.env.TELEGRAM_VOICE_SPOKEN_CHAR_CAP)\n"
+    "  : 1200\n"
+    "const VOICE_API_BASE = 'https://api.elevenlabs.io'\n"
+    "const VOICE_STT_MODEL = 'scribe_v2'\n"
+    "const VOICE_TTS_MODEL = 'eleven_flash_v2_5'\n"
+    "const VOICE_MAX_BYTES = 20 * 1024 * 1024\n"
+    "if (!VOICE_ENABLED) {\n"
+    "  process.stderr.write('telegram channel: voice disabled (TELEGRAM_VOICE_ENABLED != true)\\n')\n"
+    "} else if (!VOICE_KEY) {\n"
+    "  process.stderr.write('telegram channel: voice inactive — ELEVENLABS_API_KEY missing\\n')\n"
+    "} else {\n"
+    "  process.stderr.write(`telegram channel: voice active mode=${VOICE_REPLY_MODE} caps=${VOICE_MAX_NOTE_SECONDS}s/${VOICE_SPOKEN_CHAR_CAP}chars\\n`)\n"
+    "}\n"
+    "const _voiceOrigin = new Map<string, number>()\n"
+    "const _VOICE_ORIGIN_TTL_MS = 5 * 60 * 1000\n"
+    "function _voiceOriginSet(chatId: string): void {\n"
+    "  _voiceOrigin.set(chatId, Date.now())\n"
+    "}\n"
+    "function _voiceOriginConsume(chatId: string): boolean {\n"
+    "  const ts = _voiceOrigin.get(chatId)\n"
+    "  _voiceOrigin.delete(chatId)\n"
+    "  if (ts == null) return false\n"
+    "  return Date.now() - ts < _VOICE_ORIGIN_TTL_MS\n"
+    "}\n"
+    "function _voiceOriginClear(chatId: string): void {\n"
+    "  _voiceOrigin.delete(chatId)\n"
+    "}\n"
+    "let _voiceTtsFormat: 'unknown' | 'ogg-ok' | 'mp3-fallback' = 'unknown'\n"
+    "function _voiceErrClass(err: unknown): { cls: string; status: string } {\n"
+    "  if (err instanceof Error && err.name === 'AbortError') return { cls: 'timeout', status: '' }\n"
+    "  const msg = err instanceof Error ? err.message : ''\n"
+    "  const m = /-status-(\\d+)$/.exec(msg)\n"
+    "  if (m) return { cls: 'transport', status: m[1] }\n"
+    "  return { cls: 'transport', status: '' }\n"
+    "}\n"
+    "async function _voiceTranscribe(buf: Buffer, signal: AbortSignal): Promise<string> {\n"
+    "  const form = new FormData()\n"
+    "  form.append('file', new Blob([buf]), 'voice.ogg')\n"
+    "  form.append('model_id', VOICE_STT_MODEL)\n"
+    "  if (VOICE_STT_LANG) form.append('language_code', VOICE_STT_LANG)\n"
+    "  const res = await fetch(`${VOICE_API_BASE}/v1/speech-to-text`, {\n"
+    "    method: 'POST',\n"
+    "    headers: { 'xi-api-key': VOICE_KEY },\n"
+    "    body: form,\n"
+    "    signal,\n"
+    "  })\n"
+    "  if (!res.ok) throw new Error(`stt-status-${res.status}`)\n"
+    "  const j = (await res.json()) as { text?: string }\n"
+    "  return (j.text ?? '').trim()\n"
+    "}\n"
+    "async function _voiceSynthesize(text: string, signal: AbortSignal): Promise<{ buf: Buffer; fmt: 'ogg' | 'mp3' }> {\n"
+    "  async function _voiceTtsRequest(fmt: string): Promise<Buffer> {\n"
+    "    const res = await fetch(`${VOICE_API_BASE}/v1/text-to-speech/${VOICE_ID}?output_format=${fmt}`, {\n"
+    "      method: 'POST',\n"
+    "      headers: { 'xi-api-key': VOICE_KEY, 'content-type': 'application/json' },\n"
+    "      body: JSON.stringify({ text, model_id: VOICE_TTS_MODEL }),\n"
+    "      signal,\n"
+    "    })\n"
+    "    if (!res.ok) throw new Error(`tts-status-${res.status}`)\n"
+    "    return Buffer.from(await res.arrayBuffer())\n"
+    "  }\n"
+    "  if (_voiceTtsFormat !== 'mp3-fallback') {\n"
+    "    const buf = await _voiceTtsRequest('opus_48000_64')\n"
+    "    if (buf.length >= 4 && buf.toString('ascii', 0, 4) === 'OggS') {\n"
+    "      _voiceTtsFormat = 'ogg-ok'\n"
+    "      return { buf, fmt: 'ogg' }\n"
+    "    }\n"
+    "  }\n"
+    "  const buf = await _voiceTtsRequest('mp3_44100_128')\n"
+    "  _voiceTtsFormat = 'mp3-fallback'\n"
+    "  return { buf, fmt: 'mp3' }\n"
+    "}\n"
+    "function _voiceTruncate(text: string, cap: number): string {\n"
+    "  if (text.length <= cap) return text\n"
+    "  const cut = text.lastIndexOf(' ', cap)\n"
+    "  const at = cut > cap / 2 ? cut : cap\n"
+    "  return text.slice(0, at) + '…'\n"
+    "}\n"
+)
+
+# 032 V1: full replacement of the upstream `bot.on('message:voice')` handler
+# body. Cheap checks first (activation, DM-only pre-check, caps), then ONE
+# fire-and-forget typing action, then a DETACHED download+STT pipeline — the
+# handler itself never awaits it (grammY processes updates sequentially; an
+# in-handler 30s await would freeze the whole channel). Any failure path
+# converges on the SAME placeholder call upstream used, so a broken voice
+# pipeline degrades to exactly today's behaviour.
+VOICE_HANDLER = (
+    "bot.on('message:voice', async ctx => {\n"
+    "  // agentic-pod-launcher: voice roundtrip inbound pipeline (032)\n"
+    "  const voice = ctx.message.voice\n"
+    "  const chat_id = String(ctx.chat!.id)\n"
+    "  const placeholder = async (suffix?: string) => {\n"
+    "    await handleInbound(ctx, (ctx.message.caption ?? '(voice message)') + (suffix ?? ''), undefined, {\n"
+    "      kind: 'voice',\n"
+    "      file_id: voice.file_id,\n"
+    "      size: voice.file_size,\n"
+    "      mime: voice.mime_type,\n"
+    "    })\n"
+    "  }\n"
+    "  if (!VOICE_ACTIVE) {\n"
+    "    await placeholder()\n"
+    "    return\n"
+    "  }\n"
+    "  const access = loadAccess()\n"
+    "  const from = ctx.from\n"
+    "  const isDm =\n"
+    "    ctx.chat?.type === 'private' &&\n"
+    "    access.dmPolicy !== 'disabled' &&\n"
+    "    from != null &&\n"
+    "    access.allowFrom.includes(String(from.id))\n"
+    "  if (!isDm) {\n"
+    "    await placeholder()\n"
+    "    return\n"
+    "  }\n"
+    "  if (voice.duration && voice.duration > VOICE_MAX_NOTE_SECONDS) {\n"
+    "    process.stderr.write(`telegram channel: voice stt skip: over-cap chat=${chat_id} dur=${voice.duration}s\\n`)\n"
+    "    await placeholder(' (voice note over the transcription limit)')\n"
+    "    return\n"
+    "  }\n"
+    "  if (voice.file_size && voice.file_size > VOICE_MAX_BYTES) {\n"
+    "    process.stderr.write(`telegram channel: voice stt skip: over-cap chat=${chat_id} size=${voice.file_size}\\n`)\n"
+    "    await placeholder(' (voice note over the transcription limit)')\n"
+    "    return\n"
+    "  }\n"
+    "  void bot.api.sendChatAction(chat_id, 'typing').catch(() => {\n"
+    "    process.stderr.write('telegram channel: voice typing indicator failed\\n')\n"
+    "  })\n"
+    "  void (async () => {\n"
+    "    const started = Date.now()\n"
+    "    const controller = new AbortController()\n"
+    "    const timer = setTimeout(() => controller.abort(), 30000)\n"
+    "    try {\n"
+    "      const file = await ctx.api.getFile(voice.file_id)\n"
+    "      if (!file.file_path) throw new Error('no-file-path')\n"
+    "      const url = `https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`\n"
+    "      const res = await fetch(url, { signal: controller.signal })\n"
+    "      if (!res.ok) throw new Error(`download-status-${res.status}`)\n"
+    "      const buf = Buffer.from(await res.arrayBuffer())\n"
+    "      if (buf.length > VOICE_MAX_BYTES) {\n"
+    "        process.stderr.write(`telegram channel: voice stt skip: over-cap chat=${chat_id} bytes=${buf.length}\\n`)\n"
+    "        await placeholder(' (voice note over the transcription limit)')\n"
+    "        return\n"
+    "      }\n"
+    "      const transcript = await _voiceTranscribe(buf, controller.signal)\n"
+    "      if (!transcript) {\n"
+    "        process.stderr.write(`telegram channel: voice stt fail: empty chat=${chat_id}\\n`)\n"
+    "        await placeholder()\n"
+    "        return\n"
+    "      }\n"
+    "      process.stderr.write(`telegram channel: voice stt ok chat=${chat_id} dur=${voice.duration ?? 0}s chars=${transcript.length} ms=${Date.now() - started}\\n`)\n"
+    "      _voiceOriginSet(chat_id)\n"
+    "      await handleInbound(ctx, transcript, undefined, {\n"
+    "        kind: 'voice',\n"
+    "        file_id: voice.file_id,\n"
+    "        size: voice.file_size,\n"
+    "        mime: voice.mime_type,\n"
+    "      })\n"
+    "    } catch (err) {\n"
+    "      const { cls, status } = _voiceErrClass(err)\n"
+    "      process.stderr.write(`telegram channel: voice stt fail: ${cls} status=${status} chat=${chat_id}\\n`)\n"
+    "      await placeholder()\n"
+    "    } finally {\n"
+    "      clearTimeout(timer)\n"
+    "    }\n"
+    "  })()\n"
+    "})\n"
+)
+
+# 032 V6: a typed message ends a voice-originated exchange — clear the
+# origin flag first, then fall through to the upstream body unchanged.
+VOICE_TEXT_WRAP = (
+    "bot.on('message:text', async ctx => {\n"
+    "  // agentic-pod-launcher: voice roundtrip (032) — typed message ends the voice-origin exchange\n"
+    "  _voiceOriginClear(String(ctx.chat!.id))\n"
+    "  await handleInbound(ctx, ctx.message.text, undefined)\n"
+    "})\n"
+)
+
+# 032 V2: voice-synthesis block in `case 'reply'`, anchored on the case's
+# final return — i.e. AFTER the 028 marker-clear/offset-ack site and the
+# files loop (remediated 2026-09-06: a crash here can no longer strand the
+# marker or the offset ack). Consume-on-read happens before synthesis is
+# attempted; a failure here never throws — it only costs the voice bubble.
+VOICE_REPLY_BLOCK = (
+    "        // agentic-pod-launcher: voice roundtrip outbound synthesis (032)\n"
+    "        if (VOICE_ACTIVE && VOICE_REPLY_MODE !== 'never') {\n"
+    "          const _voiceFresh = _voiceOriginConsume(chat_id)\n"
+    "          if (VOICE_REPLY_MODE === 'always' || _voiceFresh) {\n"
+    "            const voiceTextArg = args.voice_text as string | undefined\n"
+    "            const spoken = voiceTextArg && voiceTextArg.trim()\n"
+    "              ? voiceTextArg.trim()\n"
+    "              : _voiceTruncate(text, VOICE_SPOKEN_CHAR_CAP)\n"
+    "            const _voiceStarted = Date.now()\n"
+    "            const _voiceController = new AbortController()\n"
+    "            const _voiceTimer = setTimeout(() => _voiceController.abort(), 30000)\n"
+    "            try {\n"
+    "              const { buf, fmt } = await _voiceSynthesize(spoken, _voiceController.signal)\n"
+    "              await bot.api.sendVoice(chat_id, new InputFile(buf, `voice.${fmt}`))\n"
+    "              process.stderr.write(`telegram channel: voice tts ok chat=${chat_id} chars=${spoken.length} fmt=${fmt} ms=${Date.now() - _voiceStarted}\\n`)\n"
+    "            } catch (err) {\n"
+    "              const { cls, status } = _voiceErrClass(err)\n"
+    "              process.stderr.write(`telegram channel: voice tts fail: ${cls} status=${status} chat=${chat_id}\\n`)\n"
+    "            } finally {\n"
+    "              clearTimeout(_voiceTimer)\n"
+    "            }\n"
+    "          }\n"
+    "        }\n"
+)
+
+# 032 V3: optional voice_text property on the reply tool's inputSchema.
+VOICE_SCHEMA_PROPERTY = (
+    "          voice_text: {\n"
+    "            type: 'string',\n"
+    "            description:\n"
+    "              'Optional spoken-style rendition of this reply, used to synthesize the voice bubble when the exchange is voice-originated. Plain speakable prose — no markdown, no code. When omitted, a truncated version of `text` is spoken.',\n"
+    "          },\n"
+)
+
+# 032 V4: one instructions-array line steering the agent to provide
+# voice_text when replying to a voice-originated message.
+VOICE_INSTRUCTIONS_LINE = (
+    "      'Messages whose meta carries attachment_kind=\"voice\" arrive transcribed — the message text IS the transcription. When replying to them, include voice_text with a concise speakable version of your answer.',\n"
 )
 
 
@@ -945,6 +1212,115 @@ def apply_primary(src: str) -> tuple[str, bool]:
     return new_src, True
 
 
+def apply_voice(src: str) -> tuple[str, bool]:
+    """Close the voice loop over the Telegram channel (032). Returns (new_src, applied).
+
+    Six hunks, all gated by MARKER_VOICE and rolled back together on any anchor
+    miss (an unpaired hunk would mean helpers reference undefined symbols, or a
+    handler replacement missing its dependencies):
+      V5 — module-scope helpers (config read + ONE-TIME boot line, redacting
+            error-class helper, STT/TTS fetch helpers, voice-origin map,
+            format-sniff cache, truncation helper), anchored on
+            `let botUsername = ''` (same top-level anchor as every other
+            group; all stack after that line, order-independent).
+      V1 — replace the `bot.on('message:voice')` handler body: DM-only
+            read-only pre-check, absent-metadata-safe caps, fire-and-forget
+            typing action, then a DETACHED download+STT pipeline (the handler
+            itself never awaits it). Any failure falls back to today's exact
+            placeholder call.
+      V6 — wrap `bot.on('message:text')`: clear the voice-origin flag first,
+            then the upstream body runs unchanged.
+      V2 — voice-synthesis block in `case 'reply'`, anchored on the case's
+            final `return` — i.e. AFTER the 028 marker-clear/offset-ack site
+            and the files loop.
+      V3 — optional `voice_text` property in the reply tool's inputSchema.
+      V4 — one instructions-array line steering the agent to provide
+            voice_text when replying to a voice-originated message.
+
+    Runs independently of the typing cascade and every other group; if any
+    anchor has drifted, the whole group skips (WARN) and the plugin keeps
+    today's exact behaviour (voice never activates).
+    """
+    # NOTE: every substitution below uses a lambda replacement, never a raw
+    # string. The voice constants contain literal backslash sequences
+    # (`\n` inside JS template-literal stderr writes, `\d` inside a JS
+    # regex) — passed as a plain `re.subn` replacement string, Python's own
+    # template-escape parser reinterprets those: `\n` silently becomes a
+    # real newline and `\d` is a hard "bad escape" crash (same bug class as
+    # 023's bash `${var//pattern/replacement}` footgun, different language).
+    # A lambda receives the match object and returns the string verbatim —
+    # zero escape processing, so the constants stay editable JS without an
+    # escaping ritual.
+    if MARKER_VOICE in src:
+        return src, False
+    new_src, n1 = re.subn(
+        r"(let botUsername = ''\n)",
+        lambda m: m.group(1) + VOICE_HELPERS,
+        src,
+        count=1,
+    )
+    if n1 != 1:
+        warn("voice hunk1 (helpers) anchor (let botUsername) not found — skipping voice patch (voice roundtrip stays disabled)")
+        return src, False
+    new_src, n2 = re.subn(
+        r"bot\.on\('message:voice', async ctx => \{\n"
+        r"  const voice = ctx\.message\.voice\n"
+        r"  const text = ctx\.message\.caption \?\? '\(voice message\)'\n"
+        r"  await handleInbound\(ctx, text, undefined, \{\n"
+        r"    kind: 'voice',\n"
+        r"    file_id: voice\.file_id,\n"
+        r"    size: voice\.file_size,\n"
+        r"    mime: voice\.mime_type,\n"
+        r"  \}\)\n"
+        r"\}\)\n",
+        lambda m: VOICE_HANDLER,
+        new_src,
+        count=1,
+    )
+    if n2 != 1:
+        warn("voice hunk2 (message:voice handler) anchor not found — skipping voice patch (voice roundtrip stays disabled)")
+        return src, False
+    new_src, n3 = re.subn(
+        r"bot\.on\('message:text', async ctx => \{\n"
+        r"  await handleInbound\(ctx, ctx\.message\.text, undefined\)\n"
+        r"\}\)\n",
+        lambda m: VOICE_TEXT_WRAP,
+        new_src,
+        count=1,
+    )
+    if n3 != 1:
+        warn("voice hunk3 (message:text wrap) anchor not found — skipping voice patch (voice roundtrip stays disabled)")
+        return src, False
+    new_src, n4 = re.subn(
+        r"(        return \{ content: \[\{ type: 'text', text: result \}\] \}\n)",
+        lambda m: VOICE_REPLY_BLOCK + m.group(1),
+        new_src,
+        count=1,
+    )
+    if n4 != 1:
+        warn("voice hunk4 (case 'reply' voice block) anchor not found — skipping voice patch (voice roundtrip stays disabled)")
+        return src, False
+    new_src, n5 = re.subn(
+        r"(        \},\n        required: \['chat_id', 'text'\],\n)",
+        lambda m: VOICE_SCHEMA_PROPERTY + m.group(1),
+        new_src,
+        count=1,
+    )
+    if n5 != 1:
+        warn("voice hunk5 (reply inputSchema voice_text) anchor not found — skipping voice patch (voice roundtrip stays disabled)")
+        return src, False
+    new_src, n6 = re.subn(
+        r"(    instructions: \[\n)",
+        lambda m: m.group(1) + VOICE_INSTRUCTIONS_LINE,
+        new_src,
+        count=1,
+    )
+    if n6 != 1:
+        warn("voice hunk6 (instructions line) anchor not found — skipping voice patch (voice roundtrip stays disabled)")
+        return src, False
+    return new_src, True
+
+
 def main(argv: list[str]) -> int:
     if len(argv) != 2:
         log("usage: apply_telegram_typing_patch.py <server.ts>")
@@ -980,8 +1356,13 @@ def main(argv: list[str]) -> int:
     # final (post-cascade/post-apply_typing) shape, which by this point is stable
     # regardless of which upgrade path the file took.
     new_src, ag = apply_askq_giveup(new_src)
+    # 032: voice roundtrip runs last and independently — its anchors (the
+    # message:voice/message:text handlers, the reply case's final return,
+    # the reply tool schema, the instructions array) are untouched by every
+    # patch above.
+    new_src, v = apply_voice(new_src)
 
-    if not (tu1 or tu2 or tu3 or tu4 or tu5 or t or o or pm or s or p or ag):
+    if not (tu1 or tu2 or tu3 or tu4 or tu5 or t or o or pm or s or p or ag or v):
         # Either everything is already patched, or every set of anchors missed.
         return 0
 
@@ -1012,6 +1393,8 @@ def main(argv: list[str]) -> int:
         parts.append("primary")
     if ag:
         parts.append("askq-giveup")
+    if v:
+        parts.append("voice")
     log(f"applied {'+'.join(parts)} patch(es) to {path}")
     return 0
 

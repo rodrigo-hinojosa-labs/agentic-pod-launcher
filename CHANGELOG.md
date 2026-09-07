@@ -3,6 +3,84 @@
 ## [Unreleased]
 
 ### Added
+- **Round-trip voice over the Telegram channel — `032-telegram-voice-roundtrip`**:
+  closes the voice loop asynchronously (voice notes, not real-time calls — Bot API
+  10.3 has no realtime call surface for bots, and agentic turns run 10-120s, which
+  no realtime voice platform tolerates) over the existing Telegram channel. A 7th
+  patch group in the image-baked plugin patcher
+  (`docker/scripts/apply_telegram_typing_patch.py`, marker
+  `agentic-pod-launcher: telegram voice roundtrip patch v1`) transcribes inbound
+  voice notes via ElevenLabs STT (`scribe_v2`) before announcing them to the agent,
+  and extends the plugin's `reply` tool to synthesize a spoken rendition
+  (agent-provided `voice_text`, else a truncated fallback) delivered as a native
+  Telegram voice bubble alongside the full text reply. **Opt-in, disabled by
+  default** — this spends money per message and needs a new secret, unlike the
+  reply/askuserquestion guards, which default on for free. Docker-only (the local
+  Remote Control relay has no Telegram plugin); `deployment.mode` — not plugin
+  presence — is the wizard/render discriminator, since telegram is a mandatory
+  default plugin present in every scaffold. VERSION 0.22.0 → 0.23.0.
+  - **US1 — a spoken instruction is understood and acted on.** The
+    `bot.on('message:voice')` handler gains a DM-only read-only authorization
+    pre-check (`chat.type==='private'` + `dmPolicy!=='disabled'` + sender
+    allowlisted — never `gate()`, whose pairing branch has side effects;
+    transcription is DM-only in v1, group voice notes take the existing
+    placeholder path), absent-metadata-safe caps (duration/size, with the REAL
+    size cap enforced post-download before the paid STT call), and a **DETACHED**
+    download+STT pipeline: the handler never `await`s the network work, because
+    grammY processes updates sequentially and an in-handler 30s await would freeze
+    the whole channel (texts, commands, permission Allow/Deny callbacks) for every
+    other chat too. A fire-and-forget typing action covers the silent window. Any
+    failure — inactive, unauthorized, over-cap, transport error, empty transcript —
+    converges on today's exact placeholder call (fail-open floor); the agent's
+    voice-origin signal reuses the existing `attachment_kind: 'voice'` meta, zero
+    new notification fields.
+  - **US2 — the answer comes back as a playable voice bubble.** A voice-synthesis
+    block in the `reply` tool's `case 'reply'`, anchored **after** the `028`
+    marker-clear/offset-ack site (immediately before the case's `return`), so a
+    synthesis crash can never strand the reply-guard marker or the offset ack.
+    Speaks when active and (`reply_mode=always`, or `auto` with a fresh
+    voice-origin flag — **consume-on-read**, deleted before synthesis, never
+    restored on failure: one paid attempt per voice exchange). Format strategy:
+    request `opus_48000_64`, sniff the response for the `OggS` magic bytes; if
+    absent, re-request `mp3_44100_128` (Bot API 10.3 accepts MP3 for voice
+    bubbles) — no ffmpeg, no Dockerfile change, one shared 30s budget for both
+    attempts. A synthesis/send failure logs one stderr line and never fails the
+    tool call — the text reply is unaffected. The reply tool gains an optional
+    `voice_text` property (spoken-style rendition; a truncated version of `text`
+    is the fallback) and the channel instructions gain a line steering the agent
+    to provide it for voice-originated exchanges.
+  - **US3 — declared, opt-in, regenerate-safe.** `features.voice.{enabled,
+    reply_mode,voice_id,provider}` in `agent.yml` (backfill always writes the
+    disabled block — no plugin-derived on-path, unlike `028`/`031`); wizard offers
+    the toggle only on docker-mode scaffolds, default no. Per-agent values reach
+    the plugin via the compose `environment:` block (`029` precedent,
+    unconditional — no `{{#if}}` exists on that template and no flattened var
+    expresses plugin presence): `TELEGRAM_VOICE_ENABLED/_REPLY_MODE/_ID/_PROVIDER`
+    plus `TELEGRAM_VOICE_STT_LANG` (derived from `user.language`; only `es|en`
+    pass, anything else — including the wizard-legal `mixed` — renders empty for
+    provider autodetect, delivered through a **dedicated** derived placeholder so
+    `USER_LANGUAGE` itself, which `claude-md.tpl` also consumes, is never
+    re-sanitized). `.env` carries `ELEVENLABS_API_KEY` (required to activate; a
+    missing key degrades to inert with a one-time boot WARN) plus optional
+    `TELEGRAM_VOICE_MAX_NOTE_SECONDS` (default 300) and
+    `TELEGRAM_VOICE_SPOKEN_CHAR_CAP` (default 1200) tuning knobs, documented
+    name-only in `.env.example` in both modes. Local mode renders none of the
+    `TELEGRAM_VOICE_` env in any runtime artifact (tested invariant).
+  - **Cost**: ~$0.03 per typical round trip (Scribe v2 STT + `eleven_flash_v2_5`
+    TTS), well under the $0.05 success-criterion ceiling.
+  - An adversarial design review (2026-09-06, 4 independent reviewers) and a
+    subsequent `/speckit-analyze` pass caught and remediated 4 HIGH + 2 HIGH +
+    several MEDIUM/LOW findings before implementation — most consequentially the
+    detached-pipeline requirement above, the `user.language: mixed` STT-language
+    sanitizer (the feature would otherwise have been dead-on-arrival for a
+    first-class wizard configuration), and the marker-clear/offset-ack ordering
+    (an earlier draft anchored the voice block between the text-chunk and
+    file-attachment loops, which could have stranded the `028` marker on a
+    synthesis crash and caused Telegram redelivery + a duplicate turn).
+  - DOCKER_E2E (`tests/docker-e2e-voice.bats`) and the ferrari live-agent
+    confirmation (full voice round trip, timing, multi-client render, cost check)
+    are **deferred to the v0.23.0 deploy** — the same openly-recorded pattern as
+    `016`/`028`/`031` — and ride the pending fleet upgrade.
 - **Channel AskUserQuestion guard — `031-channel-askuserquestion-guard`**: closes the
   third and last failure mode of the ferrari incident family (2026-08-16, `donna`) —
   anticipated, same class as `028`, no forensic capture of its own. A Telegram-channel

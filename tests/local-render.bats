@@ -285,3 +285,25 @@ teardown() { teardown_tmp_dir; }
   # still includes the system dirs the unit needs
   grep -qE '^PATH=[^[:space:]]*:/usr/local/bin:/usr/bin:/bin' "$TMP_TEST_DIR/env"
 }
+
+@test "FR-011 (032): no local RUNTIME artifact carries a TELEGRAM_VOICE_ string" {
+  # Round-trip voice is docker-only (the Telegram plugin isn't in the Remote
+  # Control relay). This is the honest local-mode invariant (research D6):
+  # not "renders false", but renders NOTHING voice-shaped at all. Voice env
+  # vars are unset here on purpose — a voice-enabled agent.yml in local mode
+  # must still produce none of these strings in any runtime artifact.
+  render_to_file "$REPO_ROOT/modules/systemd-remote-control.service.tpl" "$TMP_TEST_DIR/unit"
+  render_to_file "$REPO_ROOT/modules/remote-control.env.tpl" "$TMP_TEST_DIR/env"
+  render_to_file "$REPO_ROOT/modules/local-healthcheck.service.tpl" "$TMP_TEST_DIR/healthcheck.service"
+  render_to_file "$REPO_ROOT/modules/local-killswitch.sh.tpl" "$TMP_TEST_DIR/killswitch.sh"
+  render_to_file "$REPO_ROOT/modules/local-qmd-reindex.service.tpl" "$TMP_TEST_DIR/qmd-reindex.service"
+  render_to_file "$REPO_ROOT/modules/local-qmd-watch.service.tpl" "$TMP_TEST_DIR/qmd-watch.service"
+  render_to_file "$REPO_ROOT/modules/local-secret-check.sh.tpl" "$TMP_TEST_DIR/secret-check.sh"
+  render_to_file "$REPO_ROOT/modules/local-vault-backup.service.tpl" "$TMP_TEST_DIR/vault-backup.service"
+  render_to_file "$REPO_ROOT/modules/local-wiki-graph.service.tpl" "$TMP_TEST_DIR/wiki-graph.service"
+  ! grep -rq "TELEGRAM_VOICE_" "$TMP_TEST_DIR/unit" "$TMP_TEST_DIR/env" \
+    "$TMP_TEST_DIR/healthcheck.service" "$TMP_TEST_DIR/killswitch.sh" \
+    "$TMP_TEST_DIR/qmd-reindex.service" "$TMP_TEST_DIR/qmd-watch.service" \
+    "$TMP_TEST_DIR/secret-check.sh" "$TMP_TEST_DIR/vault-backup.service" \
+    "$TMP_TEST_DIR/wiki-graph.service"
+}
