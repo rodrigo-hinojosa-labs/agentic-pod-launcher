@@ -867,6 +867,25 @@ ATLASSIAN_${upper}_TOKEN=${ws_token}
   fi
   echo ""
 
+  # ── 7.6 Round-trip voice over Telegram (032, docker mode only) ──────
+  # Telegram is a mandatory default plugin present in every scaffold, so its
+  # presence discriminates nothing here — the discriminator is deployment
+  # mode (local has no Telegram plugin at all; the Remote Control relay
+  # can't carry voice notes). Opt-in, disabled by default: this spends money
+  # per message and needs a new secret (ELEVENLABS_API_KEY), unlike the
+  # reply/askuserquestion guards which default on for free.
+  local voice_enabled=false voice_id=""
+  if [ "$deploy_mode" = "docker" ]; then
+    echo "▸ Voice (Telegram)"
+    echo "  Notas de voz ida-y-vuelta por Telegram (STT+TTS, ElevenLabs). Gasta"
+    echo "  dinero por mensaje — opt-in explícito, off por defecto."
+    voice_enabled=$(ask_yn "  Enable round-trip voice over Telegram?" "n")
+    if [ "$voice_enabled" = "true" ]; then
+      voice_id=$(ask "  ElevenLabs voice id (blank = default stock voice)" "")
+    fi
+    echo ""
+  fi
+
   # ── 8. Optional plugins ─────────────────────────────
   # Iterate the optional descriptors and let the user opt in. Defaults
   # (telegram, claude-mem, context7, claude-md-management, security-guidance)
@@ -1240,6 +1259,11 @@ features:
   askuserquestion_guard:
     enabled: $_aq_enabled
     max_attempts: 1
+  voice:
+    enabled: $voice_enabled
+    reply_mode: auto
+    voice_id: "$voice_id"
+    provider: elevenlabs
 
 mcps:
   defaults:
@@ -2105,6 +2129,19 @@ regenerate() {
       yq -i '.features.askuserquestion_guard.max_attempts = 1' "$agent_yml"
     fi
 
+    # 032: backfill features.voice for a pre-032 workspace. Unlike reply_guard/
+    # askuserquestion_guard there is NO plugin-derived enabled=true path — voice
+    # spends money and needs a new secret, so the backfilled value is always
+    # disabled (explicit opt-in). has()-guarded (never `//`) so an operator's
+    # enabled:true or custom reply_mode survives a subsequent --regenerate
+    # untouched.
+    if [ "$(yq -r '(.features | has("voice")) // false' "$agent_yml" 2>/dev/null)" != "true" ]; then
+      yq -i '.features.voice.enabled = false' "$agent_yml"
+      yq -i '.features.voice.reply_mode = "auto"' "$agent_yml"
+      yq -i '.features.voice.voice_id = ""' "$agent_yml"
+      yq -i '.features.voice.provider = "elevenlabs"' "$agent_yml"
+    fi
+
     # 029: backfill claude.mcp_timeout_ms for a pre-029 workspace (the MCP
     # startup-handshake window, ms). Default 120000. has() (not `//`) so an
     # operator's 0 — a present-but-invalid value the render sanitiser degrades —
@@ -2124,6 +2161,34 @@ regenerate() {
   # Claude Code would otherwise fall back to ITS 30000 default on garbage, not ours.
   CLAUDE_MCP_TIMEOUT_MS="$(mcp_timeout_effective "${CLAUDE_MCP_TIMEOUT_MS:-}")"
   export CLAUDE_MCP_TIMEOUT_MS
+
+  # 032: voice roundtrip render-time sanitization (029 mcp_timeout_effective
+  # mold). render_load_context already flattened the raw
+  # features.voice.{reply_mode,voice_id,provider} fields; sanitize the
+  # free-text ones here so a hand-edited or pre-032 agent.yml never reaches
+  # the compose environment: as garbage (FEATURES_VOICE_ENABLED is a
+  # schema-validated boolean already — no sanitizer needed).
+  case "${FEATURES_VOICE_REPLY_MODE:-}" in
+    auto|always|never) : ;;
+    *) FEATURES_VOICE_REPLY_MODE=auto ;;
+  esac
+  export FEATURES_VOICE_REPLY_MODE
+  if [ "${FEATURES_VOICE_PROVIDER:-}" != "elevenlabs" ]; then
+    FEATURES_VOICE_PROVIDER=elevenlabs
+  fi
+  export FEATURES_VOICE_PROVIDER
+  FEATURES_VOICE_VOICE_ID="$(printf '%s' "${FEATURES_VOICE_VOICE_ID:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  export FEATURES_VOICE_VOICE_ID
+  # VOICE_STT_LANG is a DEDICATED derived placeholder — user.language itself
+  # is NEVER re-exported/sanitized here, because modules/claude-md.tpl also
+  # consumes USER_LANGUAGE and a `mixed` agent's CLAUDE.md must keep saying
+  # `mixed` (analyze remediation F1). Only es|en pass through; anything else
+  # (including the wizard-legal `mixed`) renders empty ⇒ STT autodetect.
+  case "$(yq -r '.user.language // ""' "$agent_yml" 2>/dev/null)" in
+    es|en) VOICE_STT_LANG="$(yq -r '.user.language' "$agent_yml" 2>/dev/null)" ;;
+    *) VOICE_STT_LANG="" ;;
+  esac
+  export VOICE_STT_LANG
 
   # Deployment mode (011): single source of truth in agent.yml. Default docker
   # (legacy + backfill above). DEPLOYMENT_MODE_IS_DOCKER gates the {{#if}} /

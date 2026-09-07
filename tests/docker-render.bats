@@ -72,6 +72,27 @@ teardown() { teardown_tmp_dir; }
   [[ "$result" == *'MCP_TIMEOUT: "120000"'* ]]
 }
 
+@test "docker-compose.yml.tpl renders the five TELEGRAM_VOICE_* env lines unconditionally (032)" {
+  # Unconditional — same precedent as MCP_TIMEOUT: no {{#if}} exists here and
+  # no flattened var expresses telegram-plugin presence. Fixture has
+  # features.voice.{enabled:false,reply_mode:auto,voice_id:"",provider:elevenlabs}.
+  # VOICE_STT_LANG is derived by setup.sh (not render_load_context), so this
+  # test sets it explicitly — same pattern as HOME_DIR in setup() above.
+  export VOICE_STT_LANG=""
+  result=$(render_template "$REPO_ROOT/modules/docker-compose.yml.tpl")
+  [[ "$result" == *'TELEGRAM_VOICE_ENABLED: "false"'* ]]
+  [[ "$result" == *'TELEGRAM_VOICE_REPLY_MODE: "auto"'* ]]
+  [[ "$result" == *'TELEGRAM_VOICE_ID: ""'* ]]
+  [[ "$result" == *'TELEGRAM_VOICE_PROVIDER: "elevenlabs"'* ]]
+  [[ "$result" == *'TELEGRAM_VOICE_STT_LANG: ""'* ]]
+}
+
+@test "docker-compose.yml.tpl renders a sanitized VOICE_STT_LANG value when set (032)" {
+  export VOICE_STT_LANG="es"
+  result=$(render_template "$REPO_ROOT/modules/docker-compose.yml.tpl")
+  [[ "$result" == *'TELEGRAM_VOICE_STT_LANG: "es"'* ]]
+}
+
 @test "systemd unit has Type=oneshot RemainAfterExit=yes" {
   result=$(render_template "$REPO_ROOT/modules/systemd.service.tpl")
   [[ "$result" == *"Type=oneshot"* ]]
