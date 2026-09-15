@@ -255,7 +255,8 @@ antes del bump). README (tabla de frases + línea de acuse + cooldown), CHANGELO
 (sección "Telegram plugin patch"). **Pendiente NO bloqueante:** la pierna de flota en vivo de T029
 (linus primero, luego donna — bloqueada hoy por reautenticación de Cloudflare Access que solo el
 operador puede completar) y la actualización propia de rodri-cenco-admin (0.19.0→0.24.0, operación
-aparte). **Siguiente: commit + PR contra main (no ejecutado — falta confirmación del operador).**
+aparte). **PR #95 abierto contra main (2026-09-15, commit `f8d7f6d`), sin mergear. Siguiente: revisión
+y merge del operador; luego el gate de flota en vivo (T029) y la actualización de rodri-cenco-admin.**
 Feature 034 (tiempo real, "recepcionista" sobre ElevenLabs Agents) decidida para su Fase 0, spec
 separada, NO mezclar.
 
