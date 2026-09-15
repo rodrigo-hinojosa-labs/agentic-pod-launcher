@@ -123,6 +123,8 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 
 **Implication for long operations**: any turn that legitimately exceeds ~5 minutes (a big embed, a wiki-graph pass over a large vault) will drop the indicator and warn the chat. That's the intended trade-off — a false "I'm stuck" beats an indefinite lie. Raise `TELEGRAM_TYPING_MAX_MS` in the workspace `.env` if an agent's normal turns run longer.
 
+**Voice patch group is at v2** (`MARKER_VOICE`, feature 033) — upgraded in place from v1 (032) by `upgrade_voice_v1_to_v2`, an all-or-nothing rewrite of five constant pairs (helpers, text wrap, reply block + its return line, schema property, instructions line), same shape as the typing cascade but its own independent marker. v2 adds: a `voice: sent (…)` / `voice: failed (step=synth|send, cls=…, status=…)` line fed back into the `reply` tool's acknowledgement (`_voiceOutcome`, empty when the voice step doesn't run — byte-identical to v0.23.0 in that case); the explicit-request matcher (`VOICE_REQUEST_PHRASES`, 38 fixed phrases, NFD-normalized, negation-aware) wired into the `message:text` wrap under the same DM gate as inbound voice; the `voice_force` reply-tool boolean; an omission record + nag (`VOICE_OMISSION_NAG_CHARS`, derived from the spoken-cap, not configurable); and a one-shot per-chat failure cooldown in mode `always`. The `_V1` twins of the five constants are frozen verbatim and never edited again — the upgrade's ground truth in tests is a **committed golden fixture** (`tests/fixtures/telegram-server-voice-v1.ts`, generated once from the real v0.23.0 patcher), not the `_V1` constants themselves, because a tautological oracle (comparing against the same constants used to build both sides) can't catch a copy error. `tests/docker-e2e-voice.bats` is **self-seeding**: the image ships no plugin at all (it's installed post-login), so every case copies a fixture into the plugin cache path and runs the boot patcher directly, rather than trying to `find` a `server.ts` that `--entrypoint sh` will never produce.
+
 ## Common gotchas
 
 - **This file is gitignored.** `.gitignore`'s `/CLAUDE.md` rule is meant for *scaffolded workspaces* (where it's a derived file from `modules/claude-md.tpl`), but the same rule catches the launcher's own root-level `CLAUDE.md`. `git status` won't show edits — use `git add -f CLAUDE.md` to commit changes here.
@@ -134,6 +136,129 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
+**033-voice-reply-feedback SPEC + CLARIFY + PLAN (2026-09-13; rama `033-voice-reply-feedback` desde
+main=`a7eb2e5` v0.23.0→**0.24.0** previsto).** Plan: `specs/033-voice-reply-feedback/plan.md`.
+**BUG MEDIDO (linus, 2026-09-13 13:44 -03):** el agente abrió su respuesta con "el audio saliente
+sigue sin estar disponible en este plugin" mientras el log del plugin decía `voice tts ok ...
+chars=1138 fmt=ogg ms=10687` — la burbuja de 01:16 salió igual, leyendo una lista numerada
+completa. **Causa raíz (verificada en el server.ts vivo :874-901):** el acuse de la tool `reply`
+es solo `sent (id: N)`; el bloque de voz de 032 (hunk V2) corre después de construir `result` y
+antes del `return`, escribe a stderr y NUNCA toca lo que el modelo ve → el agente actúa a ciegas y
+en sesión `--continue` con historial pre-0.23.0 su creencia vieja le gana a una línea del array
+`instructions`. Misma clase que 028/031: señal determinista, no más prompt. **DISEÑO = bump del
+grupo de voz v1→v2** (`MARKER_VOICE` v2 + `MARKER_VOICE_V1`; cinco constantes con gemela `_V1`;
+`upgrade_voice_v1_to_v2` = cinco `.replace` exactos all-or-nothing, fail-silent; `apply_voice`
+gatea también en v1 y su hunk4 REEMPLAZA la línea de return): US1 `let _voiceOutcome = ''` antes
+del `if` de voz y `return … text: result + _voiceOutcome` (vacío ⇒ byte-idéntico a 0.23.0);
+gramática `voice: sent (fmt, chars, ms)[; voice_text omitted — N chars…]` / `voice: failed
+(step=synth|send, cls, status)` con WHITELIST (nunca `${err}`, URL, texto hablado); `_voiceStep`
+volteado entre `_voiceSynthesize` y `sendVoice` (Q3); `_voiceErrClass` lee `error_code` de grammY.
+US2 línea de instrucciones v2 (conserva los substrings de 032 para no romper sus oráculos) +
+description de `voice_text`. US3 stderr `voice tts spoke N chars without voice_text` SIEMPRE +
+nag en el acuse solo si `chars > floor(VOICE_SPOKEN_CHAR_CAP/4)` (=300; constante derivada, SIN
+perilla — clarify Q2). **US4 (extensión pedida por el operador):** pedido explícito de audio en
+texto = misma señal que una nota de voz — tabla FIJA de frases ES/EN (imperativas), normalización
+NFD sin tildes ni mayúsculas, límites de palabra, guard de negación (`no|nunca|sin|don't|never…`),
+en el wrap de `message:text` (V6) tras el `_voiceOriginClear` (que se conserva VERBATIM), DM-only y
+gateado en `VOICE_ACTIVE`; efecto = UNA respuesta (consume-on-read, TTL 5 min — clarify Q5; modo
+persistente RECHAZADO por Principio I); más flag `voice_force: boolean` (estricto `=== true`,
+3er disparador en `auto`; la sola presencia de `voice_text` NUNCA dispara — clarify Q6). Decisión
+clarify Q1: ante `failed` el agente lo menciona UNA vez, sin reintento, sin mensaje del plugin;
+borde: en modo `always` la mención re-dispararía voz → **cooldown one-shot por chat** (D13: se
+setea al `failed` solo en `always`, se consume antes de la próxima síntesis, logea `voice skip:
+cooldown after failure`, sin línea de desenlace) — mecanismo, no promesa. **Regla de literales
+(bug clase 032):** todo backslash destinado al TS va DOBLADO en el literal Python; toda
+sustitución sigue siendo `lambda`; oráculo G11 con `grep -F` de las secuencias literales.
+**REVISIÓN ADVERSARIAL DEL PLAN (2026-09-13, workflow `wf_e99b3212-83d`, 4 revisores; el límite de
+sesión mató 20 de 32 refutadores, los 12 que corrieron no refutaron nada; los 2 HIGH re-verificados
+a mano): (H1) el oráculo sha del upgrade era TAUTOLÓGICO (mismas constantes `_V1` en ambos
+sentidos) → fixture v1 DORADO `tests/fixtures/telegram-server-voice-v1.ts` generado UNA vez con el
+patcher real de `a7eb2e5` y commiteado (CI es shallow) + test de fidelidad (`_V1` ⊂ golden) +
+oráculo `sha(patcher(golden)) == sha(patcher(pristine))`; el heredoc del fixture se extrae a
+`tests/fixtures/telegram-server-pristine.ts`. (H2) la imagen NO trae el plugin y el e2e usa
+`--entrypoint sh` (salta `start_services.sh`, el único instalador) → los E1/E3/E4 de la 032 JAMÁS
+podían pasar; toda la e2e de 033 es AUTO-SEMBRADA (copia el fixture al path del cache del plugin
+dentro del contenedor y corre el patcher image-baked). (M) `! grep -q` intermedio NO falla en bats
+(medido por un refutador en 3.2/5.3): negativos muertos en `apply-telegram-patches.bats:804,
+876-878, 886, 984, 995` → se reparan en la misma edición (`:878` era además INCORRECTO: el handler
+construye legítimamente la URL `file/bot`; se acota a líneas `process.stderr.write`); todo negativo
+nuevo va como `run …; [ "$status" -ne 0 ]` o conteo. (M) rollback: v0.23.0 sobre un archivo v2 NO
+aplica v1 encima — falla el hunk2 (el body upstream de `message:voice` ya no existe), WARN y deja v2
+INTACTO y funcional; para degradar de verdad hay que borrar el cache del plugin. (M) enumeración
+de oráculos corregida: RED en `:781 :795 :921 :934` + e2e `:64/:74 :113/:117`; `:804` se voltea a
+conteo v2 SIN RED; `:902/:908/:968-969` y e2e `:70` se preservan por construcción (el wrap v2 no
+liga un local `chat_id`). (M) apóstrofo tipográfico U+2019 (`don’t`) se normaliza antes del guard
+de negación; +9 formas chilenas / +4 inglesas en la tabla; guard de negación por cláusula (≤30
+chars) y escaneo de TODAS las ocurrencias. (M) "estricto" tiene un límite documentado: solo la
+PRIMERA llamada a `reply` del turno lleva voz (consume-on-read) → el contrato pide UNA sola reply;
+SC-007 mide la primera. (M) gate del wrap = el de 032 completo (`private` + `dmPolicy` +
+`allowFrom`) y además `mode !== 'never'`. (L) `error_code` null-safe; `sendVoice` recibe el
+`signal` del presupuesto de 30 s (parámetro grammY POR VERIFICAR en los typings del plugin);
+`step=` va ANTES de `chat=` en stderr; `voice_force` no-booleano se ignora; D10 del research se
+había AUTO-CORROMPIDO (marcas combinantes reales en vez de `̀` literal) → reescrito y
+verificado byte a byte; oráculos de mutación 2/3 pasan a asertar USO (orden de líneas + `step=${_voiceStep}`;
+`spoken.length > VOICE_OMISSION_NAG_CHARS` + derivación `floor(cap/4)` + sin literal `> 300`).
+DOCKER_E2E OBLIGATORIO (E1-E4 auto-sembrados, E5 matcher bajo bun con tabla ±, E6 parse-only — API
+de bun por medir, candidata `Bun.Transpiler`, E7 upgrade del golden in-container, E8 errClass).
+Riesgo nombrado: un error de sintaxis TS en un hunk flapea el canal al boot → deploy linus PRIMERO y
+mirar `channel plugin healthy`. Constitución 6/6 PASS, Complexity Tracking vacío. Artefactos:
+`specs/033-voice-reply-feedback/{spec,plan,research,data-model,quickstart}.md` +
+`contracts/{reply-voice-outcome,explicit-audio-request,voice-group-v2-upgrade}.md`.
+**TASKS (2026-09-14): 29 tareas test-first** (Setup T001-T003 fixtures pristine+dorado y baseline;
+Foundational T004-T007 churn de oráculos 032, reparación de negativos muertos, bump v1→v2 + upgrader;
+US1 T008-T011 con T008 = pre-check del parámetro `signal` de grammY ANTES de fijar oráculos; US2
+T012-T013; US3 T014-T015; US4 T016-T020; E2E auto-sembrado T021-T023 [P]; Polish T024-T028; T029
+DIFERIDA al deploy). **`/speckit-analyze` (2026-09-14, workflow `wf_d975526e-1ca`, 3 lentes): 24
+hallazgos únicos, TODOS remediados** — 1 de forma constitucional (la deferral de DOCKER_E2E ahora
+tiene su fila en Complexity Tracking, precedente 028/031/032), 5 HIGH de alineación test↔implementación
+(el awk de T001 hasheaba los CUATRO heredocs del bats — 249 líneas vs 146; G11 movido a US4 porque
+sus literales solo existen tras T018; T016 greppeaba glifos donde T018 emite escapes `\uXXXX`; tres
+grafías del chequeo `error_code` → una línea CANON-E; SC-004 tenía una pierna e2e que ningún tier
+ejecuta), 9 MEDIUM (SC-006 en dos cláusulas, oráculos de FR-008 y de anidamiento de la omisión por
+orden de líneas, T011→T008 reordenado, G3/G4 con WARN, mutación 1 catcher corregido — G2 NO detecta
+revertir el return porque ambos caminos usan la misma constante), 9 LOW. Decisión del operador:
+reescribir los Independent Tests de US1/US3/US4 a lo que los tiers prueban (sin arnés E9). Regla que
+salió de este ciclo: **cada `\uXXXX` que aparezca en un artefacto se verifica byte a byte** (el modelo
+emite la marca combinante real en vez del escape — pasó 3 veces en esta feature; auditoría
+`LC_ALL=C grep -rc $'\xcc\x80'`).
+**IMPLEMENTADO 2026-09-14 (test-first, 28/29 tareas; T029 con la pierna DOCKER_E2E cerrada de verdad —
+ver abajo — y solo la pierna de flota en vivo diferida al deploy).** `docker/scripts/
+apply_telegram_typing_patch.py` gana `MARKER_VOICE_V1` + `MARKER_VOICE` (v2), las cinco constantes
+`_V1` congeladas verbatim, `_REPLY_RETURN_V1`/`_V2`, `upgrade_voice_v1_to_v2` (cinco pares
+`re.subn`-free, all-or-nothing vía `work.count(old) != 1`), `VOICE_REPLY_BLOCK` v2 con `_voiceOutcome`
++ `_voiceStep` + el bloque de omisión + el cooldown, `VOICE_TEXT_WRAP` v2 con el matcher de pedido
+explícito bajo el gate completo de 032, `VOICE_SCHEMA_PROPERTY` v2 con `voice_force`,
+`VOICE_INSTRUCTIONS_LINE` v2 con la redacción honesta, y `VOICE_OMISSION_NAG_CHARS` +
+`VOICE_REQUEST_PHRASES` (38) + `_voiceNormalize`/`_voiceRequestMatch`/`_VOICE_REQUEST_NEGATION` +
+`_voiceCooldown`/`_voiceCooldownConsume` en `VOICE_HELPERS`. Fixtures nuevos commiteables
+`tests/fixtures/telegram-server-{pristine,voice-v1}.ts` (el segundo generado UNA vez con el patcher
+real de `a7eb2e5`, sha registrado en research D8). `tests/apply-telegram-patches.bats` 64→92 (28
+tests 033 nuevos + 4 oráculos v1→v2 + 6 negativos reparados); **DOCKER_E2E CORRIDO DE VERDAD, no
+diferido** — este host tiene Docker (`compose v5.3.1`, arm64) — `tests/docker-e2e-voice.bats`
+reescrito auto-sembrado (E1-E8, 8/8 GREEN), cazando y arreglando TRES bugs reales solo visibles bajo
+contenedor real: (1) `log()` del patcher escribe a STDOUT, no stderr — `seed.sh` capturaba la línea
+de log junto con el path, corrompiendo `$server`; (2) `grep -c PATTERN file` sale con código 1 cuando
+el conteo es 0 — bajo `set -e` eso abortaba el script del contenedor antes de completar los checks
+que esperan conteo 0 (v1 ausente tras el upgrade); (3) `docker compose run` antepone sus propias
+líneas de progreso a `$output` de bats — la extracción posicional (`sed -n '1p'`) leía la línea
+equivocada; arreglado con marcadores nombrados (`V2COUNT=`/`V1COUNT=`) en vez de posición. **Las 8
+mutaciones de quickstart corridas contra la implementación real (no solo diseñadas)**: las 8 cazadas
+por el test predicho; la mutación 4 (quitar el guard de negación) confirmada también bajo bun vía E5
+real (3/3 falsos positivos reproducidos); la mutación 7 (un byte alterado en `VOICE_HELPERS_V1`) cazó
+G2/G2b como se esperaba Y además arrastró G3/G4/G6/US2 — la gemela corrupta falla el primer par del
+upgrader, abortando TODO el upgrade; el guardia anti-tautología queda probado empíricamente, no solo
+diseñado. **GATES:** `bats tests/` 1368/0 en bash 5.3.15 Y 3.2.57 (byte-idéntico, incluye el oráculo
+FR-010 de `local-render.bats`); `shellcheck -S error` rc=0; `py_compile` OK; cero `__pycache__`; diff
+exactamente los 8 archivos + `specs/033-voice-reply-feedback/**` + los 2 fixtures nuevos — nada bajo
+`modules/`, `setup.sh`, `scripts/lib/`. VERSION 0.23.0→**0.24.0** (verificado contra `origin/main`
+antes del bump). README (tabla de frases + línea de acuse + cooldown), CHANGELOG, este archivo
+(sección "Telegram plugin patch"). **Pendiente NO bloqueante:** la pierna de flota en vivo de T029
+(linus primero, luego donna — bloqueada hoy por reautenticación de Cloudflare Access que solo el
+operador puede completar) y la actualización propia de rodri-cenco-admin (0.19.0→0.24.0, operación
+aparte). **Siguiente: commit + PR contra main (no ejecutado — falta confirmación del operador).**
+Feature 034 (tiempo real, "recepcionista" sobre ElevenLabs Agents) decidida para su Fase 0, spec
+separada, NO mezclar.
+
 **032-telegram-voice-roundtrip SPEC + CLARIFY + PLAN + TASKS + ANALYZE + IMPLEMENT COMPLETOS
 (2026-09-06/07; rama `032-telegram-voice-roundtrip` desde main=`076bb4e` v0.22.0→**0.23.0**).** Plan:
 `specs/032-telegram-voice-roundtrip/plan.md`. **FEATURE:** voz ida-y-vuelta ASÍNCRONA sobre el canal
@@ -224,10 +349,15 @@ el path del placeholder — las 6 rompieron el test correcto y se revirtieron li
 **1336/0 en bash 3.2.57 Y 1334/2 en bash 5.3.15 concurrente** (los 2 rojos son el flake de contención
 conocido de `heartbeat-auth-detection.bats`, confirmado 7/7 en aislamiento — ajeno a 032, mismo patrón
 documentado en 027/025). VERSION 0.22.0→**0.23.0** (verificado contra `origin/main` antes y después).
-CHANGELOG + README (7º hook de la sección Telegram, puntero al quickstart). **Pendiente NO bloqueante:**
-T025 (DOCKER_E2E real) + T026 (ferrari en vivo: SC-001/002/003/006, fault-injection, A/B es-CL) —
-diferidos al despliegue de v0.23.0, precedente 031. Nada comiteado todavía — falta confirmación del
-operador. NO mezclar con la actualización de flota pendiente (donna/linus 0.19.0, admins 0.17.0,
+CHANGELOG + README (7º hook de la sección Telegram, puntero al quickstart). **MERGEADO por el
+operador (PR #94, squash `a7eb2e5` en main, 2026-09-07 23:27 UTC); CI verde en los tres checks
+(shellcheck + bats bash 5.x ubuntu + bash 3.2 macos) confirmado vía `gh pr view` antes de la
+limpieza post-merge. main sincronizada y verificada (VERSION 0.23.0, `MARKER_VOICE` presente en
+`apply_telegram_typing_patch.py`, historia lineal 090→091→092→093→094). Rama local
+`032-telegram-voice-roundtrip` borrada; la remota ya había sido autoeliminada por GitHub al mergear.**
+**Pendiente NO bloqueante:** T025 (DOCKER_E2E real) + T026 (ferrari en vivo:
+SC-001/002/003/006, fault-injection, A/B es-CL) — diferidos al despliegue de v0.23.0, precedente
+031. NO mezclar con la actualización de flota pendiente (donna/linus 0.19.0, admins 0.17.0,
 mclaren-admin CAÍDO por OAuth vencido desde 2026-09-02) — el deploy de 032 se monta sobre esa
 actualización, operación aparte.**
 
