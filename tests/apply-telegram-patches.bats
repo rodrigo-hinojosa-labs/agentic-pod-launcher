@@ -26,154 +26,10 @@ setup() {
   #  10. `        return { content: [...text: result...] }`    → voice hunk V2
   #  11. reply tool inputSchema (real ListToolsRequestSchema shape) → voice hunk V3
   #  12. `    instructions: [`                                 → voice hunk V4
-  cat > "$TMP_TEST_DIR/server.ts" <<'TS'
-#!/usr/bin/env bun
-import { Bot, InputFile } from 'grammy'
-import { readFileSync, writeFileSync, statSync, mkdirSync } from 'fs'
-
-const TOKEN = process.env.TELEGRAM_BOT_TOKEN
-if (!TOKEN) {
-  process.stderr.write('TELEGRAM_BOT_TOKEN required\n')
-  process.exit(1)
-}
-
-const STATE_DIR = '/tmp/test'
-const PID_FILE = '/tmp/test/bot.pid'
-mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
-try {
-  const stale = parseInt(readFileSync(PID_FILE, 'utf8'), 10)
-  if (stale > 1 && stale !== process.pid) {
-    process.kill(stale, 0)
-    process.stderr.write(`telegram channel: replacing stale poller pid=${stale}\n`)
-    process.kill(stale, 'SIGTERM')
-  }
-} catch {}
-writeFileSync(PID_FILE, String(process.pid))
-
-const bot = new Bot(TOKEN)
-let botUsername = ''
-
-function loadAccess(): any {
-  return { dmPolicy: 'open', allowFrom: ['111'], groups: {} }
-}
-
-async function handleInbound(ctx: any, text?: string, downloadImage?: any, attachment?: any) {
-  const from = ctx.from!
-  const chat_id = String(ctx.chat!.id)
-  const msgId = ctx.message?.message_id
-  // Typing indicator — signals "processing" until we reply (or ~5s elapses).
-  void bot.api.sendChatAction(chat_id, 'typing').catch(() => {})
-}
-
-bot.on('message', async (ctx: any) => {
-  await handleInbound(ctx)
-})
-
-bot.on('message:text', async ctx => {
-  await handleInbound(ctx, ctx.message.text, undefined)
-})
-
-bot.on('message:voice', async ctx => {
-  const voice = ctx.message.voice
-  const text = ctx.message.caption ?? '(voice message)'
-  await handleInbound(ctx, text, undefined, {
-    kind: 'voice',
-    file_id: voice.file_id,
-    size: voice.file_size,
-    mime: voice.mime_type,
-  })
-})
-
-const mcp = {
-  setRequestHandler: (_schema: any, _handler: any) => {},
-}
-
-mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [
-    {
-      name: 'reply',
-      description: 'Reply on Telegram.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          chat_id: { type: 'string' },
-          text: { type: 'string' },
-          reply_to: {
-            type: 'string',
-            description: 'Message ID to thread under.',
-          },
-          files: {
-            type: 'array',
-            items: { type: 'string' },
-            description: 'Absolute file paths to attach.',
-          },
-          format: {
-            type: 'string',
-            enum: ['text', 'markdownv2'],
-            description: 'Rendering mode.',
-          },
-        },
-        required: ['chat_id', 'text'],
-      },
-    },
-  ],
-}))
-
-const mcpServer = new Server(
-  { name: 'telegram', version: '1.0.0' },
-  {
-    capabilities: { tools: {} },
-    instructions: [
-      'The sender reads Telegram, not this session.',
-      '',
-      'Access is managed by the /telegram:access skill.',
-    ].join('\n'),
-  },
-)
-
-async function handleReply(args: any) {
-  switch (args.tool) {
-      case 'reply': {
-        const chat_id = args.chat_id as string
-        const text = args.text as string
-        const files = (args.files as string[] | undefined) ?? []
-        const sentIds: number[] = []
-        try {
-          for (let i = 0; i < 1; i++) {
-            const sent = await bot.api.sendMessage(chat_id, text)
-            sentIds.push(sent.message_id)
-          }
-        } catch (err) {
-          throw err
-        }
-
-        for (const f of files) {
-          const sent = await bot.api.sendDocument(chat_id, f)
-          sentIds.push(sent.message_id)
-        }
-
-        const result =
-          sentIds.length === 1
-            ? `sent (id: ${sentIds[0]})`
-            : `sent ${sentIds.length} parts`
-        return { content: [{ type: 'text', text: result }] }
-      }
-  }
-}
-
-async function main() {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      await bot.start({
-        onStart: () => {}
-      })
-      break
-    } catch (e) {
-      // retry
-    }
-  }
-}
-TS
+  #
+  # The fixture is extracted verbatim to tests/fixtures/telegram-server-pristine.ts
+  # (033) so the DOCKER_E2E harness can seed the same source into a container.
+  cp "$REPO_ROOT/tests/fixtures/telegram-server-pristine.ts" "$TMP_TEST_DIR/server.ts"
 }
 
 teardown() { teardown_tmp_dir; }
@@ -778,7 +634,7 @@ TS
 @test "032 inbound: marker present exactly once on a fresh fixture" {
   python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
   local count
-  count=$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v1" "$TMP_TEST_DIR/server.ts")
+  count=$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v2" "$TMP_TEST_DIR/server.ts")
   [ "$count" -eq 1 ]
 }
 
@@ -792,7 +648,7 @@ TS
   sha2=$(shasum "$TMP_TEST_DIR/server.ts" | awk '{print $1}')
   [ "$sha1" = "$sha2" ]
   local count
-  count=$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v1" "$TMP_TEST_DIR/server.ts")
+  count=$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v2" "$TMP_TEST_DIR/server.ts")
   [ "$count" -eq 1 ]
 }
 
@@ -801,7 +657,7 @@ TS
   rm -f "$TMP_TEST_DIR/server.ts.bak"
   run python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
   [ "$status" -eq 0 ]
-  ! grep -q "agentic-pod-launcher: telegram voice roundtrip patch v1" "$TMP_TEST_DIR/server.ts"
+  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v2" "$TMP_TEST_DIR/server.ts")" -eq 0 ]
   grep -q "agentic-pod-launcher: offset persistence patch v1" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: pending-reply marker patch v1" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: askq-guard give-up delivery patch v1" "$TMP_TEST_DIR/server.ts"
@@ -873,9 +729,13 @@ TS
   python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
   awk '/^bot\.on\(.message:voice./{f=1} f{print; if (/^\}\)$/) exit}' \
     "$TMP_TEST_DIR/server.ts" > "$TMP_TEST_DIR/voice_inbound_snippet.txt"
-  ! grep -q '${err}' "$TMP_TEST_DIR/voice_inbound_snippet.txt"
-  ! grep -q '${url}' "$TMP_TEST_DIR/voice_inbound_snippet.txt"
-  ! grep -q 'file/bot' "$TMP_TEST_DIR/voice_inbound_snippet.txt"
+  run grep -q '${err}' "$TMP_TEST_DIR/voice_inbound_snippet.txt"
+  [ "$status" -ne 0 ]
+  run grep -q '${url}' "$TMP_TEST_DIR/voice_inbound_snippet.txt"
+  [ "$status" -ne 0 ]
+  # The handler legitimately builds a file/bot${TOKEN} URL for the getFile
+  # download (never logged) — the real invariant is "never in a stderr line".
+  [ "$(grep 'process.stderr.write' "$TMP_TEST_DIR/voice_inbound_snippet.txt" | grep -c 'file/bot')" -eq 0 ]
   grep -q 'voice stt fail: ${cls} status=${status}' "$TMP_TEST_DIR/voice_inbound_snippet.txt"
 }
 
@@ -883,7 +743,8 @@ TS
   python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
   awk '/^bot\.on\(.message:voice./{f=1} f{print; if (/^\}\)$/) exit}' \
     "$TMP_TEST_DIR/server.ts" > "$TMP_TEST_DIR/voice_inbound_snippet.txt"
-  ! grep -q 'sendMessage(' "$TMP_TEST_DIR/voice_inbound_snippet.txt"
+  run grep -q 'sendMessage(' "$TMP_TEST_DIR/voice_inbound_snippet.txt"
+  [ "$status" -ne 0 ]
   ! grep -q 'ctx.reply(' "$TMP_TEST_DIR/voice_inbound_snippet.txt"
 }
 
@@ -918,7 +779,7 @@ TS
   [ "$status" -eq 0 ]
   grep -q "typing refresh patch v6" "$TMP_TEST_DIR/server.ts"
   local voice_count
-  voice_count=$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v1" "$TMP_TEST_DIR/server.ts")
+  voice_count=$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v2" "$TMP_TEST_DIR/server.ts")
   [ "$voice_count" -eq 1 ]
 }
 
@@ -931,7 +792,7 @@ TS
   clear_line=$(grep -n "_clearPendingReply()" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
   result_line=$(grep -n "        const result =" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
   consume_line=$(grep -n "_voiceOriginConsume(chat_id)" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
-  return_line=$(grep -n "return { content: \[{ type: 'text', text: result }\] }" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  return_line=$(grep -n "return { content: \[{ type: 'text', text: result + _voiceOutcome }\] }" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
   [ "$ack_line" -lt "$result_line" ]
   [ "$clear_line" -lt "$result_line" ]
   [ "$result_line" -lt "$consume_line" ]
@@ -981,7 +842,8 @@ TS
 }
 
 @test "032 outbound: sendVoice appears only in the patched voice group, never in the baseline" {
-  ! grep -q "sendVoice" "$TMP_TEST_DIR/server.ts"
+  run grep -q "sendVoice" "$TMP_TEST_DIR/server.ts"
+  [ "$status" -ne 0 ]
   python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
   local count
   count=$(grep -c "bot.api.sendVoice(chat_id" "$TMP_TEST_DIR/server.ts")
@@ -992,7 +854,392 @@ TS
   python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
   awk '/agentic-pod-launcher: voice roundtrip outbound synthesis/{f=1} f{print; if (/^        \}$/) exit}' \
     "$TMP_TEST_DIR/server.ts" > "$TMP_TEST_DIR/voice_outbound_snippet.txt"
-  ! grep -q '^\s*throw ' "$TMP_TEST_DIR/voice_outbound_snippet.txt"
+  run grep -q '^\s*throw ' "$TMP_TEST_DIR/voice_outbound_snippet.txt"
+  [ "$status" -ne 0 ]
   grep -q "voice tts fail: \${cls} status=\${status}" "$TMP_TEST_DIR/voice_outbound_snippet.txt"
   ! grep -q '${err}' "$TMP_TEST_DIR/voice_outbound_snippet.txt"
+}
+
+# ── 033: voice group v2 upgrade (contracts/voice-group-v2-upgrade.md C5) ──
+
+@test "033 G1: fresh install lands v2 directly (marker, no v1, sentinel present)" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v2" "$TMP_TEST_DIR/server.ts")" -eq 1 ]
+  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v1" "$TMP_TEST_DIR/server.ts")" -eq 0 ]
+  [ "$(grep -c "voice helpers end (033)" "$TMP_TEST_DIR/server.ts")" -eq 1 ]
+}
+
+@test "033 G2: upgrading the golden v1 fixture converges byte-for-byte with a fresh v2 install" {
+  cp "$REPO_ROOT/tests/fixtures/telegram-server-voice-v1.ts" "$TMP_TEST_DIR/golden.ts"
+  python3 "$PATCHER" "$TMP_TEST_DIR/golden.ts"
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  local sha_golden sha_fresh
+  sha_golden=$(shasum -a 256 "$TMP_TEST_DIR/golden.ts" | awk '{print $1}')
+  sha_fresh=$(shasum -a 256 "$TMP_TEST_DIR/server.ts" | awk '{print $1}')
+  [ "$sha_golden" = "$sha_fresh" ]
+  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v2" "$TMP_TEST_DIR/golden.ts")" -eq 1 ]
+}
+
+@test "033 G2b: the patcher's _V1 twins are byte-faithful to the committed golden v1 fixture" {
+  python3 -B - "$PATCHER" "$REPO_ROOT/tests/fixtures/telegram-server-voice-v1.ts" <<'PY'
+import sys, os
+sys.path.insert(0, os.path.dirname(sys.argv[1]))
+import apply_telegram_typing_patch as p
+golden = open(sys.argv[2]).read()
+assert p.MARKER_VOICE_V1 in golden, "MARKER_VOICE_V1 not found in golden fixture"
+assert p.VOICE_HELPERS_V1 in golden, "VOICE_HELPERS_V1 not found in golden fixture"
+assert p.VOICE_TEXT_WRAP_V1 in golden, "VOICE_TEXT_WRAP_V1 not found in golden fixture"
+assert (p.VOICE_REPLY_BLOCK_V1 + p._REPLY_RETURN_V1) in golden, "VOICE_REPLY_BLOCK_V1 + _REPLY_RETURN_V1 not found in golden fixture"
+assert p.VOICE_SCHEMA_PROPERTY_V1 in golden, "VOICE_SCHEMA_PROPERTY_V1 not found in golden fixture"
+assert p.VOICE_INSTRUCTIONS_LINE_V1 in golden, "VOICE_INSTRUCTIONS_LINE_V1 not found in golden fixture"
+PY
+}
+
+@test "033 G2c: replacing v2 constants with their _V1 twins then re-patching converges back to the fresh v2 output" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  cp "$TMP_TEST_DIR/server.ts" "$TMP_TEST_DIR/roundtrip.ts"
+  python3 -B - "$PATCHER" "$TMP_TEST_DIR/roundtrip.ts" <<'PY'
+import sys, os
+sys.path.insert(0, os.path.dirname(sys.argv[1]))
+import apply_telegram_typing_patch as p
+path = sys.argv[2]
+src = open(path).read()
+src = src.replace(p.VOICE_REPLY_BLOCK + p._REPLY_RETURN_V2, p.VOICE_REPLY_BLOCK_V1 + p._REPLY_RETURN_V1)
+src = src.replace(p.VOICE_HELPERS, p.VOICE_HELPERS_V1)
+src = src.replace(p.VOICE_TEXT_WRAP, p.VOICE_TEXT_WRAP_V1)
+src = src.replace(p.VOICE_SCHEMA_PROPERTY, p.VOICE_SCHEMA_PROPERTY_V1)
+src = src.replace(p.VOICE_INSTRUCTIONS_LINE, p.VOICE_INSTRUCTIONS_LINE_V1)
+open(path, "w").write(src)
+PY
+  grep -q "agentic-pod-launcher: telegram voice roundtrip patch v1" "$TMP_TEST_DIR/roundtrip.ts"
+  python3 "$PATCHER" "$TMP_TEST_DIR/roundtrip.ts"
+  local sha_fresh sha_roundtrip
+  sha_fresh=$(shasum -a 256 "$TMP_TEST_DIR/server.ts" | awk '{print $1}')
+  sha_roundtrip=$(shasum -a 256 "$TMP_TEST_DIR/roundtrip.ts" | awk '{print $1}')
+  [ "$sha_fresh" = "$sha_roundtrip" ]
+}
+
+@test "033 G3: a second patcher run on an already-v2 file is a byte-identical no-op (fresh and upgraded)" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  local sha1
+  sha1=$(shasum -a 256 "$TMP_TEST_DIR/server.ts" | awk '{print $1}')
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  local sha2
+  sha2=$(shasum -a 256 "$TMP_TEST_DIR/server.ts" | awk '{print $1}')
+  [ "$sha1" = "$sha2" ]
+  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v2" "$TMP_TEST_DIR/server.ts")" -eq 1 ]
+
+  cp "$REPO_ROOT/tests/fixtures/telegram-server-voice-v1.ts" "$TMP_TEST_DIR/golden.ts"
+  python3 "$PATCHER" "$TMP_TEST_DIR/golden.ts"
+  local sha3
+  sha3=$(shasum -a 256 "$TMP_TEST_DIR/golden.ts" | awk '{print $1}')
+  python3 "$PATCHER" "$TMP_TEST_DIR/golden.ts"
+  local sha4
+  sha4=$(shasum -a 256 "$TMP_TEST_DIR/golden.ts" | awk '{print $1}')
+  [ "$sha3" = "$sha4" ]
+  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v2" "$TMP_TEST_DIR/golden.ts")" -eq 1 ]
+}
+
+@test "033 G4: out-of-band edit to the golden's instructions line blocks the upgrade; other six groups stay unaffected" {
+  cp "$REPO_ROOT/tests/fixtures/telegram-server-voice-v1.ts" "$TMP_TEST_DIR/golden.ts"
+  perl -0pi -e "s/include voice_text with a concise speakable version of your answer\\./include voice_text somehow./" "$TMP_TEST_DIR/golden.ts"
+  run python3 "$PATCHER" "$TMP_TEST_DIR/golden.ts"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "voice v1→v2 upgrade: hunk 5 anchor not found"
+  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v1" "$TMP_TEST_DIR/golden.ts")" -eq 1 ]
+  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v2" "$TMP_TEST_DIR/golden.ts")" -eq 0 ]
+  [ "$(grep -c "voice_text: {" "$TMP_TEST_DIR/golden.ts")" -eq 1 ]
+  grep -q "agentic-pod-launcher: offset persistence patch v1" "$TMP_TEST_DIR/golden.ts"
+  grep -q "agentic-pod-launcher: pending-reply marker patch v1" "$TMP_TEST_DIR/golden.ts"
+  grep -q "agentic-pod-launcher: stderr-capture patch v1" "$TMP_TEST_DIR/golden.ts"
+  grep -q "agentic-pod-launcher: primary lock patch v1" "$TMP_TEST_DIR/golden.ts"
+  grep -q "agentic-pod-launcher: askq-guard give-up delivery patch v1" "$TMP_TEST_DIR/golden.ts"
+  grep -q "agentic-pod-launcher: typing refresh patch v6" "$TMP_TEST_DIR/golden.ts"
+}
+
+@test "033 G6: typing cascade v4→v6 and the voice v1→v2 upgrade both complete in a single pass" {
+  cp "$REPO_ROOT/tests/fixtures/telegram-server-voice-v1.ts" "$TMP_TEST_DIR/golden.ts"
+  perl -0pi -e 's/typing refresh patch v6/typing refresh patch v4/g; s/telegram-typing v6 — names interactive-prompt cause/telegram-typing v4 — anti-zombie/g' "$TMP_TEST_DIR/golden.ts"
+  perl -0pi -e 's/⚠️ Llevo más de \$\{minutes\} min sin entregar la respuesta a este chat\. Puede deberse a: una respuesta larga aún en curso, a que respondí sin usar la herramienta de envío, a que el login de Claude haya expirado, o a que la sesión quedó bloqueada en un menú interactivo que el canal no puede responder\. Revisa: agentctl doctor\./⚠️ Tardé más de \${minutes} min en responder. Es probable que el OAuth de Claude haya expirado o haya un error de conectividad. Revisa: agentctl doctor./g' "$TMP_TEST_DIR/golden.ts"
+  run python3 "$PATCHER" "$TMP_TEST_DIR/golden.ts"
+  [ "$status" -eq 0 ]
+  grep -q "typing refresh patch v6" "$TMP_TEST_DIR/golden.ts"
+  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v2" "$TMP_TEST_DIR/golden.ts")" -eq 1 ]
+  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v1" "$TMP_TEST_DIR/golden.ts")" -eq 0 ]
+}
+
+# ── 033 US1: reply acknowledgement carries the voice outcome (contracts/reply-voice-outcome.md C1-C4) ──
+
+@test "033 US1(a): _voiceOutcome is declared right after the synthesis comment, before the voice gate, and fed into the return" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  local comment_line let_line if_line return_line
+  comment_line=$(grep -n "agentic-pod-launcher: voice roundtrip outbound synthesis" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  let_line=$(grep -n "let _voiceOutcome = ''" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  if_line=$(grep -n "if (VOICE_ACTIVE && VOICE_REPLY_MODE !== 'never')" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  return_line=$(grep -n "return { content: \[{ type: 'text', text: result + _voiceOutcome }\] }" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  [ -n "$let_line" ]
+  [ "$comment_line" -lt "$let_line" ]
+  [ "$let_line" -lt "$if_line" ]
+  [ "$if_line" -lt "$return_line" ]
+}
+
+@test "033 US1(b): the outcome assignments match the exact sent/failed templates" {
+  # The `\n` is a JS escape INSIDE the template literal (becomes a real
+  # newline only when the TS runs) — the source line itself is single-line,
+  # same convention as every other stderr.write(...\n) call in this file.
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  grep -qF '_voiceOutcome = `\nvoice: sent (fmt=${fmt}, chars=${spoken.length}, ms=${_voiceMs})`' "$TMP_TEST_DIR/server.ts"
+  grep -qF '_voiceOutcome = `\nvoice: failed (step=${_voiceStep}, cls=${cls}, status=${status})`' "$TMP_TEST_DIR/server.ts"
+}
+
+@test "033 US1(c): the step marker flips to send between synthesis and the Telegram call; the fail line names it" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  local synth_line step_line send_line
+  synth_line=$(grep -n "await _voiceSynthesize(spoken" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  step_line=$(grep -n "_voiceStep = 'send'" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  send_line=$(grep -n "bot.api.sendVoice(chat_id" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  [ -n "$step_line" ]
+  [ "$synth_line" -lt "$step_line" ]
+  [ "$step_line" -lt "$send_line" ]
+  grep -qF 'telegram channel: voice tts fail: ${cls} status=${status} step=${_voiceStep} chat=${chat_id}' "$TMP_TEST_DIR/server.ts"
+}
+
+@test "033 US1(d): sendVoice passes the synthesis AbortController's signal (grammY confirmed, research D3)" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  grep -qF 'bot.api.sendVoice(chat_id, new InputFile(buf, `voice.${fmt}`), undefined, _voiceController.signal)' "$TMP_TEST_DIR/server.ts"
+}
+
+@test "033 US1(e): the outcome/reply block never leaks a raw error, a URL, the spoken text, the voice id, or a file/bot path" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  awk '/agentic-pod-launcher: voice roundtrip outbound synthesis/{f=1} f{print; if (/^        return \{ content/) exit}' \
+    "$TMP_TEST_DIR/server.ts" > "$TMP_TEST_DIR/voice_reply_block.txt"
+  run grep -q '${err}' "$TMP_TEST_DIR/voice_reply_block.txt"
+  [ "$status" -ne 0 ]
+  run grep -q '${url}' "$TMP_TEST_DIR/voice_reply_block.txt"
+  [ "$status" -ne 0 ]
+  run grep -q '${spoken}' "$TMP_TEST_DIR/voice_reply_block.txt"
+  [ "$status" -ne 0 ]
+  run grep -q '${text}' "$TMP_TEST_DIR/voice_reply_block.txt"
+  [ "$status" -ne 0 ]
+  run grep -q '${VOICE_ID}' "$TMP_TEST_DIR/voice_reply_block.txt"
+  [ "$status" -ne 0 ]
+  run grep -q 'file/bot' "$TMP_TEST_DIR/voice_reply_block.txt"
+  [ "$status" -ne 0 ]
+}
+
+@test "033 US1(f): _voiceErrClass reads a grammY error_code null-safely" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  grep -qF "typeof err === 'object' && err !== null && typeof (err as { error_code?: unknown }).error_code === 'number'" "$TMP_TEST_DIR/server.ts"
+}
+
+@test "033 US1(g): byte-identity guard — exactly two _voiceOutcome assignments (the let declaration and any nag += are excluded)" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  [ "$(grep -cE '^ *_voiceOutcome = ' "$TMP_TEST_DIR/server.ts")" -eq 2 ]
+}
+
+# ── 033 US2: contract wording v2 (contracts/reply-voice-outcome.md C5) ──
+
+@test "033 US2: the instructions line and voice_text description state the v2 facts, on a fresh install and on the upgraded golden" {
+  cp "$REPO_ROOT/tests/fixtures/telegram-server-voice-v1.ts" "$TMP_TEST_DIR/golden.ts"
+  python3 "$PATCHER" "$TMP_TEST_DIR/golden.ts"
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  local f
+  for f in "$TMP_TEST_DIR/golden.ts" "$TMP_TEST_DIR/server.ts"; do
+    grep -qF 'AUTOMATICALLY sends your reply as a voice note too' "$f"
+    grep -qF 'explicitly asks for an audio reply' "$f"
+    grep -qF 'never tell the user you cannot send audio' "$f"
+    grep -qF 'answer in ONE reply call' "$f"
+    grep -qF 'include voice_text with a concise speakable version' "$f"
+    grep -qF 'your full text is read aloud up to the cap' "$f"
+    grep -qF 'do not repeat it to the user' "$f"
+    grep -qF 'tell the user once, briefly, that the audio did not go out this time' "$f"
+    grep -qF 'set voice_force: true on that reply' "$f"
+    grep -A 2 "    instructions: \[" "$f" | grep -q 'attachment_kind="voice"'
+    [ "$(grep -c 'arrive transcribed — the message text IS the transcription. When replying to them, include voice_text' "$f")" -eq 0 ]
+    grep -qF 'voice note or explicit audio request' "$f"
+    grep -qF 'Strongly recommended: when omitted' "$f"
+    grep -qF 'reports the omission' "$f"
+  done
+}
+
+# ── 033 US3: omission observability (research D4) ──
+
+@test "033 US3: stderr record nested under _voiceFromText, nag gated by the derived threshold" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  grep -qF 'const _voiceFromText = !(voiceTextArg && voiceTextArg.trim())' "$TMP_TEST_DIR/server.ts"
+  awk '/agentic-pod-launcher: voice roundtrip outbound synthesis/{f=1} f{print; if (/^        return \{ content/) exit}' \
+    "$TMP_TEST_DIR/server.ts" > "$TMP_TEST_DIR/voice_reply_block.txt"
+  local sent_line fromtext_if_line omission_line nag_if_line nag_append_line catch_line
+  sent_line=$(grep -n 'voice: sent' "$TMP_TEST_DIR/voice_reply_block.txt" | head -1 | cut -d: -f1)
+  fromtext_if_line=$(grep -n 'if (_voiceFromText) {' "$TMP_TEST_DIR/voice_reply_block.txt" | head -1 | cut -d: -f1)
+  omission_line=$(grep -n 'voice tts spoke ${spoken.length} chars without voice_text' "$TMP_TEST_DIR/voice_reply_block.txt" | head -1 | cut -d: -f1)
+  nag_if_line=$(grep -n 'if (spoken.length > VOICE_OMISSION_NAG_CHARS)' "$TMP_TEST_DIR/voice_reply_block.txt" | head -1 | cut -d: -f1)
+  nag_append_line=$(grep -n 'voice_text omitted' "$TMP_TEST_DIR/voice_reply_block.txt" | head -1 | cut -d: -f1)
+  catch_line=$(grep -n '} catch (err) {' "$TMP_TEST_DIR/voice_reply_block.txt" | head -1 | cut -d: -f1)
+  [ -n "$fromtext_if_line" ] && [ -n "$omission_line" ] && [ -n "$nag_if_line" ] && [ -n "$nag_append_line" ] && [ -n "$catch_line" ]
+  [ "$sent_line" -lt "$fromtext_if_line" ]
+  [ "$fromtext_if_line" -lt "$omission_line" ]
+  [ "$omission_line" -lt "$nag_if_line" ]
+  [ "$nag_if_line" -lt "$nag_append_line" ]
+  [ "$nag_append_line" -lt "$catch_line" ]
+  grep -qF 'const VOICE_OMISSION_NAG_CHARS = Math.floor(VOICE_SPOKEN_CHAR_CAP / 4)' "$TMP_TEST_DIR/server.ts"
+  [ "$(grep -c '> 300' "$TMP_TEST_DIR/server.ts")" -eq 0 ]
+  [ "$(grep -c 'process.env.TELEGRAM_VOICE_OMISSION' "$TMP_TEST_DIR/server.ts")" -eq 0 ]
+}
+
+# ── 033 US4: explicit audio request — matcher (contracts/explicit-audio-request.md C1) ──
+
+@test "033 US4(a): the fixed phrase table declares all 23 Spanish and 15 English request forms" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  grep -qF 'const VOICE_REQUEST_PHRASES: readonly string[] = [' "$TMP_TEST_DIR/server.ts"
+  local phrase
+  for phrase in \
+    "responde con audio" "respondeme con audio" "responde en audio" "respondeme en audio" \
+    "responde por audio" "respondeme por audio" "contesta con audio" "contestame con audio" \
+    "contesta en audio" "contestame en audio" "contesta por audio" "contestame por audio" \
+    "responde con voz" "respondeme con voz" "contesta con voz" "responde con una nota de voz" \
+    "mandame un audio" "mandame audio" "mandame una nota de voz" "enviame un audio" \
+    "enviame una nota de voz" "responde hablando" "respondeme hablando" \
+    "reply with audio" "respond with audio" "answer with audio" "reply with voice" \
+    "respond with voice" "answer with voice" "reply in audio" "respond in audio" \
+    "answer in audio" "send me an audio" "send me a voice note" "send me a voice message" \
+    "send a voice note" "reply with a voice note" "reply with a voice message"; do
+    grep -qF "'$phrase'" "$TMP_TEST_DIR/server.ts"
+  done
+}
+
+@test "033 US4(b): the normaliser strips combining marks and typographic quotes as escape sequences, not glyphs" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  grep -qF "function _voiceNormalize(" "$TMP_TEST_DIR/server.ts"
+  grep -qF ".normalize('NFD')" "$TMP_TEST_DIR/server.ts"
+  grep -qF '[\u0300-\u036f]' "$TMP_TEST_DIR/server.ts"
+  grep -qF '[\u2018\u2019\u02bc\u00b4\`]' "$TMP_TEST_DIR/server.ts"
+  grep -qF '.toLowerCase()' "$TMP_TEST_DIR/server.ts"
+}
+
+@test "033 US4(c): the matcher scans every occurrence with a word-boundary and negation guard" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  grep -qF "function _voiceRequestMatch(" "$TMP_TEST_DIR/server.ts"
+  grep -qF 't.indexOf(p)' "$TMP_TEST_DIR/server.ts"
+  grep -qF 't.indexOf(p, i + 1)' "$TMP_TEST_DIR/server.ts"
+  grep -qF '[a-z0-9]' "$TMP_TEST_DIR/server.ts"
+  grep -qF '_VOICE_REQUEST_NEGATION.test(t.slice(0, i))' "$TMP_TEST_DIR/server.ts"
+}
+
+@test "033 US4(d): the negation regex matches the contract verbatim" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  grep -qF "const _VOICE_REQUEST_NEGATION = /(?:^|[\s,;:—-])(?:no|nunca|jamas|sin|don't|dont|do not|never|stop)\b[^.!?\n]{0,30}\$/" "$TMP_TEST_DIR/server.ts"
+}
+
+@test "033 US4(e): the sentinel closes the helpers block after every voice helper and before the first bot.on handler" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  local sentinel_line first_bot_on_line
+  sentinel_line=$(grep -n "voice helpers end (033)" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  first_bot_on_line=$(grep -n "^bot\.on(" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  local last_helper_line
+  last_helper_line=$(grep -n "function _voiceRequestMatch\|function _voiceCooldownConsume\|function _voiceTruncate\|function _voiceNormalize" "$TMP_TEST_DIR/server.ts" | tail -1 | cut -d: -f1)
+  [ -n "$sentinel_line" ] && [ -n "$first_bot_on_line" ] && [ -n "$last_helper_line" ]
+  [ "$last_helper_line" -lt "$sentinel_line" ]
+  [ "$sentinel_line" -lt "$first_bot_on_line" ]
+}
+
+@test "033 US4(f) / G11: backslash literals reach the TS output (research D10)" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  grep -qF '[\u0300' "$TMP_TEST_DIR/server.ts"
+  grep -qF '\s+' "$TMP_TEST_DIR/server.ts"
+}
+
+# ── 033 US4: wrap gating, voice_force, cooldown (contracts/explicit-audio-request.md C2/C3, reply-voice-outcome.md C7) ──
+
+@test "033 US4(g): the message:text wrap gates the request match behind the full 032 DM gate, in order" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  awk '/^bot\.on\(.message:text./{f=1} f{print; if (/^\}\)$/) exit}' \
+    "$TMP_TEST_DIR/server.ts" > "$TMP_TEST_DIR/voice_text_wrap.txt"
+  grep -qF '_voiceOriginClear(String(ctx.chat!.id))' "$TMP_TEST_DIR/voice_text_wrap.txt"
+  grep -qF 'const access = loadAccess()' "$TMP_TEST_DIR/voice_text_wrap.txt"
+  grep -qF "ctx.chat?.type === 'private'" "$TMP_TEST_DIR/voice_text_wrap.txt"
+  grep -qF "access.dmPolicy !== 'disabled'" "$TMP_TEST_DIR/voice_text_wrap.txt"
+  grep -qF 'ctx.from != null' "$TMP_TEST_DIR/voice_text_wrap.txt"
+  grep -qF 'access.allowFrom.includes(String(ctx.from.id))' "$TMP_TEST_DIR/voice_text_wrap.txt"
+  grep -qF "if (VOICE_ACTIVE && VOICE_REPLY_MODE !== 'never' && isDm && _voiceRequestMatch(ctx.message.text))" "$TMP_TEST_DIR/voice_text_wrap.txt"
+  grep -qF '_voiceOriginSet(String(ctx.chat!.id))' "$TMP_TEST_DIR/voice_text_wrap.txt"
+  grep -qF 'telegram channel: voice request detected chat=' "$TMP_TEST_DIR/voice_text_wrap.txt"
+  grep -qF 'await handleInbound(ctx, ctx.message.text, undefined)' "$TMP_TEST_DIR/voice_text_wrap.txt"
+  local clear_line access_line if_line set_line stderr_line handle_line
+  clear_line=$(grep -n '_voiceOriginClear' "$TMP_TEST_DIR/voice_text_wrap.txt" | head -1 | cut -d: -f1)
+  access_line=$(grep -n 'const access = loadAccess()' "$TMP_TEST_DIR/voice_text_wrap.txt" | head -1 | cut -d: -f1)
+  if_line=$(grep -n '_voiceRequestMatch(ctx.message.text)' "$TMP_TEST_DIR/voice_text_wrap.txt" | head -1 | cut -d: -f1)
+  set_line=$(grep -n '_voiceOriginSet(String(ctx.chat!.id))' "$TMP_TEST_DIR/voice_text_wrap.txt" | head -1 | cut -d: -f1)
+  stderr_line=$(grep -n 'voice request detected' "$TMP_TEST_DIR/voice_text_wrap.txt" | head -1 | cut -d: -f1)
+  handle_line=$(grep -n 'await handleInbound' "$TMP_TEST_DIR/voice_text_wrap.txt" | head -1 | cut -d: -f1)
+  [ "$clear_line" -lt "$access_line" ]
+  [ "$access_line" -lt "$if_line" ]
+  [ "$if_line" -lt "$set_line" ]
+  [ "$set_line" -lt "$stderr_line" ]
+  [ "$stderr_line" -lt "$handle_line" ]
+  [ "$(grep -c 'const chat_id' "$TMP_TEST_DIR/voice_text_wrap.txt")" -eq 0 ]
+}
+
+@test "033 US4(h): _voiceOriginSet(chat_id) still occurs exactly once (032 oracle preserved)" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  [ "$(grep -c '_voiceOriginSet(chat_id)' "$TMP_TEST_DIR/server.ts")" -eq 1 ]
+}
+
+@test "033 US4(i): voice_force is added to the reply schema after voice_text, before required" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  grep -qF "voice_force: {" "$TMP_TEST_DIR/server.ts"
+  grep -qF "Set ONLY when the user asked for an audio reply in wording the channel did not recognise" "$TMP_TEST_DIR/server.ts"
+  local voice_text_line voice_force_line required_line
+  voice_text_line=$(grep -n "voice_text: {" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  voice_force_line=$(grep -n "voice_force: {" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  required_line=$(grep -n "        required: \['chat_id', 'text'\]," "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  [ "$voice_text_line" -lt "$voice_force_line" ]
+  [ "$voice_force_line" -lt "$required_line" ]
+}
+
+@test "033 US4(j): voice_force is read strictly and is a third trigger alongside mode always / fresh origin" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  grep -qF "const _voiceForce = args.voice_force === true" "$TMP_TEST_DIR/server.ts"
+  grep -qF "if (VOICE_REPLY_MODE === 'always' || _voiceFresh || _voiceForce)" "$TMP_TEST_DIR/server.ts"
+  [ "$(grep -c 'Boolean(args.voice_force)' "$TMP_TEST_DIR/server.ts")" -eq 0 ]
+}
+
+@test "033 US4(k): a failure in mode always sets a one-shot cooldown, consumed before the next synthesis" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  grep -qF "const _voiceCooldown = new Map<string, number>()" "$TMP_TEST_DIR/server.ts"
+  grep -qF "function _voiceCooldownConsume(chatId: string): boolean" "$TMP_TEST_DIR/server.ts"
+  grep -qF "_VOICE_ORIGIN_TTL_MS" "$TMP_TEST_DIR/server.ts"
+  awk '/agentic-pod-launcher: voice roundtrip outbound synthesis/{f=1} f{print; if (/^        return \{ content/) exit}' \
+    "$TMP_TEST_DIR/server.ts" > "$TMP_TEST_DIR/voice_reply_block.txt"
+  grep -qF "if (VOICE_REPLY_MODE === 'always') _voiceCooldown.set(chat_id, Date.now())" "$TMP_TEST_DIR/voice_reply_block.txt"
+  grep -qF "if (VOICE_REPLY_MODE === 'always' && _voiceCooldownConsume(chat_id))" "$TMP_TEST_DIR/voice_reply_block.txt"
+  grep -qF "telegram channel: voice skip: cooldown after failure chat=" "$TMP_TEST_DIR/voice_reply_block.txt"
+  local skip_line synth_line set_line catch_line
+  skip_line=$(grep -n "_voiceCooldownConsume(chat_id)" "$TMP_TEST_DIR/voice_reply_block.txt" | head -1 | cut -d: -f1)
+  synth_line=$(grep -n "await _voiceSynthesize(spoken" "$TMP_TEST_DIR/voice_reply_block.txt" | head -1 | cut -d: -f1)
+  catch_line=$(grep -n '} catch (err) {' "$TMP_TEST_DIR/voice_reply_block.txt" | head -1 | cut -d: -f1)
+  set_line=$(grep -n "_voiceCooldown.set(chat_id, Date.now())" "$TMP_TEST_DIR/voice_reply_block.txt" | head -1 | cut -d: -f1)
+  [ "$skip_line" -lt "$synth_line" ]
+  [ "$catch_line" -lt "$set_line" ]
+}
+
+@test "033 US1(h): FR-008 — both outcome assignments live inside the try/catch, none after the finally" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  awk '/agentic-pod-launcher: voice roundtrip outbound synthesis/{f=1} f{print; if (/^        return \{ content/) exit}' \
+    "$TMP_TEST_DIR/server.ts" > "$TMP_TEST_DIR/voice_reply_block.txt"
+  local try_line sent_line catch_line failed_line finally_line
+  try_line=$(grep -n '^ *try {$' "$TMP_TEST_DIR/voice_reply_block.txt" | head -1 | cut -d: -f1)
+  sent_line=$(grep -n 'voice: sent' "$TMP_TEST_DIR/voice_reply_block.txt" | head -1 | cut -d: -f1)
+  catch_line=$(grep -n '} catch (err)' "$TMP_TEST_DIR/voice_reply_block.txt" | head -1 | cut -d: -f1)
+  failed_line=$(grep -n 'voice: failed' "$TMP_TEST_DIR/voice_reply_block.txt" | head -1 | cut -d: -f1)
+  finally_line=$(grep -n '} finally {' "$TMP_TEST_DIR/voice_reply_block.txt" | head -1 | cut -d: -f1)
+  [ -n "$try_line" ] && [ -n "$sent_line" ] && [ -n "$catch_line" ] && [ -n "$failed_line" ] && [ -n "$finally_line" ]
+  [ "$try_line" -lt "$sent_line" ]
+  [ "$sent_line" -lt "$catch_line" ]
+  [ "$catch_line" -lt "$failed_line" ]
+  [ "$failed_line" -lt "$finally_line" ]
+  # The extracted snippet's last line is the case's `return` statement,
+  # which legitimately references _voiceOutcome (FR-002) — exclude it; the
+  # check is "no THIRD assignment sneaks in after finally".
+  [ "$(awk -v n="$finally_line" 'NR>n' "$TMP_TEST_DIR/voice_reply_block.txt" | grep -v 'return { content' | grep -c '_voiceOutcome')" -eq 0 ]
 }

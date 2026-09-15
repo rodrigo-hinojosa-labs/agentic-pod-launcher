@@ -3,6 +3,43 @@
 ## [Unreleased]
 
 ### Added
+- **Voice reply feedback + explicit audio requests — `033-voice-reply-feedback`**:
+  the voice-capable Telegram channel (`032`) told the agent nothing about what its
+  own voice did — measured in production (2026-09-14): an agent told the user
+  "the outbound audio is still not available in this plugin" in the SAME turn its
+  plugin sent a 76-second voice bubble. The voice patch group bumps **v1 → v2**
+  (`docker/scripts/apply_telegram_typing_patch.py`, marker
+  `agentic-pod-launcher: telegram voice roundtrip patch v2`), with an in-place
+  `upgrade_voice_v1_to_v2` upgrader (all-or-nothing across five constant pairs)
+  so the fleet's existing v1-patched agents migrate on next boot instead of
+  losing the feature to an anchor mismatch. The `reply` tool's acknowledgement
+  now carries one `voice: sent (fmt=…, chars=…, ms=…)` / `voice: failed
+  (step=synth|send, cls=…, status=…)` line whenever the voice step ran —
+  evidence the agent reads in its own context, which outweighs a stale belief
+  from a resumed `--continue` session; when the voice step does not run, the
+  acknowledgement stays byte-identical to v0.23.0. The channel's own
+  instructions now state the facts plainly: voice is automatic on both an
+  inbound voice note AND a typed explicit request, the agent must never claim
+  it cannot send audio, one reply per exchange carries the voice, and the
+  outcome line is for the agent's own awareness — not something to relay
+  verbatim. A typed message containing one of 38 fixed request phrases (23
+  Spanish, 15 English — e.g. "responde con audio", "reply with audio"; accent-
+  and case-insensitive, negation-aware) now makes the next reply spoken
+  exactly like an inbound voice note, and a new `voice_force` boolean lets the
+  agent honour wording the fixed table doesn't cover. Omitting a spoken
+  rendition on a long reply is now recorded to stderr on every occurrence and,
+  above a threshold derived from the spoken-length cap (no new knob), named in
+  the acknowledgement. A one-shot per-chat cooldown in mode `always` stops a
+  failure-mention reply from re-triggering another failed voice attempt.
+  Test-first: fixtures `tests/fixtures/telegram-server-{pristine,voice-v1}.ts`
+  (the latter a golden, generated once from the real v0.23.0 patcher — the
+  ground truth for the upgrade oracle, independent of the patcher's own `_V1`
+  constants); the `docker-e2e-voice.bats` harness is rewritten **self-seeding**
+  (the image ships no plugin at all — the previous harness could never locate
+  a `server.ts` under `--entrypoint sh`); six dead negative assertions
+  inherited from `032` repaired to bats-live forms. No new `agent.yml` field,
+  no wizard prompt, no schema change, no container privilege change. VERSION
+  0.23.0 → 0.24.0.
 - **Round-trip voice over the Telegram channel — `032-telegram-voice-roundtrip`**:
   closes the voice loop asynchronously (voice notes, not real-time calls — Bot API
   10.3 has no realtime call surface for bots, and agentic turns run 10-120s, which
