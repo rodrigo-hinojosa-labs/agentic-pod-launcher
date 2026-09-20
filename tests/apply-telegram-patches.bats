@@ -634,7 +634,7 @@ TS
 @test "032 inbound: marker present exactly once on a fresh fixture" {
   python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
   local count
-  count=$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v2" "$TMP_TEST_DIR/server.ts")
+  count=$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v3" "$TMP_TEST_DIR/server.ts")
   [ "$count" -eq 1 ]
 }
 
@@ -648,7 +648,7 @@ TS
   sha2=$(shasum "$TMP_TEST_DIR/server.ts" | awk '{print $1}')
   [ "$sha1" = "$sha2" ]
   local count
-  count=$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v2" "$TMP_TEST_DIR/server.ts")
+  count=$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v3" "$TMP_TEST_DIR/server.ts")
   [ "$count" -eq 1 ]
 }
 
@@ -657,7 +657,7 @@ TS
   rm -f "$TMP_TEST_DIR/server.ts.bak"
   run python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
   [ "$status" -eq 0 ]
-  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v2" "$TMP_TEST_DIR/server.ts")" -eq 0 ]
+  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v3" "$TMP_TEST_DIR/server.ts")" -eq 0 ]
   grep -q "agentic-pod-launcher: offset persistence patch v1" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: pending-reply marker patch v1" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: askq-guard give-up delivery patch v1" "$TMP_TEST_DIR/server.ts"
@@ -779,7 +779,7 @@ TS
   [ "$status" -eq 0 ]
   grep -q "typing refresh patch v6" "$TMP_TEST_DIR/server.ts"
   local voice_count
-  voice_count=$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v2" "$TMP_TEST_DIR/server.ts")
+  voice_count=$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v3" "$TMP_TEST_DIR/server.ts")
   [ "$voice_count" -eq 1 ]
 }
 
@@ -807,12 +807,13 @@ TS
   [ "$consume_line" -lt "$synth_line" ]
 }
 
-@test "032 outbound: truncation helper honors the char cap with word-boundary + ellipsis" {
+@test "034 US4: sentence cut + assembler replace the 032 truncation helper" {
   python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
-  grep -q "function _voiceTruncate(text: string, cap: number): string" "$TMP_TEST_DIR/server.ts"
-  grep -q "text.lastIndexOf(' ', cap)" "$TMP_TEST_DIR/server.ts"
+  [ "$(grep -cF "function _voiceSentenceCut(text: string, budget: number): { out: string; trimmed: boolean }" "$TMP_TEST_DIR/server.ts")" -eq 1 ]
+  [ "$(grep -cF "function _voiceSpokenAssemble(raw: string): { spoken: string; narrated: string; trimmed: boolean }" "$TMP_TEST_DIR/server.ts")" -eq 1 ]
   grep -q "TELEGRAM_VOICE_SPOKEN_CHAR_CAP" "$TMP_TEST_DIR/server.ts"
-  grep -q "_voiceTruncate(text, VOICE_SPOKEN_CHAR_CAP)" "$TMP_TEST_DIR/server.ts"
+  run grep -q "_voiceTruncate" "$TMP_TEST_DIR/server.ts"
+  [ "$status" -ne 0 ]
 }
 
 @test "032 outbound: reply tool inputSchema gains the optional voice_text property" {
@@ -827,7 +828,7 @@ TS
 @test "032 outbound: instructions array gains the voice-reply convention line" {
   python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
   grep -A 2 "    instructions: \[" "$TMP_TEST_DIR/server.ts" | grep -q 'attachment_kind="voice"'
-  grep -q "include voice_text with a concise speakable version" "$TMP_TEST_DIR/server.ts"
+  grep -qF 'ALWAYS include voice_text: a spoken SUMMARY of your answer' "$TMP_TEST_DIR/server.ts"
 }
 
 @test "032 outbound: format strategy is OggS sniff with a single-budget mp3 fallback" {
@@ -864,7 +865,8 @@ TS
 
 @test "033 G1: fresh install lands v2 directly (marker, no v1, sentinel present)" {
   python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
-  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v2" "$TMP_TEST_DIR/server.ts")" -eq 1 ]
+  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v3" "$TMP_TEST_DIR/server.ts")" -eq 1 ]
+  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v2" "$TMP_TEST_DIR/server.ts")" -eq 0 ]
   [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v1" "$TMP_TEST_DIR/server.ts")" -eq 0 ]
   [ "$(grep -c "voice helpers end (033)" "$TMP_TEST_DIR/server.ts")" -eq 1 ]
 }
@@ -877,7 +879,7 @@ TS
   sha_golden=$(shasum -a 256 "$TMP_TEST_DIR/golden.ts" | awk '{print $1}')
   sha_fresh=$(shasum -a 256 "$TMP_TEST_DIR/server.ts" | awk '{print $1}')
   [ "$sha_golden" = "$sha_fresh" ]
-  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v2" "$TMP_TEST_DIR/golden.ts")" -eq 1 ]
+  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v3" "$TMP_TEST_DIR/golden.ts")" -eq 1 ]
 }
 
 @test "033 G2b: the patcher's _V1 twins are byte-faithful to the committed golden v1 fixture" {
@@ -927,7 +929,7 @@ PY
   local sha2
   sha2=$(shasum -a 256 "$TMP_TEST_DIR/server.ts" | awk '{print $1}')
   [ "$sha1" = "$sha2" ]
-  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v2" "$TMP_TEST_DIR/server.ts")" -eq 1 ]
+  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v3" "$TMP_TEST_DIR/server.ts")" -eq 1 ]
 
   cp "$REPO_ROOT/tests/fixtures/telegram-server-voice-v1.ts" "$TMP_TEST_DIR/golden.ts"
   python3 "$PATCHER" "$TMP_TEST_DIR/golden.ts"
@@ -937,7 +939,7 @@ PY
   local sha4
   sha4=$(shasum -a 256 "$TMP_TEST_DIR/golden.ts" | awk '{print $1}')
   [ "$sha3" = "$sha4" ]
-  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v2" "$TMP_TEST_DIR/golden.ts")" -eq 1 ]
+  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v3" "$TMP_TEST_DIR/golden.ts")" -eq 1 ]
 }
 
 @test "033 G4: out-of-band edit to the golden's instructions line blocks the upgrade; other six groups stay unaffected" {
@@ -948,6 +950,7 @@ PY
   echo "$output" | grep -q "voice v1→v2 upgrade: hunk 5 anchor not found"
   [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v1" "$TMP_TEST_DIR/golden.ts")" -eq 1 ]
   [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v2" "$TMP_TEST_DIR/golden.ts")" -eq 0 ]
+  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v3" "$TMP_TEST_DIR/golden.ts")" -eq 0 ]
   [ "$(grep -c "voice_text: {" "$TMP_TEST_DIR/golden.ts")" -eq 1 ]
   grep -q "agentic-pod-launcher: offset persistence patch v1" "$TMP_TEST_DIR/golden.ts"
   grep -q "agentic-pod-launcher: pending-reply marker patch v1" "$TMP_TEST_DIR/golden.ts"
@@ -964,7 +967,7 @@ PY
   run python3 "$PATCHER" "$TMP_TEST_DIR/golden.ts"
   [ "$status" -eq 0 ]
   grep -q "typing refresh patch v6" "$TMP_TEST_DIR/golden.ts"
-  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v2" "$TMP_TEST_DIR/golden.ts")" -eq 1 ]
+  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v3" "$TMP_TEST_DIR/golden.ts")" -eq 1 ]
   [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v1" "$TMP_TEST_DIR/golden.ts")" -eq 0 ]
 }
 
@@ -1049,15 +1052,15 @@ PY
     grep -qF 'explicitly asks for an audio reply' "$f"
     grep -qF 'never tell the user you cannot send audio' "$f"
     grep -qF 'answer in ONE reply call' "$f"
-    grep -qF 'include voice_text with a concise speakable version' "$f"
-    grep -qF 'your full text is read aloud up to the cap' "$f"
+    grep -qF 'ALWAYS include voice_text: a spoken SUMMARY of your answer' "$f"
+    grep -qF 'a cleaned, sentence-cut version of your text is read aloud and the reply result says so' "$f"
     grep -qF 'do not repeat it to the user' "$f"
     grep -qF 'tell the user once, briefly, that the audio did not go out this time' "$f"
     grep -qF 'set voice_force: true on that reply' "$f"
     grep -A 2 "    instructions: \[" "$f" | grep -q 'attachment_kind="voice"'
     [ "$(grep -c 'arrive transcribed — the message text IS the transcription. When replying to them, include voice_text' "$f")" -eq 0 ]
     grep -qF 'voice note or explicit audio request' "$f"
-    grep -qF 'Strongly recommended: when omitted' "$f"
+    grep -qF 'cleaned, sentence-cut version of `text` is read aloud' "$f"
     grep -qF 'reports the omission' "$f"
   done
 }
@@ -1072,8 +1075,8 @@ PY
   local sent_line fromtext_if_line omission_line nag_if_line nag_append_line catch_line
   sent_line=$(grep -n 'voice: sent' "$TMP_TEST_DIR/voice_reply_block.txt" | head -1 | cut -d: -f1)
   fromtext_if_line=$(grep -n 'if (_voiceFromText) {' "$TMP_TEST_DIR/voice_reply_block.txt" | head -1 | cut -d: -f1)
-  omission_line=$(grep -n 'voice tts spoke ${spoken.length} chars without voice_text' "$TMP_TEST_DIR/voice_reply_block.txt" | head -1 | cut -d: -f1)
-  nag_if_line=$(grep -n 'if (spoken.length > VOICE_OMISSION_NAG_CHARS)' "$TMP_TEST_DIR/voice_reply_block.txt" | head -1 | cut -d: -f1)
+  omission_line=$(grep -n 'voice tts spoke ${_voiceAsm.narrated.length} chars without voice_text' "$TMP_TEST_DIR/voice_reply_block.txt" | head -1 | cut -d: -f1)
+  nag_if_line=$(grep -n 'if (_voiceAsm.narrated.length > VOICE_OMISSION_NAG_CHARS)' "$TMP_TEST_DIR/voice_reply_block.txt" | head -1 | cut -d: -f1)
   nag_append_line=$(grep -n 'voice_text omitted' "$TMP_TEST_DIR/voice_reply_block.txt" | head -1 | cut -d: -f1)
   catch_line=$(grep -n '} catch (err) {' "$TMP_TEST_DIR/voice_reply_block.txt" | head -1 | cut -d: -f1)
   [ -n "$fromtext_if_line" ] && [ -n "$omission_line" ] && [ -n "$nag_if_line" ] && [ -n "$nag_append_line" ] && [ -n "$catch_line" ]
@@ -1137,7 +1140,7 @@ PY
   sentinel_line=$(grep -n "voice helpers end (033)" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
   first_bot_on_line=$(grep -n "^bot\.on(" "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
   local last_helper_line
-  last_helper_line=$(grep -n "function _voiceRequestMatch\|function _voiceCooldownConsume\|function _voiceTruncate\|function _voiceNormalize" "$TMP_TEST_DIR/server.ts" | tail -1 | cut -d: -f1)
+  last_helper_line=$(grep -n "function _voiceRequestMatch\|function _voiceCooldownConsume\|function _voiceNormalize\|function _voiceSpokenNormalize\|function _voiceSentenceCut\|function _voiceKey\|function _voiceSignoffStrip\|function _voiceSignoffAppend\|function _voiceSpokenAssemble" "$TMP_TEST_DIR/server.ts" | tail -1 | cut -d: -f1)
   [ -n "$sentinel_line" ] && [ -n "$first_bot_on_line" ] && [ -n "$last_helper_line" ]
   [ "$last_helper_line" -lt "$sentinel_line" ]
   [ "$sentinel_line" -lt "$first_bot_on_line" ]
@@ -1242,4 +1245,459 @@ PY
   # which legitimately references _voiceOutcome (FR-002) — exclude it; the
   # check is "no THIRD assignment sneaks in after finally".
   [ "$(awk -v n="$finally_line" 'NR>n' "$TMP_TEST_DIR/voice_reply_block.txt" | grep -v 'return { content' | grep -c '_voiceOutcome')" -eq 0 ]
+}
+
+# ── 034: voice group v3 upgrade (contracts/voice-group-v3-upgrade.md C6) ──
+#
+# Golden v2 fixture = tests/fixtures/telegram-server-voice-v2.ts, generated ONCE
+# by the real v0.24.0 patcher (main @ 3534c6b) over the pristine fixture
+# (research D11, sha 5dc01bf3…cef0). Never regenerated by a test.
+
+@test "034 G1: fresh install lands v3 directly (marker v3 once, no v2, no v1, seven groups, sentinel)" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v3" "$TMP_TEST_DIR/server.ts")" -eq 1 ]
+  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v2" "$TMP_TEST_DIR/server.ts")" -eq 0 ]
+  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v1" "$TMP_TEST_DIR/server.ts")" -eq 0 ]
+  [ "$(grep -c "voice helpers end (033)" "$TMP_TEST_DIR/server.ts")" -eq 1 ]
+  grep -q "agentic-pod-launcher: typing refresh patch v6" "$TMP_TEST_DIR/server.ts"
+  grep -q "agentic-pod-launcher: offset persistence patch v1" "$TMP_TEST_DIR/server.ts"
+  grep -q "agentic-pod-launcher: stderr-capture patch v1" "$TMP_TEST_DIR/server.ts"
+  grep -q "agentic-pod-launcher: primary lock patch v1" "$TMP_TEST_DIR/server.ts"
+  grep -q "agentic-pod-launcher: pending-reply marker patch v1" "$TMP_TEST_DIR/server.ts"
+  grep -q "agentic-pod-launcher: askq-guard give-up delivery patch v1" "$TMP_TEST_DIR/server.ts"
+}
+
+@test "034 G2: upgrading the golden v2 fixture converges byte-for-byte with a fresh v3 install" {
+  cp "$REPO_ROOT/tests/fixtures/telegram-server-voice-v2.ts" "$TMP_TEST_DIR/golden2.ts"
+  python3 "$PATCHER" "$TMP_TEST_DIR/golden2.ts"
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  local sha_golden sha_fresh
+  sha_golden=$(shasum -a 256 "$TMP_TEST_DIR/golden2.ts" | awk '{print $1}')
+  sha_fresh=$(shasum -a 256 "$TMP_TEST_DIR/server.ts" | awk '{print $1}')
+  [ "$sha_golden" = "$sha_fresh" ]
+  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v3" "$TMP_TEST_DIR/golden2.ts")" -eq 1 ]
+}
+
+@test "034 G2b: the patcher's _V2 twins are byte-faithful to the committed golden v2 fixture (anti-tautology guards)" {
+  python3 -B - "$PATCHER" "$REPO_ROOT/tests/fixtures/telegram-server-voice-v2.ts" <<'PY'
+import sys, os
+sys.path.insert(0, os.path.dirname(sys.argv[1]))
+import apply_telegram_typing_patch as p
+golden = open(sys.argv[2]).read()
+assert p.MARKER_VOICE_V2 in golden, "MARKER_VOICE_V2 not found in golden v2 fixture"
+assert p.VOICE_HELPERS_V2 in golden, "VOICE_HELPERS_V2 not found in golden v2 fixture"
+assert (p.VOICE_REPLY_BLOCK_V2 + p._REPLY_RETURN_V2) in golden, "VOICE_REPLY_BLOCK_V2 + _REPLY_RETURN_V2 not found in golden v2 fixture"
+assert p.VOICE_SCHEMA_PROPERTY_V2 in golden, "VOICE_SCHEMA_PROPERTY_V2 not found in golden v2 fixture"
+assert p.VOICE_INSTRUCTIONS_LINE_V2 in golden, "VOICE_INSTRUCTIONS_LINE_V2 not found in golden v2 fixture"
+# anti-tautology: the live helpers must differ from the frozen twin, and the
+# twin must carry the v2 marker text (a copy built with the v3 marker would
+# still be "in golden"-false, but this pins the intent).
+assert p.VOICE_HELPERS_V2 != p.VOICE_HELPERS, "VOICE_HELPERS_V2 is identical to the live VOICE_HELPERS"
+assert p.MARKER_VOICE_V2 in p.VOICE_HELPERS_V2, "VOICE_HELPERS_V2 does not carry the v2 marker"
+PY
+}
+
+@test "034 G2c: the golden v1 fixture cascades v1→v2→v3 and converges byte-for-byte with a fresh v3 install" {
+  cp "$REPO_ROOT/tests/fixtures/telegram-server-voice-v1.ts" "$TMP_TEST_DIR/golden1.ts"
+  python3 "$PATCHER" "$TMP_TEST_DIR/golden1.ts"
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  local sha_golden sha_fresh
+  sha_golden=$(shasum -a 256 "$TMP_TEST_DIR/golden1.ts" | awk '{print $1}')
+  sha_fresh=$(shasum -a 256 "$TMP_TEST_DIR/server.ts" | awk '{print $1}')
+  [ "$sha_golden" = "$sha_fresh" ]
+  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v3" "$TMP_TEST_DIR/golden1.ts")" -eq 1 ]
+  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v2" "$TMP_TEST_DIR/golden1.ts")" -eq 0 ]
+  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v1" "$TMP_TEST_DIR/golden1.ts")" -eq 0 ]
+}
+
+@test "034 G2d: intermediate state — v1→v2 yields exactly the golden v2, v2→v3 yields exactly the fresh v3 (upgraders run separately)" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  python3 -B - "$PATCHER" "$REPO_ROOT/tests/fixtures/telegram-server-voice-v1.ts" "$REPO_ROOT/tests/fixtures/telegram-server-voice-v2.ts" "$TMP_TEST_DIR/server.ts" <<'PY'
+import sys, os
+sys.path.insert(0, os.path.dirname(sys.argv[1]))
+import apply_telegram_typing_patch as p
+golden1 = open(sys.argv[2]).read()
+golden2 = open(sys.argv[3]).read()
+fresh3 = open(sys.argv[4]).read()
+out12, ok12 = p.upgrade_voice_v1_to_v2(golden1)
+assert ok12, "upgrade_voice_v1_to_v2 refused the golden v1"
+assert out12 == golden2, "upgrade_voice_v1_to_v2(golden v1) != golden v2 (the re-pointed v1→v2 does not reproduce v0.24.0 output)"
+out23, ok23 = p.upgrade_voice_v2_to_v3(golden2)
+assert ok23, "upgrade_voice_v2_to_v3 refused the golden v2"
+assert out23 == fresh3, "upgrade_voice_v2_to_v3(golden v2) != fresh v3 install"
+assert p.VOICE_HELPERS_V2 != p.VOICE_HELPERS
+assert p.MARKER_VOICE_V2 in p.VOICE_HELPERS_V2
+PY
+}
+
+@test "034 G3: a second patcher run on an already-v3 file is a byte-identical no-op that logs the truthful no-change line (fresh and upgraded)" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  local sha1
+  sha1=$(shasum -a 256 "$TMP_TEST_DIR/server.ts" | awk '{print $1}')
+  run python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qF 'all patch groups already present'
+  local sha2
+  sha2=$(shasum -a 256 "$TMP_TEST_DIR/server.ts" | awk '{print $1}')
+  [ "$sha1" = "$sha2" ]
+  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v3" "$TMP_TEST_DIR/server.ts")" -eq 1 ]
+
+  cp "$REPO_ROOT/tests/fixtures/telegram-server-voice-v2.ts" "$TMP_TEST_DIR/golden2.ts"
+  python3 "$PATCHER" "$TMP_TEST_DIR/golden2.ts"
+  local sha3
+  sha3=$(shasum -a 256 "$TMP_TEST_DIR/golden2.ts" | awk '{print $1}')
+  run python3 "$PATCHER" "$TMP_TEST_DIR/golden2.ts"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qF 'all patch groups already present'
+  local sha4
+  sha4=$(shasum -a 256 "$TMP_TEST_DIR/golden2.ts" | awk '{print $1}')
+  [ "$sha3" = "$sha4" ]
+  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v3" "$TMP_TEST_DIR/golden2.ts")" -eq 1 ]
+}
+
+@test "034 G4: out-of-band edit to a v2 constant in the golden v2 blocks the v2→v3 upgrade; file stays v2, other six groups unaffected" {
+  cp "$REPO_ROOT/tests/fixtures/telegram-server-voice-v2.ts" "$TMP_TEST_DIR/golden2.ts"
+  # Mutate ONE line of the frozen VOICE_HELPERS_V2 text (the 033 derived threshold).
+  perl -0pi -e 's/const VOICE_OMISSION_NAG_CHARS = Math\.floor\(VOICE_SPOKEN_CHAR_CAP \/ 4\)/const VOICE_OMISSION_NAG_CHARS = 300/' "$TMP_TEST_DIR/golden2.ts"
+  grep -qF 'const VOICE_OMISSION_NAG_CHARS = 300' "$TMP_TEST_DIR/golden2.ts"
+  run python3 "$PATCHER" "$TMP_TEST_DIR/golden2.ts"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'voice v2→v3 upgrade'
+  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v2" "$TMP_TEST_DIR/golden2.ts")" -eq 1 ]
+  [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v3" "$TMP_TEST_DIR/golden2.ts")" -eq 0 ]
+  [ "$(grep -c "voice_text: {" "$TMP_TEST_DIR/golden2.ts")" -eq 1 ]
+  # ALL-OR-NOTHING (quickstart M6 caught this oracle as blind, 2026-09-18): the
+  # marker lives in the helpers pair, so a partial upgrade that skips the missing
+  # pair and applies the other three would still leave `patch v2` = 1 / `patch v3`
+  # = 0 and still print the WARN. Assert that NONE of the other three v3
+  # constants landed and the v2 text is still in place.
+  [ "$(grep -cF 'ALWAYS include voice_text: a spoken SUMMARY' "$TMP_TEST_DIR/golden2.ts" || true)" -eq 0 ]
+  [ "$(grep -cF 'Spoken SUMMARY of this reply' "$TMP_TEST_DIR/golden2.ts" || true)" -eq 0 ]
+  [ "$(grep -cF '_voiceSpokenAssemble(' "$TMP_TEST_DIR/golden2.ts" || true)" -eq 0 ]
+  grep -qF 'include voice_text with a concise speakable version' "$TMP_TEST_DIR/golden2.ts"
+  grep -qF '_voiceTruncate(text, VOICE_SPOKEN_CHAR_CAP)' "$TMP_TEST_DIR/golden2.ts"
+  grep -q "agentic-pod-launcher: offset persistence patch v1" "$TMP_TEST_DIR/golden2.ts"
+  grep -q "agentic-pod-launcher: pending-reply marker patch v1" "$TMP_TEST_DIR/golden2.ts"
+  grep -q "agentic-pod-launcher: stderr-capture patch v1" "$TMP_TEST_DIR/golden2.ts"
+  grep -q "agentic-pod-launcher: primary lock patch v1" "$TMP_TEST_DIR/golden2.ts"
+  grep -q "agentic-pod-launcher: askq-guard give-up delivery patch v1" "$TMP_TEST_DIR/golden2.ts"
+  grep -q "agentic-pod-launcher: typing refresh patch v6" "$TMP_TEST_DIR/golden2.ts"
+}
+
+@test "034 G5: apply_voice never double-inserts — re-running on fresh v3, upgraded v1 and upgraded v2 keeps every voice marker and voice_text at exactly one" {
+  cp "$REPO_ROOT/tests/fixtures/telegram-server-voice-v1.ts" "$TMP_TEST_DIR/golden1.ts"
+  cp "$REPO_ROOT/tests/fixtures/telegram-server-voice-v2.ts" "$TMP_TEST_DIR/golden2.ts"
+  local f
+  for f in "$TMP_TEST_DIR/server.ts" "$TMP_TEST_DIR/golden1.ts" "$TMP_TEST_DIR/golden2.ts"; do
+    python3 "$PATCHER" "$f"
+    python3 "$PATCHER" "$f"
+    [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v3" "$f")" -eq 1 ]
+    [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v2" "$f")" -eq 0 ]
+    [ "$(grep -c "agentic-pod-launcher: telegram voice roundtrip patch v1" "$f")" -eq 0 ]
+    [ "$(grep -c "voice_text: {" "$f")" -eq 1 ]
+    [ "$(grep -c "voice helpers end (033)" "$f")" -eq 1 ]
+  done
+}
+
+# ── 034 US1: spoken-style contract (contracts/spoken-style-contract.md) ──
+
+@test "034 US1(a): the instructions line is a template literal stating the v3 contract clauses" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  local f="$TMP_TEST_DIR/server.ts"
+  grep -qF 'ALWAYS include voice_text: a spoken SUMMARY of your answer' "$f"
+  grep -qF 'a spoken SUMMARY of your answer, never your text read aloud' "$f"
+  grep -qF 'about 30 seconds (~450 characters) by default' "$f"
+  grep -qF '${VOICE_SPOKEN_CHAR_CAP} characters, the hard limit' "$f"
+  grep -qF 'never enumerate a list item by item' "$f"
+  grep -qF 'plain spoken prose in ${VOICE_SPOKEN_LANG_NAME}' "$f"
+  grep -qF 'follow every amount with its currency name (${VOICE_CURRENCY}' "$f"
+  grep -qF 'Do NOT write a closing phrase' "$f"
+  grep -qF 'cut at a sentence and the result says so' "$f"
+  # kept 032/033 substrings
+  grep -qF 'never tell the user you cannot send audio' "$f"
+  grep -qF 'only the first reply of the exchange is spoken' "$f"
+  grep -qF 'set voice_force: true on that reply' "$f"
+  # structurally a template literal: the element starts with a backtick and ends with backtick+comma
+  local line
+  line=$(grep -F 'ALWAYS include voice_text: a spoken SUMMARY of your answer' "$f" | head -1 | sed -e 's/^[[:space:]]*//')
+  [ "${line:0:1}" = '`' ]
+  [ "${line: -2}" = '`,' ]
+}
+
+@test "034 US1(b): the voice_text description states the v3 facts (summary, limit, no closing phrase, omission fallback)" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  local f="$TMP_TEST_DIR/server.ts"
+  grep -qF 'Spoken SUMMARY of this reply' "$f"
+  grep -qF 'never above the spoken limit stated in the channel instructions' "$f"
+  grep -qF 'no closing phrase (the channel appends it)' "$f"
+  grep -qF 'cleaned, sentence-cut version of `text` is read aloud' "$f"
+}
+
+@test "034 US1(c) / G12: the replaced 033 phrases are gone from the patched file" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  run grep -qF 'include voice_text with a concise speakable version' "$TMP_TEST_DIR/server.ts"
+  [ "$status" -ne 0 ]
+  run grep -qF 'your full text is read aloud up to the cap' "$TMP_TEST_DIR/server.ts"
+  [ "$status" -ne 0 ]
+  run grep -qF 'Strongly recommended: when omitted' "$TMP_TEST_DIR/server.ts"
+  [ "$status" -ne 0 ]
+}
+
+@test "034 US1(d) / G6: the five v3 constants exist once each, before the sentinel, in TDZ-safe order" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  local f="$TMP_TEST_DIR/server.ts"
+  awk '/telegram voice roundtrip patch v3/{f=1} f{print} /voice helpers end \(033\)/{exit}' "$f" > "$TMP_TEST_DIR/helpers.txt"
+  [ "$(grep -cF "const VOICE_SIGNOFF = (process.env.TELEGRAM_VOICE_SIGNOFF ?? '').trim()" "$TMP_TEST_DIR/helpers.txt")" -eq 1 ]
+  [ "$(grep -cF "const _VOICE_WORDS = VOICE_STT_LANG === 'en'" "$TMP_TEST_DIR/helpers.txt")" -eq 1 ]
+  [ "$(grep -cF "const VOICE_CURRENCY = (process.env.TELEGRAM_VOICE_CURRENCY ?? '').trim() ||" "$TMP_TEST_DIR/helpers.txt")" -eq 1 ]
+  [ "$(grep -cF "const VOICE_SPOKEN_LANG_NAME = VOICE_STT_LANG === 'es' ? 'Spanish' : VOICE_STT_LANG === 'en' ? 'English' : 'the language the user wrote in'" "$TMP_TEST_DIR/helpers.txt")" -eq 1 ]
+  [ "$(grep -cF "const VOICE_EMPTY_SENTENCE = _VOICE_WORDS.empty" "$TMP_TEST_DIR/helpers.txt")" -eq 1 ]
+  # each constant appears exactly once in the WHOLE file too (never duplicated by a twin leak)
+  [ "$(grep -cF "const VOICE_SIGNOFF = " "$f")" -eq 1 ]
+  [ "$(grep -cF "const VOICE_EMPTY_SENTENCE = " "$f")" -eq 1 ]
+  # TDZ order (analyze U1): the const must be declared BEFORE the boot-log block reads it,
+  # and VOICE_STT_LANG before the word table that reads it.
+  local signoff_line bootlog_line sttlang_line words_line
+  signoff_line=$(grep -nF 'const VOICE_SIGNOFF =' "$TMP_TEST_DIR/helpers.txt" | head -1 | cut -d: -f1)
+  bootlog_line=$(grep -nF 'voice active mode=' "$TMP_TEST_DIR/helpers.txt" | head -1 | cut -d: -f1)
+  sttlang_line=$(grep -nF 'const VOICE_STT_LANG' "$TMP_TEST_DIR/helpers.txt" | head -1 | cut -d: -f1)
+  words_line=$(grep -nF 'const _VOICE_WORDS' "$TMP_TEST_DIR/helpers.txt" | head -1 | cut -d: -f1)
+  [ -n "$signoff_line" ] && [ -n "$bootlog_line" ] && [ -n "$sttlang_line" ] && [ -n "$words_line" ]
+  [ "$signoff_line" -lt "$bootlog_line" ]
+  [ "$sttlang_line" -lt "$words_line" ]
+}
+
+@test "034 US1(e) / G7: the spoken cap default is 900 in the v3 helpers, 1200 is gone; boot log reports the sign-off LENGTH only" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  awk '/telegram voice roundtrip patch v3/{f=1} f{print} /voice helpers end \(033\)/{exit}' "$TMP_TEST_DIR/server.ts" > "$TMP_TEST_DIR/helpers.txt"
+  [ "$(grep -cF ': 900' "$TMP_TEST_DIR/helpers.txt")" -eq 1 ]
+  [ "$(grep -cF ': 1200' "$TMP_TEST_DIR/helpers.txt" || true)" -eq 0 ]
+  grep -qF 'signoff=${VOICE_SIGNOFF.length}chars' "$TMP_TEST_DIR/helpers.txt"
+  run grep -qF 'signoff=${VOICE_SIGNOFF}' "$TMP_TEST_DIR/helpers.txt"
+  [ "$status" -ne 0 ]
+}
+
+@test "034 US1(f): anti-tautology — the live schema property and instructions line differ from their frozen _V2 twins" {
+  python3 -B - "$PATCHER" <<'PY'
+import sys, os
+sys.path.insert(0, os.path.dirname(sys.argv[1]))
+import apply_telegram_typing_patch as p
+assert p.VOICE_SCHEMA_PROPERTY_V2 != p.VOICE_SCHEMA_PROPERTY, "VOICE_SCHEMA_PROPERTY still equals its _V2 twin"
+assert p.VOICE_INSTRUCTIONS_LINE_V2 != p.VOICE_INSTRUCTIONS_LINE, "VOICE_INSTRUCTIONS_LINE still equals its _V2 twin"
+PY
+}
+
+# ── 034 US3: spoken-safe normalization + language (pipeline C2/C5/C9) ──
+
+@test "034 US3(a): _voiceSpokenNormalize is declared once, before the sentinel, with the closed figure group (CANON-FIG)" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  local f="$TMP_TEST_DIR/server.ts"
+  [ "$(grep -cF 'function _voiceSpokenNormalize(input: string): string' "$f")" -eq 1 ]
+  local fn_line sentinel_line
+  fn_line=$(grep -nF 'function _voiceSpokenNormalize(input: string): string' "$f" | head -1 | cut -d: -f1)
+  sentinel_line=$(grep -nF 'voice helpers end (033)' "$f" | head -1 | cut -d: -f1)
+  [ -n "$fn_line" ] && [ -n "$sentinel_line" ]
+  [ "$fn_line" -lt "$sentinel_line" ]
+  # ONE backslash in the TS text: the /…/.source + String.raw form (analyze I2)
+  [ "$(grep -cF 'const _VOICE_FIG = /(?:\d{1,3}(?:[.,\s]\d{3})*(?:[.,]\d+)?|\d+(?:[.,]\d+)?)(?!\d)/.source' "$f")" -eq 1 ]
+}
+
+@test "034 US3(b) / G8: the synthesis body carries the language_code spread exactly once (CANON-B); language_code appears exactly twice in the file" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  local f="$TMP_TEST_DIR/server.ts"
+  [ "$(grep -cF 'body: JSON.stringify({ text, model_id: VOICE_TTS_MODEL, ...(VOICE_STT_LANG ? { language_code: VOICE_STT_LANG } : {}) }),' "$f")" -eq 1 ]
+  # STT form.append + the synth body — nothing else
+  [ "$(grep -c 'language_code' "$f")" -eq 2 ]
+  grep -qF "if (VOICE_STT_LANG) form.append('language_code', VOICE_STT_LANG)" "$f"
+}
+
+@test "034 US3(c) / G15: every new TS sequence containing a valid Python escape reaches the OUTPUT verbatim (research D14)" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  local f="$TMP_TEST_DIR/server.ts"
+  grep -qF '\bhttps?:' "$f"
+  [ "$(grep -cF '(.+?)\1/g' "$f")" -eq 1 ]
+  grep -qF '(?<=\S)\1/g' "$f"
+  grep -qF '/\r\n?/g' "$f"
+  grep -qF '[^`\n]*' "$f"
+  grep -qF '[^\]\n]*' "$f"
+  grep -qF '[ \t]' "$f"
+  grep -qF '(?!\d)' "$f"
+  grep -qF '\u{1F1E6}-\u{1F1FF}' "$f"
+  grep -qF '\u{1F3FB}-\u{1F3FF}' "$f"
+  grep -qF '\u{20E3}' "$f"
+  grep -qF '\u{FE0F}' "$f"
+  grep -qF '\u{200D}' "$f"
+}
+
+@test "034 US3(d) / G16: zero control bytes in the patched OUTPUT (a silently transformed \\1 or \\b shows up only there)" {
+  # Control: the pristine has none, so the oracle itself is known-good.
+  run bash -c "LC_ALL=C grep -c \$'[\x01-\x08\x0b\x0c\x0e-\x1f]' '$REPO_ROOT/tests/fixtures/telegram-server-pristine.ts'"
+  [ "$output" = "0" ]
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  run bash -c "LC_ALL=C grep -c \$'[\x01-\x08\x0b\x0c\x0e-\x1f]' '$TMP_TEST_DIR/server.ts'"
+  [ "$output" = "0" ]
+}
+
+@test "034 US3(e): the normalization passes run in the contract order (rules → emphasis → lists → pipes → table rows → pictographs → symbols → stray \$)" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  awk '/function _voiceSpokenNormalize\(input: string\): string/{f=1} f{print} f&&/^}$/{exit}' "$TMP_TEST_DIR/server.ts" > "$TMP_TEST_DIR/normalize.txt"
+  [ -s "$TMP_TEST_DIR/normalize.txt" ]
+  local l_rule l_strong l_list l_pipe l_table l_picto l_r1 l_r5 l_dollar
+  l_rule=$(grep -nF '(?:[-*_=][ \t]*){3,}' "$TMP_TEST_DIR/normalize.txt" | head -1 | cut -d: -f1)
+  l_strong=$(grep -nF '(\*\*|__)(.+?)\1/g' "$TMP_TEST_DIR/normalize.txt" | head -1 | cut -d: -f1)
+  l_list=$(grep -nF '[-*+•]' "$TMP_TEST_DIR/normalize.txt" | head -1 | cut -d: -f1)
+  l_pipe=$(grep -nF '.replace(/\|/g,' "$TMP_TEST_DIR/normalize.txt" | head -1 | cut -d: -f1)
+  l_table=$(grep -nF '[-:][-: \t]*$' "$TMP_TEST_DIR/normalize.txt" | head -1 | cut -d: -f1)
+  l_picto=$(grep -nF 'Extended_Pictographic' "$TMP_TEST_DIR/normalize.txt" | head -1 | cut -d: -f1)
+  l_r1=$(grep -nF 'String.raw`(?:US\$|USD)\s*(${_VOICE_FIG})`' "$TMP_TEST_DIR/normalize.txt" | head -1 | cut -d: -f1)
+  l_r5=$(grep -nF 'String.raw`(?:CLP\s*\$?|\$)\s*(${_VOICE_FIG})`' "$TMP_TEST_DIR/normalize.txt" | head -1 | cut -d: -f1)
+  # single quotes: inside double quotes bash would collapse \$ to $ and the oracle would never match
+  l_dollar=$(grep -nF '.replace(/\$/g,' "$TMP_TEST_DIR/normalize.txt" | head -1 | cut -d: -f1)
+  [ -n "$l_rule" ] && [ -n "$l_strong" ] && [ -n "$l_list" ] && [ -n "$l_pipe" ] && [ -n "$l_table" ] && [ -n "$l_picto" ] && [ -n "$l_r1" ] && [ -n "$l_r5" ] && [ -n "$l_dollar" ]
+  [ "$l_rule" -lt "$l_strong" ]
+  [ "$l_strong" -lt "$l_list" ]
+  [ "$l_list" -lt "$l_pipe" ]
+  [ "$l_pipe" -lt "$l_table" ]
+  [ "$l_table" -lt "$l_picto" ]
+  [ "$l_picto" -lt "$l_r1" ]
+  [ "$l_r1" -lt "$l_r5" ]
+  [ "$l_r5" -lt "$l_dollar" ]
+  # the seven symbol rules are all String.raw template literals (one backslash in the TS)
+  [ "$(grep -cF 'new RegExp(String.raw`' "$TMP_TEST_DIR/normalize.txt")" -eq 7 ]
+}
+
+# ── 034 US2: sign-off helpers (pipeline C4) ──
+
+@test "034 US2(h1): _voiceKey / _voiceSignoffStrip / _voiceSignoffAppend are declared once each, in that order, before the sentinel" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  local f="$TMP_TEST_DIR/server.ts"
+  [ "$(grep -cF 'function _voiceKey(s: string): string' "$f")" -eq 1 ]
+  [ "$(grep -cF 'function _voiceSignoffStrip(spoken: string, signoff: string): string' "$f")" -eq 1 ]
+  [ "$(grep -cF 'function _voiceSignoffAppend(spoken: string, signoff: string): string' "$f")" -eq 1 ]
+  local l_key l_strip l_append l_sentinel
+  l_key=$(grep -nF 'function _voiceKey(' "$f" | head -1 | cut -d: -f1)
+  l_strip=$(grep -nF 'function _voiceSignoffStrip(' "$f" | head -1 | cut -d: -f1)
+  l_append=$(grep -nF 'function _voiceSignoffAppend(' "$f" | head -1 | cut -d: -f1)
+  l_sentinel=$(grep -nF 'voice helpers end (033)' "$f" | head -1 | cut -d: -f1)
+  [ -n "$l_key" ] && [ -n "$l_strip" ] && [ -n "$l_append" ] && [ -n "$l_sentinel" ]
+  [ "$l_key" -lt "$l_strip" ]
+  [ "$l_strip" -lt "$l_append" ]
+  [ "$l_append" -lt "$l_sentinel" ]
+}
+
+@test "034 US2(h2): _voiceKey strips combining marks and trailing punctuation as ESCAPE TEXT (never glyphs); zero combining-mark bytes in the output" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  awk '/function _voiceKey\(s: string\): string/{f=1} f{print} f&&/^}$/{exit}' "$TMP_TEST_DIR/server.ts" > "$TMP_TEST_DIR/key.txt"
+  grep -qF ".normalize('NFD').replace(/[\u0300-\u036f]/g, '')" "$TMP_TEST_DIR/key.txt"
+  grep -qF ".replace(/[.!?,;:\u2026]+$/g, '')" "$TMP_TEST_DIR/key.txt"
+  grep -qF '.toLowerCase()' "$TMP_TEST_DIR/key.txt"
+  run bash -c "LC_ALL=C grep -c \$'\xcc\x80' '$TMP_TEST_DIR/server.ts'"
+  [ "$output" = "0" ]
+  # no real ellipsis glyph in the helpers either (033 rule)
+  run bash -c "LC_ALL=C grep -c \$'\xe2\x80\xa6' '$TMP_TEST_DIR/key.txt'"
+  [ "$output" = "0" ]
+}
+
+@test "034 US2(h3): _voiceSignoffStrip bounds its scan to 3x the sign-off length and matches the longest key-equal suffix" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  awk '/function _voiceSignoffStrip\(/{f=1} f{print} f&&/^}$/{exit}' "$TMP_TEST_DIR/server.ts" > "$TMP_TEST_DIR/strip.txt"
+  grep -qF 'Math.max(0, s.length - 3 * signoff.length)' "$TMP_TEST_DIR/strip.txt"
+  grep -qF '_voiceKey(s.slice(j)) === k' "$TMP_TEST_DIR/strip.txt"
+  grep -qF 'if (!signoff) return s' "$TMP_TEST_DIR/strip.txt"
+  grep -qF '!_voiceKey(s).endsWith(k)' "$TMP_TEST_DIR/strip.txt"
+}
+
+@test "034 US2(h4): _voiceSignoffAppend dedupes by key, turns a trailing ;: into a period BEFORE choosing the separator, and is a no-op with an empty phrase" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  awk '/function _voiceSignoffAppend\(/{f=1} f{print} f&&/^}$/{exit}' "$TMP_TEST_DIR/server.ts" > "$TMP_TEST_DIR/append.txt"
+  grep -qF 'if (!signoff) return s' "$TMP_TEST_DIR/append.txt"
+  grep -qF 'if (k && _voiceKey(s).endsWith(k)) return s' "$TMP_TEST_DIR/append.txt"
+  local l_semi l_sep
+  l_semi=$(grep -nF "s = s.replace(/[;:]+$/, '.')" "$TMP_TEST_DIR/append.txt" | head -1 | cut -d: -f1)
+  l_sep=$(grep -nF "const sep = /[.!?]$/.test(s)" "$TMP_TEST_DIR/append.txt" | head -1 | cut -d: -f1)
+  [ -n "$l_semi" ] && [ -n "$l_sep" ]
+  [ "$l_semi" -lt "$l_sep" ]
+  grep -qF 'return s + sep + signoff' "$TMP_TEST_DIR/append.txt"
+}
+
+# ── 034 US4: assembly + reply block (pipeline C6/C7) ──
+
+@test "034 US4(a): _voiceSpokenAssemble runs normalize → empty sentence → strip → budget → cut → append, in that order, before the sentinel" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  awk '/function _voiceSpokenAssemble\(raw: string\)/{f=1} f{print} f&&/^}$/{exit}' "$TMP_TEST_DIR/server.ts" > "$TMP_TEST_DIR/asm.txt"
+  [ -s "$TMP_TEST_DIR/asm.txt" ]
+  local l_norm l_empty l_strip l_budget l_cut l_append
+  l_norm=$(grep -nF '_voiceSpokenNormalize(' "$TMP_TEST_DIR/asm.txt" | head -1 | cut -d: -f1)
+  l_empty=$(grep -nF 'VOICE_EMPTY_SENTENCE' "$TMP_TEST_DIR/asm.txt" | head -1 | cut -d: -f1)
+  l_strip=$(grep -nF '_voiceSignoffStrip(' "$TMP_TEST_DIR/asm.txt" | head -1 | cut -d: -f1)
+  l_budget=$(grep -nF 'Math.max(VOICE_SPOKEN_CHAR_CAP - (VOICE_SIGNOFF ? VOICE_SIGNOFF.length + 2 : 0), Math.floor(VOICE_SPOKEN_CHAR_CAP / 2))' "$TMP_TEST_DIR/asm.txt" | head -1 | cut -d: -f1)
+  l_cut=$(grep -nF '_voiceSentenceCut(' "$TMP_TEST_DIR/asm.txt" | head -1 | cut -d: -f1)
+  l_append=$(grep -nF '_voiceSignoffAppend(' "$TMP_TEST_DIR/asm.txt" | head -1 | cut -d: -f1)
+  [ -n "$l_norm" ] && [ -n "$l_empty" ] && [ -n "$l_strip" ] && [ -n "$l_budget" ] && [ -n "$l_cut" ] && [ -n "$l_append" ]
+  [ "$l_norm" -lt "$l_empty" ]
+  [ "$l_empty" -lt "$l_strip" ]
+  [ "$l_strip" -lt "$l_budget" ]
+  [ "$l_budget" -lt "$l_cut" ]
+  [ "$l_cut" -lt "$l_append" ]
+  # the whole function sits before the sentinel
+  local l_fn l_sentinel
+  l_fn=$(grep -nF 'function _voiceSpokenAssemble(' "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  l_sentinel=$(grep -nF 'voice helpers end (033)' "$TMP_TEST_DIR/server.ts" | head -1 | cut -d: -f1)
+  [ "$l_fn" -lt "$l_sentinel" ]
+  # the cut helper's sentence-terminator regex and its word-boundary fallback
+  grep -qF '[.!?;](?=\s|$)' "$TMP_TEST_DIR/server.ts"
+  grep -qF "if (at < budget / 4) at = head.lastIndexOf(' ')" "$TMP_TEST_DIR/server.ts"
+}
+
+@test "034 US4(b): the reply block builds the rendition through the assembler, synthesizes its spoken text, and reports omission/trim on the NARRATED length" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  awk '/agentic-pod-launcher: voice roundtrip outbound synthesis/{f=1} f{print; if (/^        return \{ content/) exit}' \
+    "$TMP_TEST_DIR/server.ts" > "$TMP_TEST_DIR/reply.txt"
+  local l_asm l_spoken l_synth l_o l_n l_t l_else
+  l_asm=$(grep -nF 'const _voiceAsm = _voiceSpokenAssemble(_voiceFromText ? text : (voiceTextArg as string).trim())' "$TMP_TEST_DIR/reply.txt" | head -1 | cut -d: -f1)
+  l_spoken=$(grep -nF 'const spoken = _voiceAsm.spoken' "$TMP_TEST_DIR/reply.txt" | head -1 | cut -d: -f1)
+  l_synth=$(grep -nF '_voiceSynthesize(spoken' "$TMP_TEST_DIR/reply.txt" | head -1 | cut -d: -f1)
+  l_o=$(grep -nF 'voice tts spoke ${_voiceAsm.narrated.length} chars without voice_text' "$TMP_TEST_DIR/reply.txt" | head -1 | cut -d: -f1)
+  l_n=$(grep -nF 'if (_voiceAsm.narrated.length > VOICE_OMISSION_NAG_CHARS)' "$TMP_TEST_DIR/reply.txt" | head -1 | cut -d: -f1)
+  l_t=$(grep -nF '_voiceOutcome += `; voice_text trimmed to ${_voiceAsm.narrated.length} chars`' "$TMP_TEST_DIR/reply.txt" | head -1 | cut -d: -f1)
+  l_else=$(grep -nF '} else if (_voiceAsm.trimmed) {' "$TMP_TEST_DIR/reply.txt" | head -1 | cut -d: -f1)
+  [ -n "$l_asm" ] && [ -n "$l_spoken" ] && [ -n "$l_synth" ] && [ -n "$l_o" ] && [ -n "$l_n" ] && [ -n "$l_t" ] && [ -n "$l_else" ]
+  [ "$l_asm" -lt "$l_spoken" ]
+  [ "$l_spoken" -lt "$l_synth" ]
+  [ "$l_o" -lt "$l_n" ]
+  [ "$l_n" -lt "$l_t" ]
+  [ "$((l_else + 1))" -eq "$l_t" ]
+  # the omission nag still names the count read aloud; the spoken (sign-off included) length stays in the ok line and CANON-S
+  grep -qF '; voice_text omitted — ${_voiceAsm.narrated.length} chars of text were read aloud' "$TMP_TEST_DIR/reply.txt"
+  grep -qF 'voice tts ok chat=${chat_id} chars=${spoken.length} fmt=${fmt} ms=${_voiceMs}' "$TMP_TEST_DIR/reply.txt"
+  grep -qF '_voiceOutcome = `\nvoice: sent (fmt=${fmt}, chars=${spoken.length}, ms=${_voiceMs})`' "$TMP_TEST_DIR/reply.txt"
+  # the v2 ternary is gone
+  run grep -qF '? _voiceTruncate(text, VOICE_SPOKEN_CHAR_CAP)' "$TMP_TEST_DIR/reply.txt"
+  [ "$status" -ne 0 ]
+}
+
+@test "034 US4(c) / G11 / G10: whitelist on the reply block (no raw error, URL, spoken text, voice id, file/bot path) and the 033 byte-identity guard" {
+  python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  awk '/agentic-pod-launcher: voice roundtrip outbound synthesis/{f=1} f{print; if (/^        return \{ content/) exit}' \
+    "$TMP_TEST_DIR/server.ts" > "$TMP_TEST_DIR/reply.txt"
+  local bad
+  for bad in '${err' '${url' '${spoken}' '${text' '${VOICE_ID' 'file/bot' '_voiceAsm.spoken}' '_voiceAsm.narrated}'; do
+    run grep -qF "$bad" "$TMP_TEST_DIR/reply.txt"
+    [ "$status" -ne 0 ]
+  done
+  # G10 (033): exactly two `_voiceOutcome = ` assignments (sent / failed); the += lines are nags
+  [ "$(grep -c '^ *_voiceOutcome = ' "$TMP_TEST_DIR/reply.txt")" -eq 2 ]
+  grep -qF "let _voiceOutcome = ''" "$TMP_TEST_DIR/reply.txt"
+  grep -qF "return { content: [{ type: 'text', text: result + _voiceOutcome }] }" "$TMP_TEST_DIR/reply.txt"
+}
+
+@test "034 US4(d): anti-tautology — the live reply block differs from its frozen _V2 twin" {
+  python3 -B - "$PATCHER" <<'PY'
+import sys, os
+sys.path.insert(0, os.path.dirname(sys.argv[1]))
+import apply_telegram_typing_patch as p
+assert p.VOICE_REPLY_BLOCK_V2 + p._REPLY_RETURN_V2 != p.VOICE_REPLY_BLOCK + p._REPLY_RETURN_V2, "VOICE_REPLY_BLOCK still equals its _V2 twin"
+assert '_voiceTruncate' not in p.VOICE_HELPERS, "_voiceTruncate still in the live helpers"
+assert '_voiceTruncate' in p.VOICE_HELPERS_V2 and '_voiceTruncate' in p.VOICE_HELPERS_V1, "the frozen twins must keep _voiceTruncate"
+PY
 }

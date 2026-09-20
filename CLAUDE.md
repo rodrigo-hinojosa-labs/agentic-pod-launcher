@@ -123,7 +123,7 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 
 **Implication for long operations**: any turn that legitimately exceeds ~5 minutes (a big embed, a wiki-graph pass over a large vault) will drop the indicator and warn the chat. That's the intended trade-off — a false "I'm stuck" beats an indefinite lie. Raise `TELEGRAM_TYPING_MAX_MS` in the workspace `.env` if an agent's normal turns run longer.
 
-**Voice patch group is at v2** (`MARKER_VOICE`, feature 033) — upgraded in place from v1 (032) by `upgrade_voice_v1_to_v2`, an all-or-nothing rewrite of five constant pairs (helpers, text wrap, reply block + its return line, schema property, instructions line), same shape as the typing cascade but its own independent marker. v2 adds: a `voice: sent (…)` / `voice: failed (step=synth|send, cls=…, status=…)` line fed back into the `reply` tool's acknowledgement (`_voiceOutcome`, empty when the voice step doesn't run — byte-identical to v0.23.0 in that case); the explicit-request matcher (`VOICE_REQUEST_PHRASES`, 38 fixed phrases, NFD-normalized, negation-aware) wired into the `message:text` wrap under the same DM gate as inbound voice; the `voice_force` reply-tool boolean; an omission record + nag (`VOICE_OMISSION_NAG_CHARS`, derived from the spoken-cap, not configurable); and a one-shot per-chat failure cooldown in mode `always`. The `_V1` twins of the five constants are frozen verbatim and never edited again — the upgrade's ground truth in tests is a **committed golden fixture** (`tests/fixtures/telegram-server-voice-v1.ts`, generated once from the real v0.23.0 patcher), not the `_V1` constants themselves, because a tautological oracle (comparing against the same constants used to build both sides) can't catch a copy error. `tests/docker-e2e-voice.bats` is **self-seeding**: the image ships no plugin at all (it's installed post-login), so every case copies a fixture into the plugin cache path and runs the boot patcher directly, rather than trying to `find` a `server.ts` that `--entrypoint sh` will never produce.
+**Voice patch group is at v3** (`MARKER_VOICE`, feature 034; v1 = 032, v2 = 033). The cascade runs on every boot: `upgrade_voice_v1_to_v2` (five pairs: helpers, text wrap, reply block + its return line, schema property, instructions line — now RE-POINTED to the frozen `_V2` twins, so its output is exactly the v0.24.0 file) then `upgrade_voice_v2_to_v3` (four pairs — the text wrap is unchanged between v2 and v3), both all-or-nothing on `work.count(old) != 1`, then `apply_voice` for a pristine file (gated on v1/v2/v3 markers). The `_V1` and `_V2` twins are frozen verbatim and never edited again; the ground truth is two **committed golden fixtures** (`tests/fixtures/telegram-server-voice-v1.ts` from the real v0.23.0 patcher, `telegram-server-voice-v2.ts` from the real v0.24.0 patcher — sha in `specs/034-voice-spoken-style/research.md` D11), never the twins themselves (a tautological oracle can't catch a copy error; and a corrupted `_V2` twin does NOT turn the v1→v3 cascade test red because the same constant is written and consumed — G2/G2b/G2d are the guards, not G2c). v2 (033) added the `voice: sent (…)` / `voice: failed (step=synth|send, cls=…, status=…)` acknowledgement line (`_voiceOutcome`, empty when the voice step doesn't run — the acknowledgement then stays byte-identical to v0.23.0), the explicit-request matcher (`VOICE_REQUEST_PHRASES`, 38 phrases, NFD-normalized, negation-aware), `voice_force`, the omission record + nag (`VOICE_OMISSION_NAG_CHARS` = floor(cap/4)) and the one-shot failure cooldown in mode `always`. v3 (034) makes the spoken rendition a summarized narration: the instructions line is a **template literal** interpolating `${VOICE_SPOKEN_CHAR_CAP}` (default now 900), `${VOICE_SPOKEN_LANG_NAME}` and `${VOICE_CURRENCY}` — those constants (plus `VOICE_SIGNOFF`, `_VOICE_WORDS`, `VOICE_EMPTY_SENTENCE`) MUST sit right after `VOICE_MAX_BYTES` and BEFORE the boot-log block that reads `VOICE_SIGNOFF.length`, or a `const` in its temporal dead zone throws `ReferenceError` at module load under bun and flaps the channel (a host test asserts the order); `_voiceSpokenNormalize` (15 regex passes, figure group `/…/.source` + `String.raw` rules with ONE backslash in the TS, 39-case fixture `tests/fixtures/voice-spoken-cases.ts` run under bun by E9); `language_code` spread into the TTS body; `_voiceKey`/`_voiceSignoffStrip`/`_voiceSignoffAppend` (closing phrase from `TELEGRAM_VOICE_SIGNOFF`, appended once, accent/case-insensitive dedupe, strip BEFORE the cut); `_voiceSentenceCut` + **`_voiceSpokenAssemble`** — a MODULE-LEVEL helper (not reply-block code) precisely so DOCKER_E2E E10 can execute it for real; the reply block only calls it and re-bases the 033 omission nag on `_voiceAsm.narrated.length` (sign-off excluded — the 033 meaning) and adds `; voice_text trimmed to N chars`. `_voiceTruncate` is gone from the live helpers (kept in the twins). Config: `features.voice.{signoff,currency}` in `agent.yml` (no wizard prompt; `has()` backfill with `_vlang` read inside `regenerate()`), sanitized by `voice_phrase_effective` in `setup.sh` from the RAW `yq -r '… // ""'` values (never the flattened `FEATURES_VOICE_*` — an explicit YAML null flattens to the string `null`), rendered as the derived placeholders `VOICE_SIGNOFF`/`VOICE_CURRENCY` → two unconditional compose lines. **Never `local LC_ALL=C` inside a `setup.sh` function**: bash 5.3.15 segfaults intermittently (status 139, measured 3/15 `--regenerate` runs) when it restores the locale on return — put `LC_ALL=C` on each external command and measure bytes with `wc -c`. **Python escape rule (research D14)**: every TS backslash is doubled in the Python literal; Python's VALID escapes (`\1`, `\b`, `\t`, `\r`, `\n`) transform silently and `py_compile`/bun accept the result with the pass just dead — so host oracles G15 (`grep -F` of each such sequence in the patched OUTPUT) and G16 (zero control bytes in the output) exist; and `\u0300-\u036f`/`\u2026` must be escape TEXT, never real glyphs (the model has emitted real combining marks into artifacts and test oracles six times across 033/034 — audit `LC_ALL=C grep -c $'\xcc\x80'` = 0 on the patcher source AND the bats files). The patcher's no-change path now logs `no changes to <path>: all patch groups already present` (or `N/7 … see WARN lines above`) — before 034 it returned silently. `tests/docker-e2e-voice.bats` is **self-seeding**: the image ships no plugin at all (it's installed post-login), so every case copies a fixture into the plugin cache path and runs the boot patcher directly; test bodies are single-quoted `-c '…'` strings (double quotes only inside), TS goes through a quoted heredoc, and every bun invocation pins its full `TELEGRAM_VOICE_*` env because the harness agent is `en`/`Alice` by construction.
 
 ## Common gotchas
 
@@ -136,6 +136,137 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 - Library files sourced by both `heartbeatctl` and bats tests guard their initialization with `BASH_SOURCE`-style checks so `source` doesn't run side-effecting code at load time. Preserve that pattern when adding new shared libs.
 
 <!-- SPECKIT START -->
+**034-voice-spoken-style SPEC + PLAN (2026-09-15/16; rama `034-voice-spoken-style` desde main=`3534c6b`
+v0.24.0→**0.25.0** previsto; la feature de tiempo real pasa a 035).** Plan:
+`specs/034-voice-spoken-style/plan.md`. **PROBLEMA (medido por el operador en linus post-033):** el audio
+lee la respuesta escrita casi entera (listas dictadas, markdown leído, 76 s), las cifras salen ambiguas
+(`$` → "dólares", punto de miles), no hay marca de fin y el idioma no llega al TTS. **8 DECISIONES del
+operador (AskUserQuestion 2026-09-15) + 2 clarificaciones:** híbrido plugin+contrato; cierre configurable
+`features.voice.signoff` (default "Eso es toda la información. Cambio y fuera, {nickname}." / en "That is
+all the information. Over and out, {nickname}."; `mixed` → español) anexado SIEMPRE por el plugin con
+dedupe; tramos 30/45/60 s (≈15 chars/s medido) con 60 s máximo; idioma `VOICE_STT_LANG` al modelo, al
+`language_code` del TTS y a la tabla de palabras; símbolos a palabras determinista (`$`→
+`features.voice.currency`, USD, UF, %) SIN número-a-palabras; fallback limpio con corte por FRASE; **el
+cap `TELEGRAM_VOICE_SPOKEN_CHAR_CAP` pasa a SER el tramo máximo, default 1200→900**, nag ¼ del cap sin
+tocar. **DISEÑO = grupo de voz v2→v3** (`MARKER_VOICE_V2` congelada; 4 constantes con gemela `_V2`;
+`upgrade_voice_v2_to_v3` all-or-nothing; `upgrade_voice_v1_to_v2` RE-APUNTADO a las gemelas `_V2`;
+fixture dorado v2 `tests/fixtures/telegram-server-voice-v2.ts` generado UNA vez con el patcher de
+`3534c6b`); pipeline en el reply block `normalize → empty-sentence → sentenceCut(budget=cap−signoff−1)
+→ signoffAppend → synth`, nota `; voice_text trimmed to N chars` (whitelist +1); línea de instrucciones
+como TEMPLATE LITERAL (los helpers se anclan en `let botUsername` línea 25, el array `instructions` está
+en la 97 → constantes en scope); helpers nuevos `_voiceSpokenNormalize` (13 pasadas regex, medidas bajo
+bun 1.3.12 en host: 21/21), `_voiceSentenceCut`, `_voiceKey`, `_voiceSignoffAppend`; `_voiceTruncate`
+eliminado. Config: dos campos SIN prompt de wizard, backfill `has()`, saneador `voice_phrase_effective`
+(sustituye `{nickname}` con `_render_replace_all`, borra `" \ $ { }` — compose interpola `$` en
+`environment:`, doc verificada — y sobre 120/40 chars cae al default con WARN, NUNCA corta bytes),
+placeholders derivados `VOICE_SIGNOFF`/`VOICE_CURRENCY` (molde `VOICE_STT_LANG`), +2 líneas compose
+incondicionales; `.env.example` NO lista los campos (agent.yml-sourced, `environment:` gana a `env_file`)
+y solo actualiza el cap a 900. Doc ElevenLabs verificada: `language_code` "ignorado si el modelo no lo
+soporta" y también gobierna SU normalización de texto; la lectura del punto de miles chileno queda como
+medición en vivo (§3.4 del quickstart, curl DESDE el contenedor, sin imprimir la key). DOCKER_E2E se
+CORRE en este host (E9 tabla bajo bun, E10 cierre/budget, E11 body con language_code, E12 upgrade del
+dorado v2). Constitución 6/6 PASS, Complexity Tracking VACÍO. Regla vigente: cada `\uXXXX` de un
+artefacto verificado byte a byte — volvió a pasar en esta feature (research D7 y contrato C4 salieron con
+marcas combinantes reales; reparados con Python, verificación `LC_ALL=C grep -rc $'\xcc\x80'` = 0).
+Artefactos: `specs/034-voice-spoken-style/{spec,plan,research,data-model,quickstart}.md` +
+`contracts/{spoken-style-contract,spoken-text-pipeline,voice-style-config-and-render,voice-group-v3-upgrade}.md`.
+**REVISIÓN ADVERSARIAL DEL PLAN (2026-09-18, workflow `wf_75f8266f-62e`, 4 lentes + 1 refutador por
+hallazgo, 25 agentes): 21 hallazgos, 0 refutados, TODOS remediados antes de tasks.** Cambios de diseño
+que salieron de ahí (cada uno re-medido bajo bun, R4: tabla 38/38 + 10 invariantes): (H) el patrón de
+cifra partía `$1500` en `150 … 0` → grupo cerrado con `(?!\d)`; (H) `---`, `***`, filas `|---|---|`, tonos
+de piel y keycaps sobrevivían → pasadas 6b/9c + clase extendida; (H) `signoff` vacío era a la vez
+"opt-out" y "default" en el spec → vacío/`null` = default + WARN (D3 del operador: TODO audio); (H) el caso
+"salto de línea real" era imposible (un escalar multilínea aborta `render_load_context` para CUALQUIER
+campo, preexistente) → fuera de alcance, saneador solo aplana tab/CR; (M) el corte podía caer DENTRO de
+una firma escrita por el modelo (se oía dos veces) y la reserva +1 desbordaba el cap por 1 → strip de la
+firma ANTES del corte, reserva +2, `;:`→`.`; (M) E10 no podía ejecutar el pipeline desde el reply block
+(oráculo tautológico) → `_voiceSpokenAssemble` a nivel de helpers; (M) el nag de omisión cambiaba su base
+en silencio → base = texto narrado sin firma (el significado de 033), churn `:1075 :1076`; (M) `$lang` y
+`warn` no existen en `regenerate()` (bajo `set -u` NO aborta: persiste vacío y `has()` lo protege para
+siempre) → `_vlang`/`_vnick` leídos dentro del bloque, `echo "WARN: …" >&2`, oráculo por valor exacto +
+stderr limpio; (M) YAML `null` renderizaba la palabra "null" → saneador alimentado con `yq -r '… // ""'`
+(molde `VOICE_STT_LANG`), nunca con `FEATURES_VOICE_*`; (L) `${#v}` cuenta bytes en bash 3.2 y chars en
+5.x sin locale → `local LC_ALL=C`, límites en BYTES; (M) los escapes VÁLIDOS de Python (`\1`→0x01,
+`\b`→0x08) se transforman en silencio, `py_compile` y el parse de bun los aceptan y la pasada queda
+muerta → oráculos G15 (grep -F de cada secuencia en la SALIDA parchada) y G16 (cero bytes de control en
+la salida; en la fuente `.py` un `\1` sin doblar son dos bytes ASCII, no se ve) + mutaciones M10/M11;
+(M) el agente del arnés e2e es `en`/`Alice` por construcción → cada invocación bun fija su env completo
+en la línea de comando (firma vacía = "sin firma", no default); (M) el heredoc del wizard no tenía
+oráculo (lección 031) → `wizard_answers` gana kv `lang=`/`nick=` conservando los marcadores que
+`quickstart-doc.bats` exige; (M) mapa de churn: `:945` NO churnea (es el mutante de G4 sobre el dorado
+v1), faltaban `:1053 :1060`; (M) M5 no pone G2c en rojo (la gemela corrupta se escribe y se consume por
+la misma constante) → oráculo G2d de estado intermedio. Constitución sigue 6/6, Complexity Tracking
+vacío. **TASKS (2026-09-18): 28 tareas test-first en `specs/034-voice-spoken-style/tasks.md`** —
+Setup T001-T002 (fixture dorado v2 + baseline); Foundational T003-T006 (churn de oráculos 033 a v3 con
+la lista corregida por la revisión — `:945` NO se toca —, upgrade tests G1-G5 + G2d, bump v2→v3 con
+gemelas `_V2` y re-apunte del v1→v2, `wizard_answers lang=/nick=`); fases de historia en orden de
+DEPENDENCIA sobre el único archivo del patcher, no de prioridad: US1 T007-T008 (contrato v3 +
+constantes + cap 900), US3 T009-T011 (normalizador + `language_code`, oráculos G15/G16 de escapes
+Python), US2 T012-T017 (config surface en setup.sh/compose/fixtures/schema + helpers de cierre + E2
+"seven"), US4 T018-T020 (`_voiceSentenceCut`, `_voiceSpokenAssemble`, reply block v3, nag/trim sobre
+`_voiceAsm.narrated.length`, E10/E12); T021 DOCKER_E2E corrido de verdad (E1-E12); Polish T022-T027
+(README, CHANGELOG, VERSION 0.25.0 verificando origin/main, CLAUDE.md sección del patch, mutaciones
+M1-M13, gates en ambos bash + auditorías de bytes en fuente Y en salida); T028 gate en vivo DIFERIDO
+al deploy (linus → donna, medición D9 desde el contenedor). Strings CANON (I1/I2/D1/B/FIG/ES/EN/O/N/T)
+fijados para que test e implementación no diverjan. **`/speckit-analyze` (2026-09-18, workflow
+`wf_90956f20-903`, 3 lentes + 1 refutador por hallazgo, 21 agentes): 18 hallazgos, 0 refutados, 11 únicos
+(4 HIGH / 5 MEDIUM / 2 LOW / 0 CRITICAL), cobertura 26/26, TODOS remediados con tres decisiones del
+operador:** (I1) T004 exigía `!=` en los cuatro pares `_V2` cuando T005 deja tres idénticos → los guardias
+extra van a T007/T018 donde cada constante cambia; (I2) los oráculos de una barra (`(?!\d)`, `US\$|USD`)
+eran incompatibles con "construir como string JS" y `(.+?)\1/g` count 2 era imposible (el paso de énfasis
+lleva `(?<=\S)` en medio) → **forma `/…/.source` + `String.raw`** (una barra en el TS, dos en Python),
+CANON-FIG/R1…R7, re-medida 38/38; (I3) cuatro artefactos asertaban un log "already applied" que el patcher
+NUNCA emite (rama sin cambios silenciosa) → **T005 agrega una línea veraz** `no changes to <path>: all
+patch groups already present` (CANON-L1) o la variante N/7, T001 solo sha; (U1) `const VOICE_SIGNOFF`
+quedaba DESPUÉS del boot log que lo lee → TDZ `ReferenceError` al cargar bajo bun = canal flapeando y
+ningún test host lo ve → colocación fijada tras `VOICE_MAX_BYTES` + oráculo de orden; (C1) E11 sin tarea
+de autoría y churn de E4 sin asignar; (U2) la tabla de 38 casos no existía en ningún artefacto →
+**fixture commiteado `tests/fixtures/voice-spoken-cases.ts`** (sha `0b46410e…399a`, 39 entradas, generado
+del prototipo, transpila bajo bun); (U3) firma del saneador sin FIELD para el WARN por campo; (U4) comillas
+simples dentro del cuerpo `-c '…'`, heredoc sin citar con `$1500`, golden v2 no copiado a `.e2e/`,
+`SEED_FIXTURE` redundante; (C2) sin oráculo ejecutado de "último terminador de oración" → caso (q) medido
+(807 chars); (I4/C3) referencias de molde y `.env.example`. Mutaciones M14-M16 añadidas. **IMPLEMENTADO 2026-09-18 (test-first, 27/28 tareas; T028 gate en vivo DIFERIDO al deploy por
+diseño, precedente 031/033).** `docker/scripts/apply_telegram_typing_patch.py` gana `MARKER_VOICE_V2` +
+`MARKER_VOICE` (v3), `ALL_MARKERS`, las cuatro gemelas `_V2` congeladas verbatim (copiadas
+estructuralmente ANTES de tocar cualquier constante viva), `upgrade_voice_v2_to_v3` (4 pares
+`str.replace`, all-or-nothing), `upgrade_voice_v1_to_v2` RE-APUNTADO a las `_V2` (su salida == golden
+v2 byte a byte, G2d), gate de `apply_voice` en v1/v2/v3, `VOICE_HELPERS` v3 (5 constantes C1 en
+posición TDZ-segura, cap 900, boot log con `signoff=Nchars`, `_voiceSpokenNormalize` con CANON-FIG +
+R1…R7 en forma `.source`/`String.raw`, `language_code` en el body TTS, `_voiceKey`/`_voiceSignoffStrip`/
+`_voiceSignoffAppend`, `_voiceSentenceCut`, `_voiceSpokenAssemble`; `_voiceTruncate` eliminado del
+vivo), `VOICE_REPLY_BLOCK` v3 (assembler + nag/trim sobre `_voiceAsm.narrated.length`), instructions
+line v3 como TEMPLATE LITERAL, description v3 de `voice_text`, y el log veraz CANON-L1 en la rama sin
+cambios de `main()`. `setup.sh`: `voice_signoff_default`/`voice_currency_default`, heredoc con
+`signoff`/`currency`, backfill `has()` con `_vlang` leído dentro de `regenerate()`, saneador
+`voice_phrase_effective` + `_voice_phrase_clean` alimentado con `yq -r '… // ""'`, placeholders
+`VOICE_SIGNOFF`/`VOICE_CURRENCY` exportados; compose +2 líneas incondicionales; `.env.example` cap 900.
+Fixtures: golden v2 `tests/fixtures/telegram-server-voice-v2.ts` (sha `5dc01bf3…cef0`, generado UNA vez
+con el patcher de `3534c6b`), `sample-agent{,-with-vault}.yml` con los 2 campos; `helper.bash`
+`wizard_answers lang=/nick=`. Tests: `apply-telegram-patches` 92→119, `voice-config` 9→22,
+`docker-render` +2 asserts, `schema` known_external +2, `docker-e2e-voice` 8→12 (E9–E12).
+**DOCKER_E2E CORRIDO DE VERDAD: 12/12 a la primera** (Docker 29.6.2 / Compose v5.3.1, imagen
+`agentic-pod:latest` Alpine 3.24.1 aarch64 bun 1.3.14; E9 38+1 `ALL_OK`, E10 `cap=900 budget=848
+qlen=807` y `cap=300`, E12 upgrade in-container + CANON-L1). **Mutación 16/16** (M1–M16 del quickstart
+contra la implementación real; **M6 sobrevivió al G4 original** — un upgrade parcial con `continue` deja
+`patch v2`=1/`patch v3`=0 y sigue imprimiendo el WARN porque el marcador vive en el par de helpers —
+G4 endurecido a "ninguna de las otras tres constantes v3 aterrizó", re-medido RED/GREEN; M15 reprodujo
+el `ReferenceError` del TDZ bajo bun; M5 dejó G2c verde como se predijo). **DOS DEFECTOS CAZADOS EN LA
+IMPLEMENTACIÓN, no en el diseño:** (1) `local LC_ALL=C` dentro de una función de `setup.sh` hace que
+bash 5.3.15 segfaultee INTERMITENTE (status 139) justo tras `render_load_context` — A/B medido 15
+corridas: 3/15 con `local LC_ALL=C`, 0/15 con `LC_ALL=C` por comando externo + `wc -c` para bytes
+(bash 3.2.57: 0/15 en ambos) → data-model §6 y contrato C3 actualizados; regla nueva en la sección del
+patch de este archivo. (2) Clase D14, 6ª vez entre 033/034: el modelo emitió marcas combinantes REALES
+(0xCC80–0xCDAF) y una elipsis real en los oráculos de `_voiceKey` (T014) y luego OTRA VEZ en el texto
+del CHANGELOG/CLAUDE.md que describía el propio bug — reparados byte a byte con Python, auditoría
+`LC_ALL=C grep -c $'\xcc\x80'` = 0 en patcher, bats, docs y specs. Línea base T002: 1368/0 en bash
+5.3.15 (árbol pre-034) y 1368/0 en bash 3.2.57 (worktree limpio de main@3534c6b). VERSION
+0.24.0→**0.25.0** (verificado `origin/main` = 0.24.0 antes y después). README (viñeta Round-trip
+voice), CHANGELOG, este archivo (sección "Telegram plugin patch" → v3). **Gates T027: ver Notes de
+tasks.md.** Nada commiteado en `034-voice-spoken-style`. **Siguiente: commit + PR contra main con
+confirmación del operador; luego deploy (linus primero, T028 §3.1–3.8 + medición D9 del punto de
+miles) y, aparte, la actualización pendiente de rodri-cenco-admin.**
+
+
 **033-voice-reply-feedback SPEC + CLARIFY + PLAN (2026-09-13; rama `033-voice-reply-feedback` desde
 main=`a7eb2e5` v0.23.0→**0.24.0** previsto).** Plan: `specs/033-voice-reply-feedback/plan.md`.
 **BUG MEDIDO (linus, 2026-09-13 13:44 -03):** el agente abrió su respuesta con "el audio saliente
@@ -195,7 +326,7 @@ SC-007 mide la primera. (M) gate del wrap = el de 032 completo (`private` + `dmP
 `allowFrom`) y además `mode !== 'never'`. (L) `error_code` null-safe; `sendVoice` recibe el
 `signal` del presupuesto de 30 s (parámetro grammY POR VERIFICAR en los typings del plugin);
 `step=` va ANTES de `chat=` en stderr; `voice_force` no-booleano se ignora; D10 del research se
-había AUTO-CORROMPIDO (marcas combinantes reales en vez de `̀` literal) → reescrito y
+había AUTO-CORROMPIDO (marcas combinantes reales en vez de `\u0300` literal) → reescrito y
 verificado byte a byte; oráculos de mutación 2/3 pasan a asertar USO (orden de líneas + `step=${_voiceStep}`;
 `spoken.length > VOICE_OMISSION_NAG_CHARS` + derivación `floor(cap/4)` + sin literal `> 300`).
 DOCKER_E2E OBLIGATORIO (E1-E4 auto-sembrados, E5 matcher bajo bun con tabla ±, E6 parse-only — API

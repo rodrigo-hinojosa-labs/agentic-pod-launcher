@@ -47,6 +47,8 @@ features:
     reply_mode: auto
     voice_id: ""
     provider: elevenlabs
+    signoff: "Eso es toda la información. Cambio y fuera, {nickname}."
+    currency: "pesos chilenos"
   identity_backup:
     enabled: true
     schedule: "30 3 * * *"

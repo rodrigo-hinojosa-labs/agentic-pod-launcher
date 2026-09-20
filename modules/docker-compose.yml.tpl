@@ -82,5 +82,10 @@ services:
       TELEGRAM_VOICE_ID: "{{FEATURES_VOICE_VOICE_ID}}"
       TELEGRAM_VOICE_PROVIDER: "{{FEATURES_VOICE_PROVIDER}}"
       TELEGRAM_VOICE_STT_LANG: "{{VOICE_STT_LANG}}"
+      # 034: spoken style — closing phrase (nickname already substituted, sanitized:
+      # no quotes/backslashes/dollar signs/braces, ≤ 120 bytes) and the word spoken
+      # for a bare "$" amount. Unconditional, like the five lines above.
+      TELEGRAM_VOICE_SIGNOFF: "{{VOICE_SIGNOFF}}"
+      TELEGRAM_VOICE_CURRENCY: "{{VOICE_CURRENCY}}"
     env_file:
       - ./.env

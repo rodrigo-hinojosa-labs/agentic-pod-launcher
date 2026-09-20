@@ -1264,6 +1264,8 @@ features:
     reply_mode: auto
     voice_id: "$voice_id"
     provider: elevenlabs
+    signoff: "$(voice_signoff_default "$user_lang")"
+    currency: "$(voice_currency_default "$user_lang")"
 
 mcps:
   defaults:
@@ -2020,10 +2022,74 @@ mcp_timeout_effective() {
   fi
 }
 
+# 034: localized defaults for features.voice.{signoff,currency} — the single
+# source for the wizard heredoc, the --regenerate backfill and the sanitizer
+# fallback. `{nickname}` stays LITERAL in agent.yml; it is substituted at render
+# time (voice_phrase_effective). `mixed` and anything else → Spanish (the fleet's
+# case; clarify 2026-09-15).
+voice_signoff_default() {
+  case "${1:-}" in
+    en) printf '%s' 'That is all the information. Over and out, {nickname}.' ;;
+    *)  printf '%s' 'Eso es toda la información. Cambio y fuera, {nickname}.' ;;
+  esac
+}
+voice_currency_default() {
+  case "${1:-}" in
+    en) printf '%s' 'Chilean pesos' ;;
+    *)  printf '%s' 'pesos chilenos' ;;
+  esac
+}
+
+# 034: one sanitizing pass over a spoken phrase (data-model §6 steps 1-4).
+# _voice_phrase_clean RAW NICK → stdout. Byte-oriented on purpose (LC_ALL=C on
+# each EXTERNAL command, never as a `local` inside the function: bash 5.3.15
+# segfaults intermittently — status 139 — when it restores the locale on
+# return from a function that declared `local LC_ALL`; measured 2026-09-18 in
+# ~1 of 6 --regenerate runs, 0 after this change).
+_voice_phrase_clean() {
+  local v="${1:-}" nick="${2:-}"
+  # 1. {nickname} → NICK (literal replace, never a regex/pattern — 023 lesson);
+  #    an empty nickname also drops the ", " that would precede it.
+  if [ -z "$nick" ]; then
+    v="$(_render_replace_all "$v" ', {nickname}' '')"
+    v="$(_render_replace_all "$v" '{nickname}' '')"
+  else
+    v="$(_render_replace_all "$v" '{nickname}' "$nick")"
+  fi
+  # 2. control bytes (tab, CR, ...) → space; 3. drop " \ $ { } — compose
+  #    interpolates $ inside environment: and quotes/braces would break the
+  #    YAML scalar; 4. collapse runs of whitespace, trim.
+  printf '%s' "$v" | LC_ALL=C tr '\000-\037\177' ' ' | LC_ALL=C tr -d '"\\${}' \
+    | LC_ALL=C sed -e 's/[[:space:]][[:space:]]*/ /g' -e 's/^ //' -e 's/ $//'
+}
+
+# voice_phrase_effective FIELD RAW NICK MAX_BYTES DEFAULT_TEMPLATE → stdout (one line)
+# FIELD ∈ {signoff, currency} is used ONLY in the warning, never on stdout.
+# An empty/null/over-long RAW (after cleaning) falls back to the localized
+# default template run through the SAME steps, with one WARN on stderr that
+# names the field and the reason — never the value (contract C3, step 5).
+voice_phrase_effective() {
+  local field="${1:-}" raw="${2:-}" nick="${3:-}" max="${4:-120}" tpl="${5:-}"
+  local v bytes
+  v="$(_voice_phrase_clean "$raw" "$nick")"
+  # BYTES, not characters: `${#v}` differs between bash 3.2 and 5.x under a
+  # UTF-8 locale, and `local LC_ALL=C` is off the table (see _voice_phrase_clean).
+  bytes=$(printf '%s' "$v" | wc -c | tr -d ' ')
+  if [ -z "$v" ] || [ "$bytes" -gt "$max" ]; then
+    echo "WARN: features.voice.${field} is empty, null or over ${max} bytes — using the localized default" >&2
+    v="$(_voice_phrase_clean "$tpl" "$nick")"
+  fi
+  printf '%s' "$v"
+}
+
 regenerate() {
   local agent_yml="$SCRIPT_DIR/agent.yml"
   local modules_dir="$SCRIPT_DIR/modules"
   local os
+  # 034: voice style — language read ONCE inside the [ -f agent.yml ] block
+  # below (regenerate() has no `lang` local and runs under set -u); nickname and
+  # the raw field values are read after render_load_context.
+  local _vlang="" _vnick="" _vraw=""
   os=$(uname -s | tr '[:upper:]' '[:lower:]')  # darwin | linux
 
   # Bump meta.launcher_version + meta.regenerated_at so doctor can show
@@ -2135,11 +2201,27 @@ regenerate() {
     # disabled (explicit opt-in). has()-guarded (never `//`) so an operator's
     # enabled:true or custom reply_mode survives a subsequent --regenerate
     # untouched.
+    _vlang=$(yq -r '.user.language // ""' "$agent_yml" 2>/dev/null)
     if [ "$(yq -r '(.features | has("voice")) // false' "$agent_yml" 2>/dev/null)" != "true" ]; then
       yq -i '.features.voice.enabled = false' "$agent_yml"
       yq -i '.features.voice.reply_mode = "auto"' "$agent_yml"
       yq -i '.features.voice.voice_id = ""' "$agent_yml"
       yq -i '.features.voice.provider = "elevenlabs"' "$agent_yml"
+      yq -i ".features.voice.signoff = \"$(voice_signoff_default "$_vlang")\"" "$agent_yml"
+      yq -i ".features.voice.currency = \"$(voice_currency_default "$_vlang")\"" "$agent_yml"
+    fi
+
+    # 034: backfill the two style fields for a 032/033 workspace (the whole-block
+    # backfill above ran first — `null | has("signoff")` is false, so inverting
+    # the order would create features.voice with only signoff and skip the four
+    # 032 defaults). has()-guarded so an operator's own phrase survives every
+    # --regenerate; an operator's EMPTY value is protected too — the render-time
+    # sanitizer is what falls back to the default (with a WARN), never this.
+    if [ "$(yq -r '(.features.voice | has("signoff")) // false' "$agent_yml" 2>/dev/null)" != "true" ]; then
+      yq -i ".features.voice.signoff = \"$(voice_signoff_default "$_vlang")\"" "$agent_yml"
+    fi
+    if [ "$(yq -r '(.features.voice | has("currency")) // false' "$agent_yml" 2>/dev/null)" != "true" ]; then
+      yq -i ".features.voice.currency = \"$(voice_currency_default "$_vlang")\"" "$agent_yml"
     fi
 
     # 029: backfill claude.mcp_timeout_ms for a pre-029 workspace (the MCP
@@ -2189,6 +2271,19 @@ regenerate() {
     *) VOICE_STT_LANG="" ;;
   esac
   export VOICE_STT_LANG
+  # 034: VOICE_SIGNOFF / VOICE_CURRENCY are DEDICATED derived placeholders
+  # (VOICE_STT_LANG mold): fed from the RAW agent.yml values via
+  # `yq -r '… // ""'` — never from the flattened FEATURES_VOICE_* (an explicit
+  # YAML null flattens to the string "null") — with {nickname} substituted,
+  # sanitized, and the localized default as fallback. USER_NICKNAME and
+  # FEATURES_VOICE_SIGNOFF themselves are never re-exported or altered
+  # (claude-md.tpl consumes USER_NICKNAME verbatim).
+  _vnick=$(yq -r '.user.nickname // ""' "$agent_yml" 2>/dev/null)
+  _vraw=$(yq -r '.features.voice.signoff // ""' "$agent_yml" 2>/dev/null)
+  VOICE_SIGNOFF="$(voice_phrase_effective signoff "$_vraw" "$_vnick" 120 "$(voice_signoff_default "$_vlang")")"
+  _vraw=$(yq -r '.features.voice.currency // ""' "$agent_yml" 2>/dev/null)
+  VOICE_CURRENCY="$(voice_phrase_effective currency "$_vraw" "" 40 "$(voice_currency_default "$_vlang")")"
+  export VOICE_SIGNOFF VOICE_CURRENCY
 
   # Deployment mode (011): single source of truth in agent.yml. Default docker
   # (legacy + backfill above). DEPLOYMENT_MODE_IS_DOCKER gates the {{#if}} /
