@@ -3,6 +3,56 @@
 ## [Unreleased]
 
 ### Added
+- **Spoken style for voice replies — `034-voice-spoken-style`** (VERSION
+  0.24.0 → 0.25.0): with `032`+`033` the Telegram channel spoke, but what it
+  spoke was the written reply almost verbatim — lists dictated item by item,
+  markdown read as "asterisk", `$1.234.567` ambiguous between dollars and a
+  decimal, no end-of-audio marker, and the configured language never reaching
+  the TTS (measured by the operator on `linus`, 2026-09-13/14: a 76-second
+  bubble for an answer that summarizes in 20). The voice patch group bumps
+  **v2 → v3** (`docker/scripts/apply_telegram_typing_patch.py`, marker
+  `agentic-pod-launcher: telegram voice roundtrip patch v3`) with an in-place
+  `upgrade_voice_v2_to_v3` (all-or-nothing across four constant pairs) and the
+  v1→v2 upgrader re-pointed to the frozen `_V2` twins, so the cascade
+  v1→v2→v3 runs in one boot; a new committed golden fixture
+  (`tests/fixtures/telegram-server-voice-v2.ts`, generated once from the real
+  v0.24.0 patcher) is the anti-tautology ground truth for the upgrade. The
+  channel's contract to the agent (instructions line — now a template literal
+  interpolating the cap, the language name and the currency word — and the
+  `voice_text` description) asks for a spoken SUMMARY in three tiers
+  (~30 s default, ~45 s, at most ~60 s = the cap), plain prose in the
+  configured language, figures in words with the currency named, and NO
+  closing phrase from the model. Deterministically in the plugin:
+  `_voiceSpokenNormalize` (markdown/code/lists/quotes/tables/emojis/URLs
+  stripped; `$`/`CLP`/`US$`/`USD`/`UF`/`%` next to a figure spoken as words,
+  digits never rewritten; 39-case table `tests/fixtures/voice-spoken-cases.ts`
+  executed under bun in-container), `language_code` in the TTS body,
+  `_voiceSentenceCut` (sentence-boundary cut at the budget replacing the 032
+  character-level `_voiceTruncate`), `_voiceSignoffStrip`/`_voiceSignoffAppend`
+  (the configured closing phrase appended exactly once, accent/case-insensitive
+  dedupe) and `_voiceSpokenAssemble` wiring them for both `voice_text` and the
+  omission fallback; the 033 omission nag is re-based on the narrated length
+  and a cut `voice_text` earns `; voice_text trimmed to N chars` in the
+  acknowledgement. New `agent.yml` fields `features.voice.signoff` (with a
+  literal `{nickname}`, localized default by `user.language`; `mixed` →
+  Spanish) and `features.voice.currency` (default `pesos chilenos` /
+  `Chilean pesos`), backfilled on `--regenerate`, sanitized at render time
+  (nickname substituted, quotes/backslashes/`$`/braces dropped, ≤ 120 / 40
+  bytes, empty/null/over-long → default + WARN) and delivered as two
+  unconditional compose lines `TELEGRAM_VOICE_SIGNOFF` /
+  `TELEGRAM_VOICE_CURRENCY`; `TELEGRAM_VOICE_SPOKEN_CHAR_CAP` default
+  1200 → **900**. The patcher now logs a truthful line on its no-change path
+  (`no changes to <path>: all patch groups already present`, or `N/7 … see WARN
+  lines above`) instead of returning silently. Tests: `apply-telegram-patches`
+  92 → 119, `voice-config` 9 → 22, +2 render/schema oracles, `helper.bash`
+  `wizard_answers` gains `lang=`/`nick=`, DOCKER_E2E E9–E12 (normalizer table,
+  assembler invariants incl. the sentence-boundary oracle, `language_code`
+  body, golden v2 upgrade in-container). Two defects caught during
+  implementation, not in the design: `local LC_ALL=C` inside a `setup.sh`
+  function made bash 5.3.15 segfault intermittently on `--regenerate`
+  (3/15 runs; replaced by per-command `LC_ALL=C` + `wc -c`), and the model
+  emitted real combining marks instead of `\u0300-\u036f` escape text in a
+  test oracle (repaired byte-exactly; audit rule kept).
 - **Voice reply feedback + explicit audio requests — `033-voice-reply-feedback`**:
   the voice-capable Telegram channel (`032`) told the agent nothing about what its
   own voice did — measured in production (2026-09-14): an agent told the user

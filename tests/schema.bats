@@ -78,6 +78,9 @@ teardown() { teardown_tmp_dir; }
   # USER_LANGUAGE itself is never re-sanitized (claude-md.tpl also consumes
   # it and a `mixed` agent's CLAUDE.md must keep saying `mixed`).
   known_external="${known_external} VOICE_STT_LANG "
+  # 034: closing phrase (nickname substituted, sanitized) + currency word — both
+  # derived by setup.sh from the raw agent.yml values, never from the flatten.
+  known_external="${known_external} VOICE_SIGNOFF VOICE_CURRENCY "
 
   # Capture the env shape produced by render_load_context with the fixture.
   local before_env after_env produced

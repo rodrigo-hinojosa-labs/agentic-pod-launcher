@@ -143,6 +143,11 @@ wizard_answers() {
   local vault=off qmd=off superpowers=off
   local notify=none notify_bot="" notify_chat=""
   local deployment_mode=docker
+  # 034: user.language / user.nickname (defaults keep every existing call site
+  # byte-identical: en / Alice). The only path to a wizard-heredoc oracle for
+  # the localized features.voice.{signoff,currency} defaults (031 lesson: the
+  # heredoc and the --regenerate backfill are different call sites).
+  local lang=en nick=Alice
   local kv
   for kv in "$@"; do
     case "$kv" in
@@ -150,6 +155,8 @@ wizard_answers() {
       display=*)         display="${kv#display=}" ;;
       role=*)            role="${kv#role=}" ;;
       vibe=*)            vibe="${kv#vibe=}" ;;
+      lang=*)            lang="${kv#lang=}" ;;
+      nick=*)            nick="${kv#nick=}" ;;
       vault=*)           vault="${kv#vault=}" ;;
       qmd=*)             qmd="${kv#qmd=}" ;;
       superpowers=*)     superpowers="${kv#superpowers=}" ;;
@@ -167,7 +174,7 @@ wizard_answers() {
   # Identity (4 prompts)
   printf '%s\n%s\n%s\n%s\n' "$name" "$display" "$role" "$vibe"
   # User (5 prompts)
-  printf 'Alice\nAlice\nUTC\na@b.com\nen\n'
+  printf 'Alice\n%s\nUTC\na@b.com\n%s\n' "$nick" "$lang"
   # install_service (Linux only — macOS skips the prompt entirely)
   [ "$(uname -s)" = "Linux" ] && printf 'n\n'
   # GitHub fork

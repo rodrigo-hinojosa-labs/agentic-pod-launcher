@@ -28,7 +28,10 @@ GITHUB_PAT=
 # Round-trip voice over Telegram (032, opt-in via features.voice.enabled).
 # Required to activate; a missing key degrades to today's text-only behaviour
 # with a one-time boot WARN. Optional tuning knobs override the built-in
-# defaults (transcription cap: 300s; spoken-reply truncation floor: 1200 chars).
+# defaults (transcription cap: 300s; spoken-reply cut budget: 900 chars ≈ 60 s).
+# The closing phrase and the currency word are agent.yml fields
+# (features.voice.{signoff,currency}) — compose environment: wins over this
+# file, so they are NOT knobs here.
 ELEVENLABS_API_KEY=
 # TELEGRAM_VOICE_MAX_NOTE_SECONDS=300
-# TELEGRAM_VOICE_SPOKEN_CHAR_CAP=1200
+# TELEGRAM_VOICE_SPOKEN_CHAR_CAP=900

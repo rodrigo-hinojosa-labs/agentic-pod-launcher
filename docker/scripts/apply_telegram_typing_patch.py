@@ -63,7 +63,7 @@ independent fixes that improve Telegram chat reliability + observability:
    naming "blocked in an interactive prompt the channel can't answer" among
    the timeout warning's possible causes.
 
-7. Telegram voice roundtrip patch (v1, feature 032) — closes the voice loop
+7. Telegram voice roundtrip patch (v3 — 032 v1, 033 v2, 034 v3) — closes the voice loop
    asynchronously over the existing channel. Six hunks under one marker:
    V1 replaces the `bot.on('message:voice')` handler body with a DM-only
    read-only pre-check, absent-metadata-safe caps, and a DETACHED
@@ -81,6 +81,13 @@ independent fixes that improve Telegram chat reliability + observability:
    voice-origin map, the TTS format sniff cache). V6 wraps
    `bot.on('message:text')` to clear the voice-origin flag when the operator
    types instead of speaking. Everything fails open to v0.22.0 behaviour.
+   v2 (033) feeds the voice outcome back into the reply acknowledgement and
+   honours explicit audio requests; v3 (034) makes the spoken rendition a
+   summarized narration: spoken-safe normalization (markdown/emoji/URL
+   removal, currency/percent symbols named), language passed to the TTS,
+   a configured closing phrase appended exactly once, and a sentence-boundary
+   cut at the spoken cap. In-place upgraders cascade v1 → v2 → v3 on every
+   boot against the frozen `_V1` / `_V2` twins of each constant.
 
 Each patch is independently idempotent (own marker comment) and fail-silent
 on anchor drift (logs WARN to stderr, skips THAT patch only, leaves the
@@ -108,7 +115,21 @@ MARKER_PRIMARY = "agentic-pod-launcher: primary lock patch v1"
 MARKER_PENDING = "agentic-pod-launcher: pending-reply marker patch v1"
 MARKER_ASKQ_GIVEUP = "agentic-pod-launcher: askq-guard give-up delivery patch v1"
 MARKER_VOICE_V1 = "agentic-pod-launcher: telegram voice roundtrip patch v1"
-MARKER_VOICE = "agentic-pod-launcher: telegram voice roundtrip patch v2"
+MARKER_VOICE_V2 = "agentic-pod-launcher: telegram voice roundtrip patch v2"
+MARKER_VOICE = "agentic-pod-launcher: telegram voice roundtrip patch v3"
+
+# The seven patch groups at their CURRENT version — main() counts these on the
+# no-change path so the boot log says whether the file is fully patched or
+# some group's anchors were not found (034).
+ALL_MARKERS = (
+    MARKER_TYPING,
+    MARKER_OFFSET,
+    MARKER_STDERR,
+    MARKER_PRIMARY,
+    MARKER_PENDING,
+    MARKER_ASKQ_GIVEUP,
+    MARKER_VOICE,
+)
 
 # V3 helpers — used by the v2→v3 upgrade ONLY. Fresh installs and v3→v4
 # upgrades use TYPING_HELPERS (v4 — anti-zombie). Without this separation,
@@ -534,21 +555,13 @@ VOICE_HELPERS_V1 = (
     "}\n"
 )
 
-# 032: voice roundtrip. Module-scope helpers — config read (with a ONE-TIME
-# boot-time line so fault-injection e2e can observe it, emitted before any
-# token/network use), a redacting error-class helper (never the key, never a
-# raw error object, never a URL — the getFile download URL embeds the
-# Telegram BOT TOKEN), the STT/TTS fetch helpers, the in-memory voice-origin
-# map (consume-on-read, 5-minute TTL), the TTS format sniff cache, and the
-# reply-fallback truncation helper.
-#
-# 033 v2: identical helpers plus the omission-nag threshold, the explicit
-# audio-request matcher, and the failure cooldown map (added by later hunks
-# in this same feature, not duplicated here) — closed by the sentinel
-# comment `voice helpers end (033)` so the DOCKER_E2E harness can extract
-# exactly this block for behavioural testing under bun.
-VOICE_HELPERS = (
-    "\n// " + MARKER_VOICE + "\n"
+# 034: frozen v2 twin of VOICE_HELPERS — the exact text the v0.24.0 patcher
+# wrote (built with MARKER_VOICE_V2). Never edited again: `upgrade_voice_v2_to_v3`
+# finds it verbatim in an already-patched file, the re-pointed
+# `upgrade_voice_v1_to_v2` writes it, and the golden v2 fixture's fidelity
+# test asserts it byte-for-byte (contracts/voice-group-v3-upgrade.md C1, G2b).
+VOICE_HELPERS_V2 = (
+    "\n// " + MARKER_VOICE_V2 + "\n"
     "const VOICE_ENABLED = process.env.TELEGRAM_VOICE_ENABLED === 'true'\n"
     "const VOICE_KEY = process.env.ELEVENLABS_API_KEY ?? ''\n"
     "const VOICE_ACTIVE = VOICE_ENABLED && VOICE_KEY.length > 0\n"
@@ -641,6 +654,269 @@ VOICE_HELPERS = (
     "  const cut = text.lastIndexOf(' ', cap)\n"
     "  const at = cut > cap / 2 ? cut : cap\n"
     "  return text.slice(0, at) + '…'\n"
+    "}\n"
+    "const VOICE_OMISSION_NAG_CHARS = Math.floor(VOICE_SPOKEN_CHAR_CAP / 4)\n"
+    "const VOICE_REQUEST_PHRASES: readonly string[] = [\n"
+    "  'responde con audio', 'respondeme con audio', 'responde en audio', 'respondeme en audio',\n"
+    "  'responde por audio', 'respondeme por audio', 'contesta con audio', 'contestame con audio',\n"
+    "  'contesta en audio', 'contestame en audio', 'contesta por audio', 'contestame por audio',\n"
+    "  'responde con voz', 'respondeme con voz', 'contesta con voz', 'responde con una nota de voz',\n"
+    "  'mandame un audio', 'mandame audio', 'mandame una nota de voz', 'enviame un audio',\n"
+    "  'enviame una nota de voz', 'responde hablando', 'respondeme hablando',\n"
+    "  'reply with audio', 'respond with audio', 'answer with audio', 'reply with voice',\n"
+    "  'respond with voice', 'answer with voice', 'reply in audio', 'respond in audio',\n"
+    "  'answer in audio', 'send me an audio', 'send me a voice note', 'send me a voice message',\n"
+    "  'send a voice note', 'reply with a voice note', 'reply with a voice message',\n"
+    "]\n"
+    "const _VOICE_REQUEST_NEGATION = /(?:^|[\\s,;:—-])(?:no|nunca|jamas|sin|don't|dont|do not|never|stop)\\b[^.!?\\n]{0,30}$/\n"
+    "function _voiceNormalize(s: string): string {\n"
+    "  return s\n"
+    "    .normalize('NFD')\n"
+    "    .replace(/[\\u0300-\\u036f]/g, '')\n"
+    "    .replace(/[\\u2018\\u2019\\u02bc\\u00b4\\`]/g, \"'\")\n"
+    "    .toLowerCase()\n"
+    "    .replace(/\\s+/g, ' ')\n"
+    "    .trim()\n"
+    "}\n"
+    "function _isVoiceWordChar(ch: string | undefined): boolean {\n"
+    "  return ch != null && /[a-z0-9]/.test(ch)\n"
+    "}\n"
+    "function _voiceRequestMatch(text: string): boolean {\n"
+    "  const t = _voiceNormalize(text)\n"
+    "  for (const p of VOICE_REQUEST_PHRASES) {\n"
+    "    let i = t.indexOf(p)\n"
+    "    while (i >= 0) {\n"
+    "      const before = i > 0 ? t[i - 1] : undefined\n"
+    "      const after = i + p.length < t.length ? t[i + p.length] : undefined\n"
+    "      if (!_isVoiceWordChar(before) && !_isVoiceWordChar(after) && !_VOICE_REQUEST_NEGATION.test(t.slice(0, i))) {\n"
+    "        return true\n"
+    "      }\n"
+    "      i = t.indexOf(p, i + 1)\n"
+    "    }\n"
+    "  }\n"
+    "  return false\n"
+    "}\n"
+    "const _voiceCooldown = new Map<string, number>()\n"
+    "function _voiceCooldownConsume(chatId: string): boolean {\n"
+    "  const ts = _voiceCooldown.get(chatId)\n"
+    "  _voiceCooldown.delete(chatId)\n"
+    "  if (ts == null) return false\n"
+    "  return Date.now() - ts < _VOICE_ORIGIN_TTL_MS\n"
+    "}\n"
+    "// agentic-pod-launcher: voice helpers end (033)\n"
+)
+
+# 032: voice roundtrip. Module-scope helpers — config read (with a ONE-TIME
+# boot-time line so fault-injection e2e can observe it, emitted before any
+# token/network use), a redacting error-class helper (never the key, never a
+# raw error object, never a URL — the getFile download URL embeds the
+# Telegram BOT TOKEN), the STT/TTS fetch helpers, the in-memory voice-origin
+# map (consume-on-read, 5-minute TTL), the TTS format sniff cache, and the
+# reply-fallback truncation helper.
+#
+# 033 v2: identical helpers plus the omission-nag threshold, the explicit
+# audio-request matcher, and the failure cooldown map (added by later hunks
+# in this same feature, not duplicated here) — closed by the sentinel
+# comment `voice helpers end (033)` so the DOCKER_E2E harness can extract
+# exactly this block for behavioural testing under bun.
+#
+# 034 v3: the spoken-style constants (sign-off, currency, language name,
+# empty sentence; cap default 900), `_voiceSpokenNormalize`, the sign-off
+# helpers (`_voiceKey` / `_voiceSignoffStrip` / `_voiceSignoffAppend`),
+# `_voiceSentenceCut` and `_voiceSpokenAssemble`; `language_code` in the TTS
+# body; `_voiceTruncate` removed. The sentinel text is an END marker, kept
+# verbatim on purpose.
+VOICE_HELPERS = (
+    "\n// " + MARKER_VOICE + "\n"
+    "const VOICE_ENABLED = process.env.TELEGRAM_VOICE_ENABLED === 'true'\n"
+    "const VOICE_KEY = process.env.ELEVENLABS_API_KEY ?? ''\n"
+    "const VOICE_ACTIVE = VOICE_ENABLED && VOICE_KEY.length > 0\n"
+    "const VOICE_REPLY_MODE = (['auto', 'always', 'never'].includes(process.env.TELEGRAM_VOICE_REPLY_MODE ?? '')\n"
+    "  ? (process.env.TELEGRAM_VOICE_REPLY_MODE as 'auto' | 'always' | 'never')\n"
+    "  : 'auto')\n"
+    "const VOICE_ID = process.env.TELEGRAM_VOICE_ID || 'Rachel'\n"
+    "const VOICE_STT_LANG = process.env.TELEGRAM_VOICE_STT_LANG ?? ''\n"
+    "const VOICE_MAX_NOTE_SECONDS = Number(process.env.TELEGRAM_VOICE_MAX_NOTE_SECONDS) > 0\n"
+    "  ? Number(process.env.TELEGRAM_VOICE_MAX_NOTE_SECONDS)\n"
+    "  : 300\n"
+    "const VOICE_SPOKEN_CHAR_CAP = Number(process.env.TELEGRAM_VOICE_SPOKEN_CHAR_CAP) > 0\n"
+    "  ? Number(process.env.TELEGRAM_VOICE_SPOKEN_CHAR_CAP)\n"
+    "  : 900\n"
+    "const VOICE_API_BASE = 'https://api.elevenlabs.io'\n"
+    "const VOICE_STT_MODEL = 'scribe_v2'\n"
+    "const VOICE_TTS_MODEL = 'eleven_flash_v2_5'\n"
+    "const VOICE_MAX_BYTES = 20 * 1024 * 1024\n"
+    # 034: spoken-style constants. Declared HERE — after the config reads and
+    # BEFORE the boot-log block below, which reads VOICE_SIGNOFF.length: a
+    # `const` sits in its temporal dead zone until its line runs, so placing
+    # these after that block throws ReferenceError at module load under bun
+    # and flaps the channel (analyze U1). VOICE_STT_LANG (above) feeds the
+    # word table and the language name.
+    "const VOICE_SIGNOFF = (process.env.TELEGRAM_VOICE_SIGNOFF ?? '').trim()\n"
+    "const _VOICE_WORDS = VOICE_STT_LANG === 'en'\n"
+    "  ? { dollars: 'dollars', percent: 'percent', uf: 'unidades de fomento', empty: 'The details are in the text message.' }\n"
+    "  : { dollars: 'dólares', percent: 'por ciento', uf: 'unidades de fomento', empty: 'El detalle va en el mensaje de texto.' }\n"
+    "const VOICE_CURRENCY = (process.env.TELEGRAM_VOICE_CURRENCY ?? '').trim() || (VOICE_STT_LANG === 'en' ? 'Chilean pesos' : 'pesos chilenos')\n"
+    "const VOICE_SPOKEN_LANG_NAME = VOICE_STT_LANG === 'es' ? 'Spanish' : VOICE_STT_LANG === 'en' ? 'English' : 'the language the user wrote in'\n"
+    "const VOICE_EMPTY_SENTENCE = _VOICE_WORDS.empty\n"
+    "if (!VOICE_ENABLED) {\n"
+    "  process.stderr.write('telegram channel: voice disabled (TELEGRAM_VOICE_ENABLED != true)\\n')\n"
+    "} else if (!VOICE_KEY) {\n"
+    "  process.stderr.write('telegram channel: voice inactive — ELEVENLABS_API_KEY missing\\n')\n"
+    "} else {\n"
+    "  process.stderr.write(`telegram channel: voice active mode=${VOICE_REPLY_MODE} caps=${VOICE_MAX_NOTE_SECONDS}s/${VOICE_SPOKEN_CHAR_CAP}chars signoff=${VOICE_SIGNOFF.length}chars\\n`)\n"
+    "}\n"
+    # 034 (US3): spoken-safe normalization — pipeline contract C2, 15 ordered
+    # passes. Digits are NEVER rewritten; only symbols adjacent to a figure are
+    # named (the figure group is closed by (?!\d) so `$1500` stays whole). The
+    # figure group is `/…/.source` and the seven symbol rules are `String.raw`
+    # template literals: ONE backslash in the TS text (analyze I2). In THIS
+    # Python literal every TS backslash is doubled; `\1`, `\b`, `\t`, `\r`,
+    # `\n` would otherwise be transformed silently (research D14 — G15/G16).
+    "const _VOICE_FIG = /(?:\\d{1,3}(?:[.,\\s]\\d{3})*(?:[.,]\\d+)?|\\d+(?:[.,]\\d+)?)(?!\\d)/.source\n"
+    "function _voiceSpokenNormalize(input: string): string {\n"
+    "  let t = input.replace(/\\r\\n?/g, '\\n')\n"
+    "  t = t.replace(/```[\\s\\S]*?```/g, ' ')\n"
+    "  t = t.replace(/`([^`\\n]*)`/g, '$1')\n"
+    "  t = t.replace(/\\[([^\\]\\n]*)\\]\\((?:[^)\\s]+)\\)/g, '$1')\n"
+    "  t = t.replace(/\\bhttps?:\\/\\/\\S+/gi, ' ')\n"
+    "  t = t.replace(/^[ \\t]{0,3}#{1,6}[ \\t]+/gm, '')\n"
+    "  t = t.replace(/^[ \\t]*(?:[-*_=][ \\t]*){3,}[ \\t]*$/gm, '')\n"
+    "  t = t.replace(/(\\*\\*|__)(.+?)\\1/g, '$2')\n"
+    "  t = t.replace(/(\\*|_)(?=\\S)(.+?)(?<=\\S)\\1/g, '$2')\n"
+    "  t = t.replace(/~~(.+?)~~/g, '$1')\n"
+    "  t = t.replace(/^[ \\t]*(?:[-*+•]|\\d+[.)])[ \\t]+/gm, '')\n"
+    "  t = t.replace(/^[ \\t]*>[ \\t]?/gm, '')\n"
+    "  t = t.replace(/\\|/g, ' ')\n"
+    "  t = t.replace(/^[ \\t]*[-:][-: \\t]*$/gm, '')\n"
+    "  t = t.replace(/[\\p{Extended_Pictographic}\\u{1F1E6}-\\u{1F1FF}\\u{1F3FB}-\\u{1F3FF}\\u{20E3}\\u{FE0F}\\u{200D}]/gu, '')\n"
+    "  t = t.replace(new RegExp(String.raw`(?:US\\$|USD)\\s*(${_VOICE_FIG})`, 'g'), `$1 ${_VOICE_WORDS.dollars}`)\n"
+    "  t = t.replace(new RegExp(String.raw`(${_VOICE_FIG})\\s*USD\\b`, 'g'), `$1 ${_VOICE_WORDS.dollars}`)\n"
+    "  t = t.replace(new RegExp(String.raw`\\bUF\\s*(${_VOICE_FIG})`, 'g'), `$1 ${_VOICE_WORDS.uf}`)\n"
+    "  t = t.replace(new RegExp(String.raw`(${_VOICE_FIG})\\s*UF\\b`, 'g'), `$1 ${_VOICE_WORDS.uf}`)\n"
+    "  t = t.replace(new RegExp(String.raw`(?:CLP\\s*\\$?|\\$)\\s*(${_VOICE_FIG})`, 'g'), `$1 ${VOICE_CURRENCY}`)\n"
+    "  t = t.replace(new RegExp(String.raw`(${_VOICE_FIG})\\s*CLP\\b`, 'g'), `$1 ${VOICE_CURRENCY}`)\n"
+    "  t = t.replace(new RegExp(String.raw`(${_VOICE_FIG})\\s*%`, 'g'), `$1 ${_VOICE_WORDS.percent}`)\n"
+    "  t = t.replace(/\\$/g, ' ')\n"
+    "  t = t.split('\\n').map(l => l.trim()).filter(l => l.length > 0)\n"
+    "    .map(l => (/[.!?;:]$/.test(l) ? l : l + '.')).join(' ')\n"
+    "  t = t.replace(/\\s+([.,;:!?])/g, '$1').replace(/\\s{2,}/g, ' ').trim()\n"
+    "  return t\n"
+    "}\n"
+    # 034 (US2): closing-phrase helpers — pipeline contract C4. Accent/case/
+    # punctuation-insensitive key; strip a copy the model wrote at the END of its
+    # rendition (scan bounded to 3x the phrase length); append exactly once.
+    "function _voiceKey(s: string): string {\n"
+    "  return s.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase()\n"
+    "    .replace(/[.!?,;:\\u2026]+$/g, '').replace(/\\s+/g, ' ').trim()\n"
+    "}\n"
+    "// Remove a copy of the sign-off the model wrote at the END of its rendition (any case,\n"
+    "// accents, punctuation): the longest suffix whose key equals the sign-off key. Scan bounded\n"
+    "// to where such a suffix can start (last 3 x signoff.length characters).\n"
+    "function _voiceSignoffStrip(spoken: string, signoff: string): string {\n"
+    "  const s = spoken.trim()\n"
+    "  if (!signoff) return s\n"
+    "  const k = _voiceKey(signoff)\n"
+    "  if (!k || !_voiceKey(s).endsWith(k)) return s\n"
+    "  const from = Math.max(0, s.length - 3 * signoff.length)\n"
+    "  for (let j = from; j <= s.length; j++) {\n"
+    "    if (_voiceKey(s.slice(j)) === k) return s.slice(0, j).trim()\n"
+    "  }\n"
+    "  return s\n"
+    "}\n"
+    "function _voiceSignoffAppend(spoken: string, signoff: string): string {\n"
+    "  let s = spoken.trim()\n"
+    "  if (!signoff) return s\n"
+    "  const k = _voiceKey(signoff)\n"
+    "  if (k && _voiceKey(s).endsWith(k)) return s\n"
+    "  s = s.replace(/[;:]+$/, '.')\n"
+    "  const sep = /[.!?]$/.test(s) ? ' ' : (s.length ? '. ' : '')\n"
+    "  return s + sep + signoff\n"
+    "}\n"
+    # 034 (US4): sentence-boundary cut (C3) and the whole assembly (C6) —
+    # normalize → empty sentence → strip a model-written sign-off → budget
+    # cap−(signoff+2) floored at cap/2 → cut → append the sign-off once. A
+    # MODULE-LEVEL helper so DOCKER_E2E executes it for real (E10); the reply
+    # block only calls it. Replaces the 032 character-level `_voiceTruncate`.
+    "function _voiceSentenceCut(text: string, budget: number): { out: string; trimmed: boolean } {\n"
+    "  if (text.length <= budget) return { out: text, trimmed: false }\n"
+    "  const head = text.slice(0, budget)\n"
+    "  const m = head.match(/^[\\s\\S]*[.!?;](?=\\s|$)/)\n"
+    "  let at = m ? m[0].length : -1\n"
+    "  if (at < budget / 4) at = head.lastIndexOf(' ')\n"
+    "  if (at <= 0) at = budget\n"
+    "  return { out: text.slice(0, at).trim(), trimmed: true }\n"
+    "}\n"
+    "function _voiceSpokenAssemble(raw: string): { spoken: string; narrated: string; trimmed: boolean } {\n"
+    "  let t = _voiceSpokenNormalize(raw)\n"
+    "  if (!t) t = VOICE_EMPTY_SENTENCE\n"
+    "  t = _voiceSignoffStrip(t, VOICE_SIGNOFF)\n"
+    "  if (!t) t = VOICE_EMPTY_SENTENCE\n"
+    "  const budget = Math.max(VOICE_SPOKEN_CHAR_CAP - (VOICE_SIGNOFF ? VOICE_SIGNOFF.length + 2 : 0), Math.floor(VOICE_SPOKEN_CHAR_CAP / 2))\n"
+    "  const cut = _voiceSentenceCut(t, budget)\n"
+    "  return { spoken: _voiceSignoffAppend(cut.out, VOICE_SIGNOFF), narrated: cut.out, trimmed: cut.trimmed }\n"
+    "}\n"
+    "const _voiceOrigin = new Map<string, number>()\n"
+    "const _VOICE_ORIGIN_TTL_MS = 5 * 60 * 1000\n"
+    "function _voiceOriginSet(chatId: string): void {\n"
+    "  _voiceOrigin.set(chatId, Date.now())\n"
+    "}\n"
+    "function _voiceOriginConsume(chatId: string): boolean {\n"
+    "  const ts = _voiceOrigin.get(chatId)\n"
+    "  _voiceOrigin.delete(chatId)\n"
+    "  if (ts == null) return false\n"
+    "  return Date.now() - ts < _VOICE_ORIGIN_TTL_MS\n"
+    "}\n"
+    "function _voiceOriginClear(chatId: string): void {\n"
+    "  _voiceOrigin.delete(chatId)\n"
+    "}\n"
+    "let _voiceTtsFormat: 'unknown' | 'ogg-ok' | 'mp3-fallback' = 'unknown'\n"
+    "function _voiceErrClass(err: unknown): { cls: string; status: string } {\n"
+    "  if (err instanceof Error && err.name === 'AbortError') return { cls: 'timeout', status: '' }\n"
+    "  if (typeof err === 'object' && err !== null && typeof (err as { error_code?: unknown }).error_code === 'number') {\n"
+    "    return { cls: 'transport', status: String((err as { error_code: number }).error_code) }\n"
+    "  }\n"
+    "  const msg = err instanceof Error ? err.message : ''\n"
+    "  const m = /-status-(\\d+)$/.exec(msg)\n"
+    "  if (m) return { cls: 'transport', status: m[1] }\n"
+    "  return { cls: 'transport', status: '' }\n"
+    "}\n"
+    "async function _voiceTranscribe(buf: Buffer, signal: AbortSignal): Promise<string> {\n"
+    "  const form = new FormData()\n"
+    "  form.append('file', new Blob([buf]), 'voice.ogg')\n"
+    "  form.append('model_id', VOICE_STT_MODEL)\n"
+    "  if (VOICE_STT_LANG) form.append('language_code', VOICE_STT_LANG)\n"
+    "  const res = await fetch(`${VOICE_API_BASE}/v1/speech-to-text`, {\n"
+    "    method: 'POST',\n"
+    "    headers: { 'xi-api-key': VOICE_KEY },\n"
+    "    body: form,\n"
+    "    signal,\n"
+    "  })\n"
+    "  if (!res.ok) throw new Error(`stt-status-${res.status}`)\n"
+    "  const j = (await res.json()) as { text?: string }\n"
+    "  return (j.text ?? '').trim()\n"
+    "}\n"
+    "async function _voiceSynthesize(text: string, signal: AbortSignal): Promise<{ buf: Buffer; fmt: 'ogg' | 'mp3' }> {\n"
+    "  async function _voiceTtsRequest(fmt: string): Promise<Buffer> {\n"
+    "    const res = await fetch(`${VOICE_API_BASE}/v1/text-to-speech/${VOICE_ID}?output_format=${fmt}`, {\n"
+    "      method: 'POST',\n"
+    "      headers: { 'xi-api-key': VOICE_KEY, 'content-type': 'application/json' },\n"
+    "      body: JSON.stringify({ text, model_id: VOICE_TTS_MODEL, ...(VOICE_STT_LANG ? { language_code: VOICE_STT_LANG } : {}) }),\n"
+    "      signal,\n"
+    "    })\n"
+    "    if (!res.ok) throw new Error(`tts-status-${res.status}`)\n"
+    "    return Buffer.from(await res.arrayBuffer())\n"
+    "  }\n"
+    "  if (_voiceTtsFormat !== 'mp3-fallback') {\n"
+    "    const buf = await _voiceTtsRequest('opus_48000_64')\n"
+    "    if (buf.length >= 4 && buf.toString('ascii', 0, 4) === 'OggS') {\n"
+    "      _voiceTtsFormat = 'ogg-ok'\n"
+    "      return { buf, fmt: 'ogg' }\n"
+    "    }\n"
+    "  }\n"
+    "  const buf = await _voiceTtsRequest('mp3_44100_128')\n"
+    "  _voiceTtsFormat = 'mp3-fallback'\n"
+    "  return { buf, fmt: 'mp3' }\n"
     "}\n"
     "const VOICE_OMISSION_NAG_CHARS = Math.floor(VOICE_SPOKEN_CHAR_CAP / 4)\n"
     "const VOICE_REQUEST_PHRASES: readonly string[] = [\n"
@@ -849,21 +1125,8 @@ VOICE_REPLY_BLOCK_V1 = (
 _REPLY_RETURN_V1 = "        return { content: [{ type: 'text', text: result }] }\n"
 _REPLY_RETURN_V2 = "        return { content: [{ type: 'text', text: result + _voiceOutcome }] }\n"
 
-# 032 V2: voice-synthesis block in `case 'reply'`, anchored on the case's
-# final return — i.e. AFTER the 028 marker-clear/offset-ack site and the
-# files loop (remediated 2026-09-06: a crash here can no longer strand the
-# marker or the offset ack). Consume-on-read happens before synthesis is
-# attempted; a failure here never throws — it only costs the voice bubble.
-#
-# 033 (US1/US3/US4): extends the 032 body to build `_voiceOutcome` — the
-# fed-back acknowledgement line the agent reads, in the SAME turn, to learn
-# what its own voice did (spec 033 FR-001..FR-003, FR-008). `_voiceOutcome`
-# is declared empty right after the comment and concatenated onto `result`
-# at the case's return (via `_REPLY_RETURN_V2`); when the voice step never
-# runs it stays `''`, so the acknowledgement is byte-identical to v0.23.0
-# (FR-002). `_voiceStep` discriminates synthesis from the Telegram send so a
-# failure names which leg broke (contract reply-voice-outcome.md C1/C3).
-VOICE_REPLY_BLOCK = (
+# 034: frozen v2 twin — see VOICE_HELPERS_V2. Paired CONTIGUOUS with _REPLY_RETURN_V2.
+VOICE_REPLY_BLOCK_V2 = (
     "        // agentic-pod-launcher: voice roundtrip outbound synthesis (032)\n"
     "        let _voiceOutcome = ''\n"
     "        if (VOICE_ACTIVE && VOICE_REPLY_MODE !== 'never') {\n"
@@ -908,6 +1171,74 @@ VOICE_REPLY_BLOCK = (
     "        }\n"
 )
 
+# 032 V2: voice-synthesis block in `case 'reply'`, anchored on the case's
+# final return — i.e. AFTER the 028 marker-clear/offset-ack site and the
+# files loop (remediated 2026-09-06: a crash here can no longer strand the
+# marker or the offset ack). Consume-on-read happens before synthesis is
+# attempted; a failure here never throws — it only costs the voice bubble.
+#
+# 033 (US1/US3/US4): extends the 032 body to build `_voiceOutcome` — the
+# fed-back acknowledgement line the agent reads, in the SAME turn, to learn
+# what its own voice did (spec 033 FR-001..FR-003, FR-008). `_voiceOutcome`
+# is declared empty right after the comment and concatenated onto `result`
+# at the case's return (via `_REPLY_RETURN_V2`); when the voice step never
+# runs it stays `''`, so the acknowledgement is byte-identical to v0.23.0
+# (FR-002). `_voiceStep` discriminates synthesis from the Telegram send so a
+# failure names which leg broke (contract reply-voice-outcome.md C1/C3).
+#
+# 034 (US4): the rendition — voice_text or, when omitted, `text` — goes
+# through `_voiceSpokenAssemble` (spoken-safe normalization, sign-off strip,
+# sentence-boundary cut at the budget, sign-off appended once); `spoken` is
+# what the synthesizer gets. The 033 omission record and nag are re-based on
+# the NARRATED length (sign-off excluded — the 033 meaning), and a `voice_text`
+# the channel had to cut earns the new `; voice_text trimmed to N chars` note.
+# Everything else is byte-identical to v2 (pipeline contract C6/C7).
+VOICE_REPLY_BLOCK = (
+    "        // agentic-pod-launcher: voice roundtrip outbound synthesis (032)\n"
+    "        let _voiceOutcome = ''\n"
+    "        if (VOICE_ACTIVE && VOICE_REPLY_MODE !== 'never') {\n"
+    "          const _voiceFresh = _voiceOriginConsume(chat_id)\n"
+    "          const _voiceForce = args.voice_force === true\n"
+    "          if (VOICE_REPLY_MODE === 'always' || _voiceFresh || _voiceForce) {\n"
+    "            if (VOICE_REPLY_MODE === 'always' && _voiceCooldownConsume(chat_id)) {\n"
+    "              process.stderr.write(`telegram channel: voice skip: cooldown after failure chat=${chat_id}\\n`)\n"
+    "            } else {\n"
+    "            const voiceTextArg = args.voice_text as string | undefined\n"
+    "            const _voiceFromText = !(voiceTextArg && voiceTextArg.trim())\n"
+    "            const _voiceAsm = _voiceSpokenAssemble(_voiceFromText ? text : (voiceTextArg as string).trim())\n"
+    "            const spoken = _voiceAsm.spoken\n"
+    "            const _voiceStarted = Date.now()\n"
+    "            let _voiceStep: 'synth' | 'send' = 'synth'\n"
+    "            const _voiceController = new AbortController()\n"
+    "            const _voiceTimer = setTimeout(() => _voiceController.abort(), 30000)\n"
+    "            try {\n"
+    "              const { buf, fmt } = await _voiceSynthesize(spoken, _voiceController.signal)\n"
+    "              _voiceStep = 'send'\n"
+    "              await bot.api.sendVoice(chat_id, new InputFile(buf, `voice.${fmt}`), undefined, _voiceController.signal)\n"
+    "              const _voiceMs = Date.now() - _voiceStarted\n"
+    "              process.stderr.write(`telegram channel: voice tts ok chat=${chat_id} chars=${spoken.length} fmt=${fmt} ms=${_voiceMs}\\n`)\n"
+    "              _voiceOutcome = `\\nvoice: sent (fmt=${fmt}, chars=${spoken.length}, ms=${_voiceMs})`\n"
+    "              if (_voiceFromText) {\n"
+    "                process.stderr.write(`telegram channel: voice tts spoke ${_voiceAsm.narrated.length} chars without voice_text chat=${chat_id}\\n`)\n"
+    "                if (_voiceAsm.narrated.length > VOICE_OMISSION_NAG_CHARS) {\n"
+    "                  _voiceOutcome += `; voice_text omitted — ${_voiceAsm.narrated.length} chars of text were read aloud`\n"
+    "                }\n"
+    "              } else if (_voiceAsm.trimmed) {\n"
+    "                _voiceOutcome += `; voice_text trimmed to ${_voiceAsm.narrated.length} chars`\n"
+    "              }\n"
+    "            } catch (err) {\n"
+    "              const { cls, status } = _voiceErrClass(err)\n"
+    "              if (VOICE_REPLY_MODE === 'always') _voiceCooldown.set(chat_id, Date.now())\n"
+    "              process.stderr.write(`telegram channel: voice tts fail: ${cls} status=${status} step=${_voiceStep} chat=${chat_id}\\n`)\n"
+    "              _voiceOutcome = `\\nvoice: failed (step=${_voiceStep}, cls=${cls}, status=${status})`\n"
+    "            } finally {\n"
+    "              clearTimeout(_voiceTimer)\n"
+    "            }\n"
+    "            }\n"
+    "          }\n"
+    "        }\n"
+)
+
 # 033: frozen v1 twin — see VOICE_HELPERS_V1.
 VOICE_SCHEMA_PROPERTY_V1 = (
     "          voice_text: {\n"
@@ -917,16 +1248,32 @@ VOICE_SCHEMA_PROPERTY_V1 = (
     "          },\n"
 )
 
-# 032 V3 / 033 US2/US4: optional voice_text property plus voice_force — the
-# strict per-reply escape hatch for wording the fixed phrase table doesn't
-# recognise (contract reply-voice-outcome.md C5, explicit-audio-request.md
-# C3). voice_text's v2 description states the fact that omission is read
-# aloud AND reported back.
-VOICE_SCHEMA_PROPERTY = (
+# 034: frozen v2 twin — see VOICE_HELPERS_V2.
+VOICE_SCHEMA_PROPERTY_V2 = (
     "          voice_text: {\n"
     "            type: 'string',\n"
     "            description:\n"
     "              'Spoken-style rendition of this reply, synthesized as the voice bubble whenever the exchange is voice-originated (voice note or explicit audio request) or voice_force is set. Plain speakable prose — no markdown, no code, no lists. Strongly recommended: when omitted, `text` itself is read aloud up to the spoken cap and the reply result reports the omission.',\n"
+    "          },\n"
+    "          voice_force: {\n"
+    "            type: 'boolean',\n"
+    "            description:\n"
+    "              'Force this reply to also be sent as a voice bubble even though the user typed. Set ONLY when the user asked for an audio reply in wording the channel did not recognise. Never set it by default.',\n"
+    "          },\n"
+)
+
+# 032 V3 / 033 US2/US4: optional voice_text property plus voice_force — the
+# strict per-reply escape hatch for wording the fixed phrase table doesn't
+# recognise (contract reply-voice-outcome.md C5, explicit-audio-request.md
+# C3). voice_text's v3 description (034) states the spoken-style contract:
+# a SUMMARY in the configured language under the spoken limit, no closing
+# phrase (the channel appends it), and the cleaned sentence-cut fallback
+# when omitted (contract spoken-style-contract.md C2).
+VOICE_SCHEMA_PROPERTY = (
+    "          voice_text: {\n"
+    "            type: 'string',\n"
+    "            description:\n"
+    "              'Spoken SUMMARY of this reply, synthesized as the voice bubble whenever the exchange is voice-originated (voice note or explicit audio request) or voice_force is set. Plain spoken prose in the configured language, about 30 seconds (~450 characters) by default and never above the spoken limit stated in the channel instructions; no markdown, code, lists, emojis or URLs; figures in words, every amount followed by its currency name; no closing phrase (the channel appends it). When omitted, a cleaned, sentence-cut version of `text` is read aloud and the reply result reports the omission.',\n"
     "          },\n"
     "          voice_force: {\n"
     "            type: 'boolean',\n"
@@ -940,13 +1287,25 @@ VOICE_INSTRUCTIONS_LINE_V1 = (
     "      'Messages whose meta carries attachment_kind=\"voice\" arrive transcribed — the message text IS the transcription. When replying to them, include voice_text with a concise speakable version of your answer.',\n"
 )
 
-# 032 V4 / 033 US2: one instructions-array line — v2 states the truth about
-# outbound voice (automatic on voice notes AND explicit requests, never
-# claim inability, one reply, omission consequence, the outcome line is for
-# the agent not the user, one honest failure mention, voice_force for
-# unrecognised wording — contract reply-voice-outcome.md C5).
-VOICE_INSTRUCTIONS_LINE = (
+# 034: frozen v2 twin — see VOICE_HELPERS_V2.
+VOICE_INSTRUCTIONS_LINE_V2 = (
     "      'Voice replies: when a message arrives transcribed (meta attachment_kind=\"voice\") or the user explicitly asks for an audio reply, this channel AUTOMATICALLY sends your reply as a voice note too — never tell the user you cannot send audio, and answer in ONE reply call (only the first reply of the exchange is spoken). Always include voice_text with a concise speakable version of your answer (plain prose, no markdown, no lists); if you omit it, your full text is read aloud up to the cap. The reply result carries a \"voice:\" line for your own awareness (sent/failed) — do not repeat it to the user; if it says failed, tell the user once, briefly, that the audio did not go out this time, and do not retry. If the user asks for audio in wording the channel did not recognise, set voice_force: true on that reply.',\n"
+)
+
+# 032 V4 / 033 US2 / 034 US1: one instructions-array line. v3 is a TEMPLATE
+# LITERAL (backticks) interpolating three module-level constants declared by
+# the helpers hunk (anchored at `let botUsername`, line 25 upstream — well
+# before the `instructions:` array at line 97): the hard limit
+# ${VOICE_SPOKEN_CHAR_CAP}, the language name ${VOICE_SPOKEN_LANG_NAME} and
+# the currency word ${VOICE_CURRENCY}. It states the spoken-style contract
+# (summary not dictation, 30/45/60 s tiers, plain prose, figures in words with
+# the currency named, configured language, the channel — not the model —
+# appends the closing phrase, omission/trim consequences) on top of the 033
+# facts (automatic on voice notes AND explicit requests, never claim
+# inability, one reply, outcome line is for the agent, one honest failure
+# mention, voice_force) — contract spoken-style-contract.md C1.
+VOICE_INSTRUCTIONS_LINE = (
+    "      `Voice replies: when a message arrives transcribed (meta attachment_kind=\"voice\") or the user explicitly asks for an audio reply, this channel AUTOMATICALLY sends your reply as a voice note too — never tell the user you cannot send audio, and answer in ONE reply call (only the first reply of the exchange is spoken). ALWAYS include voice_text: a spoken SUMMARY of your answer, never your text read aloud — about 30 seconds (~450 characters) by default, up to ~45 seconds (~700) or at most ~60 seconds (${VOICE_SPOKEN_CHAR_CAP} characters, the hard limit) only when the amount of information warrants it; never enumerate a list item by item. Write it as plain spoken prose in ${VOICE_SPOKEN_LANG_NAME}: no markdown, code, lists, emojis or URLs; say figures, dates and percentages in words and follow every amount with its currency name (${VOICE_CURRENCY} for a bare amount). Do NOT write a closing phrase — the channel appends the configured sign-off itself. If you omit voice_text, a cleaned, sentence-cut version of your text is read aloud and the reply result says so; a voice_text over the limit is cut at a sentence and the result says so. The reply result carries a \"voice:\" line for your own awareness (sent/failed) — do not repeat it to the user; if it says failed, tell the user once, briefly, that the audio did not go out this time, and do not retry. If the user asks for audio in wording the channel did not recognise, set voice_force: true on that reply.`,\n"
 )
 
 
@@ -1499,22 +1858,57 @@ def upgrade_voice_v1_to_v2(src: str) -> tuple[str, bool]:
 
     Returns (new_src, applied).
     """
-    if MARKER_VOICE in src:            # already at v2 or beyond
+    if MARKER_VOICE in src or MARKER_VOICE_V2 in src:   # already at v2 or beyond
         return src, False
     if MARKER_VOICE_V1 not in src:     # never patched with voice → nothing to upgrade
         return src, False
 
+    # 034: re-pointed to the frozen _V2 twins — this upgrader now produces EXACTLY
+    # the v0.24.0 output (golden v2) and `upgrade_voice_v2_to_v3` takes it the
+    # rest of the way; the cascade v1→v2→v3 runs in one boot.
     pairs = (
-        (VOICE_HELPERS_V1, VOICE_HELPERS),
+        (VOICE_HELPERS_V1, VOICE_HELPERS_V2),
         (VOICE_TEXT_WRAP_V1, VOICE_TEXT_WRAP),
-        (VOICE_REPLY_BLOCK_V1 + _REPLY_RETURN_V1, VOICE_REPLY_BLOCK + _REPLY_RETURN_V2),
-        (VOICE_SCHEMA_PROPERTY_V1, VOICE_SCHEMA_PROPERTY),
-        (VOICE_INSTRUCTIONS_LINE_V1, VOICE_INSTRUCTIONS_LINE),
+        (VOICE_REPLY_BLOCK_V1 + _REPLY_RETURN_V1, VOICE_REPLY_BLOCK_V2 + _REPLY_RETURN_V2),
+        (VOICE_SCHEMA_PROPERTY_V1, VOICE_SCHEMA_PROPERTY_V2),
+        (VOICE_INSTRUCTIONS_LINE_V1, VOICE_INSTRUCTIONS_LINE_V2),
     )
     work = src
     for n, (old, new) in enumerate(pairs, 1):
         if work.count(old) != 1:
             warn(f"voice v1→v2 upgrade: hunk {n} anchor not found (edited out-of-band?) — leaving v1 in place")
+            return src, False
+        work = work.replace(old, new, 1)
+    return work, True
+
+
+def upgrade_voice_v2_to_v3(src: str) -> tuple[str, bool]:
+    """Migrate a server.ts already patched with voice v2 (033) to v3 (034) in-place.
+
+    Four ordered pairs (helpers, reply block, schema property, instructions
+    line — the text wrap is unchanged between v2 and v3), each an exact
+    substring match against the frozen `_V2` twins. All-or-nothing with the
+    same defensive `work.count(old) != 1` rule as the v1→v2 upgrader: any
+    miss (edited out-of-band, duplicated) aborts the whole upgrade with a
+    WARN and leaves the file at v2 — functional, just not v3.
+
+    Plain `str.replace`, never a regex: the constants carry backslash
+    sequences (research D14) and must reach the file verbatim.
+
+    Returns (new_src, applied).
+    """
+    if MARKER_VOICE_V2 not in src:     # not at v2 (pristine, v1, or already v3)
+        return src, False
+    pairs = (
+        (VOICE_HELPERS_V2, VOICE_HELPERS),
+        (VOICE_REPLY_BLOCK_V2, VOICE_REPLY_BLOCK),
+        (VOICE_SCHEMA_PROPERTY_V2, VOICE_SCHEMA_PROPERTY),
+        (VOICE_INSTRUCTIONS_LINE_V2, VOICE_INSTRUCTIONS_LINE),
+    )
+    work = src
+    for n, (old, new) in enumerate(pairs, 1):
+        if work.count(old) != 1:
+            warn(f"voice v2→v3 upgrade: constant {n} not found exactly once (edited out-of-band?) — leaving v2 in place")
             return src, False
         work = work.replace(old, new, 1)
     return work, True
@@ -1559,7 +1953,10 @@ def apply_voice(src: str) -> tuple[str, bool]:
     # A lambda receives the match object and returns the string verbatim —
     # zero escape processing, so the constants stay editable JS without an
     # escaping ritual.
-    if MARKER_VOICE in src or MARKER_VOICE_V1 in src:
+    if MARKER_VOICE in src or MARKER_VOICE_V1 in src or MARKER_VOICE_V2 in src:
+        # Already applied at some version (a refused upgrade leaves v1/v2 in
+        # place on purpose). No log here — main() emits the single truthful
+        # no-change line for the whole run.
         return src, False
     new_src, n1 = re.subn(
         r"(let botUsername = ''\n)",
@@ -1672,10 +2069,18 @@ def main(argv: list[str]) -> int:
     # as "already has MARKER_VOICE_V1" — apply_voice's own gate then treats
     # a still-v1 file (upgrade refused, out-of-band edit) as "leave it".
     new_src, vu1 = upgrade_voice_v1_to_v2(new_src)
+    new_src, vu2 = upgrade_voice_v2_to_v3(new_src)
     new_src, v = apply_voice(new_src)
 
-    if not (tu1 or tu2 or tu3 or tu4 or tu5 or t or o or pm or s or p or ag or vu1 or v):
-        # Either everything is already patched, or every set of anchors missed.
+    if not (tu1 or tu2 or tu3 or tu4 or tu5 or t or o or pm or s or p or ag or vu1 or vu2 or v):
+        # Either everything is already patched, or some set of anchors missed.
+        # 034: say which — a silent no-op was indistinguishable from a refused
+        # upgrade in the boot log (analyze I3). Never writes the file.
+        present = sum(1 for m in ALL_MARKERS if m in src)
+        if present == len(ALL_MARKERS):
+            log(f"no changes to {path}: all patch groups already present")
+        else:
+            log(f"no changes to {path}: {present}/{len(ALL_MARKERS)} patch groups present, remaining anchors not found (see WARN lines above)")
         return 0
 
     # Atomic write: temp file in same dir, then rename.
@@ -1707,6 +2112,8 @@ def main(argv: list[str]) -> int:
         parts.append("askq-giveup")
     if vu1:
         parts.append("voice-upgrade-v1→v2")
+    if vu2:
+        parts.append("voice-upgrade-v2→v3")
     if v:
         parts.append("voice")
     log(f"applied {'+'.join(parts)} patch(es) to {path}")
