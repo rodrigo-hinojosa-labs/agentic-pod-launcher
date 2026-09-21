@@ -269,7 +269,23 @@ _regen() { echo 'n' | ./setup.sh --regenerate; }
   SIGNOFF_RAW='Con "comillas" y $dolar y {llaves} y \ barra' yq -i '.features.voice.signoff = strenv(SIGNOFF_RAW)' agent.yml
   _regen
   grep -qF 'TELEGRAM_VOICE_SIGNOFF: "Con comillas y dolar y llaves y barra"' docker-compose.yml
-  yq -i '.features.voice.signoff = "Con\ttab y\rretorno"' agent.yml
+  # Feed REAL control bytes through strenv, never yq's own escape handling.
+  # Measured 2026-09-19: `yq '.x = "a\tb"'` is version-dependent — v4.52.5
+  # turns \t and \r into control bytes, while v4.44.3 (the version CI pins,
+  # .github/workflows/test.yml:50) writes them as literal backslash sequences,
+  # which the sanitizer then strips as backslashes, yielding "Conttab yrretorno".
+  # The same commit was therefore green on this host and red in CI with nothing
+  # in the repo declaring why — the 023 class of defect. strenv with real bytes
+  # is byte-identical across both versions and cross-readable, so the oracle
+  # tests the SANITIZER instead of yq's expression parser.
+  local ctrl
+  ctrl=$(printf 'Con\ttab y\rretorno')
+  SIGNOFF_CTRL="$ctrl" yq -i '.features.voice.signoff = strenv(SIGNOFF_CTRL)' agent.yml
+  # Guard: the field really holds one tab and one CR before regenerating. Without
+  # this, a future yq that stops writing control bytes would make the assertion
+  # below fail for an unrelated reason.
+  run bash -c 'yq -r ".features.voice.signoff" agent.yml | LC_ALL=C tr -dc "\t\r" | wc -c | tr -d " "'
+  [ "$output" = "2" ]
   run bash -c "echo n | ./setup.sh --regenerate 2>&1"
   [ "$status" -eq 0 ]
   grep -qF 'TELEGRAM_VOICE_SIGNOFF: "Con tab y retorno"' docker-compose.yml
