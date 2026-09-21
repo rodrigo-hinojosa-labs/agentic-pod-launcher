@@ -2022,6 +2022,36 @@ mcp_timeout_effective() {
   fi
 }
 
+# agent_yml_has_plugin PREFIX FILE — 0 when plugins[] holds an entry starting
+# with PREFIX (e.g. `telegram@`), 1 otherwise. Consumed by the reply_guard (028)
+# and askuserquestion_guard (031) backfills.
+#
+# Deliberately pipeline-free. The shape this replaces,
+#
+#     yq -r '.plugins[]?' "$f" | grep -qE '^telegram@'
+#
+# lost a race roughly 7% of the time under this file's `set -euo pipefail`:
+# `grep -q` exits on the first matching line, yq still has a line to write, takes
+# EPIPE and dies with 141, and pipefail hands that 141 to the caller's `if` — so a
+# successful match reported itself as "no such plugin". Measured 18/300 under bash
+# 5.3.15 and 22/300 under 3.2.57, with the grep stage returning 0 (matched) every
+# time. Because both callers are has()-guarded they write once and never revisit,
+# so the wrong value was permanent.
+#
+# The cure is structural, not a wider escape: read the producer to completion into
+# a variable and decide with `case`. There is no second process to signal, so there
+# is no category of "producer that exits early" left to get wrong — same reasoning
+# as _render_replace_all in 023, which dropped the replacement string rather than
+# escaping one more character class.
+agent_yml_has_plugin() {
+  local prefix="$1" file="$2" list
+  list=$(yq -r '.plugins[]?' "$file" 2>/dev/null) || return 1
+  case $'\n'"$list"$'\n' in
+    *$'\n'"$prefix"*) return 0 ;;
+  esac
+  return 1
+}
+
 # 034: localized defaults for features.voice.{signoff,currency} — the single
 # source for the wizard heredoc, the --regenerate backfill and the sanitizer
 # fallback. `{nickname}` stays LITERAL in agent.yml; it is substituted at render
@@ -2176,7 +2206,7 @@ regenerate() {
     # (byte-stable second pass). has() avoids the `//` false-collapse gotcha.
     if [ "$(yq -r '(.features | has("reply_guard")) // false' "$agent_yml" 2>/dev/null)" != "true" ]; then
       local _rg_bf=false
-      if yq -r '.plugins[]?' "$agent_yml" 2>/dev/null | grep -qE '^telegram@'; then
+      if agent_yml_has_plugin 'telegram@' "$agent_yml"; then
         _rg_bf=true
       fi
       yq -i ".features.reply_guard.enabled = $_rg_bf" "$agent_yml"
@@ -2188,7 +2218,7 @@ regenerate() {
     # not folded under reply_guard, so the two guards stay separately toggleable).
     if [ "$(yq -r '(.features | has("askuserquestion_guard")) // false' "$agent_yml" 2>/dev/null)" != "true" ]; then
       local _aq_bf=false
-      if yq -r '.plugins[]?' "$agent_yml" 2>/dev/null | grep -qE '^telegram@'; then
+      if agent_yml_has_plugin 'telegram@' "$agent_yml"; then
         _aq_bf=true
       fi
       yq -i ".features.askuserquestion_guard.enabled = $_aq_bf" "$agent_yml"

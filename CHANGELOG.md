@@ -2,6 +2,42 @@
 
 ## [Unreleased]
 
+### Fixed
+- **The guard backfills stopped depending on winning a race** (VERSION
+  0.25.0 → 0.25.1). Both `--regenerate` backfills — `features.reply_guard`
+  (028) and `features.askuserquestion_guard` (031) — derived `enabled` from
+
+      yq -r '.plugins[]?' "$agent_yml" | grep -qE '^telegram@'
+
+  while `setup.sh:4` declares `set -euo pipefail`. `grep -q` exits the instant
+  it matches; yq, which writes one line per plugin, takes EPIPE on its next
+  write and dies with 141; pipefail hands that 141 to the `if`, which falls to
+  the else branch. A successful match therefore reported itself as *"no
+  telegram plugin"*. Measured through the real `setup.sh --regenerate` on a
+  workspace whose `plugins[]` carries an entry after `telegram@`: **2 failures
+  in 72 runs (~3%)**, rising with the number of lines that follow the match
+  (isolated pipeline, 4 entries after `telegram@`: 195/300 under bash 5.3.15,
+  261/300 under 3.2.57). A stock wizard scaffold is structurally immune —
+  `plugin_catalog_list` sorts alphabetically, so `telegram@` is emitted last
+  and yq has nothing left to write — and the wizard's own derivation
+  (`setup.sh:1184`) was always a pipeline-free `case` glob. The exposure is the
+  **migration path**: a hand-written or overlay-injected `plugins[]`, which is
+  what the pending fleet update runs.
+
+  The consequence was not a transient glitch. Both blocks are `has()`-guarded,
+  so they write once and are never revisited: a `false` born of the race is
+  **permanent**, silently leaving the agent without the very guard 028/031
+  exist to install, with no later `--regenerate` able to repair it.
+
+  The fix is structural rather than a wider escape: a new
+  `agent_yml_has_plugin PREFIX FILE` reads the producer to completion into a
+  variable and decides with `case`, so there is no second process left to
+  signal — the same reasoning that led `_render_replace_all` (023) to drop the
+  replacement string instead of escaping one more character class. New
+  `tests/backfill-plugin-detection.bats` makes the race deterministic with a
+  `yq` stub that replays the plugins query line by line, and pins that the
+  vulnerable shape cannot return.
+
 ### Added
 - **Spoken style for voice replies — `034-voice-spoken-style`** (VERSION
   0.24.0 → 0.25.0): with `032`+`033` the Telegram channel spoke, but what it
