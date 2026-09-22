@@ -331,6 +331,25 @@ general case and stop `doctor` from lying, but neither is required to end the in
     decides with `case`, like `agent_yml_has_plugin`.
   * Mutation: reverting to `sleep 15` reproduces 2 red / 3. Hardened: **3/3 green**, and both bash
     arms re-measured at 1502/0 afterwards.
+- **CORRECTION to the T029 record, 2026-09-22 after the merge.** The line above says both arms were
+  green with no named exception. That was true of *this machine* and false of the gate: PR #98's
+  `bats — bash 5.x (ubuntu-latest)` arm went **red**, and the PR was merged before anyone read it, so
+  `main` shipped red — the state feature 025 exists to prevent. Two tests of my own,
+  `036 US5(a)` cases 1 and 3, failed with `Argument list too long`.
+  * Cause, and it is a platform limit rather than logic: the harness handed a 200 KiB pad to the
+    probe **through the environment** (`PAD="$pad" bash probe.sh`). Linux caps each individual
+    `argv`/`envp` string at `MAX_ARG_STRLEN` (32 pages, 128 KiB) and returns `E2BIG`; macOS enforces
+    only a 1 MiB total, with no per-string limit. Green on both local arms, red on Linux, every time.
+  * Fixed on `fix/sigpipe-test-arg-limit`: the pad goes to a file and the probe reads it with
+    `$(cat …)`, in-process, with no exec in the path.
+  * Verified where it actually fails, not here: **RED/GREEN reproduced in a Linux container**
+    (Alpine, bash 5.3.9) — without the fix exactly cases 1 and 3 fail, with it 8/8. Then the full
+    suite in a CI-faithful replica (`debian:bookworm`, non-root, pinned yq 4.44.3, plus `age`,
+    `gettext-base`, `tmux`, `busybox`): **1502/0**.
+  * The harness lesson is worth as much as the fix: the FIRST container run was Alpine **as root**
+    and reported 20 reds, none of them real — "unwritable directory" tests cannot fail for a user
+    who ignores mode bits. An unfaithful oracle is not a weaker oracle, it is a different one. Both
+    points are now in `CLAUDE.md`.
 - Live gate (T030): _pending_
 - **Branch decision revised 2026-09-19.** The design was written assuming this work would ride the
   034 PR. The operator revised that once 034 was finished, gated and already deployed: 034 shipped
