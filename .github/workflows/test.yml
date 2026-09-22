@@ -37,7 +37,17 @@ jobs:
             name: "bash 3.2 (macos-latest)"
     name: bats tests/ — ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    # Shared by both legs, and sized for the slow one. The macOS leg runs the
+    # whole suite under /bin/bash 3.2.57 on a hosted Apple Silicon runner and
+    # sits right at the old 15-minute ceiling: PR #98 finished in 13m14s and
+    # passed, PR #99 — the same suite, one test file changed trivially — was
+    # CANCELLED at 15m22s. That is runner variance against too tight a budget,
+    # not a slow test, and it makes the gate flap for reasons unrelated to the
+    # code under review. ubuntu finishes the same suite in ~7m40s.
+    #
+    # 30 still catches a genuine hang; it just stops cancelling healthy runs.
+    # Revisit by MEASURING both legs if the suite grows materially again.
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v6
