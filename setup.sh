@@ -12,6 +12,10 @@ source "$SCRIPT_DIR/scripts/lib/schema.sh"
 source "$SCRIPT_DIR/scripts/lib/local_schedule.sh"
 source "$SCRIPT_DIR/scripts/lib/versions.sh"
 source "$SCRIPT_DIR/scripts/lib/fork.sh"
+# 036: the channel-window backfill reads the workspace `.env` to migrate a
+# hand-set CHANNEL_HEALTH_TIMEOUT into agent.yml. env_file_get PARSES, never
+# sources — the `.env` can arrive from a remote fork via --restore-from-fork.
+source "$SCRIPT_DIR/scripts/lib/env_file.sh"
 
 # Launcher version, surfaced in agent.yml::meta and `agentctl doctor` so
 # scaffolded workspaces can advertise which launcher rev produced them.
@@ -1121,6 +1125,7 @@ ATLASSIAN_${upper}_TOKEN=${ws_token}
   uv_version: \"${_v_uv}\"
   bun_version: \"${_v_bun}\"
   gum_version: \"${_v_gum}\"
+  channel_health_timeout_s: 60
   toolchain_channels:
     claude_code: \"${AGENTIC_CHANNEL_CLAUDE_CODE}\"
     alpine: \"${AGENTIC_CHANNEL_ALPINE}\"
@@ -2022,6 +2027,75 @@ mcp_timeout_effective() {
   fi
 }
 
+# 036: effective channel-health window (seconds) for the container watchdog.
+# Same shape as mcp_timeout_effective above, with one deliberate difference: the
+# bound is SIX digits, not seven, because that is what the in-container reader
+# validates (`channel_health_timeout`, docker/scripts/start_services.sh) — host
+# and container must agree on what "implausibly large" means, or a value the
+# host accepted would be degraded again on the other side.
+#
+# Feeding this the FLATTENED DOCKER_CHANNEL_HEALTH_TIMEOUT_S is safe, unlike the
+# free-text fields of 034: an explicit YAML null flattens to the literal string
+# `null`, which fails the regex and degrades to 60 like any other garbage. No
+# `yq -r '… // ""'` re-read is needed.
+channel_health_timeout_effective() {
+  local v="${1:-}"
+  if [[ "$v" =~ ^[0-9]{1,6}$ ]] && [ "$v" -gt 0 ]; then
+    printf '%s' "$v"
+  else
+    printf '60'
+  fi
+}
+
+# channel_env_value FILE — the CHANNEL_HEALTH_TIMEOUT an operator has in the
+# workspace `.env`, read with the same tolerance Docker Compose applies, or
+# empty. Parses; never sources (the file can arrive from a remote `.env.age`
+# via --restore-from-fork — the 021 anti-RCE rule).
+#
+# Why not `env_file_get`: it is deliberately strict — anchored `KEY=` at column
+# one, value taken verbatim — because its job is delivering SECRETS, where
+# guessing is the wrong instinct. Compose is more forgiving, and MEASURED on
+# this host it hands the container `120` for every one of these, which
+# env_file_get rejects or misreads:
+#
+#     CHANNEL_HEALTH_TIMEOUT=120         (trailing space)
+#       CHANNEL_HEALTH_TIMEOUT=120       (leading whitespace)
+#     export CHANNEL_HEALTH_TIMEOUT=120
+#     CHANNEL_HEALTH_TIMEOUT=120 # slow host
+#
+# Using the strict reader for the MIGRATION would therefore cut a live agent's
+# window from 120 to 60 — silently for the indented and `export` forms, since
+# the notice keys off the same read and would not fire either. The docs told
+# operators to hand-write this key, so these shapes are what is actually out
+# there. Read it the way the thing that consumed it reads it.
+channel_env_value() {
+  local file="${1:-}" line v out=""
+  [ -f "$file" ] || { printf ''; return 0; }
+  while IFS= read -r line || [ -n "$line" ]; do
+    # Strip leading blanks and an optional `export `, the two shapes compose
+    # accepts that a column-anchored match misses entirely.
+    line="${line#"${line%%[![:space:]]*}"}"
+    case "$line" in
+      export\ *) line="${line#export }"; line="${line#"${line%%[![:space:]]*}"}" ;;
+    esac
+    case "$line" in
+      CHANNEL_HEALTH_TIMEOUT=*)
+        v="${line#*=}"
+        # An inline comment needs a blank before `#`, matching compose.
+        case "$v" in *" #"*) v="${v%%" #"*}" ;; esac
+        # Trailing blanks, then one layer of matching quotes.
+        v="${v%"${v##*[![:space:]]}"}"
+        case "$v" in
+          \"*\") v="${v#\"}"; v="${v%\"}" ;;
+          \'*\') v="${v#\'}"; v="${v%\'}" ;;
+        esac
+        out="$v"
+        ;;
+    esac
+  done < "$file"
+  printf '%s' "$out"
+}
+
 # agent_yml_has_plugin PREFIX FILE — 0 when plugins[] holds an entry starting
 # with PREFIX (e.g. `telegram@`), 1 otherwise. Consumed by the reply_guard (028)
 # and askuserquestion_guard (031) backfills.
@@ -2261,6 +2335,31 @@ regenerate() {
     if [ "$(yq -r '((.claude // {}) | has("mcp_timeout_ms")) // false' "$agent_yml" 2>/dev/null)" != "true" ]; then
       yq -i '.claude.mcp_timeout_ms = 120000' "$agent_yml"
     fi
+
+    # 036: backfill docker.channel_health_timeout_s for a pre-036 workspace.
+    #
+    # It MIGRATES the live value instead of resetting it. Until this feature the
+    # only knob was CHANNEL_HEALTH_TIMEOUT in the workspace .env, and the docs
+    # said so — but compose's `environment:` outranks `env_file:`, so the moment
+    # the rendered line appears a flat 60 here would silently cut the window of
+    # every agent that followed those docs (donna runs at 120). That is the
+    # cold-cache + many-MCP + short-window combination this whole feature exists
+    # to prevent, so the upgrade must be behaviour-preserving.
+    #
+    # The seed goes through channel_health_timeout_effective so there is ONE
+    # definition of a valid window: empty / non-numeric / 0 / negative / 7-digit
+    # all land on 60, and the backfill can never write a value its own render
+    # would then degrade.
+    #
+    # env_file_get PARSES the .env and never sources it — the file can arrive
+    # from a remote .env.age via --restore-from-fork (the 021 anti-RCE
+    # primitive). has(), never `//`, so a present 0 or an explicit empty value
+    # stays the operator's.
+    if [ "$(yq -r '((.docker // {}) | has("channel_health_timeout_s")) // false' "$agent_yml" 2>/dev/null)" != "true" ]; then
+      local _cht_seed
+      _cht_seed="$(channel_health_timeout_effective "$(channel_env_value "$SCRIPT_DIR/.env")")"
+      yq -i ".docker.channel_health_timeout_s = $_cht_seed" "$agent_yml"
+    fi
   fi
 
   echo "▸ Loading context from agent.yml"
@@ -2273,6 +2372,13 @@ regenerate() {
   # Claude Code would otherwise fall back to ITS 30000 default on garbage, not ours.
   CLAUDE_MCP_TIMEOUT_MS="$(mcp_timeout_effective "${CLAUDE_MCP_TIMEOUT_MS:-}")"
   export CLAUDE_MCP_TIMEOUT_MS
+
+  # 036: channel-health window, same treatment one field over. The flatten of
+  # .docker.channel_health_timeout_s is automatic (render.sh upper-cases and
+  # swaps dots), so this must run BEFORE any render_to_file or the compose
+  # artifact would carry the raw value.
+  DOCKER_CHANNEL_HEALTH_TIMEOUT_S="$(channel_health_timeout_effective "${DOCKER_CHANNEL_HEALTH_TIMEOUT_S:-}")"
+  export DOCKER_CHANNEL_HEALTH_TIMEOUT_S
 
   # 032: voice roundtrip render-time sanitization (029 mcp_timeout_effective
   # mold). render_load_context already flattened the raw
@@ -2576,6 +2682,18 @@ regenerate() {
     # Render docker-compose.yml
     render_to_file "$modules_dir/docker-compose.yml.tpl" "$SCRIPT_DIR/docker-compose.yml"
     echo "  ✓ docker-compose.yml"
+
+    # 036: tell the operator that a CHANNEL_HEALTH_TIMEOUT still sitting in the
+    # workspace .env no longer decides anything — the rendered `environment:`
+    # line outranks `env_file:`. Deliberately decoupled from the backfill that
+    # migrated the value ~350 lines up: the trigger is the key still being in
+    # the .env, so no state has to travel between the two sites. Docker-only,
+    # because nothing renders the key in local mode. Names the key, never the
+    # value. Non-fatal, and repeats on every run until the line is removed —
+    # which is the point, since the line is the leftover being reported.
+    if [ -n "$(channel_env_value "$SCRIPT_DIR/.env")" ]; then
+      echo "NOTE: CHANNEL_HEALTH_TIMEOUT from the workspace .env was migrated into agent.yml (docker.channel_health_timeout_s); docker-compose.yml now renders it and the rendered value wins — you can remove the .env line" >&2
+    fi
 
     # Mirror plugin catalog into docker/ build context. Picks up descriptor
     # changes (modules/plugins/<id>.yml) on every regenerate so the next

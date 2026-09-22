@@ -1701,3 +1701,77 @@ assert '_voiceTruncate' not in p.VOICE_HELPERS, "_voiceTruncate still in the liv
 assert '_voiceTruncate' in p.VOICE_HELPERS_V2 and '_voiceTruncate' in p.VOICE_HELPERS_V1, "the frozen twins must keep _voiceTruncate"
 PY
 }
+
+# ══ 036 US4: --list-markers — the patcher publishes its own marker set ═══════
+#
+# The doctor's patch check duplicated four marker literals and pinned one of
+# them at v3 while the patcher moved to v6, so a fully-patched agent has been
+# warned at "patches incomplete" for months. Duplicated constants drift; the
+# cure is to ask the patcher instead of re-stating what it knows.
+
+@test "036 US4: --list-markers prints every ALL_MARKERS entry, one per line, on stdout" {
+  run python3 "$PATCHER" --list-markers
+  [ "$status" -eq 0 ]
+  # Exactly the seven groups, nothing else.
+  [ "${#lines[@]}" -eq 7 ]
+  # Compared against the module's own tuple, so adding an eighth group cannot
+  # silently pass: the expectation is derived, never re-typed.
+  python3 -B - "$PATCHER" "$output" <<'PY'
+import sys, os
+sys.path.insert(0, os.path.dirname(sys.argv[1]))
+import apply_telegram_typing_patch as p
+got = sys.argv[2].splitlines()
+assert got == list(p.ALL_MARKERS), f"order/content drift:\n got={got}\n want={list(p.ALL_MARKERS)}"
+PY
+}
+
+@test "036 US4: --list-markers needs no file argument and touches nothing" {
+  # The doctor calls this against an image where no server.ts path is known.
+  cp "$TMP_TEST_DIR/server.ts" "$TMP_TEST_DIR/server.ts.before"
+  run python3 "$PATCHER" --list-markers
+  [ "$status" -eq 0 ]
+  diff -q "$TMP_TEST_DIR/server.ts" "$TMP_TEST_DIR/server.ts.before"
+}
+
+@test "036 US4: --list-markers emits the markers on stdout, not stderr" {
+  run bash -c "python3 '$PATCHER' --list-markers 2>/dev/null | wc -l | tr -d ' '"
+  [ "$output" = "7" ]
+}
+
+@test "036 US4: the single-argument usage path is unchanged (exit 2, no markers)" {
+  # Regression guard on the flag's neighbour: a bare invocation must still fail
+  # the usage check exactly as before.
+  run python3 "$PATCHER"
+  [ "$status" -eq 2 ]
+  run bash -c "python3 '$PATCHER' 2>&1 | grep -cF 'usage:'"
+  [ "$output" = "1" ]
+}
+
+@test "036 US4: an UNSUPPORTED --list-markers is detectable by content, never by status" {
+  # THE probe contract. A pre-036 patcher handed the flag satisfies len(argv)==2,
+  # finds Path('--list-markers').is_file() False, logs "not found — skipping"
+  # and returns 0. A status-based probe would therefore read a stale patcher as
+  # "supported" and then compare against an empty marker list — reporting a
+  # perfectly healthy agent as unpatched. Same false verdict as today's bug,
+  # inverted. This asserts the old shape really does exit 0, so the doctor's
+  # content-based probe is not over-engineering.
+  local old="$TMP_TEST_DIR/old-patcher.py"
+  printf '%s\n' \
+    'import sys' \
+    'from pathlib import Path' \
+    'def main(argv):' \
+    '    if len(argv) != 2:' \
+    '        print("usage: apply_telegram_typing_patch.py <server.ts>")' \
+    '        return 2' \
+    '    path = Path(argv[1])' \
+    '    if not path.is_file():' \
+    '        print(f"server.ts not found at {path} — skipping")' \
+    '        return 0' \
+    '    return 0' \
+    'sys.exit(main(sys.argv))' > "$old"
+  run python3 "$old" --list-markers
+  [ "$status" -eq 0 ]
+  # …and prints no marker, which is what the doctor must key on.
+  run bash -c "python3 '$old' --list-markers 2>&1 | grep -cF 'agentic-pod-launcher:'"
+  [ "$output" = "0" ]
+}

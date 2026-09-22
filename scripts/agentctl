@@ -378,22 +378,92 @@ cmd_doctor() {
   uptime=$(docker inspect --format '{{.State.StartedAt}}' "$agent" 2>/dev/null | head -c 19)
   _doctor_pass "Container '$agent' running (started $uptime)"
 
+  # Resolve agent.yml here, BEFORE check 4. The boot-attempt freshness guard
+  # below reads this agent's own docker.channel_health_timeout_s, and the
+  # original placement declared `local yml=""` down in check 5 — 29 lines LATER
+  # in the same function. The name therefore resolved to an unset global, the
+  # read was dead code, and every agent got the default 60 s window in its
+  # budget regardless of configuration. For donna, whose window is 120, that
+  # made the budget 195 s instead of 375 s: a legitimately slow boot would have
+  # been declared stale and reported as a hard FAIL — the exact false negative
+  # this guard exists to remove. Caught by adversarial review, 2026-09-21.
+  local yml=""
+  for probe in "./agent.yml" "$(dirname "$0")/../agent.yml"; do
+    [ -f "$probe" ] && { yml="$probe"; break; }
+  done
+
   # 4. Container health
   local health
   health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$agent" 2>/dev/null)
+  # 036 US3: an `unhealthy` verdict during a legitimate boot retry is a false
+  # negative. start_initial_session writes /tmp/agent-watchdog/boot-attempt for
+  # the duration of the initial boot and removes it on success AND on
+  # exhaustion, so its presence means "still working through the attempts".
+  #
+  # Read through `docker exec`, NEVER the workspace bind-mount: /tmp is a
+  # container tmpfs, reachable through neither ./:/workspace nor
+  # ./.state:/home/agent. The convention comment above steers freshness checks
+  # toward the bind-mount, which here would silently find nothing and make this
+  # whole branch dead code.
+  local boot_attempt="" boot_age=0
+  if [ "$health" = "unhealthy" ]; then
+    # A failed exec (container restarting, daemon slow) yields empty and is
+    # treated as "no marker" — i.e. today's behaviour, never a bypass.
+    boot_attempt=$(_in_container "$agent" cat /tmp/agent-watchdog/boot-attempt 2>/dev/null || true)
+    boot_attempt=$(printf '%s' "$boot_attempt" | tr -d '\r\n')
+    # Digits and one space only; anything else degrades to "no marker" rather
+    # than producing a nonsense verdict from a truncated read.
+    case "$boot_attempt" in
+      ''|*[!0-9\ ]*) boot_attempt="" ;;
+    esac
+    if [ -n "$boot_attempt" ]; then
+      local _b_n _b_ts _b_win
+      _b_n=${boot_attempt%% *}
+      _b_ts=${boot_attempt##* }
+      if [ -z "$_b_n" ] || [ -z "$_b_ts" ] || [ "$_b_n" = "$_b_ts" ]; then
+        boot_attempt=""
+      else
+        # THE FRESHNESS GUARD IS NOT OPTIONAL. A container that can never bring
+        # the channel up exhausts its attempts, exits, is revived by `restart:
+        # unless-stopped`, and starts over — so it lives permanently inside an
+        # "initial boot" with a marker almost always present. Without an age
+        # limit this check would answer "starting" forever for a dead agent,
+        # which is worse than the FAIL it replaces.
+        #
+        # Budget: attempts x (channel window + overhead). The window comes from
+        # the same agent.yml field the compose file renders, defaulting to 60.
+        _b_win=60
+        if [ -n "${yml:-}" ] && [ -f "${yml:-}" ]; then
+          _b_win=$(yq -r '.docker.channel_health_timeout_s // 60' "$yml" 2>/dev/null || echo 60)
+        fi
+        case "$_b_win" in ''|*[!0-9]*) _b_win=60 ;; esac
+        boot_age=$(( $(date -u +%s) - _b_ts ))
+        if [ "$boot_age" -lt 0 ] || [ "$boot_age" -gt $(( 3 * (_b_win + 5) )) ]; then
+          boot_attempt=""
+        else
+          boot_attempt="$_b_n"
+        fi
+      fi
+    fi
+  fi
+
   case "$health" in
     healthy)   _doctor_pass "Container health: healthy" ;;
     starting)  _doctor_warn "Container health: still starting" "Healthcheck still in start_period (~60s). Re-run doctor in a minute." ;;
-    unhealthy) _doctor_fail "Container health: unhealthy" "Check 'agentctl logs -n 50' and 'docker logs $agent | tail -50'" ;;
+    unhealthy)
+      if [ -n "$boot_attempt" ]; then
+        _doctor_pass "Container health: starting (boot attempt ${boot_attempt}/3)"
+      else
+        _doctor_fail "Container health: unhealthy" "Check 'agentctl logs -n 50' and 'docker logs $agent | tail -50'"
+      fi
+      ;;
     none)      _doctor_warn "Container health: not configured" "Older agent without HEALTHCHECK in docker-compose.yml. Re-scaffold or add it manually." ;;
     *)         _doctor_warn "Container health: $health" ;;
   esac
 
   # 5. agent.yml valid (host-side check; file is in cwd or workspace)
-  local yml=""
-  for probe in "./agent.yml" "$(dirname "$0")/../agent.yml"; do
-    [ -f "$probe" ] && { yml="$probe"; break; }
-  done
+  # NOTE: $yml is resolved earlier, just before check 4 — the boot-attempt
+  # freshness guard needs it to read this agent's own channel window.
   if [ -z "$yml" ]; then
     _doctor_warn "agent.yml not found" "Run from the workspace dir, or pass -a NAME to skip this check"
   elif yq -e '.' "$yml" >/dev/null 2>&1; then
@@ -521,19 +591,74 @@ cmd_doctor() {
   fi
 
   # 12. Telegram plugin patched
+  #
+  # 036 rewrote this check after it spent months warning healthy agents. Three
+  # defects, all of them structural rather than typos:
+  #
+  #   1. It restated four of the patcher's marker literals, one of them pinned
+  #      at "typing refresh patch v3" while the patcher moved to v6 in feature
+  #      031. Duplicated constants drift; this one drifted silently, because a
+  #      missing marker looks exactly like an unpatched plugin. The cure is to
+  #      ASK the patcher (`--list-markers`) instead of re-stating what it knows,
+  #      so no future version bump can desynchronise the two again.
+  #   2. `v=$(… grep -c … || echo 0)` produced TWO tokens whenever the file
+  #      existed and did not match: grep printed its own 0, exited 1, and the
+  #      `||` appended another. `[ "$v" -ge 1 ]` then died with an integer-
+  #      expression error, which is what the operator actually saw.
+  #   3. It read `… | head -1` of the cache glob, so with two version
+  #      directories present it could report on the one the boot patcher never
+  #      touched. The boot patcher walks every match; so does this now.
   if [ "$notif_channel" = "telegram" ]; then
-    local plugin_dir
-    plugin_dir=$(_in_container "$agent" sh -c 'ls -d /home/agent/.claude/plugins/cache/claude-plugins-official/telegram/*/server.ts 2>/dev/null | head -1')
-    if [ -n "$plugin_dir" ]; then
-      local typing_v3 offset stderr primary
-      typing_v3=$(_in_container "$agent" grep -c "typing refresh patch v3" "$plugin_dir" 2>/dev/null || echo 0)
-      offset=$(_in_container "$agent" grep -c "offset persistence patch v1" "$plugin_dir" 2>/dev/null || echo 0)
-      stderr=$(_in_container "$agent" grep -c "stderr-capture patch v1" "$plugin_dir" 2>/dev/null || echo 0)
-      primary=$(_in_container "$agent" grep -c "primary lock patch v1" "$plugin_dir" 2>/dev/null || echo 0)
-      if [ "$typing_v3" -ge 1 ] && [ "$offset" -ge 1 ] && [ "$stderr" -ge 1 ] && [ "$primary" -ge 1 ]; then
-        _doctor_pass "Telegram plugin patches: typing v3, offset v1, stderr v1, primary v1"
+    local plugin_files
+    plugin_files=$(_in_container "$agent" sh -c 'ls -d /home/agent/.claude/plugins/cache/claude-plugins-official/telegram/*/server.ts 2>/dev/null')
+    if [ -n "$plugin_files" ]; then
+      local marker_list marker_count
+      marker_list=$(_in_container "$agent" python3 /opt/agent-admin/scripts/apply_telegram_typing_patch.py --list-markers 2>/dev/null | grep '^agentic-pod-launcher: ' || true)
+      marker_count=$(printf '%s' "$marker_list" | grep -c . || true)
+      # Probe by CONTENT, never by status. A patcher that predates the flag
+      # treats "--list-markers" as a filename, logs "not found — skipping" and
+      # returns 0 — so a status probe would read a stale image as supported and
+      # then compare against an empty list. That yields "0/0 groups present",
+      # a pass glyph on an unverified agent: the same false-clean verdict this
+      # rewrite exists to end, merely inverted. Gate before any counting.
+      if [ -z "$marker_list" ] || [ "${marker_count:-0}" -lt 1 ]; then
+        _doctor_skip "Telegram plugin patches" "image patcher predates --list-markers; rebuild the image to enable this check"
       else
-        _doctor_warn "Telegram plugin patches incomplete (typing=$typing_v3 offset=$offset stderr=$stderr primary=$primary)" "agentctl restart (apply_telegram_typing_patch.py runs at boot)"
+        local worst_dir="" worst_missing="" worst_present=0 checked=0 f
+        while IFS= read -r f; do
+          [ -n "$f" ] || continue
+          checked=$((checked + 1))
+          local present=0 missing="" m
+          while IFS= read -r m; do
+            [ -n "$m" ] || continue
+            # grep -q, not -c: a boolean question deserves a boolean answer,
+            # and there is no count to mis-parse. The status is consumed by an
+            # `if`, so a non-match is data rather than a failure.
+            if _in_container "$agent" grep -qF "$m" "$f" 2>/dev/null; then
+              present=$((present + 1))
+            elif [ -z "$missing" ]; then
+              missing="$m"
+            else
+              missing="$missing, $m"
+            fi
+          done <<EOF
+$marker_list
+EOF
+          if [ -n "$missing" ] && [ -z "$worst_dir" ]; then
+            # Report the version directory, not the full path: the rest of the
+            # path is a constant and carries no information.
+            worst_dir=$(printf '%s' "$f" | sed 's|.*/telegram/||; s|/server\.ts$||')
+            worst_missing="$missing"
+            worst_present="$present"
+          fi
+        done <<EOF
+$plugin_files
+EOF
+        if [ -z "$worst_dir" ]; then
+          _doctor_pass "Telegram plugin patches: ${marker_count}/${marker_count} groups present (${checked} file(s) checked)"
+        else
+          _doctor_warn "Telegram plugin patches incomplete in ${worst_dir}: ${worst_present}/${marker_count} groups present, missing: ${worst_missing}" "agentctl restart (apply_telegram_typing_patch.py runs at boot)"
+        fi
       fi
     else
       _doctor_skip "Telegram plugin patches" "plugin not yet installed in cache"

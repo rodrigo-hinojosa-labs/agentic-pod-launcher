@@ -46,6 +46,75 @@ teardown() { teardown_tmp_dir; }
   [ "$output" = "function" ]
 }
 
+# ══ 036 US1: the pruner runs BEFORE the warm ═════════════════════════════════
+#
+# BEHAVIOURAL oracle, not a naive one. The obvious test — "assert the pruner is
+# called" — cannot fail for the mutation it is supposed to catch: moving the
+# call after mcp_warm_run still calls it, and mcp_warm_run has no early return
+# that would skip it (that early return belongs to mcp_warm_targets,
+# mcp_warm.sh:62, inside a process substitution). So the oracle has to observe
+# the CONSEQUENCE of the order instead.
+#
+# The consequence is the live incident itself: a dangling link holding the
+# executable name makes `uv tool install` exit 2 instantly. Prune first and the
+# install succeeds; prune after (or never) and it fails. The stub below keys its
+# exit code on exactly that, so the two orders produce different warm summaries.
+_install_collision_uv_stub() {
+  cat > "$TMP_TEST_DIR/bin/uv" <<EOF
+#!/bin/sh
+echo "uv \$*" >> "$TMP_TEST_DIR/warm.log"
+# Reproduce uv's real behaviour: refuse while the executable name is taken.
+if [ -L "\$HOME/.local/bin/workspace-cli" ] || [ -e "\$HOME/.local/bin/workspace-cli" ]; then
+  exit 2
+fi
+exit 0
+EOF
+  chmod +x "$TMP_TEST_DIR/bin/uv"
+}
+
+@test "036 US1: a dangling link colliding with a declared package still ends warm (pruner runs first)" {
+  mkdir -p "$HOME/.local/bin"
+  ln -s /opt/uv/tools/workspace-mcp/bin/workspace-cli "$HOME/.local/bin/workspace-cli"
+  _install_collision_uv_stub
+  cat > "$WORKDIR/.mcp.json" <<'EOF'
+{ "mcpServers": { "gws": { "command": "uvx", "args": ["workspace-mcp"] } } }
+EOF
+  run pre_warm_mcps
+  [ "$status" -eq 0 ]
+  # Pruner-before → the install succeeds → 1/1 warm, no CANON-W1.
+  run bash -c "printf '%s\n' \"\$1\" | grep -cF 'mcp_warm: warm cache: 1/1 warm, 0 failed'" _ "$output"
+  [ "$output" = "1" ]
+}
+
+@test "036 US1: the same collision reports CANON-W1 when the link is NOT pruned (the mutation's shape)" {
+  # Pins that the previous test is discriminating rather than vacuous: with the
+  # link left in place, the identical stub yields the exact failure the incident
+  # produced. If this ever goes green alongside a broken order, the oracle above
+  # has stopped proving anything.
+  mkdir -p "$HOME/.local/bin"
+  ln -s /opt/uv/tools/workspace-mcp/bin/workspace-cli "$HOME/.local/bin/workspace-cli"
+  _install_collision_uv_stub
+  cat > "$WORKDIR/.mcp.json" <<'EOF'
+{ "mcpServers": { "gws": { "command": "uvx", "args": ["workspace-mcp"] } } }
+EOF
+  run mcp_warm_run "$WORKDIR/.mcp.json"   # warm WITHOUT pruning
+  [ "$status" -eq 0 ]
+  run bash -c "printf '%s\n' \"\$1\" | grep -cF 'mcp_warm: warn: uvx workspace-mcp failed (exit 2) — will resolve on first use'" _ "$output"
+  [ "$output" = "1" ]
+}
+
+@test "036 US1: stale links are pruned even for an agent with zero uvx/npx targets (C14 oracle c)" {
+  mkdir -p "$HOME/.local/bin"
+  ln -s /opt/uv/tools/gone/bin/gone "$HOME/.local/bin/gone"
+  # Only a baked binary: the derivation yields no targets at all.
+  cat > "$WORKDIR/.mcp.json" <<'EOF'
+{ "mcpServers": { "time": { "command": "mcp-server-time", "args": [] } } }
+EOF
+  run pre_warm_mcps
+  [ "$status" -eq 0 ]
+  [ ! -L "$HOME/.local/bin/gone" ]
+}
+
 # ── pre_warm_mcps warms the packages the effective .mcp.json declares ─────────
 
 @test "030 US1: pre_warm_mcps warms uvx and npx packages from WORKDIR/.mcp.json" {

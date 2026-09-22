@@ -2027,6 +2027,25 @@ def apply_voice(src: str) -> tuple[str, bool]:
 
 
 def main(argv: list[str]) -> int:
+    # 036: publish the marker set so no other tool has to restate it. `agentctl
+    # doctor` duplicated four of these literals and pinned typing at v3 while
+    # this file moved to v6, so a fully-patched agent was warned "patches
+    # incomplete" for months. Duplicated constants drift; a reader that asks is
+    # correct by construction.
+    #
+    # Bare print(), not log(): log() prefixes every line, and this output is
+    # parsed. One marker per line, on stdout, in ALL_MARKERS order.
+    #
+    # Placed BEFORE the usage guard on purpose. `--list-markers` makes argv
+    # length 2, so it would otherwise sail past the guard and die at the
+    # is_file() check — which is exactly what a pre-036 patcher does with this
+    # flag: exit 0, having printed no marker. That is why the consumer probes by
+    # content and never by status.
+    if len(argv) == 2 and argv[1] == "--list-markers":
+        for marker in ALL_MARKERS:
+            print(marker)
+        return 0
+
     if len(argv) != 2:
         log("usage: apply_telegram_typing_patch.py <server.ts>")
         return 2

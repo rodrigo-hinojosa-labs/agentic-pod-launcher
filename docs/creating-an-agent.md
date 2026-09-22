@@ -449,14 +449,25 @@ docker exec -u agent john-doe sh -lc '
 docker exec -u agent john-doe heartbeatctl qmd-reindex
 ```
 
-### `agentctl doctor` says the typing patch is "incomplete"
+### `agentctl doctor` says the Telegram plugin patches are "incomplete"
 
-Known false-negative: `doctor`'s integer parse of the typing-tick count misreports the
-Telegram typing patch as incomplete even when the `v4` marker is present. Confirm the
-patch is applied and ignore the warning:
+**Fixed in 0.26.0.** Until then this was a false negative, and the advice here was to
+ignore it — which is the worst possible state for a health check, since a real problem
+looked identical. Two causes: `doctor` restated the patcher's marker strings and had
+pinned the typing group at `v3` while the patcher moved to `v6`, and its count parse
+produced a two-token value that made the comparison fail outright.
+
+It now asks the patcher for its own marker list (`--list-markers`) instead of restating
+it, so a version bump can no longer desynchronise the two, and it checks every version
+directory in the cache rather than only the first. A warning from a current image is
+therefore real: act on it.
+
+If the check reports `image patcher predates --list-markers`, the image is older than
+0.26.0 — rebuild it. To confirm the patches by hand meanwhile:
 
 ```bash
-docker exec john-doe grep -c "typing refresh patch v4" \
+docker exec john-doe python3 /opt/agent-admin/scripts/apply_telegram_typing_patch.py --list-markers
+docker exec john-doe grep -c "agentic-pod-launcher:" \
   /home/agent/.claude/plugins/cache/claude-plugins-official/telegram/*/server.ts
 ```
 

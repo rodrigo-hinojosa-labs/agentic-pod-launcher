@@ -89,20 +89,97 @@ _mcp_warm_timeout() {
 
 # _mcp_warm_one RUNTIME PACKAGE PY_FLAG TIMEOUT — warm a single package. rc 0 on
 # success. Idempotent: a package already in the cache resolves without download.
+#
+# 036: also classifies the failure, in _MCP_WARM_CLASS, into one of
+#   warm | failed | timeout | unavailable
+# because the single pre-036 wording made an instant hard error ("Executable
+# already exists", rc 2, 0 seconds) indistinguishable from a slow download —
+# which is why feature 030's pre-warm was silently ineffective for months.
+#
+# NO --force, deliberately. An earlier revision of this fix added it, on the
+# theory that a surviving executable link had to be overwritten. Measured in the
+# real image against the pre-036 layout (UV_TOOL_BIN_DIR at its old default, a
+# dangling link in place): install alone gives rc=2 — the incident — while BOTH
+# `--force` and "prune first, then install" give rc=0. The pruner already closes
+# it, so --force was a second cure for an already-cured problem.
+#
+# It is left out because it is not free in the way that matters. Every uvx MCP is
+# declared WITHOUT a version (modules/mcp-json.tpl) and the image installs them
+# unpinned too, so a forced reinstall on every boot — and on every watchdog
+# respawn — is an unattended version change waiting to happen, in a repo where
+# MCP version drift has already caused outages (feature 027). Costing 0 s is not
+# the same as having no effect. Raised by adversarial review, 2026-09-21.
 _mcp_warm_one() {
-  local rt="$1" pkg="$2" py_flag="$3" to="$4"
+  local rt="$1" pkg="$2" py_flag="$3" to="$4" rc
+  _MCP_WARM_CLASS="failed"
   case "$rt" in
     uvx)
-      command -v uv >/dev/null 2>&1 || return 1
+      command -v uv >/dev/null 2>&1 || { _MCP_WARM_CLASS="unavailable"; return 1; }
       # shellcheck disable=SC2086
       _mcp_warm_timeout "$to" uv tool install $py_flag "$pkg" >/dev/null 2>&1
+      rc=$?
       ;;
     npx)
-      command -v npm >/dev/null 2>&1 || return 1
+      command -v npm >/dev/null 2>&1 || { _MCP_WARM_CLASS="unavailable"; return 1; }
       _mcp_warm_timeout "$to" npm exec --prefer-offline -y --package="$pkg" -- true >/dev/null 2>&1
+      rc=$?
       ;;
     *) return 1 ;;
   esac
+  if [ "$rc" -eq 0 ]; then
+    _MCP_WARM_CLASS="warm"
+  elif [ "$rc" -eq 124 ] || [ "$rc" -eq 143 ]; then
+    # MEASURED, do not narrow to 124: GNU timeout reports 124 on expiry, busybox
+    # timeout — what the Alpine image ships — reports 143 (128+SIGTERM). A
+    # non-expiring child's own status passes through faithfully in both.
+    _MCP_WARM_CLASS="timeout"
+  fi
+  _MCP_WARM_RC="$rc"
+  return "$rc"
+}
+
+# _mcp_warm_runtime_bin RUNTIME — the executable a runtime needs on PATH.
+_mcp_warm_runtime_bin() {
+  case "$1" in
+    uvx) printf 'uv' ;;
+    npx) printf 'npm' ;;
+    *)   printf '%s' "$1" ;;
+  esac
+}
+
+# mcp_warm_prune_stale_links DIR — remove symlinks in DIR that point into
+# /opt/uv/tools and no longer resolve. Always rc 0 (fail-soft, Principle IV).
+#
+# Why this exists: uv splits its state across UV_TOOL_DIR (the package tree,
+# baked into the image and discarded on every rebuild) and UV_TOOL_BIN_DIR (the
+# executable links, which default to ~/.local/bin — inside the .state/
+# bind-mount, so they survive everything). After a rebuild the links dangle, and
+# `uv tool install` refuses to overwrite an existing executable, so every
+# affected package becomes permanently unwarmable.
+#
+# DIR IS MANDATORY — there is deliberately no default. This library is also
+# sourced on the operator's own machine (modules/local-bootstrap.sh.tpl), where
+# ~/.local/bin holds their real uv, bun, node and github-mcp-server links. A
+# function containing `rm` whose default target is the user's own bin directory
+# is one careless call away from damage. Empty or missing → return 0, no scan.
+mcp_warm_prune_stale_links() {
+  local dir="${1:-}" entry target removed=0
+  [ -n "$dir" ] || return 0
+  [ -d "$dir" ] || return 0
+  for entry in "$dir"/*; do
+    [ -L "$entry" ] || continue          # never a regular file
+    target=$(readlink "$entry" 2>/dev/null) || continue
+    case "$target" in
+      /opt/uv/tools/*) ;;                # never a link pointing elsewhere
+      *) continue ;;
+    esac
+    [ -e "$entry" ] && continue          # never a link that still resolves
+    rm -f "$entry" 2>/dev/null && removed=$((removed + 1))
+  done
+  if [ "$removed" -gt 0 ]; then
+    _mcp_warm_log "pruned ${removed} stale uv link(s) from ${dir} (image rebuild leaves them dangling)"
+  fi
+  return 0
 }
 
 # mcp_warm_run <mcp_json_path>
@@ -123,7 +200,20 @@ mcp_warm_run() {
       warmed=$((warmed + 1))
     else
       failed=$((failed + 1))
-      _mcp_warm_log "warn: ${rt} ${pkg} failed (will resolve on first use)"
+      # Name the outcome class. The pre-036 single wording promised "it will
+      # resolve later", which was false for the whole donna incident and hid an
+      # instant rc=2 behind the same text as a slow download.
+      case "$_MCP_WARM_CLASS" in
+        unavailable)
+          _mcp_warm_log "warn: ${rt} unavailable ($(_mcp_warm_runtime_bin "$rt") not on PATH) — skipping ${pkg}"
+          ;;
+        timeout)
+          _mcp_warm_log "warn: ${rt} ${pkg} timed out after ${to}s — will resolve on first use"
+          ;;
+        *)
+          _mcp_warm_log "warn: ${rt} ${pkg} failed (exit ${_MCP_WARM_RC:-1}) — will resolve on first use"
+          ;;
+      esac
     fi
   done < <(mcp_warm_targets "$mcp_json")
   if [ "$tried" -gt 0 ]; then

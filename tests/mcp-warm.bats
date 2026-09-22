@@ -199,3 +199,176 @@ EOF
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
+
+# ══ 036 — US1: the warm actually warms, and says which failure it hit ═════════
+#
+# Contract: specs/036-cold-start-boot-resilience/contracts/mcp-warm-contract.md
+# CANON strings: specs/036-cold-start-boot-resilience/data-model.md §2 and §3.
+# Every warn string below is copied VERBATIM from data-model; a paraphrase here
+# is the drift this convention exists to prevent (lesson of 033/034).
+
+# A single .mcp.json with exactly one uvx target: workspace-mcp — the package
+# that failed in the live incident.
+_one_uvx_target() {
+  cat > "$MCP_JSON" <<'EOF'
+{
+  "mcpServers": {
+    "google-workspace": { "command": "uvx", "args": ["workspace-mcp"] }
+  }
+}
+EOF
+}
+
+# uv stub whose exit code is controllable, logging the full argv so the oracle
+# can assert on the flags the installer was actually called with.
+_install_uv_stub() {
+  local rc="${1:-0}" dir="$TMP_TEST_DIR/bin"
+  mkdir -p "$dir"
+  cat > "$dir/uv" <<EOF
+#!/bin/sh
+echo "uv \$*" >> "$TMP_TEST_DIR/warm.log"
+exit ${rc}
+EOF
+  chmod +x "$dir/uv"
+  export PATH="$dir:$PATH"
+}
+
+@test "036 US1: the installer is NOT called with --force (C1)" {
+  # This oracle is inverted from its first revision, and the reversal is the
+  # point. The live failure is uv exiting 2 in 0s with "Executable already
+  # exists" when a dangling link from a previous image holds the name, and
+  # --force does clear it — but so does removing the link first, which the
+  # pruner already does. Measured in the real image against the pre-036 layout:
+  # install alone rc=2, --force rc=0, prune-then-install rc=0.
+  #
+  # Since both work, the tie is broken on blast radius: every uvx MCP is
+  # declared unversioned, so a forced reinstall on every boot and every watchdog
+  # respawn is an unattended version change waiting to happen. The pruner is the
+  # cure; --force would be a second one carrying a risk the first does not.
+  _one_uvx_target
+  _install_uv_stub 0
+  run mcp_warm_run "$MCP_JSON"
+  [ "$status" -eq 0 ]
+  run grep -cF -- '--force' "$TMP_TEST_DIR/warm.log"
+  [ "$output" = "0" ]
+  # …and the install did happen, so this is not passing by silence.
+  run grep -cF 'tool install' "$TMP_TEST_DIR/warm.log"
+  [ "$output" = "1" ]
+}
+
+@test "036 US1: a non-zero installer exit reports CANON-W1 with the exit code" {
+  _one_uvx_target
+  _install_uv_stub 2
+  run mcp_warm_run "$MCP_JSON"
+  [ "$status" -eq 0 ]
+  run bash -c "printf '%s\n' \"\$1\" | grep -cF 'mcp_warm: warn: uvx workspace-mcp failed (exit 2) — will resolve on first use'" _ "$output"
+  [ "$output" = "1" ]
+}
+
+@test "036 US1: an expiring timeout reports CANON-W2, for BOTH 124 and 143" {
+  # MEASURED (data-model §2): GNU timeout reports 124 on expiry, but busybox
+  # timeout — which is what the Alpine image actually ships — reports 143
+  # (128+SIGTERM). Classifying only on 124 would label every real in-container
+  # timeout as "failed (exit 143)", re-creating the ambiguity US1 removes.
+  local rc
+  for rc in 124 143; do
+    rm -f "$TMP_TEST_DIR/warm.log"
+    _one_uvx_target
+    _install_uv_stub "$rc"
+    run mcp_warm_run "$MCP_JSON"
+    [ "$status" -eq 0 ]
+    run bash -c "printf '%s\n' \"\$1\" | grep -cF 'mcp_warm: warn: uvx workspace-mcp timed out after 300s — will resolve on first use'" _ "$output"
+    [ "$output" = "1" ]
+  done
+}
+
+@test "036 US1: a missing runtime reports CANON-W3, not a generic failure" {
+  _one_uvx_target
+  # Prune PATH so `uv` genuinely cannot be found, while keeping `jq` (in
+  # /usr/bin on both CI arms) so the derivation still yields the target —
+  # otherwise the run produces zero targets and the oracle passes vacuously.
+  run env PATH=/usr/bin:/bin bash -c "source '$REPO_ROOT/scripts/lib/mcp_warm.sh'; mcp_warm_run '$MCP_JSON' 2>&1"
+  [ "$status" -eq 0 ]
+  run bash -c "printf '%s\n' \"\$1\" | grep -cF 'mcp_warm: warn: uvx unavailable (uv not on PATH) — skipping workspace-mcp'" _ "$output"
+  [ "$output" = "1" ]
+}
+
+# ── The stale-link pruner (data-model §3, contract C10) ──────────────────────
+#
+# EVERY case below runs against a scratch HOME. tests/mcp-warm.bats does not
+# override HOME today (unlike start-services-warm.bats:14-15), and this library
+# is ALSO sourced on the operator's own machine by modules/local-bootstrap.sh.tpl,
+# where ~/.local/bin holds the real uv, bun, node and github-mcp-server links.
+# A pruner test that scanned the developer's actual home is a bug waiting to run.
+# NOT a command substitution — that was the bug. `bin="$(_scratch_bin)"` runs the
+# function in a SUBSHELL, so its `export HOME` dies with that subshell and the
+# test body keeps the developer's REAL home. Every case here then believed it was
+# sandboxed while `$HOME` pointed at the operator's actual directory. Harmless as
+# long as each call passes an explicit path — but mutation M19 reinstates a
+# default of `$HOME/.local/bin` inside a function containing `rm`, and under that
+# mutation the no-argument case below would have scanned, and pruned, the
+# developer's own ~/.local/bin. Caught by the adversarial review; M19 never
+# actually applied in the mutation harness, so it was never executed.
+#
+# Sets SCRATCH_BIN in the caller's scope instead.
+_scratch_bin() {
+  export HOME="$TMP_TEST_DIR/home"
+  mkdir -p "$HOME/.local/bin" "$TMP_TEST_DIR/opt/uv/tools/live/bin"
+  printf '#!/bin/sh\n' > "$TMP_TEST_DIR/opt/uv/tools/live/bin/live-tool"
+  chmod +x "$TMP_TEST_DIR/opt/uv/tools/live/bin/live-tool"
+  SCRATCH_BIN="$HOME/.local/bin"
+}
+
+@test "036 US1: the pruner removes a dangling link into /opt/uv/tools" {
+  _scratch_bin; local bin="$SCRATCH_BIN"
+  ln -s /opt/uv/tools/workspace-mcp/bin/workspace-cli "$bin/workspace-cli"
+  [ -L "$bin/workspace-cli" ]
+  run mcp_warm_prune_stale_links "$bin"
+  [ "$status" -eq 0 ]
+  [ ! -L "$bin/workspace-cli" ]
+  [ ! -e "$bin/workspace-cli" ]
+}
+
+@test "036 US1: the pruner keeps a link that resolves, a regular file, and a link pointing elsewhere" {
+  _scratch_bin; local bin="$SCRATCH_BIN"
+  ln -s "$TMP_TEST_DIR/opt/uv/tools/live/bin/live-tool" "$bin/live-tool"
+  printf '#!/bin/sh\n' > "$bin/regular-file"; chmod +x "$bin/regular-file"
+  ln -s /somewhere/else/that/does/not/exist "$bin/foreign-link"
+  run mcp_warm_prune_stale_links "$bin"
+  [ "$status" -eq 0 ]
+  [ -L "$bin/live-tool" ]
+  [ -f "$bin/regular-file" ]
+  [ -L "$bin/foreign-link" ]
+}
+
+@test "036 US1: the pruner logs CANON-W4 only when it removed something, and is idempotent" {
+  _scratch_bin; local bin="$SCRATCH_BIN"
+  ln -s /opt/uv/tools/a/bin/a "$bin/a"
+  ln -s /opt/uv/tools/b/bin/b "$bin/b"
+  run bash -c "source '$REPO_ROOT/scripts/lib/mcp_warm.sh'; mcp_warm_prune_stale_links '$bin' 2>&1"
+  [ "$status" -eq 0 ]
+  run bash -c "printf '%s\n' \"\$1\" | grep -cF 'mcp_warm: pruned 2 stale uv link(s) from $bin (image rebuild leaves them dangling)'" _ "$output"
+  [ "$output" = "1" ]
+  # Second run: nothing left to remove, nothing logged.
+  run bash -c "source '$REPO_ROOT/scripts/lib/mcp_warm.sh'; mcp_warm_prune_stale_links '$bin' 2>&1"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "036 US1: the pruner refuses to run without an explicit directory (C10 oracle b)" {
+  # The argument is MANDATORY, with no default. A function containing `rm` whose
+  # default target is the operator's own bin directory is one careless call from
+  # damage — adversarial-review finding #11. Mutation M19 reinstates the default
+  # and must turn this red.
+  _scratch_bin; local bin="$SCRATCH_BIN"
+  ln -s /opt/uv/tools/x/bin/x "$bin/x"
+  run mcp_warm_prune_stale_links
+  [ "$status" -eq 0 ]
+  run mcp_warm_prune_stale_links ""
+  [ "$status" -eq 0 ]
+  # Nothing was scanned: the dangling link under the scratch HOME survives.
+  [ -L "$bin/x" ]
+  # Static half: the library never names a default bin directory.
+  run bash -c "grep -vE '^[[:space:]]*#' '$REPO_ROOT/scripts/lib/mcp_warm.sh' | grep -cF 'DIR:-'"
+  [ "$output" = "0" ]
+}

@@ -3,6 +3,87 @@
 ## [Unreleased]
 
 ### Fixed
+- **Cold-start boot resilience + honest diagnostics — `036-cold-start-boot-resilience`**
+  (VERSION 0.25.1 → 0.26.0). `donna` was down for 25 minutes after a routine
+  image rebuild: a cold MCP cache made the first boot lose the channel-health
+  race, the container exited, `restart: unless-stopped` revived it into the same
+  race, and every diagnostic the operator reached for either lied or said
+  nothing. Five defects, each fixed at its root rather than papered over.
+
+  **The pre-warm was inert, and said so cheerfully.** Feature 030's warm cache
+  had been failing silently for months. `uv` splits its state across
+  `UV_TOOL_DIR` (the package tree, baked into the image and discarded on every
+  rebuild) and `UV_TOOL_BIN_DIR`, which defaulted to `~/.local/bin` — inside the
+  `.state/` bind-mount, so it survives everything. After a rebuild the links
+  dangle, `uv tool install` refuses to overwrite an existing executable name,
+  and the affected package becomes **permanently** unwarmable. Every failure
+  reported the same optimistic sentence, so an instant `rc=2` was
+  indistinguishable from a slow download. The image now sets
+  `UV_TOOL_BIN_DIR=/opt/uv/bin`, the boot prunes dangling links into
+  `/opt/uv/tools/` **before** warming, and each failure names its own class —
+  unavailable runtime, timeout, or exit code. `uv tool install` is deliberately
+  **not** forced: measured in the real image, both `--force` and prune-then-install
+  cure the `rc=2`, and since every uvx MCP is declared unpinned, a forced reinstall
+  on every boot would be an unattended version change (the failure mode of 027).
+
+  **The channel window became configuration.** `docker.channel_health_timeout_s`
+  in `agent.yml` renders into the compose `environment:` block. Because that
+  block outranks `env_file:`, the backfill **migrates** a value an operator had
+  hand-written into the workspace `.env` instead of resetting it — a flat `60`
+  would have silently halved the window of every agent that followed the
+  documentation (`donna` runs at 120), re-creating the very combination behind
+  the outage. A one-line note names the leftover `.env` key, never its value.
+  `README.md` and `docs/architecture.md` stop pointing at the losing channel.
+
+  **A slow first boot no longer kills the container.** `start_initial_session`
+  retries up to three times, logging each attempt, and still exits non-zero when
+  the budget is spent. The watchdog's respawn path is untouched and frozen by a
+  hash oracle — no test exercised `_run_watchdog` before this, and the
+  regression precedent (`ebfe35f`, automated stuck-channel detection killing
+  healthy sessions every two minutes) is expensive enough to warrant one.
+
+  **`agentctl doctor` stopped lying about plugin patches.** It restated four of
+  the patcher's marker strings, one pinned at `typing refresh patch v3` while
+  the patcher reached **v6** in feature 031, so a fully-patched agent was warned
+  "incomplete" for months — and the documentation had been updated to tell
+  operators to ignore the warning, which is the worst possible state for a
+  health check. Its count parse also produced a two-token value
+  (`grep -c … || echo 0` emits `0\n0` when the file exists and does not match),
+  killing the comparison outright, and it inspected only the first version
+  directory in the cache. The patcher now publishes its own set via
+  `--list-markers`; `doctor` asks instead of restating, walks every version
+  directory, and skips — never passes — against an image too old to answer.
+  `doctor` also tells a boot that is legitimately retrying from a dead
+  container, with a freshness guard so a permanently broken agent cannot read
+  as "starting" forever.
+
+  **Two more instances of a defect class found by audit.** A 26-site sweep of
+  every early-exit pipeline under `pipefail` (all verdicts measured, one
+  adversarial refuter per finding) turned up two beyond the ones fixed in
+  0.25.1. The local healthcheck captured an uncapped `journalctl` and piped it
+  into `grep -q`: past the 64 KiB pipe buffer the producer takes EPIPE, the
+  `if` goes false, and a live authentication failure is **not** reported — a
+  down agent that does not say so. The in-container wizard read config keys
+  through `grep … | head -1` in a plain assignment, which under `set -euo
+  pipefail` aborted it both on a duplicated key (22/3000 in the real musl
+  image) and, deterministically, on an **absent** one — the case that occurs
+  the moment a new Atlassian alias is added. Since the Telegram token is
+  persisted earlier, the respawned supervisor took the steady-state branch and
+  the wizard was never relaunched, skipping every remaining prompt forever.
+  Both now read their input to completion, with no second process to signal.
+  `CLAUDE.md` records the class and the six sites that are safe only by a
+  property of their input.
+
+  **One e2e oracle stopped guessing at time.** The post-login DOCKER_E2E case
+  slept a fixed 15s after `up -d` before creating the credential file, racing a
+  boot measured at 4-13s — and the credential must land *after* the watchdog's
+  first tick, which is what establishes the absent/present baseline. When the
+  race was lost the flip never fired, the retry was never armed, and the failure
+  looked like broken plugin installation. It now waits for the boot log to
+  announce the launch. The assertions are unchanged: an implicit assumption
+  became a checked precondition. Pre-existing, no production impact (a real
+  `/login` lands minutes after boot), and confirmed by measurement rather than
+  filed as a flake.
 - **The guard backfills stopped depending on winning a race** (VERSION
   0.25.0 → 0.25.1). Both `--regenerate` backfills — `features.reply_guard`
   (028) and `features.askuserquestion_guard` (031) — derived `enabled` from

@@ -307,3 +307,25 @@ teardown() { teardown_tmp_dir; }
     "$TMP_TEST_DIR/secret-check.sh" "$TMP_TEST_DIR/vault-backup.service" \
     "$TMP_TEST_DIR/wiki-graph.service"
 }
+
+@test "036 US2: no local RUNTIME artifact carries a CHANNEL_HEALTH_TIMEOUT string" {
+  # Same honest invariant as the 032 oracle above, for the channel window: the
+  # field is docker-only, so in local mode the right assertion is not "renders
+  # 60" but "renders nothing of that shape at all". The compose file — the only
+  # artifact that carries the key — is not rendered in local mode.
+  #
+  # Note agent.yml DOES gain the field in local mode (the backfill is
+  # mode-agnostic, like every backfill in that block). This oracle constrains
+  # the rendered artifacts, not the source of truth.
+  render_to_file "$REPO_ROOT/modules/systemd-remote-control.service.tpl" "$TMP_TEST_DIR/unit"
+  render_to_file "$REPO_ROOT/modules/remote-control.env.tpl" "$TMP_TEST_DIR/env"
+  render_to_file "$REPO_ROOT/modules/local-healthcheck.service.tpl" "$TMP_TEST_DIR/healthcheck.service"
+  render_to_file "$REPO_ROOT/modules/local-killswitch.sh.tpl" "$TMP_TEST_DIR/killswitch.sh"
+  render_to_file "$REPO_ROOT/modules/local-qmd-reindex.service.tpl" "$TMP_TEST_DIR/qmd-reindex.service"
+  render_to_file "$REPO_ROOT/modules/local-qmd-watch.service.tpl" "$TMP_TEST_DIR/qmd-watch.service"
+  render_to_file "$REPO_ROOT/modules/local-secret-check.sh.tpl" "$TMP_TEST_DIR/secret-check.sh"
+  render_to_file "$REPO_ROOT/modules/local-vault-backup.service.tpl" "$TMP_TEST_DIR/vault-backup.service"
+  render_to_file "$REPO_ROOT/modules/local-wiki-graph.service.tpl" "$TMP_TEST_DIR/wiki-graph.service"
+  run bash -c "LC_ALL=C grep -rlF 'CHANNEL_HEALTH_TIMEOUT' '$TMP_TEST_DIR/unit' '$TMP_TEST_DIR/env' '$TMP_TEST_DIR/healthcheck.service' '$TMP_TEST_DIR/killswitch.sh' '$TMP_TEST_DIR/qmd-reindex.service' '$TMP_TEST_DIR/qmd-watch.service' '$TMP_TEST_DIR/secret-check.sh' '$TMP_TEST_DIR/vault-backup.service' '$TMP_TEST_DIR/wiki-graph.service' 2>/dev/null | wc -l | tr -d ' '"
+  [ "$output" = "0" ]
+}

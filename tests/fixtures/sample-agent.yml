@@ -23,6 +23,7 @@ docker:
   gid: 1000
   state_volume: "dockbot-state"
   base_image: "alpine:3.20"
+  channel_health_timeout_s: 60
 claude:
   config_dir: "/home/agent/.claude"
   profile_new: true
