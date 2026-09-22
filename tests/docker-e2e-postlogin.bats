@@ -116,8 +116,33 @@ CL
   local cache_tg="/home/agent/.claude/plugins/cache/claude-plugins-official/telegram"
   local cache_cm="/home/agent/.claude/plugins/cache/thedotmack/claude-mem"
 
-  # 1) settle unauthenticated for ~15s — NEITHER sentinel may appear yet.
-  sleep 15
+  # 1) settle unauthenticated — NEITHER sentinel may appear yet.
+  #
+  # The wait is on the boot LOG, not on a fixed sleep, and that is load-bearing.
+  # The credential file must appear AFTER the watchdog's first tick: that tick
+  # establishes the baseline for the absent->present flip, and a file already
+  # present at baseline reads as "this agent booted already authenticated", which
+  # correctly never fires the post-login retry. The old `sleep 15` raced a boot
+  # measured at 4-13s on this host (the long tail is build-adjacent, which is
+  # precisely when this test runs), leaving as little as 2s of margin — it failed
+  # intermittently on BOTH this branch and origin/main for reasons that have
+  # nothing to do with the behaviour under test.
+  #
+  # No `docker compose logs | grep -q` here: under `pipefail` the producer takes
+  # EPIPE when grep exits on its first match, and the condition silently goes
+  # false. Read the output into a variable and decide with `case` — same
+  # structural cure as agent_yml_has_plugin in setup.sh.
+  local waited=0 logs=""
+  while [ "$waited" -lt 90 ]; do
+    logs=$( (cd "$DEST" && docker compose logs 2>/dev/null) || true )
+    case $logs in *"launching:"*) break ;; esac
+    sleep 1
+    waited=$((waited + 1))
+  done
+  [ "$waited" -lt 90 ]
+  # The watchdog polls every 2s; give it room to take its baseline tick.
+  sleep 5
+
   run in_container test -f "$cache_tg/.installed-ok"
   [ "$status" -ne 0 ]
   run in_container test -f "$cache_cm/.installed-ok"
@@ -143,18 +168,26 @@ CL
   [ "$cm" -eq 1 ]
 }
 
-# Feature 026 (DOCKER_E2E): the operator's CHANNEL_HEALTH_TIMEOUT override lives
-# in the workspace .env and must reach the container watchdog via env_file. The
-# verify-timeout LOGIC is unit-covered host-side in start-services-watchdog.bats;
-# this proves the .env → env_file delivery chain end-to-end.
-@test "channel timeout: CHANNEL_HEALTH_TIMEOUT from .env reaches the container (feature 026)" {
+# Feature 026 → 036 (DOCKER_E2E): the channel-health window must reach the
+# container watchdog. 026 delivered it from the workspace .env through compose's
+# `env_file:`; 036 moved the source of truth into agent.yml and renders it into
+# the `environment:` block, which OUTRANKS env_file.
+#
+# This test was red by construction after that change, and re-pointing it rather
+# than reordering its writes is the whole point: it is the delivery oracle for
+# the window, so it has to track where the window actually comes from. Case (b)
+# is the only executed proof of the precedence claim that the migration
+# behaviour, the operator notice and both doc paragraphs all rest on.
+@test "channel timeout: docker.channel_health_timeout_s reaches the container and outranks .env (026 → 036)" {
   mkdir -p "$DEST"
+  # The field carries 45 — the value 026 used to put in the .env — so a
+  # regression that drops the rendered line cannot pass by coincidence.
   cat > "$DEST/agent.yml" <<YML
 version: 1
 agent: {name: $AGENT_NAME, display_name: "chtimeout e2e", role: "test", vibe: "terse"}
 user: {name: "Tester", nickname: "Tester", timezone: "UTC", email: "t@e.x", language: "en"}
 deployment: {host: "test", workspace: "$DEST", install_service: false, claude_cli: "claude"}
-docker: {image_tag: "agent-admin:chtimeout-e2e", uid: $(id -u), gid: $(id -g), state_volume: "${AGENT_NAME}-state", base_image: "alpine:3.24.1"}
+docker: {image_tag: "agent-admin:chtimeout-e2e", uid: $(id -u), gid: $(id -g), state_volume: "${AGENT_NAME}-state", base_image: "alpine:3.24.1", channel_health_timeout_s: 45}
 claude: {config_dir: "/home/agent/.claude", profile_new: true}
 notifications: {channel: none}
 features:
@@ -166,8 +199,9 @@ YML
   cp -R "$REPO_ROOT/modules" "$REPO_ROOT/scripts" "$REPO_ROOT/docker" "$DEST/"
   cp "$REPO_ROOT/setup.sh" "$DEST/"; chmod +x "$DEST/setup.sh"
   (cd "$DEST" && ./setup.sh --regenerate --non-interactive)
-  # The override the operator would add by hand.
-  printf 'CHANNEL_HEALTH_TIMEOUT=45\n' > "$DEST/.env"; chmod 0600 "$DEST/.env"
+  # A stale hand-written override, of the shape the old docs taught. It must
+  # LOSE to the rendered value — that is case (b).
+  printf 'CHANNEL_HEALTH_TIMEOUT=99\n' > "$DEST/.env"; chmod 0600 "$DEST/.env"
   # Idle claude stub so the watchdog keeps a live tmux session.
   python3 - "$DEST/docker-compose.yml" <<'PY'
 import sys
@@ -185,11 +219,13 @@ PY
   # 2>/dev/null so a compose warning on stderr can't contaminate $output.
   in_container() { (cd "$DEST" && docker compose exec -T -u agent "$AGENT_NAME" "$@" 2>/dev/null); }
   sleep 10
-  # (a) the .env override reached the container environment via env_file.
+  # (a) + (b) in one read: the agent.yml field reached the process environment,
+  # and it did so over a .env line carrying a different value.
   run in_container printenv CHANNEL_HEALTH_TIMEOUT
   [ "$status" -eq 0 ]
   [ "$output" = "45" ]
-  # (b) the baked watchdog carries the configurable helper, not the old 20s literal.
+  # (c) the baked watchdog still carries the configurable helper unchanged — the
+  # reader is frozen by this story, only the source of its value moved.
   run in_container grep -c 'channel_health_timeout' /opt/agent-admin/scripts/start_services.sh
   [ "$output" -ge 1 ]
 }

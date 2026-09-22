@@ -71,6 +71,19 @@ services:
       # of the session. The launcher sanitises the value (positive int → default
       # 120000) before rendering, so this is always a safe integer > 0.
       MCP_TIMEOUT: "{{CLAUDE_MCP_TIMEOUT_MS}}"
+      # How long the watchdog waits for the channel plugin to appear before it
+      # declares the session unhealthy and respawns (026). Single-sourced from
+      # agent.yml::docker.channel_health_timeout_s and sanitised at render time,
+      # so this is always a positive integer of at most six digits — the same
+      # bound the in-container reader enforces.
+      #
+      # This block outranks `env_file:`, so from here on the rendered value wins
+      # over a CHANNEL_HEALTH_TIMEOUT an operator wrote into the workspace .env.
+      # That is why the backfill MIGRATES the .env value into agent.yml instead
+      # of resetting it: the upgrade must not shorten a window somebody widened
+      # on purpose. No literal default belongs here — it lives in the host
+      # sanitiser and in the container reader, and nowhere else.
+      CHANNEL_HEALTH_TIMEOUT: "{{DOCKER_CHANNEL_HEALTH_TIMEOUT_S}}"
       # Round-trip voice over Telegram (032), single-sourced from
       # agent.yml::features.voice.*, sanitized at render time. Rendered
       # UNCONDITIONALLY (MCP_TIMEOUT precedent — no {{#if}} exists here and

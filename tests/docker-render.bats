@@ -72,6 +72,19 @@ teardown() { teardown_tmp_dir; }
   [[ "$result" == *'MCP_TIMEOUT: "120000"'* ]]
 }
 
+@test "docker-compose.yml.tpl propagates docker.channel_health_timeout_s via CHANNEL_HEALTH_TIMEOUT (036)" {
+  # The channel-health window moves from a hand-written workspace .env key to an
+  # agent.yml field, delivered through the same environment: block as
+  # MCP_TIMEOUT. Unconditional, for the same reason: no flattened var expresses
+  # watchdog presence. Fixture has docker.channel_health_timeout_s=60.
+  #
+  # Because compose's environment: outranks env_file:, this line is also what
+  # makes the rendered value WIN over a .env the operator wrote by hand — the
+  # precedence the migrating backfill exists to keep harmless.
+  result=$(render_template "$REPO_ROOT/modules/docker-compose.yml.tpl")
+  [[ "$result" == *'CHANNEL_HEALTH_TIMEOUT: "60"'* ]]
+}
+
 @test "docker-compose.yml.tpl renders the seven TELEGRAM_VOICE_* env lines unconditionally (032/034)" {
   # Unconditional — same precedent as MCP_TIMEOUT: no {{#if}} exists here and
   # no flattened var expresses telegram-plugin presence. Fixture has

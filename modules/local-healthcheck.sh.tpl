@@ -41,8 +41,23 @@ fi
 
 # 2. Journal auth-failure signal (last 10 min). Absence is fine (a healthy
 #    session is silent); only a PRESENT 401 / "please run /login" is actionable.
-journal=$(journalctl -u "$UNIT" --since "-10 min" --no-pager 2>/dev/null || true)
-if printf '%s\n' "$journal" | grep -qE 'API Error: 401|Please run /login'; then
+#    Bounded at the source (-n) and matched WITHOUT a pipeline. Both halves
+#    matter, and the second is the one that was actually broken:
+#
+#    `printf '%s\n' "$journal" | grep -qE …` loses a race whenever the journal
+#    exceeds the 64 KiB pipe buffer. grep -q exits on the first match, printf
+#    still has bytes to push, takes EPIPE and dies with 141, and `pipefail`
+#    (line 6) makes the `if` FALSE — so a live 401 silently fails to demote,
+#    the unit reports OK, and the operator's alert never fires. A down agent
+#    that does not say so. Measured 2026-09-21: clean at 64,883 B, 261/300
+#    failing at 65,573 B under bash 5.3.15; 29/300 at 66,263 B on Linux.
+#
+#    A here-string has no second process to signal, so the category is gone
+#    rather than made less likely. The -n cap is belt and braces: an unbounded
+#    capture is a memory cost on every tick even when it is not a correctness
+#    problem.
+journal=$(journalctl -u "$UNIT" --since "-10 min" -n 2000 --no-pager 2>/dev/null || true)
+if grep -qE 'API Error: 401|Please run /login' <<< "$journal"; then
   _demote DEGRADED "auth error in journal (401 / please run /login)"
 fi
 

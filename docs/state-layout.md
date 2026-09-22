@@ -196,7 +196,15 @@ plugins/cache/
             └── worker-service.cjs
 ```
 
-The Telegram plugin's `server.ts` is the file the boot-time post-install hook edits (`docker/scripts/apply_telegram_typing_patch.py`): typing refresh, offset persistence, stderr capture, primary lock. Each group is guarded by a marker comment and is idempotent. On a fully patched file, `grep -c "agentic-pod-launcher:" server.ts` returns **9** (2 typing — the group marker plus the inline `_typingStop` call — + 4 offset hunks + 2 primary + 1 stderr). Treat exact-count greps as fragile: the typing marker is versioned (currently v4) and the patcher runs a `v1 → v4` upgrade cascade on every boot.
+The Telegram plugin's `server.ts` is the file the boot-time post-install hook edits (`docker/scripts/apply_telegram_typing_patch.py`). There are **seven** patch groups: typing refresh, offset persistence, stderr capture, primary lock, pending-reply marker, askq-guard give-up delivery, and voice round-trip. Each group is guarded by a marker comment and is idempotent.
+
+Do not memorise the marker strings or an expected count — several groups are versioned, the patcher runs upgrade cascades on every boot, and a stale expectation here is what made `agentctl doctor` misreport healthy agents for months. Ask the patcher instead; it publishes its own set:
+
+```bash
+docker exec <agent> python3 /opt/agent-admin/scripts/apply_telegram_typing_patch.py --list-markers
+```
+
+`agentctl doctor` uses exactly that, which is why it cannot drift from the patcher again.
 
 Each plugin's cache directory gets an `.installed-ok` sentinel (at `cache/<marketplace>/<name>/.installed-ok`, sibling of the version dir) after a successful `claude plugin install`. The supervisor checks the sentinel before re-running install on boot — a half-extracted cache (network blip) is detected as missing the sentinel and forced into a clean re-install; permanent failures are appended to `plugin-install-failures.jsonl` (surfaced by `agentctl doctor`).
 

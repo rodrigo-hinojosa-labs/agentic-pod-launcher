@@ -257,6 +257,13 @@ CHANNEL_MARKER="$WATCHDOG_RUNTIME_DIR/session.channels-mode"
 
 MAX_CRASHES=5
 WINDOW=300
+# 036: how many times the INITIAL boot may try before giving up. Distinct from
+# MAX_CRASHES, which governs respawns of an already-established session: a first
+# boot that loses the channel-health race used to exit the container outright,
+# and `unless-stopped` turned that single loss into a restart loop. Retrying in
+# place costs one more attempt; restarting costs the whole image start-up again
+# and re-enters the same race with a colder cache.
+MAX_BOOT_ATTEMPTS=3
 # Crash budget is a sliding 300s window: each entry is a unix timestamp.
 # crash_budget_check (defined below) drops entries older than now-WINDOW
 # and exits the watchdog when MAX_CRASHES still fit in the trailing window.
@@ -807,6 +814,16 @@ pre_install_askq_hook() {
 # off-mount caches /opt/uv and /opt/npm-cache. No-op if the lib didn't load.
 pre_warm_mcps() {
   command -v mcp_warm_run >/dev/null 2>&1 || return 0
+  # 036: prune FIRST. An image rebuild wipes UV_TOOL_DIR (/opt/uv/tools, in the
+  # image) but not the executable links uv wrote under HOME (the .state/
+  # bind-mount), so they dangle — and `uv tool install` refuses to overwrite an
+  # existing executable, which silently defeated this very warm for months.
+  # Order is load-bearing: a stale link left in place re-blocks the install the
+  # warm is about to attempt, and the cleanup must still run for an agent whose
+  # .mcp.json declares no uvx/npx targets at all.
+  if command -v mcp_warm_prune_stale_links >/dev/null 2>&1; then
+    mcp_warm_prune_stale_links "$HOME/.local/bin" || true
+  fi
   mcp_warm_run "$WORKDIR/.mcp.json" || true
 }
 
@@ -1270,14 +1287,57 @@ _run_watchdog() {
   done
 }
 
+# 036: bounded retry for the INITIAL boot. Returns 0 as soon as an attempt
+# succeeds, non-zero once the budget is spent — the caller keeps owning the exit.
+#
+# A named function rather than a loop inside main(), so the host suite can drive
+# it; an inlined loop would have no oracle at all, which is how the watchdog's
+# own regression (ebfe35f) stayed invisible for so long.
+#
+# Two guards here are load-bearing and must not be tidied away:
+#
+#   * The `mkdir -p`. WATCHDOG_RUNTIME_DIR is under /tmp — a tmpfs emptied on
+#     every container start — and the only other mkdir in this file sits INSIDE
+#     start_session, i.e. after the first marker write. Without this line
+#     attempt 1 writes into a directory that does not exist.
+#   * The `|| true` on every marker write and on the removal. This script runs
+#     under `set -euo pipefail`, so an unguarded failed redirect would abort the
+#     boot — turning a diagnostic aid into the very restart loop the retry
+#     exists to prevent.
+#
+# The marker is written HERE and never by start_session, which is also the
+# watchdog's respawn path: a respawn is not an initial boot, and a marker left
+# behind by one would make `doctor` report "starting" on a long-running agent.
+start_initial_session() {
+  mkdir -p "$WATCHDOG_RUNTIME_DIR" 2>/dev/null || true
+  local marker="$WATCHDOG_RUNTIME_DIR/boot-attempt"
+  local attempt=1
+  while [ "$attempt" -le "$MAX_BOOT_ATTEMPTS" ]; do
+    log "initial session attempt ${attempt}/${MAX_BOOT_ATTEMPTS}"
+    printf '%s %s\n' "$attempt" "$(date +%s)" > "$marker" 2>/dev/null || true
+    if start_session; then
+      rm -f "$marker" 2>/dev/null || true
+      return 0
+    fi
+    attempt=$((attempt + 1))
+  done
+  # No sleep between attempts on purpose: the attempt itself already blocks for
+  # the whole channel-health wait, and a delay would only push a failing cycle
+  # closer to the crash budget's window while slowing nothing that matters.
+  rm -f "$marker" 2>/dev/null || true
+  # Keeps the pre-036 sentence as a prefix, so log scraping that predates this
+  # feature still matches.
+  log "ERROR: initial tmux session failed to start after ${MAX_BOOT_ATTEMPTS} attempts"
+  return 1
+}
+
 main() {
   boot_side_effects
 
   warn_if_channel_timeout_risky
 
   log "starting tmux session '$SESSION'"
-  if ! start_session; then
-    log "ERROR: initial tmux session failed to start"
+  if ! start_initial_session; then
     exit 1
   fi
 

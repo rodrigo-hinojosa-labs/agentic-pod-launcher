@@ -28,6 +28,7 @@ docker:
   uv_version: "0.11.22"
   bun_version: "1.3.14"
   gum_version: "0.17.0"
+  channel_health_timeout_s: 60
 claude:
   config_dir: "/home/agent/.claude"
   profile_new: true

@@ -9,6 +9,42 @@ set -euo pipefail
 ENV_FILE="/workspace/.env"
 AGENT_YML="/workspace/agent.yml"
 
+# current_env_value KEY FILE — the first value recorded for KEY, or empty.
+# Always rc 0: "not present" is an ordinary answer here, not a failure.
+#
+# 036: this replaces two copies of
+#
+#     existing=$(grep "^${var}=" "$FILE" 2>/dev/null | head -1 | cut -d= -f2-)
+#
+# which aborted the wizard under this file's `set -euo pipefail` (line 7) in two
+# independent ways, both measured 2026-09-21:
+#
+#   * KEY ABSENT — grep exits 1, pipefail hands that to the assignment, and
+#     errexit kills the script. Not a race: deterministic. The wizard dies
+#     before the prompt it was about to show, which is what happens the moment a
+#     new Atlassian alias is added to agent.yml, since the generated file has no
+#     line for it yet. (`local v=$(…)` on ONE line would have masked this —
+#     `local`'s own status wins — but these were split across two lines, which
+#     does not. Measured: split form aborts, single-line form survives.)
+#   * KEY DUPLICATED — grep keeps writing after `head -1` closes the pipe, takes
+#     EPIPE and dies with 141; pipefail and errexit do the rest. 22/3000 in the
+#     real image (busybox 1.37.0, musl). Two lines for one key is what setup.sh
+#     emits for two colliding Atlassian aliases.
+#
+# Reading the file directly removes both at once: there is no second process to
+# signal and no exit status to mis-handle. The `break` is safe precisely because
+# the input is a file rather than a pipe.
+current_env_value() {
+  local key="$1" file="$2" line
+  [ -f "$file" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      "${key}="*) printf '%s' "${line#*=}"; return 0 ;;
+    esac
+  done < "$file"
+  return 0
+}
+
 # Upsert KEY=VALUE into $ENV_FILE. Replaces an existing line in place
 # (preserving surrounding content) or appends a new one. Uses `|` as the
 # sed delimiter — bot tokens / PATs / basic-auth tokens never contain `|`.
@@ -116,7 +152,7 @@ main() {
   # ── GitHub PAT (optional — for gh CLI and the github MCP) ──
   # If the host wizard already captured a GITHUB_PAT, don't ask again.
   local existing_gh_pat
-  existing_gh_pat=$(grep "^GITHUB_PAT=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-)
+  existing_gh_pat=$(current_env_value GITHUB_PAT "$ENV_FILE")
   if [ -z "$existing_gh_pat" ]; then
     if gum confirm "Add a GitHub Personal Access Token (for gh / MCP)?" --default=no; then
       GH_PAT=$(gum input --password --prompt "GitHub PAT: ")
@@ -143,7 +179,7 @@ main() {
         upper=$(echo "$ws_name" | tr '[:lower:]' '[:upper:]')
         var="ATLASSIAN_${upper}_TOKEN"
         # Skip if already populated
-        existing=$(grep "^${var}=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-)
+        existing=$(current_env_value "$var" "$ENV_FILE")
         if [ -n "$existing" ]; then
           echo "  ✓ ${var} already set — skipping"
           continue

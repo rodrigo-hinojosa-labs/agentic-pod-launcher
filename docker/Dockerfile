@@ -115,7 +115,16 @@ RUN set -eux; \
 # interpreters match the python preference and may otherwise auto-download a
 # managed CPython, which would defeat the warm /opt/uv cache and break the
 # offline MCP handshake. Pin uv to the apk-installed system python3.
+# 036: UV_TOOL_BIN_DIR must live in the image alongside UV_TOOL_DIR. Left unset,
+# uv writes its executable links to ~/.local/bin — which is inside the .state/
+# bind-mount, so the links SURVIVE a rebuild that wipes /opt/uv/tools. The result
+# is a dangling link holding the executable name, and `uv tool install` refuses
+# to overwrite it: every affected package becomes permanently unwarmable. That
+# split is what took donna down for 25 minutes on 2026-09-18.
+# PATH is deliberately NOT extended: measured in a live container, ~/.local/bin
+# was never on it, so a new bin dir there would be surface with no consumer.
 ENV UV_TOOL_DIR=/opt/uv/tools \
+    UV_TOOL_BIN_DIR=/opt/uv/bin \
     UV_CACHE_DIR=/opt/uv/cache \
     UV_PYTHON_PREFERENCE=only-system
 RUN mkdir -p /opt/uv \

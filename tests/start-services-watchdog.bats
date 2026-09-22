@@ -427,3 +427,169 @@ STUB
   CHANNEL_HEALTH_TIMEOUT=notanum PATH="$TMP_TEST_DIR/bin:$PATH" run verify_channel_healthy
   [ "$status" -eq 0 ]
 }
+
+# ══ 036 US3: the initial boot retries instead of killing the container ═══════
+#
+# A first boot that loses the channel-health race today exits the container, and
+# `unless-stopped` turns that into a restart loop — the shape of the 25-minute
+# outage this feature exists to end. The retry lives in a NAMED function,
+# start_initial_session, precisely so it can be driven from here; a loop inlined
+# in main() would have no host oracle at all.
+
+_us3_setup() {
+  export WATCHDOG_RUNTIME_DIR="$TMP_TEST_DIR/rt"
+  BOOT_MARKER="$WATCHDOG_RUNTIME_DIR/boot-attempt"
+  LOG_FILE="$TMP_TEST_DIR/boot.log"
+  : > "$LOG_FILE"
+  log() { printf '%s\n' "$*" >> "$LOG_FILE"; }
+}
+
+@test "036 US3: a session healthy on the second attempt does not exit" {
+  _us3_setup
+  local n="$TMP_TEST_DIR/n"; echo 0 > "$n"
+  start_session() {
+    local c; c=$(cat "$n"); c=$((c + 1)); echo "$c" > "$n"
+    [ "$c" -ge 2 ]
+  }
+  run start_initial_session
+  [ "$status" -eq 0 ]
+  [ "$(cat "$n")" = "2" ]
+}
+
+@test "036 US3: a session that never comes up exits non-zero after exactly 3 attempts" {
+  _us3_setup
+  local n="$TMP_TEST_DIR/n"; echo 0 > "$n"
+  start_session() { local c; c=$(cat "$n"); echo $((c + 1)) > "$n"; return 1; }
+  run start_initial_session
+  [ "$status" -ne 0 ]
+  [ "$(cat "$n")" = "3" ]
+}
+
+@test "036 US3: CANON-B1 is logged once per attempt" {
+  _us3_setup
+  start_session() { return 1; }
+  run start_initial_session
+  run bash -c "grep -cF 'initial session attempt 1/3' '$LOG_FILE'"
+  [ "$output" = "1" ]
+  run bash -c "grep -cF 'initial session attempt 2/3' '$LOG_FILE'"
+  [ "$output" = "1" ]
+  run bash -c "grep -cF 'initial session attempt 3/3' '$LOG_FILE'"
+  [ "$output" = "1" ]
+}
+
+@test "036 US3: CANON-B2 keeps today's line as a substring so old log scraping still matches" {
+  _us3_setup
+  start_session() { return 1; }
+  run start_initial_session
+  run bash -c "grep -cF 'ERROR: initial tmux session failed to start after 3 attempts' '$LOG_FILE'"
+  [ "$output" = "1" ]
+  # The pre-036 wording is a prefix of the new one, deliberately.
+  run bash -c "grep -cF 'ERROR: initial tmux session failed to start' '$LOG_FILE'"
+  [ "$output" = "1" ]
+}
+
+@test "036 US3: there is no sleep between attempts" {
+  _us3_setup
+  # A delay would push a failing cycle toward the crash budget's window and
+  # slow every healthy boot for nothing: the attempt itself already blocks for
+  # as long as the channel-health wait takes.
+  local slept="$TMP_TEST_DIR/slept"; : > "$slept"
+  sleep() { echo "$*" >> "$slept"; }
+  start_session() { return 1; }
+  run start_initial_session
+  [ ! -s "$slept" ]
+}
+
+@test "036 US3: the marker holds '<attempt> <epoch>' and is removed on success" {
+  _us3_setup
+  local n="$TMP_TEST_DIR/n"; echo 0 > "$n"
+  local seen="$TMP_TEST_DIR/seen"
+  start_session() {
+    cat "$BOOT_MARKER" >> "$seen" 2>/dev/null || true
+    local c; c=$(cat "$n"); c=$((c + 1)); echo "$c" > "$n"
+    [ "$c" -ge 2 ]
+  }
+  run start_initial_session
+  [ "$status" -eq 0 ]
+  # Two attempts ran, so two marker generations were observed, numbered 1 then 2.
+  run bash -c "grep -cE '^1 [0-9]+\$' '$seen'"
+  [ "$output" = "1" ]
+  run bash -c "grep -cE '^2 [0-9]+\$' '$seen'"
+  [ "$output" = "1" ]
+  # A stale marker must not outlive the boot.
+  [ ! -f "$BOOT_MARKER" ]
+}
+
+@test "036 US3: the marker is removed on exhaustion too" {
+  _us3_setup
+  start_session() { return 1; }
+  run start_initial_session
+  [ "$status" -ne 0 ]
+  [ ! -f "$BOOT_MARKER" ]
+}
+
+# ── (m1) the mkdir -p. Catches mutation M-B1 ─────────────────────────────────
+
+@test "036 US3: the marker is written even though its directory does not exist yet" {
+  # THE critical finding of the adversarial review. WATCHDOG_RUNTIME_DIR lives
+  # under /tmp, a tmpfs emptied on every container start, and the only mkdir -p
+  # in the file sits INSIDE start_session (:840) — i.e. after the first marker
+  # write. Without a mkdir of its own, attempt 1 writes into a directory that
+  # does not exist.
+  _us3_setup
+  [ ! -d "$WATCHDOG_RUNTIME_DIR" ]
+  local seen="$TMP_TEST_DIR/seen"
+  start_session() { cat "$BOOT_MARKER" >> "$seen" 2>/dev/null || true; return 0; }
+  run start_initial_session
+  [ "$status" -eq 0 ]
+  run bash -c "grep -cE '^1 [0-9]+\$' '$seen'"
+  [ "$output" = "1" ]
+}
+
+# ── (m2) the || true. Catches mutation M-B2 ──────────────────────────────────
+
+@test "036 US3: an unwritable marker path does not abort the boot (errexit re-established)" {
+  # This oracle CANNOT use `run start_initial_session`. Measured on this host
+  # (bats 1.13.0): bats' `run` strips errexit — `$-` is `ehuBET` in the test
+  # body but `huB` inside `run` — so a sourced function whose unguarded
+  # redirect fails still runs to completion, and the guarded and mutant
+  # versions produce byte-identical results. The subshell below puts errexit
+  # back, which is the only condition under which the mutation is observable.
+  #
+  # The status is 1 either way (exhaustion), so the DISCRIMINATOR is the count
+  # of attempt lines: guarded → 3, unguarded → 1, because the failed redirect
+  # kills the shell on the first attempt.
+  local rt="$TMP_TEST_DIR/blocked"
+  # A regular file where the directory should be: mkdir -p fails, and so does
+  # every write beneath it.
+  printf 'not a directory\n' > "$rt"
+  # Invoked BARE, with no `|| true` and no `if`. Measured: a function call that
+  # is the left operand of `||` has errexit suspended for its entire dynamic
+  # extent, so `start_initial_session || true` would make the unguarded write
+  # survive and the mutation would go undetected — this oracle was written that
+  # way first and did NOT catch M-B2. (It is the same bash rule that makes
+  # start_services.sh:431 safe despite a genuine SIGPIPE, per the 2026-09-21
+  # pipeline audit.) Bare, the guarded version still prints all three attempt
+  # lines before returning 1; the mutant dies on the first failed redirect.
+  run bash -c "set -euo pipefail
+    START_SERVICES_NO_RUN=1 source '$REPO_ROOT/docker/scripts/start_services.sh'
+    WATCHDOG_RUNTIME_DIR='$rt/rt'
+    log() { printf '%s\n' \"\$*\"; }
+    start_session() { return 1; }
+    start_initial_session"
+  local n
+  n=$(printf '%s\n' "$output" | grep -cF 'initial session attempt') || true
+  [ "$n" -eq 3 ]
+}
+
+# ── (m3) FR-013: the watchdog stays frozen ───────────────────────────────────
+
+@test "036 US3: _run_watchdog is byte-identical to its pre-036 shape (FR-013)" {
+  # No test in this repo exercises _run_watchdog — measured: `grep -rn
+  # _run_watchdog tests/` returns nothing else. US3 edits this very file, so
+  # this hash is the only thing standing between a well-meant refactor and a
+  # silent re-run of the ebf5f regression, where automated stuck-channel
+  # detection killed healthy sessions every ~2 minutes (commit ebfe35f).
+  run bash -c "sed -n '/^_run_watchdog() {/,/^}/p' '$REPO_ROOT/docker/scripts/start_services.sh' | shasum -a 256 | cut -d' ' -f1"
+  [ "$output" = "745a1a70f53eee28e9f87acbc406580b2e7a4ce44cb1fada19651beef94b32c4" ]
+}
