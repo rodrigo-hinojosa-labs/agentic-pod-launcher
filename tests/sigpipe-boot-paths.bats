@@ -52,20 +52,28 @@ _render_healthcheck() {
 # of systemd, ss and everything else the real script touches.
 _auth_branch() {
   local bytes="$1" shell="${2:-bash}"
-  local pad
   # A 401 on the FIRST line, then filler: that is the shape that makes the
   # reader close early while the producer still has bytes to push.
-  pad=$(head -c "$bytes" < /dev/zero | tr '\0' 'x')
-  cat > "$TMP_TEST_DIR/probe.sh" <<'PROBE'
+  #
+  # The filler goes through a FILE, never through the environment or argv.
+  # Linux caps each individual argv/envp string at MAX_ARG_STRLEN — 32 pages,
+  # 128 KiB — while macOS enforces only a total (1 MiB) with no per-string
+  # limit. A 200 KiB pad passed as `PAD=… bash probe.sh` is therefore green on
+  # macOS and E2BIG ("Argument list too long") on Linux. Measured in CI, on the
+  # ubuntu arm, which is exactly what the two-arm matrix is for.
+  head -c "$bytes" < /dev/zero | tr '\0' 'x' > "$TMP_TEST_DIR/pad.txt"
+  # Unquoted heredoc so the pad PATH is baked in now; the `\$(cat …)` stays
+  # literal and runs inside the probe. Same idiom as the (b) probe below.
+  cat > "$TMP_TEST_DIR/probe.sh" <<PROBE
 set -uo pipefail
 journal="API Error: 401
-$PAD"
+\$(cat "$TMP_TEST_DIR/pad.txt")"
 PROBE
   # Extract the real line from the rendered template, so this test tracks the
   # implementation instead of restating it.
   grep -n "Please run /login" "$TMP_TEST_DIR/healthcheck.sh" | head -1 | cut -d: -f2- >> "$TMP_TEST_DIR/probe.sh"
   printf '  echo DEGRADED\nfi\necho DONE\n' >> "$TMP_TEST_DIR/probe.sh"
-  PAD="$pad" "$shell" "$TMP_TEST_DIR/probe.sh"
+  "$shell" "$TMP_TEST_DIR/probe.sh"
 }
 
 @test "036 US5(a): the healthcheck detects a 401 in a journal far past the pipe buffer" {
@@ -89,15 +97,15 @@ PROBE
 @test "036 US5(a): a clean journal is still not demoted" {
   _render_healthcheck
   # Same size, no 401 anywhere: the branch must NOT be taken.
-  local pad
-  pad=$(head -c 204800 < /dev/zero | tr '\0' 'x')
-  cat > "$TMP_TEST_DIR/probe.sh" <<'PROBE'
+  # Through a file, for the MAX_ARG_STRLEN reason documented on _auth_branch.
+  head -c 204800 < /dev/zero | tr '\0' 'x' > "$TMP_TEST_DIR/pad.txt"
+  cat > "$TMP_TEST_DIR/probe.sh" <<PROBE
 set -uo pipefail
-journal="$PAD"
+journal="\$(cat "$TMP_TEST_DIR/pad.txt")"
 PROBE
   grep -n "Please run /login" "$TMP_TEST_DIR/healthcheck.sh" | head -1 | cut -d: -f2- >> "$TMP_TEST_DIR/probe.sh"
   printf '  echo DEGRADED\nfi\necho DONE\n' >> "$TMP_TEST_DIR/probe.sh"
-  PAD="$pad" run bash "$TMP_TEST_DIR/probe.sh"
+  run bash "$TMP_TEST_DIR/probe.sh"
   [ "$status" -eq 0 ]
   run bash -c "printf '%s\n' \"\$1\" | grep -cF 'DEGRADED'" _ "$output"
   [ "$output" = "0" ]
