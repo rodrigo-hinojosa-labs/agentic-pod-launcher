@@ -52,9 +52,17 @@ setup() {
 }
 
 teardown() {
-  if [ -d "$DEST" ]; then
-    (cd "$DEST" && docker compose down -v --remove-orphans || true)
-  fi
+  # Sweep every per-test workspace under $TMP_TEST_DIR, not just $DEST: the
+  # 037 tests use their OWN isolated D2/D3 dirs (distinct compose project
+  # names, to avoid the container/network name collisions a shared $DEST/
+  # $AGENT_NAME produced when tests ran back-to-back) via `local` vars that
+  # do not survive into this separate function call — this glob is how they
+  # still get torn down.
+  local d
+  for d in "$TMP_TEST_DIR"/agent-qmd-*; do
+    [ -d "$d" ] || continue
+    (cd "$d" && docker compose down -v --remove-orphans || true)
+  done
   teardown_tmp_dir
 }
 
@@ -166,9 +174,12 @@ PY
     in_container sh -c 'cat "$HOME/.cache/qmd/engine-calls.log" 2>&1' >&2 || true
   fi
   [ "$setup_ok" -eq 1 ]
-  # setup must have run the full add → update → embed sequence
+  # setup must have run the full add → update → embed sequence, and (037) the
+  # collection add MUST carry the wiki/-only mask -- raw_sources/ was never
+  # meant to be in the search collection (Grep/search_notes cover it instead).
   run in_container sh -c 'cat "$HOME/.cache/qmd/engine-calls.log"'
   [[ "$output" == *"collection add"* ]]
+  echo "$output" | grep -qF -- '--mask wiki/**/*.md'
   [[ "$output" == *"update"* ]]
   [[ "$output" == *"embed"* ]]
 
@@ -288,6 +299,250 @@ PY
   run docker inspect --format '{{.HostConfig.CapDrop}}' "$cid"
   [ "$status" -eq 0 ]
   [[ "$output" == *"ALL"* ]]
+}
+
+# 037 T037: an agent scaffolded before the 0.27.0 wiki/-only mask migrates its
+# qmd collection automatically, once, on the first reindex tick. Pre-seeds a
+# "legacy" index (index.sqlite present, NO .qmd-collection-wiki sentinel) so
+# qmd_setup_if_needed skips entirely (its `[ ! -f index.sqlite ]` guard is
+# false) and the ONLY path that can migrate is _qmd_reindex_locked's own
+# pending-state check (T015) -- proving the real boot plumbing, not a stub
+# shortcut. `heartbeatctl qmd-reindex` is invoked directly (deterministic)
+# rather than waiting for the */5 cron backstop.
+@test "qmd e2e (037): a legacy vault-root collection migrates to wiki/-only on the first reindex tick" {
+  local D2="$TMP_TEST_DIR/agent-qmd-migrate-e2e" N2="qmd-migrate-e2e"
+  mkdir -p "$D2"
+  cat > "$D2/agent.yml" <<YML
+version: 1
+agent: {name: $N2, display_name: "qmd migrate e2e", role: "test", vibe: "terse"}
+user: {name: "Tester", nickname: "Tester", timezone: "UTC", email: "t@e.x", language: "en"}
+deployment: {host: "test", workspace: "$D2", install_service: false, claude_cli: "claude"}
+docker: {image_tag: "agent-admin:qmd-migrate-e2e", uid: $(id -u), gid: $(id -g), state_volume: "${N2}-state", base_image: "alpine:3.20"}
+claude: {config_dir: "/home/agent/.claude", profile_new: true}
+notifications: {channel: none}
+features:
+  heartbeat: {enabled: true, interval: "30m", timeout: 30, retries: 0, default_prompt: "echo pong"}
+mcps: {defaults: [], atlassian: [], github: {enabled: false, email: ""}}
+vault:
+  enabled: true
+  path: .state/.vault
+  seed_skeleton: true
+  initial_sources: []
+  mcp: {enabled: true, server: vault}
+  qmd: {enabled: true, version: "2.5.3", schedule: "*/5 * * * *"}
+  schema: {frontmatter_required: true, log_format: "## [{date}] {op} | {title}"}
+plugins: []
+YML
+  cp -R "$REPO_ROOT/modules" "$REPO_ROOT/scripts" "$REPO_ROOT/docker" "$D2/"
+  cp "$REPO_ROOT/setup.sh" "$D2/"
+  chmod +x "$D2/setup.sh"
+  (cd "$D2" && ./setup.sh --regenerate --non-interactive)
+  touch "$D2/.env"; chmod 0600 "$D2/.env"
+
+  mkdir -p "$D2/bin"
+  cat > "$D2/bin/claude" <<'CL'
+#!/bin/bash
+exec sleep 86400
+CL
+  chmod +x "$D2/bin/claude"
+
+  # Pre-seed the managed prefix (installed, so no `bun install`/network) PLUS a
+  # legacy index.sqlite with NO sentinel -- the exact shape qmd_collection_
+  # migration_state reads as "pending" (index present, sentinel absent).
+  local _prefix="$D2/.state/.cache/qmd/pkg"
+  mkdir -p "$_prefix/node_modules/.bin" "$D2/.state/.cache/qmd"
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/scripts/lib/qmd_index.sh"
+  printf '%s' "$(_qmd_manifest "2.5.3")" > "$_prefix/package.json"
+  printf '%s' "$(_qmd_manifest "2.5.3")" | _qmd_sha > "$_prefix/.installed-hash"
+  : > "$D2/.state/.cache/qmd/index.sqlite"
+  cat > "$_prefix/node_modules/.bin/qmd" <<'QS'
+#!/bin/sh
+mkdir -p "$HOME/.cache/qmd" 2>/dev/null || true
+echo "$*" >> "$HOME/.cache/qmd/engine-calls.log" 2>/dev/null || true
+case "$1" in
+  collection)
+    case "$2" in
+      add) : > "$HOME/.cache/qmd/index.sqlite" ;;
+      remove) : ;;
+    esac
+    ;;
+  cleanup) : ;;
+  embed)  echo "✓ All content hashes already have embeddings" ;;
+  status) echo "Pending: 0 need embedding" ;;
+esac
+exit 0
+QS
+  chmod +x "$_prefix/node_modules/.bin/qmd"
+
+  python3 - "$D2/docker-compose.yml" <<'PY'
+import sys
+path = sys.argv[1]
+txt = open(path).read()
+needle = '      - ./:/workspace'
+inject = '      - ./bin/claude:/usr/local/bin/claude:ro'
+if inject not in txt:
+    txt = txt.replace(needle, needle + '\n' + inject, 1)
+open(path, 'w').write(txt)
+PY
+
+  (cd "$D2" && docker compose build)
+  (cd "$D2" && docker compose up -d)
+  in_container() { (cd "$D2" && docker compose exec -T -u agent "$N2" "$@"); }
+
+  # boot must NOT have run collection setup (index.sqlite already existed) —
+  # confirms the only path exercised below is the reindex-time migration.
+  run in_container sh -c 'test -f "$HOME/.cache/qmd/.qmd-setup-ok" && echo RAN || echo SKIPPED'
+  [[ "$output" == *"SKIPPED"* ]]
+
+  # qmd_setup_if_needed and qmd_reindex share the SAME .reindex.lock
+  # (non-blocking flock -n): the backgrounded boot-time setup check briefly
+  # holds it just to confirm index.sqlite already exists and no-op. If this
+  # manual reindex races that brief hold, it loses the lock, fail-silently
+  # "skips" (exit 91 internally, wrapped to return 0), and no migration
+  # happens THIS tick -- exit 0 alone does not prove the work ran. Retry
+  # until the engine log actually shows a migration call.
+  local retry_deadline=$(( $(date +%s) + 45 )) calls=""
+  while [ "$(date +%s)" -lt "$retry_deadline" ]; do
+    in_container /usr/local/bin/heartbeatctl qmd-reindex >/dev/null 2>&1
+    calls=$(in_container sh -c 'cat "$HOME/.cache/qmd/engine-calls.log" 2>/dev/null')
+    echo "$calls" | grep -q '^collection remove' && break
+    sleep 2
+  done
+  if ! echo "$calls" | grep -q '^collection remove'; then
+    echo "--- container logs ---" >&2
+    (cd "$D2" && docker compose logs --tail=100 2>&1) >&2 || true
+  fi
+  # order: remove -> add (wiki/-only mask) -> update -> cleanup (sentinel
+  # write happens between add/update and cleanup, in-process — not an engine
+  # call, so it can't appear in this log; checked separately below).
+  local remove_line add_line cleanup_line
+  remove_line=$(echo "$calls" | grep -n '^collection remove' | head -1 | cut -d: -f1)
+  add_line=$(echo "$calls" | grep -n -- '^collection add.*--mask wiki/\*\*/\*\.md' | head -1 | cut -d: -f1)
+  cleanup_line=$(echo "$calls" | grep -n '^cleanup' | head -1 | cut -d: -f1)
+  [ -n "$remove_line" ]
+  [ -n "$add_line" ]
+  [ -n "$cleanup_line" ]
+  [ "$remove_line" -lt "$add_line" ]
+  [ "$add_line" -lt "$cleanup_line" ]
+
+  run in_container sh -c 'test -f "$HOME/.cache/qmd/.qmd-collection-wiki" && echo HAVE_SENTINEL'
+  [[ "$output" == *"HAVE_SENTINEL"* ]]
+  run in_container sh -c 'jq -r .migration /workspace/scripts/heartbeat/qmd-index.json'
+  [ "$output" = "done" ]
+
+  # a second tick must NOT migrate again (idempotent) — no new remove/add.
+  local calls_before; calls_before=$(echo "$calls" | grep -c '^collection')
+  run in_container /usr/local/bin/heartbeatctl qmd-reindex
+  [ "$status" -eq 0 ]
+  run in_container sh -c 'grep -c "^collection" "$HOME/.cache/qmd/engine-calls.log"'
+  [ "$output" = "$calls_before" ]
+}
+
+# 037 T037 (Phase 4.5 extension): the SAME PARA fixture the host suite uses to
+# oracle review_due/project_overdue/pending_ingest/etc. produces IDENTICAL
+# counts inside the real container (proves docker awk/jq/date parity, not just
+# the pre-037 six-count oracle above). Named COUNT_x markers, not positional
+# fields — `docker compose exec` output ordering is not a contract.
+@test "qmd e2e (037): vault-graph-para fixture yields host-identical PARA counts in-container" {
+  local D3="$TMP_TEST_DIR/agent-qmd-para-e2e" N3="qmd-para-e2e"
+  mkdir -p "$D3"
+  cat > "$D3/agent.yml" <<YML
+version: 1
+agent: {name: $N3, display_name: "wiki-graph para e2e", role: "test", vibe: "terse"}
+user: {name: "Tester", nickname: "Tester", timezone: "UTC", email: "t@e.x", language: "en"}
+deployment: {host: "test", workspace: "$D3", install_service: false, claude_cli: "claude"}
+docker: {image_tag: "agent-admin:wg-para-e2e", uid: $(id -u), gid: $(id -g), state_volume: "${N3}-state", base_image: "alpine:3.24.1"}
+claude: {config_dir: "/home/agent/.claude", profile_new: true}
+notifications: {channel: none}
+features:
+  heartbeat: {enabled: true, interval: "30m", timeout: 30, retries: 0, default_prompt: "echo pong"}
+mcps: {defaults: [], atlassian: [], github: {enabled: false, email: ""}}
+vault:
+  enabled: true
+  path: .state/.vault
+  seed_skeleton: true
+  initial_sources: []
+  mcp: {enabled: true, server: vault}
+  qmd: {enabled: false, version: "2.5.3", schedule: "*/5 * * * *"}
+  schema: {frontmatter_required: true, log_format: "## [{date}] {op} | {title}"}
+plugins: []
+YML
+  cp -R "$REPO_ROOT/modules" "$REPO_ROOT/scripts" "$REPO_ROOT/docker" "$D3/"
+  cp "$REPO_ROOT/setup.sh" "$D3/"
+  chmod +x "$D3/setup.sh"
+  (cd "$D3" && ./setup.sh --regenerate --non-interactive)
+  touch "$D3/.env"; chmod 0600 "$D3/.env"
+
+  # Pre-seed the fixture BEFORE the first boot (same pattern as the vault
+  # upgrade e2e test) rather than overlaying after boot: vault_seed_if_empty
+  # only seeds an EMPTY target, so a pre-populated vault is never raced by
+  # the container's own boot-time skeleton copy. `.state/` must exist first
+  # so the bind-mount target is real (macOS gotcha).
+  mkdir -p "$D3/.state/.vault"
+  cp -R "$REPO_ROOT/tests/fixtures/vault-graph-para/." "$D3/.state/.vault/"
+
+  mkdir -p "$D3/bin"
+  cat > "$D3/bin/claude" <<'CL'
+#!/bin/bash
+exec sleep 86400
+CL
+  chmod +x "$D3/bin/claude"
+  python3 - "$D3/docker-compose.yml" <<'PY'
+import sys
+path = sys.argv[1]
+txt = open(path).read()
+needle = '      - ./:/workspace'
+inject = '      - ./bin/claude:/usr/local/bin/claude:ro'
+if inject not in txt:
+    txt = txt.replace(needle, needle + '\n' + inject, 1)
+open(path, 'w').write(txt)
+PY
+  (cd "$D3" && docker compose build)
+  (cd "$D3" && docker compose up -d)
+  in_container() { (cd "$D3" && docker compose exec -T -u agent "$N3" "$@"); }
+
+  # Wait for the /home/agent/vault SYMLINK, not just CLAUDE.md (already
+  # present from the pre-seed) -- the symlink is the LAST step of
+  # boot_side_effects's vault sequence (skeleton check -> additive-upgrade
+  # check -> symlink), so its presence proves both checks already ran and
+  # settled, closing the race a bare CLAUDE.md check would leave open (exec
+  # can succeed before boot_side_effects runs at all).
+  local deadline=$(( $(date +%s) + 60 )) ready=0
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    in_container test -L /home/agent/vault 2>/dev/null && { ready=1; break; }
+    sleep 2
+  done
+  if [ "$ready" -ne 1 ]; then
+    echo "--- container logs ---" >&2
+    (cd "$D3" && docker compose logs --tail=80 2>&1) >&2 || true
+  fi
+  [ "$ready" -eq 1 ]
+  # the pre-seeded fixture must have been left ALONE (vault_seed_if_empty
+  # no-ops on a non-empty target) -- the vault-populated e2e test already
+  # proves the additive-upgrade path separately; this just confirms no seed
+  # clobber happened here.
+  run in_container wc -c /home/agent/.vault/CLAUDE.md
+  [[ "$output" == *"$(wc -c < "$REPO_ROOT/tests/fixtures/vault-graph-para/CLAUDE.md" | tr -d ' ')"* ]]
+
+  run in_container env WIKI_GRAPH_TODAY=2030-06-15 /usr/local/bin/heartbeatctl wiki-graph
+  [ "$status" -eq 0 ]
+  # named marker per field (not positional output) -- each is its own jq call
+  # against the SAME state file, so no multi-line quoting risk in the exec arg.
+  _wg_count() {
+    (cd "$D3" && docker compose exec -T -u agent "$N3" \
+      jq -r ".counts.$1" /workspace/scripts/heartbeat/wiki-graph.json)
+  }
+  [ "$(_wg_count nodes)" = "21" ]
+  [ "$(_wg_count edges)" = "9" ]
+  [ "$(_wg_count project_incomplete)" = "1" ]
+  [ "$(_wg_count project_overdue)" = "1" ]
+  [ "$(_wg_count review_due)" = "2" ]
+  [ "$(_wg_count pending_ingest)" = "1" ]
+  [ "$(_wg_count description_missing)" = "3" ]
+  [ "$(_wg_count problem_unfed)" = "2" ]
+  [ "$(_wg_count packets)" = "1" ]
+  [ "$(_wg_count para_project)" = "5" ]
 }
 
 # 016: the des-stubbed, real-qmd test. Slow (native build + network). NOT executed

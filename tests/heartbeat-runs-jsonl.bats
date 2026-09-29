@@ -65,6 +65,13 @@ teardown() { teardown_tmp_dir; }
   [ "$output" = "none" ]
 }
 
+@test "037: heartbeat.sh --trigger review is passed through unfiltered to runs.jsonl" {
+  run bash "$WORKSPACE/scripts/heartbeat/heartbeat.sh" --trigger review --prompt "check the queue"
+  [ "$status" -eq 0 ]
+  run jq -r '.trigger' "$WORKSPACE/scripts/heartbeat/logs/runs.jsonl"
+  [ "$output" = "review" ]
+}
+
 @test "heartbeat.sh writes state.json with counters and last_run" {
   run bash "$WORKSPACE/scripts/heartbeat/heartbeat.sh"
   [ -f "$WORKSPACE/scripts/heartbeat/state.json" ]

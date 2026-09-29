@@ -2,6 +2,56 @@
 
 ## [Unreleased]
 
+### Added
+- **Second Brain (PARA method) on the vault wiki — `037-second-brain-rag`**
+  (VERSION 0.26.0 → 0.27.0). Layers Tiago Forte's PARA method (Projects /
+  Areas / Resources / Archives) onto the existing Karpathy LLM Wiki
+  three-layer vault, giving the agent a deterministic, non-LLM review queue
+  instead of relying on it to remember what's open.
+
+  - **Actionability in frontmatter.** Any page can carry `para: project |
+    area | resource | archive` (absent = `resource`); a `project` page tracks
+    `goal`/`due`/`next_action`/`next_review` as the single home of that
+    project's state — an auto-memory `project_<slug>.md` pointer stays 2-3
+    lines and carries no state of its own.
+  - **A deterministic review queue**, computed by the same awk+jq
+    `wiki_graph.sh` runner that already did structural lint (no LLM, no new
+    dependency): `project_incomplete`, `project_overdue`, `review_due`,
+    `pending_ingest`, `description_missing`, `problem_unfed`,
+    `archive_candidate`, `schema_delta_pending` — each with a `CANON-F*`
+    frontmatter-violation counterpart where it applies.
+  - **Two new artifacts**, `.graph/policy.json` (effective review cadences,
+    archive threshold, qmd collection layout) and `.graph/packets.json`
+    (every page with a valid `packet:` value, for reuse without redoing the
+    thinking) alongside the existing three.
+  - **Favorite problems** (Hamming's "keep a short list"): a single
+    `synthesis/favorite-problems.md` page, never pre-seeded, numbered
+    questions capped at twelve; any page can set `problems: [fp-N]`, and
+    `problem_unfed` flags a favorite problem nobody has fed in N days.
+  - **qmd collection scoped to `wiki/` only** (was the whole vault, including
+    `raw_sources/`, which was never meant to be searched semantically).
+    Agents scaffolded before 0.27.0 migrate automatically, once, on the first
+    reindex tick — reusing embeddings (qmd keys vectors by content hash, not
+    collection) — with a manual `heartbeatctl qmd-migrate [--dry-run|--force]`
+    (local: `./scripts/agentctl heartbeat qmd-migrate`) for a forced check.
+  - **An opt-in weekly review notice** (docker only,
+    `features.heartbeat.review.enabled`, default off): a separate heartbeat
+    tick reports the queue in plain text, capped at 600 characters, in the
+    agent's configured language (`mixed` → Spanish, precedent 034).
+  - **A schema delta that self-denounces**: `schema_delta_pending` fires when
+    an existing vault received the 0.27.0 delta but never integrated it
+    (`## Actionability (PARA)` absent from that vault's own `CLAUDE.md`) past
+    a configurable grace period.
+  - Config surface: `vault.review.{project_days,area_days}`,
+    `vault.archive.candidate_days`,
+    `features.heartbeat.review.{enabled,schedule,prompt}` — all with
+    `has()`-guarded backfill on `--regenerate` and sanitizers that WARN by
+    key, never by value, on an out-of-range input.
+  - Deferred, optional: `scripts/qmd_watch.sh` still dispatches a reindex for
+    every wiki-graph run that touches `.graph/` — a redundant tick, not a
+    correctness bug. Tracked as an optional follow-up (`--exclude`-ing
+    `.graph/` from the inotify watch) rather than blocking this release.
+
 ### Fixed
 - **Cold-start boot resilience + honest diagnostics — `036-cold-start-boot-resilience`**
   (VERSION 0.25.1 → 0.26.0). `donna` was down for 25 minutes after a routine

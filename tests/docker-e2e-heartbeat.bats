@@ -141,3 +141,77 @@ PY
   # this assertion, and a multi-line "$output" would never == "ok"/"error".
   [[ "${output%%$'\n'*}" == "ok" || "${output%%$'\n'*}" == "error" ]]
 }
+
+# 037 T037: the opt-in weekly review notice reaches the REAL crontab file
+# (not just the workspace staging copy) through the root-side sync loop.
+# Gotchas from 033/034 applied here: `grep -c ... || true` (a zero match exits
+# 1 and would abort the script under `run` is fine, but NOT under a bare `[`
+# comparison after arithmetic) rather than `wc -l` (the crontab already ships
+# blank lines between entries, so counting physical lines is meaningless).
+@test "037: heartbeatctl reload writes the review crontab line into /etc/crontabs/agent when enabled" {
+  mkdir -p "$DEST"
+  cat > "$DEST/agent.yml" <<YML
+version: 1
+agent: {name: $AGENT_NAME, display_name: "review e2e", role: "test", vibe: "terse"}
+user: {name: "Tester", nickname: "Tester", timezone: "UTC", email: "t@e.x", language: "en"}
+deployment: {host: "test", workspace: "$DEST", install_service: false, claude_cli: "claude"}
+docker: {image_tag: "agent-admin:review-e2e", uid: $(id -u), gid: $(id -g), state_volume: "${AGENT_NAME}-state", base_image: "alpine:3.24.1"}
+claude: {config_dir: "/home/agent/.claude", profile_new: true}
+notifications: {channel: none}
+features:
+  heartbeat: {enabled: true, interval: "30m", timeout: 30, retries: 0, default_prompt: "echo pong"}
+mcps: {defaults: [], atlassian: [], github: {enabled: false, email: ""}}
+vault: {enabled: true, path: .state/.vault, seed_skeleton: true, initial_sources: [], mcp: {enabled: true, server: vault}, qmd: {enabled: false, version: "2.5.3", schedule: "*/5 * * * *"}, schema: {frontmatter_required: true, log_format: "## [{date}] {op} | {title}"}}
+plugins: []
+YML
+  cp -R "$REPO_ROOT/modules" "$REPO_ROOT/scripts" "$REPO_ROOT/docker" "$DEST/"
+  cp "$REPO_ROOT/setup.sh" "$DEST/"
+  chmod +x "$DEST/setup.sh"
+  (cd "$DEST" && ./setup.sh --regenerate --non-interactive)
+  yq -i '.features.heartbeat.review.enabled = true' "$DEST/agent.yml"
+  touch "$DEST/.env"; chmod 0600 "$DEST/.env"
+  mkdir -p "$DEST/.state"
+  mkdir -p "$DEST/bin"
+  cat > "$DEST/bin/claude" <<'CL'
+#!/bin/bash
+case " $* " in
+  *" --print "*) printf 'STUB_CLAUDE: %s\n' "$*"; exit 0 ;;
+  *)             exec sleep 86400 ;;
+esac
+CL
+  chmod +x "$DEST/bin/claude"
+  python3 - "$DEST/docker-compose.yml" <<'PY'
+import sys
+path = sys.argv[1]
+txt = open(path).read()
+needle = '      - ./:/workspace'
+inject = '      - ./bin/claude:/usr/local/bin/claude:ro'
+if inject not in txt:
+    txt = txt.replace(needle, needle + '\n' + inject, 1)
+open(path, 'w').write(txt)
+PY
+
+  (cd "$DEST" && docker compose build)
+  (cd "$DEST" && docker compose up -d)
+  in_container() { (cd "$DEST" && docker compose exec -T -u agent "$AGENT_NAME" "$@"); }
+
+  # heartbeatctl reload runs at boot (start_services.sh); wait for the
+  # root-side sync loop (cmp -s, polls every ~15s) to copy the staged
+  # crontab into /etc/crontabs/agent, then assert exactly one uncommented
+  # --trigger review line and a review-prompt.txt.
+  local deadline=$(( $(date +%s) + 60 )) count=""
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    count=$(cd "$DEST" && docker compose exec -T "$AGENT_NAME" sh -c "grep -c -- '--trigger review' /etc/crontabs/agent 2>/dev/null || true")
+    [ "$count" = "1" ] && break
+    sleep 5
+  done
+  if [ "$count" != "1" ]; then
+    echo "--- container logs ---" >&2
+    (cd "$DEST" && docker compose logs --tail=80 2>&1) >&2 || true
+    echo "--- /etc/crontabs/agent ---" >&2
+    (cd "$DEST" && docker compose exec -T "$AGENT_NAME" cat /etc/crontabs/agent 2>&1) >&2 || true
+  fi
+  [ "$count" = "1" ]
+  run in_container sh -c 'test -f /workspace/scripts/heartbeat/review-prompt.txt && echo HAVE_PROMPT'
+  [[ "$output" == *"HAVE_PROMPT"* ]]
+}

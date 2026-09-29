@@ -1271,6 +1271,10 @@ features:
     provider: elevenlabs
     signoff: "$(voice_signoff_default "$user_lang")"
     currency: "$(voice_currency_default "$user_lang")"
+  review:
+    enabled: false
+    schedule: "7 9 * * 1"
+    prompt: ""
 
 mcps:
   defaults:
@@ -1295,6 +1299,11 @@ vault:
   schema:
     frontmatter_required: true
     log_format: "## [{date}] {op} | {title}"
+  review:
+    project_days: 7
+    area_days: 30
+  archive:
+    candidate_days: 90
 
 $plugins_yaml
 EOF
@@ -2047,6 +2056,24 @@ channel_health_timeout_effective() {
   fi
 }
 
+# 037: shared validator for the three day-count fields below (1..3650 -- same
+# range as scripts/lib/wiki_graph.sh::_wg_config_days, which is what actually
+# reads these at runtime). This function has NO render target: nothing
+# flattens .vault.review.*/.vault.archive.* into a template placeholder, so
+# its only job is early WARN feedback during --regenerate. Molde
+# mcp_timeout_effective.
+vault_review_days_effective() {
+  local v="${1:-}" default="$2"
+  if [[ "$v" =~ ^[0-9]{1,4}$ ]] && [ "$v" -ge 1 ] && [ "$v" -le 3650 ]; then
+    printf '%s' "$v"
+  else
+    printf '%s' "$default"
+  fi
+}
+vault_review_project_days_effective() { vault_review_days_effective "${1:-}" 7; }
+vault_review_area_days_effective() { vault_review_days_effective "${1:-}" 30; }
+vault_archive_candidate_days_effective() { vault_review_days_effective "${1:-}" 90; }
+
 # channel_env_value FILE — the CHANNEL_HEALTH_TIMEOUT an operator has in the
 # workspace `.env`, read with the same tolerance Docker Compose applies, or
 # empty. Parses; never sources (the file can arrive from a remote `.env.age`
@@ -2327,6 +2354,36 @@ regenerate() {
     if [ "$(yq -r '(.features.voice | has("currency")) // false' "$agent_yml" 2>/dev/null)" != "true" ]; then
       yq -i ".features.voice.currency = \"$(voice_currency_default "$_vlang")\"" "$agent_yml"
     fi
+
+    # 037: backfill features.heartbeat.review for a pre-037 workspace. Disabled
+    # by default (opt-in weekly notice, docker-only) — has()-guarded so an
+    # operator's own enabled:true/schedule/prompt survives every --regenerate.
+    if [ "$(yq -r '(.features.heartbeat | has("review")) // false' "$agent_yml" 2>/dev/null)" != "true" ]; then
+      yq -i '.features.heartbeat.review.enabled = false' "$agent_yml"
+      yq -i '.features.heartbeat.review.schedule = "7 9 * * 1"' "$agent_yml"
+      yq -i '.features.heartbeat.review.prompt = ""' "$agent_yml"
+    fi
+    # 037: backfill vault.review/vault.archive for a pre-037 workspace. Defaults
+    # 7/30/90 days (data-model.md §9). has()-guarded per sub-block (not the
+    # whole vault: key) so an operator's existing vault.review.project_days
+    # survives untouched even if vault.archive is still absent, or vice versa.
+    if [ "$(yq -r '(.vault // {} | has("review")) // false' "$agent_yml" 2>/dev/null)" != "true" ]; then
+      yq -i '.vault.review.project_days = 7' "$agent_yml"
+      yq -i '.vault.review.area_days = 30' "$agent_yml"
+    fi
+    if [ "$(yq -r '(.vault // {} | has("archive")) // false' "$agent_yml" 2>/dev/null)" != "true" ]; then
+      yq -i '.vault.archive.candidate_days = 90' "$agent_yml"
+    fi
+    local _vrp _vra _vac
+    _vrp=$(yq -r '.vault.review.project_days // ""' "$agent_yml" 2>/dev/null)
+    [ -n "$_vrp" ] && [ "$(vault_review_project_days_effective "$_vrp")" != "$_vrp" ] \
+      && echo "WARN: invalid value for vault.review.project_days, using default 7" >&2
+    _vra=$(yq -r '.vault.review.area_days // ""' "$agent_yml" 2>/dev/null)
+    [ -n "$_vra" ] && [ "$(vault_review_area_days_effective "$_vra")" != "$_vra" ] \
+      && echo "WARN: invalid value for vault.review.area_days, using default 30" >&2
+    _vac=$(yq -r '.vault.archive.candidate_days // ""' "$agent_yml" 2>/dev/null)
+    [ -n "$_vac" ] && [ "$(vault_archive_candidate_days_effective "$_vac")" != "$_vac" ] \
+      && echo "WARN: invalid value for vault.archive.candidate_days, using default 90" >&2
 
     # 029: backfill claude.mcp_timeout_ms for a pre-029 workspace (the MCP
     # startup-handshake window, ms). Default 120000. has() (not `//`) so an

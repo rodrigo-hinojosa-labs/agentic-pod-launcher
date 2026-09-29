@@ -290,6 +290,82 @@ SH
   [ ! -f "$TMP_TEST_DIR/reindex.log" ]
 }
 
+@test "037: local heartbeat qmd-migrate: runs the entrypoint with --migrate" {
+  cd "$TMP_TEST_DIR"
+  mkdir -p scripts/local
+  cat > scripts/local/agent-qmd-reindex.sh << 'SH'
+#!/usr/bin/env bash
+echo "MIGRATE_RAN args=$*" >> "$TMP_TEST_DIR/migrate.log"
+SH
+  chmod +x scripts/local/agent-qmd-reindex.sh
+  export TMP_TEST_DIR
+  run ./scripts/agentctl heartbeat qmd-migrate
+  [ "$status" -eq 0 ]
+  grep -q "MIGRATE_RAN args=--migrate" "$TMP_TEST_DIR/migrate.log"
+}
+
+@test "037: local heartbeat qmd-migrate --dry-run: passes the flag through (unlike qmd-reindex)" {
+  cd "$TMP_TEST_DIR"
+  mkdir -p scripts/local
+  cat > scripts/local/agent-qmd-reindex.sh << 'SH'
+#!/usr/bin/env bash
+echo "MIGRATE_RAN args=$*" >> "$TMP_TEST_DIR/migrate.log"
+SH
+  chmod +x scripts/local/agent-qmd-reindex.sh
+  export TMP_TEST_DIR
+  run ./scripts/agentctl heartbeat qmd-migrate --dry-run
+  [ "$status" -eq 0 ]
+  grep -q "MIGRATE_RAN args=--migrate --dry-run" "$TMP_TEST_DIR/migrate.log"
+}
+
+@test "037: local status shows qmd collection layout/migration, computed live" {
+  cd "$TMP_TEST_DIR"
+  mkdir -p scripts/local .state/.cache/qmd
+  : > scripts/local/agent-qmd-reindex.sh
+  : > .state/.cache/qmd/index.sqlite
+  run ./scripts/agentctl status
+  [[ "$output" == *"qmd collection    : vault-root (migration pending)"* ]]
+  : > .state/.cache/qmd/.qmd-collection-wiki
+  run ./scripts/agentctl status
+  [[ "$output" == *"qmd collection    : wiki-root (migration done)"* ]]
+}
+
+@test "037: local doctor reports migration pending as informative (never a warn/error line)" {
+  cd "$TMP_TEST_DIR"
+  mkdir -p scripts/local .state/.cache/qmd
+  : > scripts/local/agent-qmd-reindex.sh
+  : > .state/.cache/qmd/index.sqlite
+  run ./scripts/agentctl doctor
+  # isolate this one check: it must print as a pass (✓), regardless of
+  # unrelated pre-existing warnings from this minimal fixture (login/.env).
+  [[ "$output" == *"✓ QMD collection: vault-root (migration pending"* ]]
+}
+
+@test "037: local status shows the seven review-queue counters, in canonical order (T022)" {
+  cd "$TMP_TEST_DIR"
+  mkdir -p scripts/local scripts/heartbeat
+  : > scripts/local/agent-wiki-graph.sh
+  local now; now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  printf '{"last_run":"%s","last_status":"ok","counts":{"broken_links":0,"frontmatter_violations":0,"index_drift":0,"orphans":0,"alias_occurrences":0,"review_due":2,"project_overdue":1,"project_incomplete":1,"pending_ingest":1,"archive_candidate":1,"schema_delta_pending":1,"problem_unfed":1}}\n' "$now" > scripts/heartbeat/wiki-graph.json
+  run ./scripts/agentctl status
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"review_due=2 project_overdue=1 project_incomplete=1 pending_ingest=1 archive_candidate=1 schema_delta_pending=1 problem_unfed=1"* ]]
+}
+
+@test "037: local doctor reports the review queue as informative, never a warn, when the 014 counts are clean (T022)" {
+  cd "$TMP_TEST_DIR"
+  mkdir -p scripts/local scripts/heartbeat
+  : > scripts/local/agent-wiki-graph.sh
+  local now; now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  printf '{"last_run":"%s","last_status":"ok","counts":{"broken_links":0,"frontmatter_violations":0,"index_drift":0,"orphans":0,"alias_occurrences":0,"review_due":2,"project_overdue":1,"project_incomplete":1,"pending_ingest":1,"archive_candidate":1,"schema_delta_pending":1,"problem_unfed":1}}\n' "$now" > scripts/heartbeat/wiki-graph.json
+  run ./scripts/agentctl doctor
+  # isolate this one check (precedent: the qmd-migration-pending test above) —
+  # a minimal fixture trips unrelated WARN/ERROR (login/.env), so exit code is
+  # not asserted; only that the queue prints as a PASS, never as integrity WARN.
+  [[ "$output" == *"✓ wiki-graph queue: review_due=2 project_overdue=1 project_incomplete=1 pending_ingest=1 archive_candidate=1 schema_delta_pending=1 problem_unfed=1"* ]]
+  if [[ "$output" == *"wiki-graph integrity"* ]]; then false; fi
+}
+
 @test "local heartbeat backup-vault --dry-run: runs the entrypoint with the flag (013 FR-010/T022)" {
   cd "$TMP_TEST_DIR"
   mkdir -p scripts/local

@@ -50,6 +50,10 @@ features:
     provider: elevenlabs
     signoff: "Eso es toda la información. Cambio y fuera, {nickname}."
     currency: "pesos chilenos"
+  review:
+    enabled: false
+    schedule: "7 9 * * 1"
+    prompt: ""
   identity_backup:
     enabled: true
     schedule: "30 3 * * *"

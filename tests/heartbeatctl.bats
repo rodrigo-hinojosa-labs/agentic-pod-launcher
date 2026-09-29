@@ -348,3 +348,109 @@ YML
   [ "$status" -eq 0 ]
   [[ "$output" == *"wiki-graph"* ]]
 }
+
+# ── 037 T035: opt-in weekly review notice (docker, heartbeatctl) ────────────
+# contracts/heartbeat-review-notice.md — review_line concatenated onto the SAME
+# heredoc line as wiki_graph_line so a disabled feature stays byte-identical.
+
+@test "037 review notice: disabled (default) — crontab byte-identical to v0.26.0, no prompt file" {
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" reload
+  [ "$status" -eq 0 ]
+  diff -q "$HEARTBEATCTL_CRONTAB_FILE" "$REPO_ROOT/tests/fixtures/crontab-v0.26.0.golden"
+  [ ! -f "$WORKSPACE/scripts/heartbeat/review-prompt.txt" ]
+}
+
+@test "037 review notice: enabled with default schedule — line + prompt file with VAULT_DIR substituted" {
+  cat >> "$WORKSPACE/agent.yml" <<'YML'
+vault:
+  enabled: true
+  path: .state/.vault
+YML
+  yq -i '.features.heartbeat.review.enabled = true' "$WORKSPACE/agent.yml"
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" reload
+  [ "$status" -eq 0 ]
+  grep -qE '^7 9 \* \* 1 HEARTBEAT_TRIGGER=review /workspace/scripts/heartbeat/heartbeat\.sh --trigger review --prompt "\$\(cat /workspace/scripts/heartbeat/review-prompt\.txt\)" >> /workspace/scripts/heartbeat/logs/review\.log 2>&1$' "$HEARTBEATCTL_CRONTAB_FILE"
+  [ -f "$WORKSPACE/scripts/heartbeat/review-prompt.txt" ]
+  ! grep -qF '{{VAULT_DIR}}' "$WORKSPACE/scripts/heartbeat/review-prompt.txt"
+  ! grep -qF '{{WORKSPACE}}' "$WORKSPACE/scripts/heartbeat/review-prompt.txt"
+  grep -qF 'findings.json' "$WORKSPACE/scripts/heartbeat/review-prompt.txt"
+  grep -qF 'sin pendientes' "$WORKSPACE/scripts/heartbeat/review-prompt.txt"
+}
+
+@test "037 review notice: EN language default closes with 'nothing pending'" {
+  cat >> "$WORKSPACE/agent.yml" <<'YML'
+user:
+  language: en
+vault:
+  enabled: true
+YML
+  yq -i '.features.heartbeat.review.enabled = true' "$WORKSPACE/agent.yml"
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" reload
+  [ "$status" -eq 0 ]
+  grep -qF 'nothing pending' "$WORKSPACE/scripts/heartbeat/review-prompt.txt"
+}
+
+@test "037 review notice: mixed language falls back to the ES default (precedent 034)" {
+  cat >> "$WORKSPACE/agent.yml" <<'YML'
+user:
+  language: mixed
+vault:
+  enabled: true
+YML
+  yq -i '.features.heartbeat.review.enabled = true' "$WORKSPACE/agent.yml"
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" reload
+  [ "$status" -eq 0 ]
+  grep -qF 'sin pendientes' "$WORKSPACE/scripts/heartbeat/review-prompt.txt"
+}
+
+@test "037 review notice: a custom prompt wins over the default" {
+  cat >> "$WORKSPACE/agent.yml" <<'YML'
+vault:
+  enabled: true
+YML
+  yq -i '.features.heartbeat.review.enabled = true | .features.heartbeat.review.prompt = "custom text"' "$WORKSPACE/agent.yml"
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" reload
+  [ "$status" -eq 0 ]
+  [ "$(cat "$WORKSPACE/scripts/heartbeat/review-prompt.txt")" = "custom text" ]
+  ! grep -qF 'sin pendientes' "$WORKSPACE/scripts/heartbeat/review-prompt.txt"
+}
+
+@test "037 review notice: invalid schedules WARN naming the key, line absent, rest of crontab unchanged" {
+  for bad in "9 * *" "a b c d e" "0 9 * * 8x" "* * * * * *" "* 9 * * 1" "*/5 9 * * 1" "0 25 * * 1"; do
+    cp "$WORKSPACE/agent.yml" "$WORKSPACE/agent.yml.bak"
+    # yq -i MERGE (not `cat >>` a second top-level features: key, which yq
+    # resolves by taking the LAST occurrence whole — silently discarding the
+    # base block's interval/enabled and desyncing the golden comparison).
+    yq -i '.features.heartbeat.review.enabled = true | .features.heartbeat.review.schedule = "'"$bad"'"' "$WORKSPACE/agent.yml"
+    run bash "$REPO_ROOT/docker/scripts/heartbeatctl" reload
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"features.heartbeat.review.schedule"* ]] || { echo "no WARN for schedule '$bad'" >&2; return 1; }
+    ! grep -qF -- '--trigger review' "$HEARTBEATCTL_CRONTAB_FILE" || { echo "review line leaked for schedule '$bad'" >&2; return 1; }
+    diff -q "$HEARTBEATCTL_CRONTAB_FILE" "$REPO_ROOT/tests/fixtures/crontab-v0.26.0.golden" || { echo "crontab diverged for schedule '$bad'" >&2; return 1; }
+    mv "$WORKSPACE/agent.yml.bak" "$WORKSPACE/agent.yml"
+  done
+}
+
+@test "037 review notice: emits even when the main heartbeat is disabled (independent lines)" {
+  cat >> "$WORKSPACE/agent.yml" <<'YML'
+vault:
+  enabled: true
+YML
+  yq -i '.features.heartbeat.enabled = false' "$WORKSPACE/agent.yml"
+  yq -i '.features.heartbeat.review.enabled = true' "$WORKSPACE/agent.yml"
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" reload
+  [ "$status" -eq 0 ]
+  grep -qF -- '--trigger review' "$HEARTBEATCTL_CRONTAB_FILE"
+  grep -qE '^# paused: .* /workspace/scripts/heartbeat/heartbeat\.sh >>' "$HEARTBEATCTL_CRONTAB_FILE"
+}
+
+@test "037 review notice: status prints the seven canonical wiki-graph counters" {
+  cat > "$WORKSPACE/scripts/heartbeat/state.json" <<'JS'
+{"schema":1,"enabled":true,"interval":"2m","cron":"*/2 * * * *","prompt":"Check","notifier_channel":"log","last_run":{"ts":"2026-04-19T01:30:00Z","run_id":"x","status":"ok","duration_ms":1000},"counters":{"total_runs":5,"ok":5,"timeout":0,"error":0,"consecutive_failures":0,"success_rate_24h":1},"next_run_estimate":null,"crond":{"alive":null,"pid":null},"updated_at":"2026-04-19T01:30:00Z"}
+JS
+  cat > "$WORKSPACE/scripts/heartbeat/wiki-graph.json" <<'JSON'
+{"schema":1,"last_run":"2030-06-15T00:00:00Z","last_status":"ok","counts":{"review_due":2,"project_overdue":1,"project_incomplete":1,"pending_ingest":1,"archive_candidate":1,"schema_delta_pending":1,"problem_unfed":1}}
+JSON
+  run bash "$REPO_ROOT/docker/scripts/heartbeatctl" status
+  [[ "$output" == *"wiki-graph: ok @ 2030-06-15T00:00:00Z"*"due=2"*"overdue=1"*"incomplete=1"*"ingest=1"*"archive=1"*"delta=1"*"unfed=1"* ]]
+}

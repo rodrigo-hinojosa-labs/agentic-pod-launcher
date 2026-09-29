@@ -1117,6 +1117,16 @@ _local_vault_qmd_status() {
     echo "    qmd watcher       : $(_local_unit_state "agent-${agent}-qmd-watch.service" "$ws")"
     if [ -f "$ws/.state/.cache/qmd/index.sqlite" ]; then echo "    qmd index         : present"
     else echo "    qmd index         : not built yet"; fi
+    # 037: layout/migration computed LIVE from sentinel + index.sqlite presence
+    # (same rule as qmd_collection_migration_state) so `pending` is visible
+    # before the first reindex tick ever migrates it.
+    if [ ! -f "$ws/.state/.cache/qmd/index.sqlite" ]; then
+      echo "    qmd collection    : none (migration n/a)"
+    elif [ -f "$ws/.state/.cache/qmd/.qmd-collection-wiki" ]; then
+      echo "    qmd collection    : wiki-root (migration done)"
+    else
+      echo "    qmd collection    : vault-root (migration pending)"
+    fi
     # 013 FR-009/FR-013: surface freshness (last run) + a schedule fallback marker.
     if [ -f "$ws/scripts/heartbeat/qmd-index.json" ] && command -v jq >/dev/null 2>&1; then
       local st lr
@@ -1139,8 +1149,11 @@ _local_vault_qmd_status() {
       wst=$(jq -r '.last_status // ""' "$ws/scripts/heartbeat/wiki-graph.json" 2>/dev/null)
       wlr=$(jq -r '.last_run // ""' "$ws/scripts/heartbeat/wiki-graph.json" 2>/dev/null)
       wc=$(jq -r '.counts // {} | "broken=\(.broken_links) fm=\(.frontmatter_violations) drift=\(.index_drift) orphans=\(.orphans) alias=\(.alias_occurrences)"' "$ws/scripts/heartbeat/wiki-graph.json" 2>/dev/null)
+      local qc
+      qc=$(jq -r '.counts // {} | "review_due=\(.review_due // 0) project_overdue=\(.project_overdue // 0) project_incomplete=\(.project_incomplete // 0) pending_ingest=\(.pending_ingest // 0) archive_candidate=\(.archive_candidate // 0) schema_delta_pending=\(.schema_delta_pending // 0) problem_unfed=\(.problem_unfed // 0)"' "$ws/scripts/heartbeat/wiki-graph.json" 2>/dev/null)
       [ -n "$wlr" ] && echo "    wiki-graph run    : ${wlr}${wst:+ (${wst})}"
       [ -n "$wc" ] && echo "    wiki-graph counts : ${wc}"
+      [ -n "$qc" ] && echo "    wiki-graph queue  : ${qc}"
     else
       echo "    wiki-graph        : not derived yet"
     fi
@@ -1159,6 +1172,15 @@ _local_vault_qmd_doctor() {
       _doctor_pass "QMD index present"
     else
       _doctor_warn "QMD index not built yet" "builds on --login or the reindex timer (~5 min)"
+    fi
+    # 037: informative only — never warn. `pending` is expected for any agent
+    # scaffolded before 037 and self-heals on the next reindex tick (FR-009).
+    if [ -f "$ws/.state/.cache/qmd/index.sqlite" ]; then
+      if [ -f "$ws/.state/.cache/qmd/.qmd-collection-wiki" ]; then
+        _doctor_pass "QMD collection: wiki-root (migration done)"
+      else
+        _doctor_pass "QMD collection: vault-root (migration pending — completes on the next reindex tick)"
+      fi
     fi
     # 013 FR-009: honest last-run reporting — a reindex that fails EVERY tick used
     # to print ✓ with a recent timestamp. Degrade to warn when last_status=error.
@@ -1227,6 +1249,19 @@ _local_vault_qmd_doctor() {
         _doctor_warn "wiki-graph integrity: broken_links=${broken} frontmatter=${fmv} index_drift=${drift}" \
           "inspect .graph/findings.json in the vault; fix in the wiki, then agentctl heartbeat wiki-graph"
       fi
+      # 037 (T022): the seven review-queue counters are informative ONLY — never
+      # a warn/fail. They are an actionability backlog for the human, not a
+      # structural integrity problem the runner can fix (contrast with
+      # broken_links/frontmatter/index_drift above).
+      local rq po pic pin ac sdp pu
+      rq=$(jq -r '.counts.review_due // 0' "$wsf" 2>/dev/null)
+      po=$(jq -r '.counts.project_overdue // 0' "$wsf" 2>/dev/null)
+      pic=$(jq -r '.counts.project_incomplete // 0' "$wsf" 2>/dev/null)
+      pin=$(jq -r '.counts.pending_ingest // 0' "$wsf" 2>/dev/null)
+      ac=$(jq -r '.counts.archive_candidate // 0' "$wsf" 2>/dev/null)
+      sdp=$(jq -r '.counts.schema_delta_pending // 0' "$wsf" 2>/dev/null)
+      pu=$(jq -r '.counts.problem_unfed // 0' "$wsf" 2>/dev/null)
+      _doctor_pass "wiki-graph queue: review_due=${rq} project_overdue=${po} project_incomplete=${pic} pending_ingest=${pin} archive_candidate=${ac} schema_delta_pending=${sdp} problem_unfed=${pu}"
     fi
     if [ -f "$ws/scripts/heartbeat/wiki-graph-schedule.fallback" ]; then
       _doctor_warn "wiki-graph schedule not convertible — using the default cadence" \
@@ -1576,6 +1611,14 @@ cmd_local_heartbeat() {
         [ "$a" = "--dry-run" ] && { echo "agentctl: 'heartbeat qmd-reindex' does not support --dry-run (it would run a real reindex)." >&2; return 2; }
       done
       exec "$script" "$@"
+      ;;
+    qmd-migrate)
+      # 037: one-time move to the wiki/ mask. Unlike qmd-reindex above,
+      # --dry-run IS safe here (qmd_migrate_collection --dry-run reads state
+      # and prints the steps; it never runs a real reindex) — pass it through.
+      local script="$ws/scripts/local/agent-qmd-reindex.sh"
+      [ -x "$script" ] || { echo "agentctl: qmd reindex entrypoint not found ($script) — enable vault.qmd + ./setup.sh --regenerate" >&2; return 2; }
+      exec "$script" --migrate "$@"
       ;;
     backup-vault)
       local script="$ws/scripts/local/agent-vault-backup.sh"

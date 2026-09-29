@@ -71,6 +71,7 @@ _SCHEMA_BOOLEANS=(
   '.vault.mcp.enabled'
   '.vault.qmd.enabled'
   '.vault.wiki_graph.enabled'
+  '.features.heartbeat.review.enabled'
 )
 
 # Optional string leaves: absent is fine (not required), but if the key is
@@ -86,6 +87,7 @@ _SCHEMA_OPTIONAL_NONEMPTY=(
   '.vault.qmd.version'
   '.vault.qmd.schedule'
   '.vault.wiki_graph.schedule'
+  '.features.heartbeat.review.schedule'
 )
 
 # Internal: read a yq value, normalise a missing (null) value to empty string.

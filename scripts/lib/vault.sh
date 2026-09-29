@@ -47,6 +47,13 @@ vault_seed_if_empty() {
     sed "s/SCAFFOLD_DATE/${today}/g" "$target/log.md" > "$target/log.md.tmp" || return 1
     mv "$target/log.md.tmp" "$target/log.md" || return 1
   fi
+
+  # 037: a fresh scaffold already integrates the 0.27.0 schema (CANON-D1 is in
+  # $skeleton/CLAUDE.md), so it never needs the delta .md — only the dated
+  # marker, so DELTA_DATE is known and description_missing can compare
+  # created: against it (data-model.md §4/§7).
+  mkdir -p "$target/_templates" 2>/dev/null || true
+  printf 'deposited: %s\n' "$today" > "$target/_templates/.schema-updates-0.27.0.applied" 2>/dev/null || true
 }
 
 # vault_seed_missing TARGET_DIR SKELETON_DIR DELTAS_DIR [TODAY]
@@ -103,6 +110,46 @@ vault_seed_missing() {
         : > "$marker" 2>/dev/null || true
         if [ -f "$target/log.md" ]; then
           printf '\n## [%s] upgrade | schema updates 0.8.0 — read _templates/schema-updates-0.8.0.md and integrate into CLAUDE.md\n' \
+            "$today" >> "$target/log.md" 2>/dev/null || true
+        fi
+      fi
+    fi
+  fi
+
+  # 037: additive schema delta 0.27.0 (Second Brain / PARA). Independent marker
+  # and flag from the 0.8.0 block above — a vault can be missing either delta,
+  # both, or neither, and each is deposited on its own trigger.
+  local changed27=0
+
+  # 4) NEW templates this launcher version introduces, only when absent.
+  if [ ! -f "$target/_templates/entity-project.md" ] && [ -f "$skeleton/_templates/entity-project.md" ]; then
+    mkdir -p "$target/_templates" 2>/dev/null || true
+    cp "$skeleton/_templates/entity-project.md" "$target/_templates/entity-project.md" 2>/dev/null && changed27=1
+  fi
+  if [ ! -f "$target/_templates/overview-area.md" ] && [ -f "$skeleton/_templates/overview-area.md" ]; then
+    mkdir -p "$target/_templates" 2>/dev/null || true
+    cp "$skeleton/_templates/overview-area.md" "$target/_templates/overview-area.md" 2>/dev/null && changed27=1
+  fi
+
+  # 5) schema delta 0.27.0 — gated by its own HIDDEN marker, never TARGET/CLAUDE.md.
+  local marker27="$target/_templates/.schema-updates-0.27.0.applied"
+  local delta27_src="$deltas/schema-updates-0.27.0.md"
+  if [ ! -f "$marker27" ] && [ -n "$deltas" ] && [ -f "$delta27_src" ]; then
+    # Safe form (never `find | head -1 | grep -q .`): that pipeline evaluates
+    # FALSE under `pipefail` once the vault has enough pages that `head`
+    # closes the pipe before `find` finishes writing (measured 200/200 with
+    # 3,000 pages, bash 3.2 and 5.x — research.md). `-print -quit` makes find
+    # itself stop after the first match; no downstream reader, no SIGPIPE race.
+    local has_pages27=0
+    if [ -d "$target/wiki" ] && [ -n "$(find "$target/wiki" -type f -name '*.md' -print -quit 2>/dev/null)" ]; then
+      has_pages27=1
+    fi
+    if [ "$changed27" -eq 1 ] || [ "$has_pages27" -eq 1 ]; then
+      mkdir -p "$target/_templates" 2>/dev/null || true
+      if cp "$delta27_src" "$target/_templates/schema-updates-0.27.0.md" 2>/dev/null; then
+        printf 'deposited: %s\n' "$today" > "$marker27" 2>/dev/null || true
+        if [ -f "$target/log.md" ]; then
+          printf '\n## [%s] upgrade | schema delta 0.27.0 deposited — integrate _templates/schema-updates-0.27.0.md into CLAUDE.md\n' \
             "$today" >> "$target/log.md" 2>/dev/null || true
         fi
       fi

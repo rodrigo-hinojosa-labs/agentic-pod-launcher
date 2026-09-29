@@ -2,7 +2,7 @@
 
 CLI for inspecting, controlling, and mutating the in-container heartbeat. Image-baked at `/opt/agent-admin/scripts/heartbeatctl`, symlinked to `/usr/local/bin/heartbeatctl`.
 
-Full subcommand list (as of v0.12.0, matches `docker/scripts/heartbeatctl` dispatch): `status`, `logs`, `show`, `test`, `pause`, `resume`, `reload`, `kick-channel`, `drop-plugin`, `set-interval`, `set-prompt`, `set-notifier`, `set-timeout`, `set-retries`, `backup-identity`, `backup-vault`, `backup-config`, `token-check`, `qmd-reindex`, `wiki-graph`, `help`.
+Full subcommand list (as of v0.27.0, matches `docker/scripts/heartbeatctl` dispatch): `status`, `logs`, `show`, `test`, `pause`, `resume`, `reload`, `kick-channel`, `drop-plugin`, `set-interval`, `set-prompt`, `set-notifier`, `set-timeout`, `set-retries`, `backup-identity`, `backup-vault`, `backup-config`, `token-check`, `qmd-reindex`, `qmd-migrate`, `wiki-graph`, `help`.
 
 ## Invocation
 
@@ -200,10 +200,15 @@ Per-primitive state files (same directory):
 - `token-health/<id>.json` — one per probed token, plus `token-health/warnings.jsonl` (warning audit trail).
 - `qmd-index.json` — reindex state, schema `{hash, last_run, last_status, runs[, pending]}` (see "Vault RAG" below).
 - `wiki-graph.json` + `.wiki-graph.lock` — wiki-graph freshness/counts state and its flock file.
+- `review-prompt.txt` (037) — the effective weekly-review prompt (custom or
+  the localized default), written by `reload` only when
+  `features.heartbeat.review.enabled: true`; absent otherwise. `{{VAULT_DIR}}`
+  and `{{WORKSPACE}}` are already substituted — this is what the crontab line
+  actually `cat`s at tick time.
 
 Per-primitive cron logs (docker mode; the cron lines written by `reload` redirect here):
 
-- `logs/backup-identity.log`, `logs/backup-vault.log`, `logs/backup-config.log`, `logs/token-health.log`, `logs/qmd-reindex.log`, `logs/wiki-graph.log`.
+- `logs/backup-identity.log`, `logs/backup-vault.log`, `logs/backup-config.log`, `logs/token-health.log`, `logs/qmd-reindex.log`, `logs/wiki-graph.log`, `logs/review.log` (037, only when the review notice is enabled).
 
 The qmd reindex lock is the exception to the "all under `scripts/heartbeat/`" rule: it lives at `<qmd cache root>/.reindex.lock`, shared with the first-boot setup so setup and reindex never overlap. The cache root is `$QMD_CACHE_HOME`, falling back to `~/.cache/qmd` — docker mode: `HOME=/home/agent`, which is the `.state/` bind-mount; local mode: the rendered entrypoints export `QMD_CACHE_HOME=<workspace>/.state/.cache/qmd`. Either way it persists under `.state/`.
 
@@ -412,6 +417,33 @@ no embed, no state write. The local wrapper has no dry-run mode, so
 `agentctl heartbeat qmd-reindex --dry-run` is refused in local mode (exit `2`)
 rather than silently running a real reindex.
 
+### `qmd-migrate [--dry-run|--force]` (037)
+
+```
+heartbeatctl qmd-migrate                # docker mode, in-container
+agentctl heartbeat qmd-migrate         # both modes, from the host
+```
+
+One-time move of the search collection from the legacy `**/*.md` mask to
+`wiki/**/*.md`. Runs **automatically** on the first `qmd-reindex` tick after
+an agent upgrades to 037 — this subcommand is the manual check/trigger, not
+the only way it happens.
+
+- No flags: idempotent. If the layout sentinel is present, prints "already
+  migrated" and exits `0` without touching qmd at all.
+- `--dry-run`: prints the current state (`collection=<layout>
+  migration=<state>`) and the six steps (`remove`, `add` with the new mask,
+  `update`, write the sentinel, `cleanup`, `embed` if pending) — runs nothing.
+  Safe in **both** modes, unlike `qmd-reindex --dry-run`.
+- `--force`: recreates the collection with the `wiki/` mask even if already
+  migrated — for repairing a stale sentinel or after a manual `cleanup`.
+
+`remove`+`add` reuses embeddings (qmd keys vectors by content hash, not by
+collection), so migrating is fast and never re-downloads or re-embeds
+unchanged content. `status`/`doctor` in both modes report
+`collection=<layout> migration=<state>`, computed live from the sentinel and
+`index.sqlite` — this is visible even before the first reindex tick runs.
+
 #### Embed completion loop (018)
 
 A single `qmd embed` runs inside an engine session hard-capped at ~30 minutes;
@@ -469,8 +501,12 @@ agentctl heartbeat wiki-graph           # same, from the host (both modes)
 ```
 
 Regenerates the derived wiki graph + structural lint (feature 014). Reads the
-whole `wiki/` and writes `<vault>/.graph/{graph,backlinks,findings}.json` plus the
-`<workspace>/scripts/heartbeat/wiki-graph.json` state file (freshness + finding
+whole `wiki/` and writes five artifacts under `<vault>/.graph/`:
+`graph.json`, `backlinks.json`, `findings.json` (structural lint plus, as of
+037, the PARA actionability queue — see below), `policy.json` (037: effective
+review cadences, archive threshold, qmd collection layout) and `packets.json`
+(037: every page with a valid `packet:` value). Plus the
+`<workspace>/scripts/heartbeat/wiki-graph.json` state file (freshness +
 counts). `flock`-guarded (lock lives under `scripts/heartbeat/`, never in the
 vault), fail-silent (always exits 0; honesty is in the state file). NEVER edits the
 wiki — it reports; the agent fixes. A `20 */6 * * *` backstop runs the same command
@@ -478,13 +514,64 @@ wiki — it reports; the agent fixes. A `20 */6 * * *` backstop runs the same co
 override via `vault.wiki_graph.schedule`); opt out with
 `vault.wiki_graph.enabled=false`.
 
-Local mode: `agentctl status`/`doctor` surface the freshness and degrade on
-integrity findings (broken links, frontmatter violations, index drift → warn)
-or a dead runner (fail). Docker mode (as of v0.12.0): neither surfaces the wiki
-graph — `agentctl status` proxies `heartbeatctl status`, which reports the
-heartbeat, backups and token health only, and `agentctl doctor` has no
-wiki-graph checks. Read `scripts/heartbeat/wiki-graph.json` directly. See
-"agentctl doctor exit contract" below.
+**The PARA review queue (037):** `findings.json` and `wiki-graph.json.counts`
+gain seven kinds beyond the pre-037 structural set —
+`project_incomplete`, `project_overdue`, `review_due`, `pending_ingest`,
+`description_missing`, `problem_unfed`, `archive_candidate` — plus
+`schema_delta_pending` (the schema delta self-denounces if an existing vault
+never integrated it). These are deterministic, computed by the same awk+jq
+runner, never by an LLM.
+
+Local mode: `agentctl status`/`doctor` surface the freshness, the seven queue
+counters (`review_due=<n> project_overdue=<n> project_incomplete=<n>
+pending_ingest=<n> archive_candidate=<n> schema_delta_pending=<n>
+problem_unfed=<n>`, in that fixed order — informative only, never a warn) and
+degrade on integrity findings (broken links, frontmatter violations, index
+drift → warn) or a dead runner (fail). Docker mode (as of 037):
+`heartbeatctl status` prints a `wiki-graph: <status> @ <last_run> —
+due=<n> overdue=<n> incomplete=<n> ingest=<n> archive=<n> delta=<n>
+unfed=<n>` line (same seven counters, same order) whenever
+`wiki-graph.json` exists, alongside the existing `qmd index:` line;
+`agentctl doctor` still has no wiki-graph checks in docker mode — read
+`scripts/heartbeat/wiki-graph.json` directly there. See "agentctl doctor
+exit contract" below.
+
+### Review notice (opt-in, docker only, 037)
+
+A **separate** heartbeat tick, distinct from the main interval, that reports
+the PARA queue above without acting on it. Off by default — enable with
+`features.heartbeat.review.enabled: true` in `agent.yml`, then `reload`.
+
+```yaml
+features:
+  heartbeat:
+    review:
+      enabled: true
+      schedule: "7 9 * * 1"   # default: Monday 09:07
+      prompt: ""               # empty = localized default (mixed -> Spanish)
+```
+
+- **Pick a minute that is not a multiple of your heartbeat interval.** The
+  minute field deliberately rejects `*` and `*/N` (`_v_cron5`, image-baked) —
+  a review notice firing on every tick would defeat "at most one notice a
+  week" (SC-007). The default `7` avoids every common interval (5, 10, 15,
+  30, 60).
+- An invalid schedule WARNs to the boot log naming
+  `features.heartbeat.review.schedule` (never the value) and the crontab line
+  is simply omitted — the rest of `reload` proceeds normally.
+- The effective prompt (custom or the localized default, `{{VAULT_DIR}}` and
+  `{{WORKSPACE}}` already substituted) is written to
+  `scripts/heartbeat/review-prompt.txt` and `cat`'d into the crontab line at
+  tick time — see "Data files" above.
+- The tick uses the SAME isolated heartbeat session as a regular tick
+  (`trigger: "review"` in `runs.jsonl`), runs independently of
+  `features.heartbeat.enabled` (a paused main heartbeat still gets its review
+  tick), and is subject to the same collision rule as any two ticks: if one
+  is still running when the other's minute arrives, the loser is `skipped`,
+  never queued.
+- Local mode: no timer ships for this — the queue is still readable via
+  `wiki-graph.json`/`findings.json`, or offered to the human at the start of
+  a conversation per the vault's own `CLAUDE.md` protocol.
 
 ## agentctl doctor exit contract
 

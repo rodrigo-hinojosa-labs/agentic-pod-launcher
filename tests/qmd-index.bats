@@ -15,8 +15,8 @@ setup() {
   setup_tmp_dir
   export HOME="$TMP_TEST_DIR/home"; mkdir -p "$HOME"
   export QMD_CACHE_HOME="$TMP_TEST_DIR/cache/qmd"; mkdir -p "$QMD_CACHE_HOME"
-  export QMD_VAULT_DIR="$TMP_TEST_DIR/vault"; mkdir -p "$QMD_VAULT_DIR"
-  printf '# note\nhello\n' > "$QMD_VAULT_DIR/a.md"
+  export QMD_VAULT_DIR="$TMP_TEST_DIR/vault"; mkdir -p "$QMD_VAULT_DIR/wiki"
+  printf '# note\nhello\n' > "$QMD_VAULT_DIR/wiki/a.md"
   export QMD_INDEX_STATE_FILE="$TMP_TEST_DIR/qmd-index.json"
   export QMD_STUB_LOG="$TMP_TEST_DIR/engine.log"; : > "$QMD_STUB_LOG"
   mkdir -p "$TMP_TEST_DIR/bin"
@@ -75,6 +75,77 @@ teardown() { teardown_tmp_dir; }
   [ "$output" = "1" ]
   run jq -e '.hash and .last_run and .last_status and (.runs|type=="number")' "$QMD_INDEX_STATE_FILE"
   [ "$status" -eq 0 ]
+}
+
+# ── 037 US2: automatic one-time collection migration (before the hash guard) ─
+
+@test "037: inherited index (no sentinel) migrates first tick: remove->add(wiki mask)->update->sentinel->cleanup, no embed at Pending:0" {
+  install_qmd_stub
+  mkdir -p "$QMD_CACHE_HOME"; : > "$QMD_CACHE_HOME/index.sqlite"
+  run qmd_reindex "$AGENT_YML"
+  [ "$status" -eq 0 ]
+  local log; log=$(cat "$QMD_STUB_LOG")
+  # order: remove, add (wiki mask), update, cleanup — sentinel write is a
+  # plain file (not a qmd subcommand) between update and cleanup.
+  local i_remove i_add i_update i_cleanup
+  i_remove=$(grep -n '^collection remove' "$QMD_STUB_LOG" | head -1 | cut -d: -f1)
+  i_add=$(grep -n '^collection add' "$QMD_STUB_LOG" | head -1 | cut -d: -f1)
+  i_update=$(grep -n '^update$' "$QMD_STUB_LOG" | head -1 | cut -d: -f1)
+  i_cleanup=$(grep -n '^cleanup$' "$QMD_STUB_LOG" | head -1 | cut -d: -f1)
+  [ -n "$i_remove" ] && [ -n "$i_add" ] && [ -n "$i_update" ] && [ -n "$i_cleanup" ]
+  [ "$i_remove" -lt "$i_add" ]
+  [ "$i_add" -lt "$i_update" ]
+  [ "$i_update" -lt "$i_cleanup" ]
+  grep -qF -- "collection add $QMD_VAULT_DIR --name vault --mask wiki/**/*.md" "$QMD_STUB_LOG"
+  ! grep -q '^embed$' "$QMD_STUB_LOG"
+  [ -f "$QMD_CACHE_HOME/.qmd-collection-wiki" ]
+  [ "$(jq -r '.migration' "$QMD_INDEX_STATE_FILE")" = "done" ]
+}
+
+@test "037: inherited index WITH pending embeds runs embed after cleanup" {
+  install_qmd_stub
+  mkdir -p "$QMD_CACHE_HOME"; : > "$QMD_CACHE_HOME/index.sqlite"
+  QMD_STUB_PENDING=3 run qmd_reindex "$AGENT_YML"
+  [ "$status" -eq 0 ]
+  grep -q '^embed$' "$QMD_STUB_LOG"
+}
+
+@test "037: second reindex tick after migration touches no collection/cleanup again" {
+  install_qmd_stub
+  mkdir -p "$QMD_CACHE_HOME"; : > "$QMD_CACHE_HOME/index.sqlite"
+  qmd_reindex "$AGENT_YML"
+  : > "$QMD_STUB_LOG"
+  run qmd_reindex "$AGENT_YML"
+  [ "$status" -eq 0 ]
+  ! grep -q '^collection' "$QMD_STUB_LOG"
+  ! grep -q '^cleanup$' "$QMD_STUB_LOG"
+}
+
+@test "037: interrupted migration (add fails once) leaves sentinel absent, migration pending, error state, hash untouched" {
+  install_qmd_stub
+  mkdir -p "$QMD_CACHE_HOME"; : > "$QMD_CACHE_HOME/index.sqlite"
+  qmd_write_state "$QMD_INDEX_STATE_FILE" "PRIORHASH" "indexed" 0
+  QMD_STUB_FAIL_ONCE=add run qmd_reindex "$AGENT_YML"
+  [ "$status" -eq 0 ]
+  [ ! -f "$QMD_CACHE_HOME/.qmd-collection-wiki" ]
+  [ "$(qmd_collection_migration_state)" = "pending" ]
+  [ "$(jq -r '.last_status' "$QMD_INDEX_STATE_FILE")" = "error" ]
+  [ "$(jq -r '.hash' "$QMD_INDEX_STATE_FILE")" = "PRIORHASH" ]
+  ! grep -q '^update$' "$QMD_STUB_LOG"
+  ! grep -q '^embed$' "$QMD_STUB_LOG"
+  # next tick completes the migration
+  run qmd_reindex "$AGENT_YML"
+  [ "$status" -eq 0 ]
+  [ -f "$QMD_CACHE_HOME/.qmd-collection-wiki" ]
+  [ "$(qmd_collection_migration_state)" = "done" ]
+}
+
+@test "037: no index.sqlite at all -> reindex issues no 'collection remove'" {
+  install_qmd_stub
+  run qmd_reindex "$AGENT_YML"
+  [ "$status" -eq 0 ]
+  ! grep -q '^collection remove' "$QMD_STUB_LOG"
+  [ "$(jq -r '.migration' "$QMD_INDEX_STATE_FILE")" = "n/a" ]
 }
 
 @test "qmd_reindex records last_status=error and preserves the prior hash on engine failure" {

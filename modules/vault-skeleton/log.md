@@ -6,7 +6,7 @@ Chronological, append-only record of vault operations. Time-oriented complement 
 Format — one entry per operation, parseable by `grep "^## \[" log.md | tail -N`:
 
 ```
-## [YYYY-MM-DD] {ingest|query|lint|init|other} | <short title>
+## [YYYY-MM-DD] {ingest|query|lint|init|upgrade|project-open|project-close|review|session|other} | <short title>
 
 (optional one-paragraph note)
 ```

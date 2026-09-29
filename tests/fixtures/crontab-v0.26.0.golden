@@ -1,0 +1,8 @@
+# Cron for in-container agent heartbeat + identity/vault/config backup + token-health + qmd reindex + wiki-graph. Managed by heartbeatctl.
+*/2 * * * * /workspace/scripts/heartbeat/heartbeat.sh >> /workspace/scripts/heartbeat/logs/cron.log 2>&1
+
+
+30 3 * * * /usr/local/bin/heartbeatctl backup-config >> /workspace/scripts/heartbeat/logs/backup-config.log 2>&1
+0 * * * * /opt/agent-admin/scripts/check_token_health.sh >> /workspace/scripts/heartbeat/logs/token-health.log 2>&1
+
+

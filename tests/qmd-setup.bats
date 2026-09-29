@@ -16,8 +16,8 @@ setup() {
   setup_tmp_dir
   export HOME="$TMP_TEST_DIR/home"; mkdir -p "$HOME"
   export QMD_CACHE_HOME="$TMP_TEST_DIR/cache/qmd"
-  export QMD_VAULT_DIR="$TMP_TEST_DIR/vault"; mkdir -p "$QMD_VAULT_DIR"
-  printf '# note\nhello\n' > "$QMD_VAULT_DIR/a.md"
+  export QMD_VAULT_DIR="$TMP_TEST_DIR/vault"; mkdir -p "$QMD_VAULT_DIR/wiki"
+  printf '# note\nhello\n' > "$QMD_VAULT_DIR/wiki/a.md"
   export QMD_STUB_LOG="$TMP_TEST_DIR/engine.log"; : > "$QMD_STUB_LOG"
   mkdir -p "$TMP_TEST_DIR/bin"
   AGENT_YML="$TMP_TEST_DIR/agent.yml"
@@ -82,6 +82,33 @@ teardown() { teardown_tmp_dir; }
   grep -q "embed" "$QMD_STUB_LOG"
   if grep -q "collection add" "$QMD_STUB_LOG"; then false; fi
   [ -f "$QMD_CACHE_HOME/.qmd-setup-ok" ]
+}
+
+# ── 037 US2: wiki/ mask + layout sentinel (qmd-collection-migration.md) ──────
+
+@test "037: fresh setup masks to wiki/**/*.md and writes the layout sentinel done" {
+  install_qmd_stub
+  run qmd_setup_if_needed "$AGENT_YML"
+  [ "$status" -eq 0 ]
+  grep -qF -- "collection add $QMD_VAULT_DIR --name vault --mask wiki/**/*.md" "$QMD_STUB_LOG"
+  [ -f "$QMD_CACHE_HOME/.qmd-collection-wiki" ]
+  grep -q '^wiki-root ' "$QMD_CACHE_HOME/.qmd-collection-wiki"
+  [ "$(qmd_collection_migration_state)" = "done" ]
+  [ "$(qmd_collection_layout)" = "wiki-root" ]
+}
+
+@test "037: re-entrant setup (index present, sentinel absent) does NOT write the layout sentinel" {
+  install_qmd_stub
+  mkdir -p "$QMD_CACHE_HOME"; : > "$QMD_CACHE_HOME/index.sqlite"
+  run qmd_setup_if_needed "$AGENT_YML"
+  [ "$status" -eq 0 ]
+  [ ! -f "$QMD_CACHE_HOME/.qmd-collection-wiki" ]
+  [ "$(qmd_collection_migration_state)" = "pending" ]
+}
+
+@test "037: no index.sqlite at all -> migration state n/a, layout none" {
+  [ "$(qmd_collection_migration_state)" = "n/a" ]
+  [ "$(qmd_collection_layout)" = "none" ]
 }
 
 @test "qmd_setup_if_needed is fail-silent and writes no sentinel on engine failure" {

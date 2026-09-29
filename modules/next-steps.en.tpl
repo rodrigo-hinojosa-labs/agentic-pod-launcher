@@ -100,11 +100,21 @@ Defaults as of v0.12.0:
 | Vault backup → `backup/vault` branch | `vault.enabled: true` | `0 * * * *` (`vault.backup_schedule`) |
 | QMD semantic index (reindex backstop) | `vault.qmd.enabled: true` | `*/5 * * * *` (`vault.qmd.schedule`) |
 | Wiki-graph derive + structural lint | vault on, opt out with `vault.wiki_graph.enabled: false` | `20 */6 * * *` (`vault.wiki_graph.schedule`) |
+| Weekly review notice (opt-in, PARA queue) | `features.heartbeat.review.enabled: true` (off by default) | `7 9 * * 1` (`features.heartbeat.review.schedule`) |
 
 With QMD on, the supervisor also builds the index in the background on first
 boot and keeps an inotify watcher running, so edits reindex immediately; the
 cron line is only the backstop. Both call the same flock-guarded command, so
-they never overlap.
+they never overlap. As of 037 the collection is scoped to `wiki/` only
+(`raw_sources/` is excluded — use `Grep`/`search_notes` for that); an agent
+scaffolded before 0.27.0 migrates automatically, once, on its first reindex
+tick after the upgrade — nothing to do by hand.
+
+The wiki-graph runner also derives a deterministic **review queue** (037) —
+`review_due`, `project_overdue`, `pending_ingest`, `archive_candidate` and
+more, computed without an LLM. The opt-in weekly notice above just reports it
+on a schedule; the queue itself is always readable via
+`scripts/heartbeat/wiki-graph.json`.
 
 The workspace is bind-mounted at `/workspace`, so state and logs are readable
 from the host without entering the container:
@@ -119,6 +129,7 @@ jq . scripts/heartbeat/wiki-graph.json             # last_run, last_status, coun
 
 # Manual actions (flock-guarded; safe while the cron is armed)
 ./scripts/agentctl heartbeat qmd-reindex           # reindex now (--dry-run reports only)
+./scripts/agentctl heartbeat qmd-migrate --dry-run # check/force the one-time wiki/ scope migration (037)
 ./scripts/agentctl heartbeat wiki-graph            # regenerate the graph now
 ./scripts/agentctl heartbeat backup-vault --dry-run
 ```
@@ -198,6 +209,7 @@ docker compose build && ./scripts/agentctl restart
 ./scripts/agentctl heartbeat backup-vault
 ./scripts/agentctl heartbeat backup-config
 ./scripts/agentctl heartbeat qmd-reindex   # reindex the vault's semantic index
+./scripts/agentctl heartbeat qmd-migrate --dry-run  # check/force the wiki/ scope migration (037)
 ./scripts/agentctl heartbeat wiki-graph    # derive the wiki graph + lint
 ./scripts/agentctl heartbeat token-check   # ad-hoc token-health probe
 ```
@@ -394,6 +406,7 @@ journalctl -u agent-{{AGENT_NAME}}-qmd-reindex.service   # scheduled reindex run
 journalctl -u agent-{{AGENT_NAME}}-qmd-watch.service     # inotify watcher (reindex-on-change)
 systemctl list-timers 'agent-{{AGENT_NAME}}-*'           # every agent timer at a glance
 ./scripts/agentctl heartbeat qmd-reindex                 # force a reindex right now (no --dry-run: it would reindex for real)
+./scripts/agentctl heartbeat qmd-migrate --dry-run        # check/force the one-time wiki/ scope migration (037)
 jq . scripts/heartbeat/qmd-index.json                    # hash, last_run, last_status, pending
 ```
 

@@ -7,6 +7,8 @@ created: ""
 updated: ""
 status: active
 tags: []
+description: ""      # required for pages created from now on; one-line hook for index.md
+# packet: distilled-note | outtake | wip | deliverable | external   # only if this page is a reusable Intermediate Packet
 ---
 
 # {{title}}

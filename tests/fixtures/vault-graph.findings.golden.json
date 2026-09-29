@@ -1,0 +1,39 @@
+{
+  "findings": [
+    {
+      "detail": "SENCOSUD -> Cencosud",
+      "kind": "alias_occurrence",
+      "page": "overviews/topic"
+    },
+    {
+      "detail": "concepts/ghost-x",
+      "kind": "broken_link",
+      "page": "comparisons/broken"
+    },
+    {
+      "detail": "type: invalid 'synthesisX'",
+      "kind": "frontmatter_violation",
+      "page": "synthesis/badfm"
+    },
+    {
+      "detail": "missing_file",
+      "kind": "index_drift",
+      "page": "concepts/ghostpage"
+    },
+    {
+      "detail": "missing_from_index",
+      "kind": "index_drift",
+      "page": "concepts/widget"
+    },
+    {
+      "detail": "",
+      "kind": "orphan",
+      "page": "concepts/orphan-note"
+    },
+    {
+      "detail": "source newer than updated:",
+      "kind": "stale",
+      "page": "summaries/alpha"
+    }
+  ]
+}

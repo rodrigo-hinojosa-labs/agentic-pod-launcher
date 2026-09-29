@@ -84,21 +84,91 @@ _qmd_stub_prefix_seed() {
   printf '#!/bin/sh\nexit 0\n' > "$TMP_TEST_DIR/bin/bun"
   chmod +x "$TMP_TEST_DIR/bin/bun"
   export PATH="$TMP_TEST_DIR/bin:$PATH"
+  # 037: private stub state (collection markers, cleanup counter, fail-once
+  # consumption) — separate from $QMD_CACHE_HOME so it never gets swept by
+  # code that treats that dir as the real qmd cache root.
+  QMD_STUB_DIR="$QMD_CACHE_HOME/.stub"
+  mkdir -p "$QMD_STUB_DIR/collections"
+  export QMD_STUB_DIR
 }
 
 # install_qmd_stub [VER] — success engine: logs each invocation ("$@" = qmd
 # subcommands, no package-spec prefix), fakes index.sqlite on `collection`,
 # and emits the 018 completion signal on `embed`/`status` so
 # _qmd_embed_until_complete finishes in one pass (indexed, pending=0).
+#
+# 037 additions (contracts/qmd-collection-migration.md §4):
+#   - `collection add ... --name N` drops a marker $QMD_STUB_DIR/collections/N.
+#   - `collection remove|rm N` removes that marker; rc=1 if it was absent.
+#   - `cleanup` increments $QMD_STUB_DIR/cleanup.count.
+#   - `status` prints `Total: 0 files indexed` and `Pending: ${QMD_STUB_PENDING:-0}
+#     need embedding` (read at RUN time, so a test can set QMD_STUB_PENDING right
+#     before the call under test without reinstalling the stub).
+#   - `ls` prints `wiki/...` relative paths from the real $QMD_VAULT_DIR.
+#   - QMD_STUB_FAIL_ONCE=<add|remove|update|cleanup|embed|status> makes the
+#     FIRST matching invocation fail (rc=1); a marker file consumes the seam
+#     so later invocations of the same subcommand behave normally again (an
+#     exported env var can't be unset by a child process, so the "borra el
+#     seam" effect is implemented via that consumption marker, not by
+#     mutating the caller's environment).
 install_qmd_stub() {
   _qmd_stub_prefix_seed "${1:-2.5.3}"
   cat > "$QMD_CACHE_HOME/pkg/node_modules/.bin/qmd" <<EOF
 #!/bin/sh
 echo "\$@" >> "$QMD_STUB_LOG"
+sub="\$1"
 case "\$1" in
-  collection) mkdir -p "$QMD_CACHE_HOME"; : > "$QMD_CACHE_HOME/index.sqlite" ;;
+  collection)
+    case "\$2" in
+      add) sub="add" ;;
+      remove|rm) sub="remove" ;;
+    esac
+    ;;
+esac
+if [ -n "\${QMD_STUB_FAIL_ONCE:-}" ] && [ "\$sub" = "\$QMD_STUB_FAIL_ONCE" ] && [ ! -f "$QMD_STUB_DIR/failonce.done" ]; then
+  : > "$QMD_STUB_DIR/failonce.done"
+  exit 1
+fi
+case "\$1" in
+  collection)
+    mkdir -p "$QMD_CACHE_HOME"
+    : > "$QMD_CACHE_HOME/index.sqlite"
+    case "\$2" in
+      add)
+        name="vault"
+        prev=""
+        for a in "\$@"; do
+          if [ "\$prev" = "--name" ]; then name="\$a"; fi
+          prev="\$a"
+        done
+        : > "$QMD_STUB_DIR/collections/\$name"
+        ;;
+      remove|rm)
+        name="\$3"
+        if [ -f "$QMD_STUB_DIR/collections/\$name" ]; then
+          rm -f "$QMD_STUB_DIR/collections/\$name"
+        else
+          exit 1
+        fi
+        ;;
+    esac
+    ;;
+  cleanup)
+    n=0
+    [ -f "$QMD_STUB_DIR/cleanup.count" ] && n=\$(cat "$QMD_STUB_DIR/cleanup.count")
+    n=\$((n + 1))
+    echo "\$n" > "$QMD_STUB_DIR/cleanup.count"
+    ;;
   embed)  echo "✓ All content hashes already have embeddings" ;;
-  status) echo "Pending: 0 need embedding" ;;
+  status)
+    echo "Total: 0 files indexed"
+    echo "Pending: \${QMD_STUB_PENDING:-0} need embedding"
+    ;;
+  ls)
+    if [ -n "\${QMD_VAULT_DIR:-}" ] && [ -d "\$QMD_VAULT_DIR/wiki" ]; then
+      (cd "\$QMD_VAULT_DIR" && find wiki -type f -name '*.md' 2>/dev/null)
+    fi
+    ;;
 esac
 exit 0
 EOF

@@ -32,6 +32,12 @@ Flat `raw_sources/` works fine up to roughly 50 sources. Beyond that, organize b
 Move existing sources into subdirectories only when the flat layout starts to hurt navigation.
 Premature subdivision wastes effort.
 
+## Searching raw sources
+
+`raw_sources/` is not part of the hybrid-search collection (the search index covers `wiki/`
+only, to keep results limited to your own synthesis). To search the raw text itself, use
+`Grep` or `search_notes` directly on `raw_sources/` — never hybrid search for this layer.
+
 ## Naming
 
 - Slugified, kebab-case, lowercase: `karpathy-llm-wiki.md`, not `Karpathy LLM Wiki.md`.

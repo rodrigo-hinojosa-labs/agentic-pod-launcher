@@ -182,7 +182,8 @@ This workspace is your home. Each session you start from scratch — files are y
 | **Auto-memoria** | `~/.claude/projects/-workspace/memory/` (`HOME=/home/agent`, cwd `/workspace`) | Atomic facts about the user, preferences, project state. Indexed by `MEMORY.md` (loaded into every session). Write tipped memories: `user_*`, `feedback_*`, `project_*`, `reference_*`. |{{/if}}{{#unless DEPLOYMENT_MODE_IS_DOCKER}}
 | **Auto-memoria** | `{{DEPLOYMENT_WORKSPACE}}/.state/.claude/projects/<workspace slug>/memory/` — your config dir is pinned there by the unit's `EnvironmentFile` (`CLAUDE_CONFIG_DIR`). **`~/.claude` is the operator's personal config — never write there.** | Atomic facts about the user, preferences, project state. Indexed by `MEMORY.md` (loaded into every session). Write tipped memories: `user_*`, `feedback_*`, `project_*`, `reference_*`. |{{/unless}}
 | **`claude-mem`** | `~/.claude-mem/*.db` (when the `claude-mem` plugin is installed; `~` = `HOME`, which in local mode is the operator's own home) | Auto-captured observations from your transcripts (passive). You don't write here; the worker daemon does. Query via `mem-search`, `smart_search`, `timeline`. |{{#if VAULT_ENABLED}}
-| **Vault** | `{{VAULT_MCP_PATH}}` | Curated, synthetic, compounding knowledge derived from external sources. Karpathy's three-layer LLM Wiki pattern. Pages you'll revisit, refine, link, and lint. Its own `CLAUDE.md` at the vault root is authoritative for the schema and the ingest/query/lint protocols. |{{/if}}
+| **Vault** | `{{VAULT_MCP_PATH}}` | Curated, synthetic, compounding knowledge derived from external sources. Karpathy's three-layer LLM Wiki pattern. Pages you'll revisit, refine, link, and lint. Its own `CLAUDE.md` at the vault root is authoritative for the schema and the ingest/query/lint protocols. |
+| Project state → vault project page | `wiki/entities/<slug>.md` | The single home for an active project's `goal`/`due`/`next_action`/`next_review`. An auto-memory `project_<slug>.md` pointer stays 2-3 lines and carries no state of its own. |{{/if}}
 
 Heuristic:
 
@@ -209,17 +210,23 @@ The pipeline maintains itself; there is nothing to run by hand in the normal cas
 - **State** — `scripts/heartbeat/qmd-index.json`: `{hash, last_run, last_status, runs[, pending]}` with `last_status ∈ {indexed, skipped, error, partial, stalled}`. `partial`/`stalled` with `pending > 0` means part of the vault has no vectors yet — semantic hits will be thin until a later run finishes it. Read this file before blaming the search.
 
 Manual reindex, rarely needed — docker mode: `heartbeatctl qmd-reindex`. local mode: `./scripts/agentctl heartbeat qmd-reindex` (it has no `--dry-run`; passing one is refused rather than silently running a real reindex). Never invoke `bunx @tobilu/qmd` by hand: the launcher runs qmd from a managed install prefix, and `bunx` breaks it.
+
+The collection is scoped to `wiki/` only (`raw_sources/` is excluded — search it with `Grep`/`search_notes` instead). Agents scaffolded before launcher 0.27.0 migrate automatically, once, on the first reindex tick after upgrading; nothing to do by hand. To check or force it — docker mode: `heartbeatctl qmd-migrate [--dry-run]`. local mode: `./scripts/agentctl heartbeat qmd-migrate [--dry-run]`.
 {{/if}}
 {{#if WIKI_GRAPH_ENABLED}}
 ### Wiki graph (derived, read-only)
 
-A scheduled runner (`{{WIKI_GRAPH_SCHEDULE}}`) derives three JSON artifacts from the wiki and never edits it:
+A scheduled runner (`{{WIKI_GRAPH_SCHEDULE}}`) derives five JSON artifacts from the wiki and never edits it:
 
 - `<vault>/.graph/graph.json` — nodes + wikilink edges
 - `<vault>/.graph/backlinks.json` — reverse index, per page
-- `<vault>/.graph/findings.json` — structural lint (orphans, broken links, stubs)
+- `<vault>/.graph/findings.json` — structural lint (orphans, broken links, stubs) plus the actionability queue: `project_incomplete`, `project_overdue`, `review_due`, `pending_ingest`, `description_missing`, `problem_unfed`, `archive_candidate`, `schema_delta_pending`
+- `<vault>/.graph/policy.json` — the effective review cadences, archive threshold and collection layout (read this before assuming a default)
+- `<vault>/.graph/packets.json` — every page with a valid `packet:` value, newest first
 
-Read them instead of re-crawling the wiki when you need structure ("what links here", "what's orphaned"). Freshness + finding counts live in `scripts/heartbeat/wiki-graph.json`. Regenerate on demand — docker mode: `heartbeatctl wiki-graph`; local mode: `./scripts/agentctl heartbeat wiki-graph`.
+Read them instead of re-crawling the wiki when you need structure ("what links here", "what's orphaned", "what's due for review"). Freshness + finding counts live in `scripts/heartbeat/wiki-graph.json`. Regenerate on demand — docker mode: `heartbeatctl wiki-graph`; local mode: `./scripts/agentctl heartbeat wiki-graph`.
+
+An opt-in weekly heartbeat notice (`features.heartbeat.review.enabled` in `agent.yml`, default off) can nudge you to work this queue on a schedule — **docker mode only**: `heartbeatctl reload` wires the crontab line after you flip it on. local mode has no timer for this; the queue is still yours to check via the artifacts above or `./scripts/agentctl heartbeat wiki-graph`.
 {{/if}}
 
 ## Backups (what actually survives)
