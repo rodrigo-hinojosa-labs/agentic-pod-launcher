@@ -249,3 +249,74 @@ SH
   ! grep -q 'qmd-reindex.timer' "$TMP_TEST_DIR/systemctl.log"
   ! echo "$output" | grep -qi 'Building the QMD index'
 }
+
+# --- 038: the SessionStart upgrade-notice hook is registered at login ----------------
+# Same step shape as the 028 Stop hook (4c) and the 031 AskUserQuestion guard (4d): the jq merge
+# lives in the rendered workspace installer; the login only invokes it, guarded and fail-silent
+# (this script runs under set -euo pipefail, so an unguarded failure here would end the login).
+# A workspace that predates 038 has no installer: the step is skipped and the login completes.
+
+# _install_notice_installer: render the real installer into the workspace (it has no placeholders).
+_install_notice_installer() {
+  mkdir -p "$WS/scripts/hooks"
+  render_to_file "$REPO_ROOT/modules/upgrade-notice-install.sh.tpl" "$WS/scripts/hooks/install-upgrade-notice-hook.sh"
+  chmod +x "$WS/scripts/hooks/install-upgrade-notice-hook.sh"
+}
+
+@test "038 login: with the installer present it registers the SessionStart hook in the workspace settings.json" {
+  printf 'STAGED-UNIT\n' > "$WS/agent-locbot.service"
+  _install_notice_installer
+  run "$LOGIN"
+  [ "$status" -eq 0 ]
+  local s="$WS/.state/.claude/settings.json"
+  [ -f "$s" ]
+  [ "$(jq '.hooks.SessionStart | length' "$s")" = "1" ]
+  [ "$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$s")" = "$WS/scripts/hooks/upgrade-notice.sh" ]
+  [[ "$output" == *"upgrade notice hook registered"* ]]
+}
+
+@test "038 login: a workspace that predates 038 (no installer) skips the step and the login still completes" {
+  printf 'STAGED-UNIT\n' > "$WS/agent-locbot.service"
+  [ ! -e "$WS/scripts/hooks/install-upgrade-notice-hook.sh" ]
+  run "$LOGIN"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"upgrade notice hook registered"* ]]
+  local s="$WS/.state/.claude/settings.json"
+  if [ -f "$s" ]; then
+    [ "$(jq '(.hooks.SessionStart // []) | length' "$s")" = "0" ]
+  fi
+}
+
+@test "038 login: running the login twice leaves exactly one entry (idempotent)" {
+  printf 'STAGED-UNIT\n' > "$WS/agent-locbot.service"
+  _install_notice_installer
+  run "$LOGIN"
+  [ "$status" -eq 0 ]
+  run "$LOGIN"
+  [ "$status" -eq 0 ]
+  [ "$(jq '.hooks.SessionStart | length' "$WS/.state/.claude/settings.json")" = "1" ]
+}
+
+@test "038 login: an installer that fails does not end the login (set -e is guarded)" {
+  printf 'STAGED-UNIT\n' > "$WS/agent-locbot.service"
+  mkdir -p "$WS/scripts/hooks"
+  printf '#!/bin/sh\ntouch "%s/notice-installer-ran"\nexit 9\n' "$TMP_TEST_DIR" > "$WS/scripts/hooks/install-upgrade-notice-hook.sh"
+  chmod +x "$WS/scripts/hooks/install-upgrade-notice-hook.sh"
+  run "$LOGIN"
+  [ "$status" -eq 0 ]
+  # it WAS invoked (a login that never calls it would trivially "survive" its failure)
+  [ -f "$TMP_TEST_DIR/notice-installer-ran" ]
+  # and the steps after it still ran: the unit was installed and enabled
+  grep -q 'enable --now agent-locbot.service' "$TMP_TEST_DIR/systemctl.log"
+}
+
+@test "038 login: it leaves the other hooks in settings.json alone" {
+  printf 'STAGED-UNIT\n' > "$WS/agent-locbot.service"
+  _install_notice_installer
+  printf '%s\n' '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/x/stop-redeliver.sh"}]}]}}' > "$WS/.state/.claude/settings.json"
+  run "$LOGIN"
+  [ "$status" -eq 0 ]
+  local s="$WS/.state/.claude/settings.json"
+  [ "$(jq -r '.hooks.Stop[0].hooks[0].command' "$s")" = "/x/stop-redeliver.sh" ]
+  [ "$(jq '.hooks.SessionStart | length' "$s")" = "1" ]
+}

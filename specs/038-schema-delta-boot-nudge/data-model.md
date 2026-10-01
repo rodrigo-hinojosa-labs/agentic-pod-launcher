@@ -1,46 +1,117 @@
-# Data Model: aviso automatico de integracion de delta al arrancar
+# Data Model: Aviso de actualización de conocimiento al iniciar sesión
 
-Sin base de datos ni entidades persistentes nuevas mas alla de dos marcadores de archivo
-(sentinels), coherentes con el patron ya establecido por 014/037 para `.applied`.
+Sin base de datos. El estado son archivos dentro del workspace, un campo nuevo en `agent.yml` y una entrada
+nueva en el `settings.json` de la sesión. Todo lo demás se deriva en el momento.
 
-## Entidad: Delta pendiente (conceptual, no persistida — derivada en runtime)
+## 1. Archivos de estado
 
-Calculada por `vault_pending_deltas`, no almacenada. Campos conceptuales:
+| Archivo | Tipo | Escritor | Lector | Ciclo de vida |
+|---|---|---|---|---|
+| `<ws>/.state/launcher/claude-md.upstream.md` | Derivado | `setup.sh --regenerate` (siempre) | regenerate, hook, doctor, el agente | Se reescribe en cada regenerate. Perderlo equivale a `unknown` hasta el próximo regenerate. |
+| `<ws>/.state/launcher/claude-md.baseline.md` | Durable | regenerate (render, force, refresh, adopt); el agente u operador con `cp` tras integrar a mano | regenerate, hook, doctor | Nunca se borra por esta feature. Perderlo degrada a `pending_no_baseline` (aviso conservador), nunca a pérdida de datos. |
+| `<vault>/_templates/.schema-updates-<v>.applied` | Existente (014/037) | `vault_seed_missing`, `vault_seed_if_empty` | `vault_pending_deltas` | Sin cambios. Solo lectura para esta feature. |
+| `<vault>/CLAUDE.md` | Existente, del agente | El agente | `vault_pending_deltas` (`grep -F` del hito) | Esta feature nunca lo escribe (FR-013). |
+| `<ws>/CLAUDE.md` | Derivado preservable | regenerate según §4 | Claude Code (carga automática), hook, doctor | Re-render solo si coincide con la línea base. |
+| `<ws>/scripts/hooks/upgrade-notice.sh` | Derivado | regenerate (siempre) | Claude Code (hook `SessionStart`) | Se re-renderiza en cada regenerate. |
+| `<ws>/scripts/hooks/install-upgrade-notice-hook.sh` | Derivado | regenerate (siempre) | boot docker, login local, regenerate local | Se re-renderiza en cada regenerate. |
 
-| Campo | Origen | Notas |
+En docker, `<ws>` es `/workspace` y `<ws>/.state` también es `/home/agent` (dos bind-mounts sobre el mismo
+directorio, `docker-compose.yml.tpl:55,60`). `<vault>` es el `VAULT_MCP_PATH` del modo: `/home/agent/.vault` en
+docker, `LOCAL_VAULT_DIR` en local (`setup.sh:2501-2506`).
+
+## 2. Campo nuevo en `agent.yml`
+
+```yaml
+features:
+  upgrade_notice:
+    enabled: true   # inyectar el aviso al iniciar sesion; doctor y el re-render no dependen de esto
+```
+
+- Default `true`. Backfill en `regenerate()` con `has()`, nunca con `//` (el `//` de yq colapsa un `false`
+  explícito igual que `null`; gotcha documentado en 028/037).
+- Se agrega a `_SCHEMA_BOOLEANS` (`scripts/lib/schema.sh`) y a los fixtures `sample-agent{,-with-vault}.yml`.
+- Sin prompt de wizard. El heredoc del wizard lo escribe con `enabled: true`.
+- Se hornea en el hook al renderizar. Apagado, el hook sale sin imprimir; sigue registrado.
+
+## 3. Tabla de hitos de la capa vault
+
+Vive en `scripts/lib/vault.sh` (`vault_delta_versions`, `vault_delta_checkpoint`). Orden ascendente.
+
+| Versión | Hito literal (`grep -F` contra `<vault>/CLAUDE.md`) |
+|---|---|
+| 0.8.0 | `wiki/normalization/` |
+| 0.27.0 | `## Actionability (PARA)` |
+
+Delta pendiente ⇔ `.applied` existe ∧ hito ausente. No hay estado de "ya avisado": el pendiente se recalcula
+en cada lectura y desaparece cuando el agente integra.
+
+Invariantes (vigiladas por tests): una fila por cada `modules/vault-deltas/schema-updates-*.md`; el skeleton
+contiene todos los hitos; el literal 0.27.0 coincide con `wiki_graph.sh:458`.
+
+## 4. Máquina de estados de la capa workspace
+
+Notación: `C` = `<ws>/CLAUDE.md`, `U` = upstream, `B` = baseline; igualdad = `cmp -s`.
+
+### Estado (lo que leen el hook y doctor: `claude_md_state`)
+
+| Estado | Condición | ¿Pendiente? |
 |---|---|---|
-| `version` | nombre de archivo `_templates/.schema-updates-{version}.applied` | una de `_vault_delta_known_versions` |
-| `checkpoint_text` | tabla `_vault_delta_checkpoint_text(version)` | literal a buscar en `CLAUDE.md` del vault |
-| `integrated` | `grep -F -q checkpoint_text CLAUDE.md` | boolean derivado, nunca guardado |
-| `already_nudged` (solo docker) | existencia de `_templates/.schema-updates-{version}.nudged` | ver abajo |
+| `unknown` | `U` no existe | No (no se puede saber) |
+| `in_sync` | `C = U` | No |
+| `customized` | `C ≠ U`, `B` existe, `B = U` | No: ediciones propias sobre la plantilla vigente |
+| `pending_template` | `C ≠ U`, `B` existe, `B ≠ U` | Sí: la plantilla cambió; diff exacto `B → U` |
+| `pending_no_baseline` | `C ≠ U`, `B` no existe | Sí: procedencia desconocida (toda la flota hoy) |
 
-## Marcador: `_templates/.schema-updates-{version}.nudged`
+### Decisión de regenerate (`claude_md_regenerate_decision`)
 
-- **Proposito**: registra que el aviso ACTIVO (disparo de heartbeat, modo docker) ya se envio para
-  esta version especifica. Hermano directo del `.applied` que 014/037 ya usan para "delta
-  depositado" — mismo directorio, mismo estilo de nombre oculto.
-- **Escritor**: `docker/scripts/start_services.sh::boot_side_effects()`, inmediatamente despues de
-  lanzar en background el turno de heartbeat con `--trigger schema_delta`. Escritura best-effort
-  (`|| true`) — un fallo al escribir el marcador NO debe abortar el boot (Principio IV); en el peor
-  caso, el proximo boot reintenta el aviso, lo cual es preferible a que un fallo de escritura
-  bloquee el arranque.
-- **Lector**: la misma funcion, en cada boot posterior — si el marcador ya existe para una version,
-  esa version se salta al decidir el dispatch, aunque `vault_pending_deltas` la siga reportando
-  como pendiente (la version integrada la deja de reportar `vault_pending_deltas` una vez que el
-  agente actualiza `CLAUDE.md`; el marcador `.nudged` solo evita RE-avisar mientras sigue pendiente).
-- **Modo local**: NO se usa. El chequeo de `agentctl doctor`/`status` en modo local es pasivo y
-  persiste hasta que la version deje de estar pendiente (ver research.md R3) — no necesita su
-  propio marcador de "ya mostrado".
-- **Ciclo de vida**: nunca se borra automaticamente por esta feature (igual que `.applied` no se
-  borra). Si el operador quisiera forzar un reaviso, borrarlo a mano alcanza — comportamiento
-  identico al que ya existe para forzar un re-deposito de delta hoy, documentado como tal.
+Se evalúa después de escribir `U`. Primera fila que aplica:
 
-## Sin cambios a entidades existentes
+| # | Condición | Acción | Efecto |
+|---|---|---|---|
+| 1 | `C` no existe | `render` | `C ← U`, `B ← U` |
+| 2 | `--force-claude-md` y el operador confirma | `render` | `C ← U`, `B ← U` |
+| 3 | modo local y `C` es el `CLAUDE.md` del launcher (027) | `render` | `C ← U`, `B ← U` |
+| 4 | `B` existe, `C = B`, `C ≠ U` | `refresh` | `C ← U`, `B ← U` |
+| 5 | `C = U`, `B` ausente o distinta de `U` | `adopt` | `B ← U` |
+| 6 | `C = U`, `B = U` | `noop` | sin cambios |
+| 7 | cualquier otro | `preserve` | sin cambios; el estado queda `customized` o `pending_*` |
 
-- `_templates/.schema-updates-{version}.applied` (014/037): sin cambios, solo lectura.
-- `.graph/findings.json` / `wiki-graph.json` (`schema_delta_pending`, 037): sin cambios — esta
-  feature NO lee de ahi (ver research.md R1, razon de frescura) ni escribe ahi.
-- `agent.yml`: sin campos nuevos. Esta feature no tiene superficie de configuracion — no hay
-  toggle de `enabled/disabled` (a diferencia de `features.heartbeat.review`): el aviso de
-  integracion no es opt-in, es comportamiento base del ciclo de arranque, igual que el propio
-  deposito del delta.
+### Transiciones fuera de regenerate
+
+- El agente u operador integra a mano y corre `cp U B`: `pending_template` o `pending_no_baseline` →
+  `customized` (o `in_sync`, si `C` quedó idéntico a `U`).
+- El agente edita `C` sin tocar `B`: `in_sync` → `customized` si `B = U`; el siguiente cambio de plantilla lo
+  lleva a `pending_template`, nunca a `refresh` (el archivo ya no coincide con la línea base).
+
+### Invariantes
+
+- Ninguna acción de regenerate escribe `C` si `C ≠ B` salvo las filas 1-3 (FR-007).
+- Dos regenerate seguidos sin cambios de entrada son byte-idénticos en `C`, `U` y `B`.
+- Un workspace recién scaffoldeado queda en `in_sync` con `B = U` (SC-007).
+
+## 5. Entrada en `settings.json`
+
+Agregada por `install-upgrade-notice-hook.sh`, aditiva y con dedupe por `command`:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [ { "type": "command", "command": "<ws>/scripts/hooks/upgrade-notice.sh", "timeout": 10 } ] }
+    ]
+  }
+}
+```
+
+- Docker: `$HOME/.claude/settings.json` (= `<ws>/.state/.claude/settings.json`), `command` =
+  `/workspace/scripts/hooks/upgrade-notice.sh`.
+- Local: `<ws>/.state/.claude/settings.json` (el `CLAUDE_CONFIG_DIR` de la unit), `command` = ruta absoluta del
+  workspace.
+- Heartbeat: la copia aislada de `settings.json` descarta `.hooks.SessionStart`.
+
+## 6. Sin cambios
+
+- `.graph/findings.json`, `wiki-graph.json` y `schema_delta_pending` de 037.
+- `vault_seed_missing` y los marcadores `.applied`.
+- `features.heartbeat.review`.
+- `personas/<agente>.md`: se sigue leyendo vía `agent.role_file`; esta feature no lo escribe.

@@ -16,6 +16,9 @@ source "$SCRIPT_DIR/scripts/lib/fork.sh"
 # hand-set CHANNEL_HEALTH_TIMEOUT into agent.yml. env_file_get PARSES, never
 # sources — the `.env` can arrive from a remote fork via --restore-from-fork.
 source "$SCRIPT_DIR/scripts/lib/env_file.sh"
+# 038: the workspace CLAUDE.md against the template that rendered it (pure cmp-based
+# functions: claude_md_state, claude_md_regenerate_decision).
+source "$SCRIPT_DIR/scripts/lib/claude_md.sh"
 
 # Launcher version, surfaced in agent.yml::meta and `agentctl doctor` so
 # scaffolded workspaces can advertise which launcher rev produced them.
@@ -1264,6 +1267,8 @@ features:
   askuserquestion_guard:
     enabled: $_aq_enabled
     max_attempts: 1
+  upgrade_notice:
+    enabled: true
   voice:
     enabled: $voice_enabled
     reply_mode: auto
@@ -2021,6 +2026,115 @@ _is_launcher_own_claude_md() {
   grep -qF 'This is **the launcher**, not an agent' "${1:-}" 2>/dev/null
 }
 
+# 038: the pre-038 CLAUDE.md handling, VERBATIM. It is the fallback when the current render
+# cannot be recorded under .state/launcher (a read-only dir or file, a root-owned .state): the
+# new behaviour must never turn that into an aborted --regenerate (FR-010), so in that one
+# case the old rules apply unchanged: render if missing / forced / the launcher's own doc,
+# otherwise preserve.
+_regenerate_claude_md_legacy() {
+  local modules_dir="$1"
+  if [ -f "$SCRIPT_DIR/CLAUDE.md" ] && [ "$FORCE_CLAUDE_MD" = true ]; then
+    if [ "$(ask_yn 'Overwrite existing CLAUDE.md? THIS IS DESTRUCTIVE' 'n')" = "false" ]; then
+      echo "  skipping CLAUDE.md (preserved)"
+    else
+      render_to_file "$modules_dir/claude-md.tpl" "$SCRIPT_DIR/CLAUDE.md"
+      echo "  ✓ CLAUDE.md (overwritten)"
+    fi
+  elif [ ! -f "$SCRIPT_DIR/CLAUDE.md" ]; then
+    render_to_file "$modules_dir/claude-md.tpl" "$SCRIPT_DIR/CLAUDE.md"
+    echo "  ✓ CLAUDE.md"
+  elif [ "$DEPLOYMENT_MODE_IS_DOCKER" != true ] && _is_launcher_own_claude_md "$SCRIPT_DIR/CLAUDE.md"; then
+    render_to_file "$modules_dir/claude-md.tpl" "$SCRIPT_DIR/CLAUDE.md"
+    echo "  ✓ CLAUDE.md (replaced the launcher's own dev doc with this agent's identity)"
+  else
+    echo "  ◦ CLAUDE.md (preserved — use --force-claude-md to overwrite)"
+  fi
+}
+
+# 038: what --regenerate does with the workspace CLAUDE.md. It used to PRESERVE it
+# unconditionally, so it fell behind the template (donna and linus ran a pre-037 copy after
+# a 0.27.0 upgrade although nobody had edited it - the persona lives in personas/, not here).
+#
+# The current template is rendered ONCE into U (.state/launcher/claude-md.upstream.md), always,
+# so the operator and the agent can compare. Then three files decide, by byte comparison only
+# (contracts/claude-md-refresh.md): C = CLAUDE.md, U = that render, B = the render C incorporates
+# (.state/launcher/claude-md.baseline.md). C is rewritten ONLY when it equals B (nobody edited it)
+# or when the operator forces it / it is the launcher's own dev doc - never otherwise (FR-007).
+_regenerate_claude_md() {
+  local modules_dir="$1"
+  local c="$SCRIPT_DIR/CLAUDE.md"
+  local cdir="$SCRIPT_DIR/.state/launcher"
+  local u="$cdir/claude-md.upstream.md" b="$cdir/claude-md.baseline.md"
+  local force=false own=false existed=false decision state
+
+  # Can the current render be recorded? Decide with `test`, NOT by running the render inside
+  # an `if`: that would silently switch errexit off for the whole render and let a half-failed
+  # render through. Not recordable -> the old behaviour, and a warning, never an abort (FR-010).
+  mkdir -p "$cdir" 2>/dev/null || true
+  if [ ! -d "$cdir" ] || [ ! -w "$cdir" ] || { [ -e "$u" ] && [ ! -w "$u" ]; }; then
+    echo "WARN: CLAUDE.md: cannot record the current render under .state/launcher (not writable); using the pre-038 rules" >&2
+    _regenerate_claude_md_legacy "$modules_dir"
+    return 0
+  fi
+  render_to_file "$modules_dir/claude-md.tpl" "$u"
+
+  # --force-claude-md: the destructive-overwrite confirmation, only meaningful when C exists.
+  # A 'no' ends the matter - no automatic refresh behind the operator's back.
+  if [ -f "$c" ] && [ "$FORCE_CLAUDE_MD" = true ]; then
+    if [ "$(ask_yn 'Overwrite existing CLAUDE.md? THIS IS DESTRUCTIVE' 'n')" = "false" ]; then
+      echo "  skipping CLAUDE.md (preserved)"
+      return 0
+    fi
+    force=true
+  fi
+  # 027: the launcher's own dev doc inherited by a declarative clone (local mode only, so the
+  # docker render stays byte-identical, FR-012).
+  if [ "$DEPLOYMENT_MODE_IS_DOCKER" != true ] && [ -f "$c" ] && _is_launcher_own_claude_md "$c"; then
+    own=true
+  fi
+  if [ -f "$c" ]; then existed=true; fi
+
+  decision="$(claude_md_regenerate_decision "$c" "$u" "$b" "$force" "$own")"
+  case "$decision" in
+    render|refresh)
+      # Written in place (same inode and mode as before, like the render it replaces). A file
+      # the operator made read-only is a choice to respect: warn and leave it, never abort.
+      if cp "$u" "$c" 2>/dev/null; then
+        cp "$u" "$b" 2>/dev/null || true
+        if [ "$decision" = refresh ]; then
+          echo "  ✓ CLAUDE.md (refreshed: no local edits since the last render)"
+        elif [ "$force" = true ]; then
+          echo "  ✓ CLAUDE.md (overwritten)"
+        elif [ "$existed" != true ]; then
+          echo "  ✓ CLAUDE.md"
+        else
+          echo "  ✓ CLAUDE.md (replaced the launcher's own dev doc with this agent's identity)"
+        fi
+      else
+        echo "WARN: CLAUDE.md could not be written (read-only?); left as it is. Current render: .state/launcher/claude-md.upstream.md" >&2
+      fi
+      ;;
+    adopt)
+      cp "$u" "$b" 2>/dev/null || true
+      echo "  ◦ CLAUDE.md (up to date; baseline recorded)"
+      ;;
+    noop)
+      echo "  ◦ CLAUDE.md (up to date)"
+      ;;
+    *)
+      state="$(claude_md_state "$c" "$u" "$b")"
+      case "$state" in
+        customized)
+          echo "  ◦ CLAUDE.md (preserved: local edits, template unchanged)"
+          ;;
+        *)
+          echo "  ◦ CLAUDE.md (preserved: differs from the current template; compare with .state/launcher/claude-md.upstream.md, or use --force-claude-md to overwrite)"
+          ;;
+      esac
+      ;;
+  esac
+}
+
 # 029: effective MCP startup-handshake window (ms). A positive integer of up to
 # 7 digits wins; anything else (empty, non-numeric, 0, negative, oversized)
 # degrades to the 120000 default. Mirrors channel_health_timeout
@@ -2324,6 +2438,15 @@ regenerate() {
       fi
       yq -i ".features.askuserquestion_guard.enabled = $_aq_bf" "$agent_yml"
       yq -i '.features.askuserquestion_guard.max_attempts = 1' "$agent_yml"
+    fi
+
+    # 038: backfill features.upgrade_notice for a pre-038 workspace. Unlike the two
+    # guards above there is nothing to derive: the SessionStart upgrade notice is base
+    # behaviour (on by default), the key only exists so an operator can turn it off.
+    # has()-guarded, NEVER `//`: yq's `//` collapses an explicit `false` exactly like
+    # null, so a `//` backfill would silently re-enable a notice the operator disabled.
+    if [ "$(yq -r '(.features | has("upgrade_notice")) // false' "$agent_yml" 2>/dev/null)" != "true" ]; then
+      yq -i '.features.upgrade_notice.enabled = true' "$agent_yml"
     fi
 
     # 032: backfill features.voice for a pre-032 workspace. Unlike reply_guard/
@@ -2677,27 +2800,11 @@ regenerate() {
 
   echo "▸ Rendering modules"
 
-  # CLAUDE.md — render if missing, if --force-claude-md, or (local mode) if the
-  # current file is the launcher's OWN dev doc wrongly inherited by a declarative
-  # clone (027 US1). A genuine operator agent doc (no launcher sentinel) is
-  # preserved (FR-002). The launcher-doc branch is local-gated so docker render
-  # stays byte-identical (FR-012).
-  if [ -f "$SCRIPT_DIR/CLAUDE.md" ] && [ "$FORCE_CLAUDE_MD" = true ]; then
-    if [ "$(ask_yn 'Overwrite existing CLAUDE.md? THIS IS DESTRUCTIVE' 'n')" = "false" ]; then
-      echo "  skipping CLAUDE.md (preserved)"
-    else
-      render_to_file "$modules_dir/claude-md.tpl" "$SCRIPT_DIR/CLAUDE.md"
-      echo "  ✓ CLAUDE.md (overwritten)"
-    fi
-  elif [ ! -f "$SCRIPT_DIR/CLAUDE.md" ]; then
-    render_to_file "$modules_dir/claude-md.tpl" "$SCRIPT_DIR/CLAUDE.md"
-    echo "  ✓ CLAUDE.md"
-  elif [ "$DEPLOYMENT_MODE_IS_DOCKER" != true ] && _is_launcher_own_claude_md "$SCRIPT_DIR/CLAUDE.md"; then
-    render_to_file "$modules_dir/claude-md.tpl" "$SCRIPT_DIR/CLAUDE.md"
-    echo "  ✓ CLAUDE.md (replaced the launcher's own dev doc with this agent's identity)"
-  else
-    echo "  ◦ CLAUDE.md (preserved — use --force-claude-md to overwrite)"
-  fi
+  # CLAUDE.md - rendered if missing, refreshed if nobody edited it since the last render (038),
+  # replaced if forced (--force-claude-md) or, in local mode, if it is the launcher's OWN dev doc
+  # wrongly inherited by a declarative clone (027 US1); otherwise PRESERVED, with the current
+  # render left at .state/launcher/claude-md.upstream.md to compare against.
+  _regenerate_claude_md "$modules_dir"
 
   # .mcp.json
   render_to_file "$modules_dir/mcp-json.tpl" "$SCRIPT_DIR/.mcp.json"
@@ -2730,6 +2837,18 @@ regenerate() {
     chmod +x "$SCRIPT_DIR/scripts/hooks/askq-guard.sh" "$SCRIPT_DIR/scripts/hooks/install-askq-guard-hook.sh"
     echo "  ✓ scripts/hooks/ (askq-guard.sh + install-askq-guard-hook.sh)"
   fi
+
+  # 038: SessionStart upgrade-notice hook + its settings.json installer. Rendered on EVERY
+  # regenerate, in both modes, with NO gate - unlike the 028/031 guards above, which only make
+  # sense with a telegram channel. The on/off switch (features.upgrade_notice.enabled) is baked
+  # INTO the hook, so turning the notice off never leaves a settings.json entry pointing at a
+  # file that no longer exists. Registration in settings.json happens at boot (docker, see
+  # start_services.sh::pre_install_upgrade_notice_hook) and at login/regenerate (local).
+  mkdir -p "$SCRIPT_DIR/scripts/hooks"
+  render_to_file "$modules_dir/upgrade-notice.sh.tpl"         "$SCRIPT_DIR/scripts/hooks/upgrade-notice.sh"
+  render_to_file "$modules_dir/upgrade-notice-install.sh.tpl" "$SCRIPT_DIR/scripts/hooks/install-upgrade-notice-hook.sh"
+  chmod +x "$SCRIPT_DIR/scripts/hooks/upgrade-notice.sh" "$SCRIPT_DIR/scripts/hooks/install-upgrade-notice-hook.sh"
+  echo "  ✓ scripts/hooks/ (upgrade-notice.sh + install-upgrade-notice-hook.sh)"
 
   # Docker-only artifacts (011): the compose file + the mirrored build context
   # are rendered ONLY in docker mode. Local mode skips them entirely (no Docker)
@@ -2823,6 +2942,17 @@ regenerate() {
     # US1/FR-001: seed the vault skeleton host-side (docker seeds at container
     # boot; local has no boot, so we do it here). Closes 011's FR-004 gap.
     _seed_vault_local "$agent_yml"
+    # 038: register the SessionStart upgrade-notice hook for agents that ALREADY logged in. The
+    # login step (agent-login.sh) covers new logins; THIS covers every existing local agent, which
+    # is updated with --regenerate and never logs in again. Only when .state/.claude exists: the
+    # login creates it, and creating it here would make an unlogged workspace look logged in (the
+    # session unit's ExecCondition keys on the login state kept in that directory). The command
+    # path is $SCRIPT_DIR - the one directory where the hook was just rendered, so it exists.
+    if [ -d "$SCRIPT_DIR/.state/.claude" ] && [ -x "$SCRIPT_DIR/scripts/hooks/install-upgrade-notice-hook.sh" ]; then
+      "$SCRIPT_DIR/scripts/hooks/install-upgrade-notice-hook.sh" \
+        "$SCRIPT_DIR/.state/.claude/settings.json" "$SCRIPT_DIR/scripts/hooks/upgrade-notice.sh" || true
+      echo "  ✓ upgrade notice hook registered (.state/.claude/settings.json)"
+    fi
   fi
 
   if [ "${DEPLOYMENT_INSTALL_SERVICE:-false}" = "true" ]; then

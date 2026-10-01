@@ -375,8 +375,9 @@ done
 # CHANGELOG names one as removed, delete just that file by hand.
 [ -d scripts ] && cp -R scripts "$DEST/"
 
-# 3. Re-render the derived set (docker-compose.yml, .mcp.json, CLAUDE.md, the
-#    local wrappers/units, …) from your agent.yml with the new templates.
+# 3. Re-render the derived set (docker-compose.yml, .mcp.json, the local
+#    wrappers/units, …) from your agent.yml with the new templates. CLAUDE.md is
+#    refreshed only if you never edited it (see "What the upgrade leaves behind").
 cd "$DEST"
 ./setup.sh --regenerate
 ```
@@ -398,6 +399,25 @@ Then pick up the runtime for your mode:
   ```
 
   Restarting is safe for a live conversation: since `024-fix-session-restart-retire`, an external restart **keeps** the session pointer instead of retiring it, so the operator's chat link survives the bounce.
+
+**What the upgrade leaves behind (0.28.0+).** Two documents the agent itself reads can fall behind
+a release, and the agent now finds out on its own at the start of its next session:
+
+- **The vault's own `CLAUDE.md`.** A release that changes the vault schema deposits a *delta* document
+  under `_templates/`; the agent integrates it (the upgrade never rewrites that file).
+- **The workspace `CLAUDE.md`.** `--regenerate` refreshes it from the new template only if it matches
+  the render it was last written from, i.e. nobody edited it (your persona is not in this file: it
+  lives in `personas/<agent>.md` and is injected by the render). An edited file is kept as is.
+  Workspaces from before 0.28.0 have no such record yet, so the first `--regenerate` keeps theirs and
+  says so; run `./setup.sh --regenerate --force-claude-md` **once per agent** (answer `y`) and every
+  later upgrade applies by itself. If a separate overlay re-applies extra configuration after a
+  regenerate (custom MCP injection, for instance), run it after that forced re-render.
+
+`./scripts/agentctl doctor` shows both (one line each, in both modes) and keeps warning until they are
+resolved; `features.upgrade_notice.enabled: false` in `agent.yml` silences the in-session notice.
+In local mode the in-session notice depends on Remote Control sessions running `SessionStart` hooks,
+which has not been measured yet (see the CHANGELOG entry for 0.28.0); `doctor` does not depend on it.
+Details: `docs/architecture.md` (*Upgrade & Rollback*) and `docs/vault.md`.
 
 Caveats worth knowing:
 

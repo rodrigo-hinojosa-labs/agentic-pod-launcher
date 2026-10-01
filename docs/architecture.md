@@ -177,6 +177,40 @@ docker compose up -d
 
 The copy overwrites only same-named launcher files — workspace-local state under `scripts/heartbeat/` (`heartbeat.conf`, `logs/`, state files) is left in place, and `--regenerate` re-renders the derived files. Workspace bind-mounts and `.state/` persist. All agent data survives.
 
+### What an upgrade leaves behind, and how the agent learns about it (038)
+
+`--regenerate` re-renders derived files, but two documents the agent itself reads sit outside that
+mechanism, and each fell behind silently until someone noticed (donna described its RAG with the
+pre-0.27.0 model, weeks after the code was current):
+
+1. **The vault's own `CLAUDE.md`** is never rewritten: it is the agent's co-evolved schema. New schema
+   arrives as a *delta* document that the agent must integrate (see `docs/vault.md`).
+2. **The workspace `CLAUDE.md`** is a derived file, but `--regenerate` used to preserve it
+   unconditionally. It now renders the current template once into
+   `.state/launcher/claude-md.upstream.md` (U) and compares three files byte for byte: `CLAUDE.md` (C),
+   U, and `.state/launcher/claude-md.baseline.md` (B), the render that C incorporates.
+
+| Situation | What `--regenerate` does |
+|---|---|
+| C equals B and differs from U (nobody edited it) | **Refreshes** C from U and moves B. The persona is safe: it lives in `personas/<agent>.md` and is injected by the render, it is not stored in `CLAUDE.md`. |
+| C has edits of its own | **Preserves** C byte for byte, leaves U to compare against, and says so. |
+| No baseline yet (every agent scaffolded before 0.28.0) | **Preserves** and says so. Run `./setup.sh --regenerate --force-claude-md` once per agent (answer `y`): from then on every upgrade applies by itself. |
+| `--force-claude-md`, confirmed | Rewrites C from U and establishes B. |
+
+After merging a template change by hand into an edited file, record it with
+`cp .state/launcher/claude-md.upstream.md .state/launcher/claude-md.baseline.md`. If a separate
+overlay re-applies extra configuration after a regenerate (custom MCP injection, for example), run it
+**after** the forced re-render, not before: the forced render rebuilds the derived files it touched.
+
+Both layers are **announced, never applied**. A `SessionStart` hook (`scripts/hooks/upgrade-notice.sh`,
+registered by `start_services.sh` at every docker boot and by login / `--regenerate` in local mode)
+puts one notice into the agent's context at the start of every interactive session while something is
+pending, and nothing when nothing is. Heartbeat ticks never receive it (their isolated
+`settings.json` drops the hook), and `agentctl doctor` shows the same two layers to the operator in
+both modes. Switch the notice off with `features.upgrade_notice.enabled: false`. **Not yet measured:**
+whether the sessions `claude remote-control` creates run `SessionStart` hooks; in local mode `doctor`
+is the surface that is guaranteed until that is confirmed (`specs/038-schema-delta-boot-nudge/`, gate G0).
+
 ### Rollback
 
 ```bash

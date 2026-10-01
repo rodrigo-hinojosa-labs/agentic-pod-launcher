@@ -1,57 +1,65 @@
-# Contract: `vault_pending_deltas` (deteccion compartida)
+# Contract: detección de la capa vault (`scripts/lib/vault.sh`)
 
-**Ubicacion**: `scripts/lib/vault.sh` (nueva funcion, junto a `vault_seed_missing` — no la
-modifica). Espejada a `docker/scripts/lib/vault.sh` (COPY del Dockerfile, igual que el resto de la
-lib) — cualquier cambio aqui exige `DOCKER_E2E`.
+**Ubicación**: `scripts/lib/vault.sh`, junto a `vault_seed_missing` (que no se modifica). La imagen la copia
+tal cual (`docker/Dockerfile:285`); no hay espejo commiteado que mantener. El hook y doctor la cargan desde
+la copia del workspace (`<ws>/scripts/lib/vault.sh`), que se actualiza en el mismo upgrade que renderiza el
+hook.
 
-## Firma
+## Funciones
 
-```bash
-vault_pending_deltas <vault_root>
-```
+### `vault_delta_versions`
 
-- **Input**: `vault_root` — ruta absoluta a la raiz del vault (misma convencion que
-  `vault_seed_missing`, `wiki_graph_run`, etc.).
-- **Output** (stdout): cero o mas lineas, una version de delta por linea (ej. `0.27.0`), en el
-  orden de `_vault_delta_known_versions`. Vacio (sin lineas) si no hay ninguna pendiente.
-- **Exit status**: siempre `0`. Nunca falla — un `vault_root` inexistente o sin `_templates/`
-  simplemente no reporta nada pendiente (Principio IV: fail-silent, nunca aborta un caller).
+- **Salida**: una versión por línea, orden ascendente. Hoy: `0.8.0`, `0.27.0`.
+- **Código**: siempre 0. Sin efectos laterales.
 
-## Comportamiento
+### `vault_delta_checkpoint <versión>`
 
-Para cada version en `_vault_delta_known_versions` (hoy solo `0.27.0`):
+- **Salida**: el hito literal de esa versión, sin salto de línea final.
+- **Código**: 0 si la versión está en la tabla; 1 si no.
 
-1. Si `_vault_delta_checkpoint_text <version>` no resuelve (version desconocida en la tabla) →
-   se salta.
-2. Si `<vault_root>/_templates/.schema-updates-<version>.applied` NO existe → se salta (el delta ni
-   siquiera fue depositado; nada que avisar).
-3. Si el texto de checkpoint de esa version SI aparece (grep -F) en
-   `<vault_root>/CLAUDE.md` → se salta (ya integrado).
-4. En cualquier otro caso → la version se reporta como pendiente.
+| Versión | Hito |
+|---|---|
+| `0.8.0` | `wiki/normalization/` |
+| `0.27.0` | `## Actionability (PARA)` |
 
-## Garantias
+### `vault_pending_deltas <vault_root>`
 
-- **Idempotente y sin efectos secundarios**: solo lee (`.applied`, `CLAUDE.md`); nunca escribe
-  nada. Los callers (boot dispatch, doctor) son quienes deciden que hacer con el resultado.
-- **Barato**: dos operaciones de filesystem por version conocida (test -f, grep -F de un archivo).
-  Nunca escala con el tamano del vault — seguro de llamar de forma sincronica en `agentctl doctor`
-  incluso sobre un vault de miles de paginas.
-- **Fresco**: NO depende de `.graph/findings.json` ni de ninguna cache de wiki-graph — lee el
-  estado real del vault en el momento de la llamada.
+- **Entrada**: ruta absoluta a la raíz del vault.
+- **Salida**: cero o más líneas, una versión pendiente por línea, en el orden de `vault_delta_versions`.
+- **Código**: siempre 0. Un `vault_root` vacío, inexistente, sin `_templates/` o sin un `CLAUDE.md` legible
+  no reporta pendientes y no falla (sin poder leer el archivo no hay forma de saber si está integrado).
+- **Regla**, por cada versión `v`:
+  1. Si `vault_delta_checkpoint v` falla → se omite.
+  2. Si no existe `<vault_root>/_templates/.schema-updates-<v>.applied` → se omite (nunca se depositó).
+  3. Si `grep -F -q -- "<hito>" <vault_root>/CLAUDE.md` tiene éxito → se omite (integrado).
+  4. Si no → se imprime `v`.
+
+## Garantías
+
+- **Solo lectura**: nunca escribe ni crea archivos.
+- **Fresca**: no lee `.graph/` ni `wiki-graph.json`; refleja el estado del disco en el momento de la llamada.
+- **Barata**: por versión, un `test -f` y un `grep -F` sobre un archivo. No escala con el tamaño del vault.
+- **Sin pipelines con salida temprana**: nada de `producer | grep -q` bajo `pipefail` (gotcha SIGPIPE del
+  `CLAUDE.md` del repo); el `grep -F -q` lee un archivo, no una tubería.
+- **Portable**: bash 3.2 a 5.3 y busybox.
+- **Carga segura**: definir las funciones no ejecuta nada (mismo patrón de librería que el resto de
+  `scripts/lib/`).
+
+## Guardias de deriva (tests obligatorios)
+
+1. Cada `modules/vault-deltas/schema-updates-<v>.md` tiene `vault_delta_checkpoint <v>` con código 0, y cada
+   versión de `vault_delta_versions` tiene su documento.
+2. `modules/vault-skeleton/CLAUDE.md` contiene el hito de cada versión (un vault nuevo nunca queda pendiente,
+   aunque `vault_seed_if_empty` le escriba el `.applied` de 0.27.0).
+3. El literal que usa `scripts/lib/wiki_graph.sh` para `integrated` es igual a `vault_delta_checkpoint 0.27.0`.
+4. `modules/vault-deltas/schema-updates-0.27.0.md` contiene su propio hito.
 
 ## Consumidores
 
-- `docker/scripts/start_services.sh::boot_side_effects()` — dispatch del aviso activo (ver
-  contrato `schema-delta-boot-trigger.md`).
-- `scripts/agentctl::_local_vault_qmd_doctor()` — linea de WARN en modo local.
-- (Potencialmente `scripts/agentctl`'s docker-mode doctor equivalent, si se decide espejar la
-  misma linea de WARN alli tambien — ver quickstart.md para el criterio de aceptacion exacto.)
+- `scripts/hooks/upgrade-notice.sh` (contrato `upgrade-notice-hook.md`).
+- `scripts/agentctl::_upgrade_notice_doctor` (mismo contrato, sección doctor).
 
 ## Fuera de este contrato
 
-- La tabla `_vault_delta_known_versions` / `_vault_delta_checkpoint_text` es intencionalmente
-  MANUAL — agregar una version nueva de delta en el futuro requiere una linea nueva aqui. No se
-  deriva automaticamente de `modules/vault-deltas/*.md` (leer el contenido de cada delta doc para
-  extraer su propio checkpoint declarado seria mas generico, pero es mas fragil — el checkpoint es
-  prosa libre dentro de un blockquote, no un campo estructurado; se prefiere la tabla explicita,
-  mas facil de testear).
+- Derivar los hitos del contenido de los documentos (descartado en research R2).
+- Cambiar la detección de `schema_delta_pending` de 037 o su gracia de 14 días.

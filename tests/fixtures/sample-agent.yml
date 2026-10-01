@@ -43,6 +43,8 @@ features:
   askuserquestion_guard:
     enabled: true
     max_attempts: 1
+  upgrade_notice:
+    enabled: true
   voice:
     enabled: false
     reply_mode: auto

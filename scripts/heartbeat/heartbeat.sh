@@ -148,7 +148,10 @@ ensure_heartbeat_config_dir() {
     # to). Belt-and-suspenders: the hook itself no-ops on an absent marker.
     # 031: same for .hooks.PreToolUse — the AskUserQuestion guard has nothing
     # to redirect to on an isolated cron tick either.
-    if jq '.enabledPlugins = {} | .extraKnownMarketplaces = {} | del(.hooks.Stop) | del(.hooks.PreToolUse)' \
+    # 038: and .hooks.SessionStart — the upgrade notice is addressed to the interactive
+    # session the operator talks to; an unattended tick must never receive it (it would
+    # start editing the vault's CLAUDE.md with nobody there to see it).
+    if jq '.enabledPlugins = {} | .extraKnownMarketplaces = {} | del(.hooks.Stop) | del(.hooks.PreToolUse) | del(.hooks.SessionStart)' \
         "$src/settings.json" > "$tmp_settings" 2>/dev/null; then
       mv "$tmp_settings" "$dst/settings.json"
       chmod 0644 "$dst/settings.json" 2>/dev/null || true

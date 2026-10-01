@@ -158,6 +158,55 @@ vault_seed_missing() {
   return 0
 }
 
+# 038: the integration CHECKPOINT of each schema delta. It is a literal line that,
+# once present in the vault's OWN CLAUDE.md, proves the agent integrated that delta.
+# The additive upgrade never edits that file (it is the agent's co-evolved layer-3
+# schema), so the checkpoint is the only signal a script can observe. The table is
+# deliberately explicit and manual: the delta documents are free prose and the agent
+# may delete them after integrating, so nothing here is derived from their content.
+# tests/vault-pending-deltas.bats guards the drift (every shipped delta has a row, the
+# skeleton contains every checkpoint, and the 0.27.0 literal equals the one
+# scripts/lib/wiki_graph.sh already greps).
+#
+# Adding a delta in the future = one line in EACH of the two functions below, plus
+# its checkpoint declared at the top of the new delta document.
+vault_delta_versions() {
+  printf '%s\n' 0.8.0 0.27.0
+}
+
+# vault_delta_checkpoint VERSION -> the literal on stdout (no trailing newline);
+# rc 1 and no output for a version the table does not know.
+vault_delta_checkpoint() {
+  case "${1:-}" in
+    0.8.0)  printf '%s' 'wiki/normalization/' ;;
+    0.27.0) printf '%s' '## Actionability (PARA)' ;;
+    *)      return 1 ;;
+  esac
+}
+
+# vault_pending_deltas VAULT_ROOT
+# One version per line (ascending) for every delta that was DEPOSITED
+# (_templates/.schema-updates-<v>.applied exists) and whose checkpoint is NOT in
+# VAULT_ROOT/CLAUDE.md. Read-only, always rc 0: an empty/absent root, or a CLAUDE.md
+# that cannot be read, reports nothing (no way to tell, so say nothing). It never
+# reads .graph/ or any cache - it reflects the disk at call time - and it reads a
+# FILE with grep -F -q, never a pipeline (no SIGPIPE/pipefail exposure).
+# Contract: specs/038-schema-delta-boot-nudge/contracts/vault-pending-deltas.md
+vault_pending_deltas() {
+  local root="${1:-}" version checkpoint
+  [ -n "$root" ] || return 0
+  { [ -f "$root/CLAUDE.md" ] && [ -r "$root/CLAUDE.md" ]; } || return 0
+  for version in $(vault_delta_versions); do
+    checkpoint="$(vault_delta_checkpoint "$version")" || continue
+    [ -f "$root/_templates/.schema-updates-${version}.applied" ] || continue
+    if grep -F -q -- "$checkpoint" "$root/CLAUDE.md" 2>/dev/null; then
+      continue
+    fi
+    printf '%s\n' "$version"
+  done
+  return 0
+}
+
 # vault_backup_and_reseed TARGET_DIR SKELETON_DIR [TODAY] [TIMESTAMP]
 # Move TARGET_DIR (with its contents) to TARGET_DIR.backup-<TIMESTAMP> and
 # re-seed from SKELETON_DIR. Used when agent.yml.vault.force_reseed=true to

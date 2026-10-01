@@ -1,7 +1,7 @@
-# Specification Quality Checklist: Aviso automatico de integracion de delta al arrancar
+# Specification Quality Checklist: Aviso de actualización de conocimiento al iniciar sesión
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning
-**Created**: 2026-09-30
+**Created**: 2026-09-30 (re-evaluado tras la reescritura del mismo día)
 **Feature**: [spec.md](../spec.md)
 
 ## Content Quality
@@ -31,9 +31,13 @@
 
 ## Notes
 
-- Todos los items pasan en la primera pasada. El mecanismo propuesto (disparador de heartbeat
-  `schema_delta`, reutilizo de la heuristica de deteccion de 037) quedo en la seccion Assumptions
-  como punto de partida no vinculante para `/speckit-plan`, no como requisito — evita filtrar
-  implementacion al spec.
-- Dependencia de rama explicita: esta feature parte de `037-second-brain-rag` (no de `main`) y su
-  PR debe esperar a que esa feature mergee primero; ver la nota de rama base al inicio de spec.md.
+- Excepciones aceptadas a sabiendas, por convención del repo: el producto es una CLI, así que
+  `--regenerate`, `--force-claude-md` y `agentctl doctor` son la interfaz del operador, no detalle de
+  implementación. El mecanismo `SessionStart` aparece solo en Clarifications y en Contexto medido, como
+  registro de una decisión del operador y de su medición; los FR hablan de "inyectar en el contexto de la
+  sesión", sin nombrar el mecanismo.
+- "Non-technical stakeholders": el lector real es el operador (Engineering Manager, técnico). El spec evita
+  detalle de código, no vocabulario del dominio.
+- Tres decisiones del operador del 30-09-2026 registradas en Clarifications; ninguna queda abierta. El gate de
+  Remote Control (US4) es un supuesto explícito con su salida definida, no una ambigüedad.
+- Dependencia de rama: parte de `037-second-brain-rag`; el PR espera el merge de 037.
