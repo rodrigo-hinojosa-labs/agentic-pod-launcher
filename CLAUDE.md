@@ -185,6 +185,33 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 - **A container is a usable Linux oracle, but only if it matches the runner.** Reproducing a CI-only failure locally works — the `E2BIG` above was reproduced RED/GREEN in Alpine in minutes — but the *full suite* under a naive `docker run` lies: as **root** every "unwritable directory" test fails (root ignores the mode bits), and Alpine's busybox/GNU mix fails more. Measured on the same tree: Alpine-as-root reported 20 reds, Debian-as-non-root reported 1, CI reported 2. A faithful replica is `debian:bookworm` + a non-root user + the deps the workflow installs (`age`, `gettext-base` for `envsubst`, `tmux`, `busybox`) + the pinned `yq` — and copy the repo in rather than bind-mounting it writable, or the host tree ends up owned by root.
 
 <!-- SPECKIT START -->
+**038-schema-delta-boot-nudge SPEC + PLAN (2026-09-30; rama `038-schema-delta-boot-nudge`
+ramificada sobre `037-second-brain-rag` (v0.27.0), NO sobre main (sigue en v0.26.0) — depende del
+mecanismo de delta de 037; el PR de esta feature espera a que 037 mergee primero, precedente
+023-sobre-022).** Origen: el operador le pidio a donna (docker, ferrari, 30-09-2026) un resumen de
+su sistema RAG y respondio con el modelo pre-037 (sin PARA, cola de revision, packets) — el delta
+0.27.0 estaba depositado y la migracion de qmd ya corrida (verificado esa misma noche), pero nadie
+le aviso al agente que tenia que leer el delta e integrarlo a su `CLAUDE.md`. Diagnostico: por
+diseno, el sistema NUNCA reescribe el `CLAUDE.md` del vault — la integracion depende del agente, y
+el unico mecanismo existente para senalarlo (`schema_delta_pending` de 037) tiene 14 dias de
+gracia y solo se empuja si el aviso semanal opt-in esta prendido (no es el default). **DISEÑO:**
+funcion compartida `vault_pending_deltas` nueva en `scripts/lib/vault.sh` (tabla explicita
+version→texto-de-checkpoint, hoy solo `0.27.0`→`## Actionability (PARA)`; deliberadamente NO
+reusa ni refactoriza la logica ya hardcodeada de `schema_delta_pending` en `wiki_graph.sh` —
+mutation-tested a fondo por 037, se acepta una pequeña duplicacion antes que reabrir esa
+superficie). Dos superficies de entrega: (1) **modo docker** — disparo ACTIVO de heartbeat
+(`HEARTBEAT_TRIGGER=schema_delta`, mismo mecanismo que el aviso semanal de PARA pero de una sola
+vez, disparado desde `start_services.sh::boot_side_effects` en vez de por cron, con su propio
+marcador `_templates/.schema-updates-X.Y.Z.nudged` hermano del `.applied` existente para no
+repetirse); (2) **modo local** — decision explicita del operador (AskUserQuestion, 2026-09-30,
+recomendada): sin canal de notificacion separado como Telegram, el aviso se superficializa como
+linea de WARN dedicada y persistente en `agentctl doctor`/`status` (ambos modos, ademas
+complementaria al aviso activo en docker) en vez de construir un mecanismo de inyeccion nuevo hacia
+la sesion interactiva (mayor costo/riesgo, sin precedente) o diferir modo local (contradeciria el
+requisito de paridad ya puesto en el spec). Constitucion 6/6 PASS, Complexity Tracking vacio.
+Artefactos: `specs/038-schema-delta-boot-nudge/{spec,plan,research,data-model,quickstart}.md` +
+`contracts/{vault-pending-deltas,schema-delta-notice-delivery}.md`. **Siguiente:** `/speckit-tasks`.
+
 **037-second-brain-rag SPEC + PLAN + TASKS + IMPLEMENT EN CURSO (2026-09-26/28; rama
 `037-second-brain-rag` desde main=`70214d9` v0.26.0→**0.27.0**; NO mergeada, sin commit — working
 tree de la rama con todo el diff aplicado).** Spec: `specs/037-second-brain-rag/spec.md`
