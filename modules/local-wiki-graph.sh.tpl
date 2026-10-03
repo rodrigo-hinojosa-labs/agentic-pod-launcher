@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Local-mode wiki-graph entrypoint. Rendered from modules/local-wiki-graph.sh.tpl
 # — do not hand-edit (use ./setup.sh --regenerate). Runs the shared wiki_graph.sh
-# against the workspace vault, deriving <vault>/.graph/{graph,backlinks,findings}
-# .json + the wiki-graph.json state file. Never edits the wiki.
+# against the workspace vault, deriving <vault>/.graph/{graph,backlinks,findings,
+# policy,packets}.json + the wiki-graph.json state file. Never edits the wiki.
 #
 # Always exits 0 (Principle IV, fail-silent): detail goes to the systemd journal
 # and the machine-readable state file. Gated by the lib's own wiki_graph_enabled.

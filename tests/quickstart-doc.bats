@@ -207,3 +207,12 @@ load helper
     fi
   done
 }
+
+@test "037 quickstart-doc: docs/vault.md marks exactly the four dead vault: keys reserved" {
+  local n
+  n=$(grep -c 'reserved (no reader today)' "$REPO_ROOT/docs/vault.md")
+  [ "$n" -eq 4 ]
+  for key in 'vault.initial_sources' 'vault.mcp.server' 'vault.schema.frontmatter_required' 'vault.schema.log_format'; do
+    grep -qF "$key" "$REPO_ROOT/docs/vault.md" || { echo "missing key: $key" >&2; return 1; }
+  done
+}

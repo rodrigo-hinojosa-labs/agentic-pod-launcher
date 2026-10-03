@@ -40,3 +40,28 @@ the drift.
 
 <!-- Canonical-form rules (writing rules, NOT knowledge pages). Format:
      `- [[normalization/<slug>]] — <canonical> <- <aliases>` -->
+
+## Projects (active)
+
+<!-- One entry per `para: project` page. Format:
+     `- [[entities/<slug>]] — <goal>, due <due>` -->
+
+## Areas
+
+<!-- One entry per `para: area` page. Format:
+     `- [[overviews/<slug>]] — <standard>` -->
+
+## Archive
+
+<!-- One entry per `para: archive` page. Format:
+     `- [[<type>/<slug>]] — archived <archived>` -->
+
+## Packets
+
+<!-- One entry per page with a valid `packet:` value. Format:
+     `- [[<type>/<slug>]] — <packet> — <description>` -->
+
+## Favorite problems
+
+<!-- Link to `wiki/synthesis/favorite-problems.md` once it exists. Never seeded. Format:
+     `- [[synthesis/favorite-problems]] — the current list` -->

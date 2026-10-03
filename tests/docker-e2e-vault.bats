@@ -169,6 +169,110 @@ PY
   done
   run in_container grep -q "user-content-marker" /home/agent/.vault/raw_sources/user-note.md
   [ "$status" -eq 0 ]
+
+  # 13) 037 fresh-scaffold: a NEW vault is seeded straight to 0.27.0 — the
+  # marker carries a real ISO date, but there is nothing to "integrate" (no
+  # delta .md was ever deposited, no CANON-D14 log line) because the skeleton
+  # already IS the current schema.
+  run in_container test -f /home/agent/.vault/_templates/.schema-updates-0.27.0.applied
+  [ "$status" -eq 0 ]
+  run in_container sh -c 'grep -qE "^deposited: [0-9]{4}-[0-9]{2}-[0-9]{2}$" /home/agent/.vault/_templates/.schema-updates-0.27.0.applied'
+  [ "$status" -eq 0 ]
+  run in_container sh -c 'test -f /home/agent/.vault/_templates/schema-updates-0.27.0.md && echo HAS_DELTA || echo NO_DELTA'
+  [[ "$output" == *"NO_DELTA"* ]]
+  run in_container sh -c '! grep -q "schema delta 0.27.0" /home/agent/.vault/log.md'
+  [ "$status" -eq 0 ]
+}
+
+# 037 T037: an agent that already had a populated (pre-0.27.0) vault gets the
+# additive upgrade at boot — the delta lands, the marker is dated, and the
+# log line is written exactly once even across a restart.
+@test "vault e2e (037): a pre-existing populated vault receives the 0.27.0 additive upgrade" {
+  mkdir -p "$DEST"
+  cat > "$DEST/agent.yml" <<YML
+version: 1
+agent: {name: $AGENT_NAME, display_name: "vault upgrade e2e", role: "test", vibe: "terse"}
+user: {name: "Tester", nickname: "Tester", timezone: "UTC", email: "t@e.x", language: "en"}
+deployment: {host: "test", workspace: "$DEST", install_service: false, claude_cli: "claude"}
+docker: {image_tag: "agent-admin:vault-upgrade-e2e", uid: $(id -u), gid: $(id -g), state_volume: "${AGENT_NAME}-state", base_image: "alpine:3.24.1"}
+claude: {config_dir: "/home/agent/.claude", profile_new: true}
+notifications: {channel: none}
+features:
+  heartbeat: {enabled: true, interval: "30m", timeout: 30, retries: 0, default_prompt: "echo pong"}
+mcps: {defaults: [], atlassian: [], github: {enabled: false, email: ""}}
+vault:
+  enabled: true
+  path: .state/.vault
+  seed_skeleton: true
+  initial_sources: []
+  mcp: {enabled: true, server: vault}
+  schema: {frontmatter_required: true, log_format: "## [{date}] {op} | {title}"}
+plugins: []
+YML
+  cp -R "$REPO_ROOT/modules" "$REPO_ROOT/scripts" "$REPO_ROOT/docker" "$DEST/"
+  cp "$REPO_ROOT/setup.sh" "$DEST/"
+  chmod +x "$DEST/setup.sh"
+  (cd "$DEST" && ./setup.sh --regenerate --non-interactive)
+  touch "$DEST/.env"; chmod 0600 "$DEST/.env"
+
+  # Pre-seed a pre-0.27.0 populated vault BEFORE the first boot (.state/ must
+  # exist first so the bind-mount target is real, macOS gotcha).
+  mkdir -p "$DEST/.state/.vault"
+  cp -R "$REPO_ROOT/tests/fixtures/vault-populated/." "$DEST/.state/.vault/"
+
+  mkdir -p "$DEST/bin"
+  cat > "$DEST/bin/claude" <<'CL'
+#!/bin/bash
+exec sleep 86400
+CL
+  chmod +x "$DEST/bin/claude"
+  python3 - "$DEST/docker-compose.yml" <<'PY'
+import sys
+path = sys.argv[1]
+txt = open(path).read()
+needle = '      - ./:/workspace'
+inject = '      - ./bin/claude:/usr/local/bin/claude:ro'
+if inject not in txt:
+    txt = txt.replace(needle, needle + '\n' + inject, 1)
+open(path, 'w').write(txt)
+PY
+
+  (cd "$DEST" && docker compose build)
+  (cd "$DEST" && docker compose up -d)
+  in_container() { (cd "$DEST" && docker compose exec -T -u agent "$AGENT_NAME" "$@"); }
+
+  local deadline=$(( $(date +%s) + 60 )) upgraded=0
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    if in_container test -f /home/agent/.vault/_templates/.schema-updates-0.27.0.applied 2>/dev/null; then
+      upgraded=1; break
+    fi
+    sleep 2
+  done
+  if [ "$upgraded" -ne 1 ]; then
+    echo "--- container logs ---" >&2
+    (cd "$DEST" && docker compose logs --tail=80 2>&1) >&2 || true
+  fi
+  [ "$upgraded" -eq 1 ]
+
+  run in_container sh -c 'grep -qE "^deposited: [0-9]{4}-[0-9]{2}-[0-9]{2}$" /home/agent/.vault/_templates/.schema-updates-0.27.0.applied'
+  [ "$status" -eq 0 ]
+  # the pre-existing 0.8.0 marker (from the fixture) stays empty — this vault
+  # never received THAT delta either, and the fresh-scaffold guard must not
+  # confuse "upgrade deposited a marker" with "this was a brand-new scaffold".
+  run in_container sh -c '[ -f /home/agent/.vault/_templates/.schema-updates-0.8.0.applied ] && [ ! -s /home/agent/.vault/_templates/.schema-updates-0.8.0.applied ] && echo EMPTY_MARKER'
+  [[ "$output" == *"EMPTY_MARKER"* ]]
+  run in_container sh -c 'grep -c "schema delta 0.27.0" /home/agent/.vault/log.md || true'
+  [ "$output" = "1" ]
+
+  # Restart and confirm idempotency (refutación N C4): still exactly one line.
+  (cd "$DEST" && docker compose restart)
+  local rdeadline=$(( $(date +%s) + 30 ))
+  while [ "$(date +%s)" -lt "$rdeadline" ]; do
+    in_container test -f /home/agent/.vault/CLAUDE.md 2>/dev/null && break
+    sleep 2
+  done
+  run in_container sh -c 'grep -c "schema delta 0.27.0" /home/agent/.vault/log.md || true'
+  [ "$output" = "1" ]
 }
 
 # Feature 004 US1 — the default npx MCP packages are warmed into the image's

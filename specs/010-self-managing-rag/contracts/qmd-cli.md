@@ -20,7 +20,7 @@ Sources `backup_vault.sh` to reuse `vault_resolve_root` and `vault_hash` (no dup
 ### `qmd_setup_if_needed [agent_yml]`
 - **Pre**: `vault.qmd.enabled = true` and `vault.enabled = true`; else **return 0 (no-op)** (FR-012).
 - **Idempotency** (FR-003): return 0 immediately if sentinel `<qmd_cache_root>/.qmd-setup-ok` exists AND `<qmd_cache_root>/index.sqlite` exists.
-- **Action**: `timeout <T> bunx $(qmd_pkg) collection add <vault_root>` then `update` then `embed`; on success `touch` the sentinel.
+- **Action**: `timeout <T> bunx $(qmd_pkg) collection add <vault_root>` then `update` then `embed`; on success `touch` the sentinel. (Historical: `bunx` was retired by 016 in favor of a managed install prefix, and the mask on `collection add` narrowed from the whole vault to `wiki/**/*.md` by 037 — see `specs/037-second-brain-rag/contracts/qmd-collection-migration.md`. This line documents the original 010 design; it is superseded, not current behavior.)
 - **Failure** (FR-011): any `bunx` non-zero/timeout → log a WARN, do NOT write the sentinel, **return 0** (caller continues; retried next boot). Never exits non-zero.
 - **Invariant**: never blocks indefinitely; every external call is `timeout`-bounded. The *caller* (`start_services.sh`) backgrounds this whole function so boot is not delayed (D4).
 

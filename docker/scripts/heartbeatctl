@@ -124,10 +124,22 @@ Vault RAG:
                           changed (flock-guarded + hash-debounced). Invoked by
                           the */5 cron backstop and the inotify watcher
                           (qmd_watch.sh). Opt-in via vault.qmd.enabled=true.
+  qmd-migrate   [--dry-run|--force]
+                          One-time move of the qmd collection to the 'wiki/'
+                          mask (reuses embeddings). Idempotent: no-ops once
+                          done. Runs automatically on the first reindex tick
+                          after an upgrade; this is the manual trigger/check.
   wiki-graph              Regenerate the derived wiki graph + structural lint
                           (.graph/*.json + wiki-graph.json). flock-guarded, never
                           edits the wiki. Cron backstop + manual action. Opt-out
                           via vault.wiki_graph.enabled=false.
+
+Review notice (opt-in, docker only):
+  Weekly heartbeat tick that reports the actionability queue (review_due,
+  project_overdue, pending_ingest, and more). Opt in via
+  features.heartbeat.review.enabled=true in agent.yml, then `reload`. Default
+  schedule "7 9 * * 1" (Mon 09:07); an invalid schedule WARNs and omits the
+  line, leaving the rest of the crontab untouched.
 
 Exit codes:
   0  success
@@ -168,6 +180,84 @@ _yq() {
   fi
   rm -f "$err_log"
   printf '%s' "$out" | sed 's/^null$//'
+}
+
+# 037: cron-field validators for features.heartbeat.review.schedule. A plain
+# integer/range/list check per field -- no interval math, so busybox `awk`/
+# `date` quirks never enter it.
+_v_cron5_num() {
+  local n="$1" min="$2" max="$3"
+  [[ "$n" =~ ^[0-9]+$ ]] || return 1
+  [ "$n" -ge "$min" ] && [ "$n" -le "$max" ]
+}
+
+_v_cron5_piece() {
+  local piece="$1" min="$2" max="$3" lo hi
+  if [[ "$piece" == *-* ]]; then
+    lo="${piece%%-*}"; hi="${piece#*-}"
+    _v_cron5_num "$lo" "$min" "$max" || return 1
+    _v_cron5_num "$hi" "$min" "$max" || return 1
+    [ "$lo" -le "$hi" ]
+  else
+    _v_cron5_num "$piece" "$min" "$max"
+  fi
+}
+
+# _v_cron5_field VALUE MIN MAX ALLOW_STAR -- ALLOW_STAR=0 rejects `*` and
+# `*/N` (the minute field: a review notice must fire at most once a week, and
+# `*`/`*/N` there would fire every tick instead, SC-007).
+_v_cron5_field() {
+  local value="$1" min="$2" max="$3" allow_star="$4"
+  if [ "$value" = "*" ]; then
+    [ "$allow_star" = "1" ]
+    return $?
+  fi
+  if [[ "$value" =~ ^\*/([0-9]+)$ ]]; then
+    [ "$allow_star" = "1" ] || return 1
+    [ "${BASH_REMATCH[1]}" -ge 1 ] 2>/dev/null
+    return $?
+  fi
+  local piece
+  local IFS=','
+  # deliberate comma-split of a cron field
+  # shellcheck disable=SC2206
+  local -a pieces=($value)
+  unset IFS
+  [ "${#pieces[@]}" -ge 1 ] || return 1
+  for piece in "${pieces[@]}"; do
+    [ -n "$piece" ] || return 1
+    _v_cron5_piece "$piece" "$min" "$max" || return 1
+  done
+  return 0
+}
+
+# _v_cron5 SCHEDULE -- 5 space-separated fields, minute without `*`/`*/N`.
+_v_cron5() {
+  local sched="$1"
+  local -a f
+  IFS=' ' read -r -a f <<< "$sched"
+  [ "${#f[@]}" -eq 5 ] || return 1
+  _v_cron5_field "${f[0]}" 0 59 0 || return 1
+  _v_cron5_field "${f[1]}" 0 23 1 || return 1
+  _v_cron5_field "${f[2]}" 1 31 1 || return 1
+  _v_cron5_field "${f[3]}" 1 12 1 || return 1
+  _v_cron5_field "${f[4]}" 0 7 1
+}
+
+# 037: default weekly-review prompt text, localized (molde voice_signoff_default,
+# feature 034; mixed -> spanish). Placeholders {{VAULT_DIR}}/{{WORKSPACE}} are
+# substituted by the caller. No accented characters by design (heredoc -> yq ->
+# crontab file; same byte discipline as 033/034).
+heartbeat_review_prompt_default() {
+  local lang="$1"
+  case "$lang" in
+    en)
+      printf '%s' 'Weekly vault review notice. Read with the Read tool the files {{VAULT_DIR}}/.graph/findings.json and {{WORKSPACE}}/scripts/heartbeat/wiki-graph.json. Do not use any other tool and do not write anything. Reply in plain text, no markdown, under 600 characters: one line for each nonzero counter among review_due, project_overdue, project_incomplete, pending_ingest, archive_candidate, schema_delta_pending and problem_unfed, then at most three items (page and detail), most overdue first. If every count is zero, reply exactly: nothing pending'
+      ;;
+    *)
+      printf '%s' 'Aviso semanal de revision del vault. Lee con la herramienta Read los archivos {{VAULT_DIR}}/.graph/findings.json y {{WORKSPACE}}/scripts/heartbeat/wiki-graph.json. No uses ninguna otra herramienta y no escribas nada. Responde en texto plano, sin markdown, en menos de 600 caracteres: una linea por cada contador distinto de cero entre review_due, project_overdue, project_incomplete, pending_ingest, archive_candidate, schema_delta_pending y problem_unfed, y luego a lo mas tres items (pagina y detalle), los mas atrasados primero. Si todos los contadores son cero, responde exactamente: sin pendientes'
+      ;;
+  esac
 }
 
 cmd_reload() {
@@ -300,6 +390,40 @@ CONF
     wiki_graph_line="$wg_schedule /usr/local/bin/heartbeatctl wiki-graph >> /workspace/scripts/heartbeat/logs/wiki-graph.log 2>&1"
   fi
 
+  # 037: opt-in weekly review notice. Concatenated onto the SAME heredoc slot
+  # as wiki_graph_line (not its own heredoc line) so a disabled/unconfigured
+  # feature keeps the crontab byte-identical to pre-037 (refutación N C1) --
+  # an own blank line would show up even when review_line is empty.
+  local review_line=""
+  local review_enabled review_schedule review_prompt
+  review_enabled=$(_yq '.features.heartbeat.review.enabled')
+  review_schedule=$(_yq '.features.heartbeat.review.schedule // "7 9 * * 1"')
+  review_prompt=$(_yq '.features.heartbeat.review.prompt // ""')
+  if [ "$review_enabled" = "true" ]; then
+    if _v_cron5 "$review_schedule"; then
+      local review_prompt_effective review_vault_root review_lang
+      if [ -n "$review_prompt" ]; then
+        review_prompt_effective="$review_prompt"
+      else
+        review_lang=$(_yq '.user.language // "es"')
+        review_prompt_effective=$(heartbeat_review_prompt_default "$review_lang")
+      fi
+      review_vault_root=$(command -v vault_resolve_root >/dev/null 2>&1 && vault_resolve_root "$AGENT_YML" 2>/dev/null || true)
+      # Filesystem paths and /workspace never contain '&' -- the ampersand
+      # hazard in bash 5.2+ `${//}` (023-fix-render-ampersand) doesn't apply
+      # to this substitution's domain.
+      review_prompt_effective="${review_prompt_effective//\{\{VAULT_DIR\}\}/$review_vault_root}"
+      review_prompt_effective="${review_prompt_effective//\{\{WORKSPACE\}\}//workspace}"
+      local tmp_review
+      tmp_review=$(mktemp)
+      printf '%s' "$review_prompt_effective" > "$tmp_review"
+      mv -f "$tmp_review" "$HEARTBEAT_DIR/review-prompt.txt"
+      review_line=$'\n'"$review_schedule HEARTBEAT_TRIGGER=review /workspace/scripts/heartbeat/heartbeat.sh --trigger review --prompt \"\$(cat /workspace/scripts/heartbeat/review-prompt.txt)\" >> /workspace/scripts/heartbeat/logs/review.log 2>&1"
+    else
+      echo "heartbeatctl: WARN invalid features.heartbeat.review.schedule — review notice line omitted" >&2
+    fi
+  fi
+
   local tmp_crontab="${CRONTAB_FILE}.tmp"
   if ! cat > "$tmp_crontab" <<CT
 # Cron for in-container agent heartbeat + identity/vault/config backup + token-health + qmd reindex + wiki-graph. Managed by heartbeatctl.
@@ -309,7 +433,7 @@ ${vault_backup_line}
 ${config_backup_line}
 ${token_health_line}
 ${qmd_reindex_line}
-${wiki_graph_line}
+${wiki_graph_line}${review_line}
 CT
   then
     rm -f "$tmp_crontab"
@@ -415,6 +539,36 @@ cmd_status() {
     bc_commit=$(jq -r '.last_commit // ""' "$CONFIG_BACKUP_STATE_FILE" 2>/dev/null)
     bc_push=$(jq -r '.last_push // ""' "$CONFIG_BACKUP_STATE_FILE" 2>/dev/null)
     echo "config backup:   commit=${bc_commit:0:8} last_push=${bc_push:-never}"
+  fi
+
+  # 037: wiki-graph review-queue summary — the seven canonical counters, same
+  # names/order as the local agentctl surface (data-model.md §6).
+  if [ -f "$WIKI_GRAPH_STATE_FILE" ] && command -v jq >/dev/null 2>&1; then
+    local wg_status wg_run wg_due wg_overdue wg_incomplete wg_ingest wg_archive wg_delta wg_unfed
+    wg_status=$(jq -r '.last_status // "unknown"' "$WIKI_GRAPH_STATE_FILE" 2>/dev/null)
+    wg_run=$(jq -r '.last_run // "never"' "$WIKI_GRAPH_STATE_FILE" 2>/dev/null)
+    wg_due=$(jq -r '.counts.review_due // 0' "$WIKI_GRAPH_STATE_FILE" 2>/dev/null)
+    wg_overdue=$(jq -r '.counts.project_overdue // 0' "$WIKI_GRAPH_STATE_FILE" 2>/dev/null)
+    wg_incomplete=$(jq -r '.counts.project_incomplete // 0' "$WIKI_GRAPH_STATE_FILE" 2>/dev/null)
+    wg_ingest=$(jq -r '.counts.pending_ingest // 0' "$WIKI_GRAPH_STATE_FILE" 2>/dev/null)
+    wg_archive=$(jq -r '.counts.archive_candidate // 0' "$WIKI_GRAPH_STATE_FILE" 2>/dev/null)
+    wg_delta=$(jq -r '.counts.schema_delta_pending // 0' "$WIKI_GRAPH_STATE_FILE" 2>/dev/null)
+    wg_unfed=$(jq -r '.counts.problem_unfed // 0' "$WIKI_GRAPH_STATE_FILE" 2>/dev/null)
+    echo
+    echo "wiki-graph: $wg_status @ $wg_run — due=$wg_due overdue=$wg_overdue incomplete=$wg_incomplete ingest=$wg_ingest archive=$wg_archive delta=$wg_delta unfed=$wg_unfed"
+  fi
+
+  # 037: qmd index summary — collection layout/migration computed LIVE (not
+  # just read from the state file) so `pending` is visible before the first
+  # reindex tick ever runs (data-model.md §8; M U2).
+  if command -v qmd_collection_migration_state >/dev/null 2>&1; then
+    local qi_status="unknown" qi_pending="unknown"
+    if [ -f "$QMD_INDEX_STATE_FILE" ]; then
+      qi_status=$(jq -r '.last_status // "unknown"' "$QMD_INDEX_STATE_FILE" 2>/dev/null)
+      qi_pending=$(jq -r '.pending // "unknown"' "$QMD_INDEX_STATE_FILE" 2>/dev/null)
+    fi
+    echo
+    echo "qmd index: $qi_status pending=$qi_pending collection=$(qmd_collection_layout) migration=$(qmd_collection_migration_state)"
   fi
 
   # Token-health summary (one line per probed token). Emits nothing
@@ -995,6 +1149,50 @@ _qmd_reindex_dry() {
   fi
 }
 
+# 037: one-time collection migration to the wiki/ mask (contracts/
+# qmd-collection-migration.md §3). No flags: idempotent (sentinel present ->
+# "already migrated", rc 0, no qmd call at all). --dry-run: state + the six
+# steps, no execution. --force: recreates even if already migrated (same
+# mask; repairs a stale sentinel or a manual cleanup).
+cmd_qmd_migrate() {
+  local mode=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dry-run) mode="--dry-run"; shift ;;
+      --force)   mode="--force"; shift ;;
+      -h|--help)
+        cat <<EOF
+Usage: heartbeatctl qmd-migrate [flags]
+
+Move the qmd search collection from the legacy '**/*.md' mask to 'wiki/**/*.md'.
+Reuses embeddings (remove+add keys vectors by content hash, not by collection).
+
+Flags:
+  --dry-run   Print the current state and the steps, run nothing.
+  --force     Recreate the collection even if already migrated.
+  (no flags)  Idempotent: migrates if pending, no-ops if already done.
+EOF
+        return 0 ;;
+      *) echo "qmd-migrate: unknown flag: $1" >&2; return 1 ;;
+    esac
+  done
+
+  if ! command -v qmd_migrate_collection >/dev/null 2>&1; then
+    echo "qmd-migrate: qmd_index.sh not loaded — nothing to do" >&2
+    return 0
+  fi
+
+  if [ "$mode" = "--dry-run" ]; then
+    qmd_migrate_collection --dry-run "$AGENT_YML"
+    return 0
+  fi
+  if [ "$mode" = "--force" ]; then
+    qmd_migrate_collection --force "$AGENT_YML"
+    return $?
+  fi
+  qmd_migrate_collection "$AGENT_YML"
+}
+
 # heartbeatctl wiki-graph — 014: regenerate the derived wiki graph + structural
 # lint (flock-guarded, fail-silent). The exact command the cron backstop runs and
 # the manual `agentctl heartbeat wiki-graph` action. Always exits 0.
@@ -1004,7 +1202,7 @@ cmd_wiki_graph() {
       cat <<EOF
 Usage: heartbeatctl wiki-graph
 
-Derives <vault>/.graph/{graph,backlinks,findings}.json from the wiki and writes
+Derives <vault>/.graph/{graph,backlinks,findings,policy,packets}.json from the wiki and writes
 the wiki-graph.json state file (freshness + finding counts). flock-guarded; safe
 to run any time. Never edits the wiki.
 EOF
@@ -1054,6 +1252,7 @@ main() {
     backup-vault)    cmd_backup_vault "$@" ;;
     backup-config)   cmd_backup_config "$@" ;;
     qmd-reindex)     cmd_qmd_reindex "$@" ;;
+    qmd-migrate)     cmd_qmd_migrate "$@" ;;
     wiki-graph)      cmd_wiki_graph "$@" ;;
     token-check)     cmd_token_check ;;
     set-interval) cmd_set_interval "${1:-}" ;;

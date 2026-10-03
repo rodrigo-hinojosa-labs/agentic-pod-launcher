@@ -7,6 +7,9 @@ created: ""
 updated: ""
 status: active
 tags: []
+description: ""      # required for pages created from now on; one-line hook for index.md
+distill: 1            # 1=full note, 2=bolded, 3=highlighted, 4=executive summary
+# packet: distilled-note | outtake | wip | deliverable | external   # only if this page is a reusable Intermediate Packet
 ---
 
 # {{title}}
@@ -37,3 +40,17 @@ How this source relates to other pages in the wiki. Use `[[wikilinks]]`.
 
 - `[[concepts/...]]` — connection note.
 - `[[entities/...]]` — connection note.
+
+<!--
+Progressive Summarization layers 2-3 (optional, add only when distill >= 2/3;
+never run a distillation pass over the vault, raise this only when you're already here):
+
+## Highlights
+
+The load-bearing sentences from the sections above, lifted out and **bolded** in place.
+
+## Core
+
+Of the highlights, the few that matter most — the executive-summary layer sits at the top
+of this page as `description` once distill reaches 4.
+-->

@@ -125,6 +125,35 @@ Two optional keys are **not** written by the wizard but are read when present:
   (default `20 */6 * * *`).
 - `vault.backup_schedule` — cadence of the vault backup (default `0 * * * *`, hourly).
 
+### Second Brain (PARA) config keys (launcher 0.27.0)
+
+Not asked by the wizard — written with defaults by `--regenerate`'s backfill, edited directly
+in `agent.yml` thereafter:
+
+| Key | Default | Read by |
+|---|---|---|
+| `vault.review.project_days` | `7` | `wiki_graph.sh` (`review_due`, `.graph/policy.json`) |
+| `vault.review.area_days` | `30` | `.graph/policy.json` (no `area_days`-gated finding yet) |
+| `vault.archive.candidate_days` | `90` | `wiki_graph.sh` (`archive_candidate`, `.graph/policy.json`) |
+| `features.heartbeat.review.enabled` | `false` | `heartbeatctl` (opt-in weekly notice; docker only) |
+| `features.heartbeat.review.schedule` | `"7 9 * * 1"` | `heartbeatctl` (5-field cron, validated) |
+| `features.heartbeat.review.prompt` | `""` (= language default) | `heartbeatctl` (the review-tick prompt) |
+
+Each is validated (`schema.sh` for the booleans/non-empty checks; an out-of-range `*_days`
+degrades to its default with a `WARN` naming the key, never the value) and safe to hand-edit —
+run `./setup.sh --regenerate` afterward so `.graph/policy.json` and the crontab pick it up.
+
+Four pre-existing `vault:` keys predate the Second Brain work and are honest dead weight — every
+scaffold writes them, nothing validates them, and no code in this launcher reads them today:
+
+- `vault.initial_sources` — reserved (no reader today).
+- `vault.mcp.server` — reserved (no reader today).
+- `vault.schema.frontmatter_required` — reserved (no reader today).
+- `vault.schema.log_format` — reserved (no reader today).
+
+Safe to leave at their default — if you came looking for what they do, that is the honest
+answer: nothing, yet.
+
 ### Seeding
 
 **Docker mode** — `docker/scripts/start_services.sh::seed_vault_if_needed` runs as the `agent`
@@ -143,7 +172,15 @@ user during `boot_side_effects` on every boot:
 
 **Local mode** — `setup.sh::_seed_vault_local` does the equivalent host-side at scaffold and on
 every `--regenerate`, against `<workspace>/<vault.path>` (no `/home/agent` rebase, no symlink).
-Same skeleton, same idempotency, same `force_reseed` and `vault_seed_missing` semantics.
+Same skeleton, same idempotency, same `force_reseed` and `vault_seed_missing` semantics. A
+schema delta (like 0.27.0's Second Brain layer) reaches an EXISTING local agent only through
+`--regenerate` — there is no `--login` hook for it, so an operator who only ever runs `--login`
+after upgrading the launcher never gets the delta deposited.
+
+Either mode: `vault.seed_skeleton: false` opts the agent out of ALL seeding, including the
+additive upgrade path — `_seed_vault_local`/`seed_vault_if_needed` return before calling
+`vault_seed_missing`, so that agent never receives a schema delta either, by design (it asked
+to co-evolve its own `CLAUDE.md` from scratch).
 
 ### Day-to-day
 
@@ -395,14 +432,33 @@ Then regenerate and restart (see "After editing `agent.yml`" above).
 
 | Stage | What happens | Where |
 |---|---|---|
-| **Setup** (once) | `qmd_setup_if_needed`: `collection add <vault> --name vault --mask '**/*.md'` → `update` → `embed`. Downloads the ~300 MB embedding model on first `embed`. Idempotent via a sentinel + `index.sqlite`; `flock`-guarded against the reindex. | docker: backgrounded by `start_services.sh` at every boot. local: dispatched by `agent-login.sh` and re-checked at the start of every reindex tick. |
+| **Setup** (once) | `qmd_setup_if_needed`: `collection add <vault> --name vault --mask 'wiki/**/*.md'` → `update` → `embed`. Downloads the ~300 MB embedding model on first `embed`. Idempotent via a sentinel + `index.sqlite`; `flock`-guarded against the reindex. | docker: backgrounded by `start_services.sh` at every boot. local: dispatched by `agent-login.sh` and re-checked at the start of every reindex tick. |
 | **Reindex** | `qmd_reindex`: hash-debounced (`vault_hash`) + `flock`-guarded; runs `update` then the embed-completion loop. Always exits 0 (a cron tick must never crash) — honesty lives in the state file. | docker: cron backstop (`vault.qmd.schedule`, default `*/5 * * * *`) + the inotify watcher `qmd_watch.sh`. local: `agent-<name>-qmd-reindex.timer` (cron converted to `OnCalendar`) + `agent-<name>-qmd-watch.service`. |
 | **Watch** | inotify on the vault, debounced (~15s), dispatches the same `qmd-reindex`. Captures every change regardless of source (MCPVault, native `Write`, Syncthing). Degrades to the cron/timer backstop when `inotifywait` is unavailable. | docker: respawned by the 2s watchdog. local: `Restart=always` systemd service with a supervised loop. |
 | **Manual** | `./scripts/agentctl heartbeat qmd-reindex` (both modes; in-container it is `heartbeatctl qmd-reindex`). `--dry-run` works in docker mode only — the local wrapper has none, so it is refused (exit 2) rather than silently running a real reindex. | |
 
-State: `scripts/heartbeat/qmd-index.json` — `{hash, last_run, last_status, runs[, pending]}`,
-with `last_status ∈ {indexed, skipped, error, partial, stalled}`. Full schema and semantics in
-[`docs/heartbeatctl.md`](heartbeatctl.md#vault-rag).
+State: `scripts/heartbeat/qmd-index.json` — `{hash, last_run, last_status, runs[, pending],
+collection_layout, migration}`, with `last_status ∈ {indexed, skipped, error, partial, stalled}`,
+`collection_layout ∈ {none, vault-root, wiki-root}`, `migration ∈ {n/a, pending, done}`. Full
+schema and semantics in [`docs/heartbeatctl.md`](heartbeatctl.md#vault-rag).
+
+### Collection scope: `wiki/` only, migrated automatically once (037)
+
+As of the 037 schema, the search collection masks `wiki/**/*.md` on the **vault root** — never
+`raw_sources/`, `_templates/`, `index.md`, `log.md`, or `CLAUDE.md`. The `qmd://vault/wiki/...`
+URIs an agent has already cited are unchanged; only the mask narrowed. An agent scaffolded
+before 037 had `**/*.md` (everything); the first reindex tick after the upgrade migrates it
+automatically — `remove` → `add` (new mask) → `update` → write the layout sentinel
+(`<qmd cache root>/.qmd-collection-wiki`) → `cleanup` → `embed` only if pending. `remove`+`add`
+reuses embeddings (they're keyed by content hash, not by collection), so this is fast and does
+not re-download or re-compute vectors for unchanged content.
+
+Manual check/trigger: `heartbeatctl qmd-migrate` (docker) / `agentctl heartbeat qmd-migrate`
+(local). No flags is idempotent (no-ops once migrated); `--dry-run` prints the state and the
+steps without touching anything; `--force` recreates the collection even if already migrated
+(useful after a manual `cleanup`, or to repair a stale sentinel). `status`/`doctor` in both modes
+report `collection=<layout> migration=<state>`, computed live from the sentinel and
+`index.sqlite` — visible even before the first reindex tick has run.
 
 ### How qmd is invoked (no `bunx`)
 

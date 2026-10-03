@@ -273,6 +273,100 @@ qmd_last_hash() {
   jq -r '.hash // ""' "$state_file" 2>/dev/null
 }
 
+# 037: qmd_collection_migration_state — pure reader, molde qmd_last_hash.
+# n/a (no index.sqlite yet -- nothing to migrate), pending (index.sqlite
+# present, sentinel absent -- a heredited **/*.md collection, or a re-entrant
+# setup that skipped the sentinel), done (sentinel present). Never parses the
+# vendor's own YAML/sqlite — sentinel + index.sqlite presence only.
+qmd_collection_migration_state() {
+  local cache_root; cache_root=$(qmd_cache_root)
+  [ -f "$cache_root/index.sqlite" ] || { printf 'n/a\n'; return 0; }
+  if [ -f "$cache_root/.qmd-collection-wiki" ]; then
+    printf 'done\n'
+  else
+    printf 'pending\n'
+  fi
+}
+
+# 037: qmd_collection_layout — derives the layout word from the migration
+# state (n/a->none, pending->vault-root, done->wiki-root), for qmd-index.json
+# and policy.json/status consumers (data-model.md §8).
+qmd_collection_layout() {
+  case "$(qmd_collection_migration_state)" in
+    done) printf 'wiki-root\n' ;;
+    pending) printf 'vault-root\n' ;;
+    *) printf 'none\n' ;;
+  esac
+}
+
+# 037: qmd_migrate_collection [--dry-run|--force] AGENT_YML — one-time move of
+# the qmd collection from the legacy **/*.md mask to wiki/**/*.md (contracts/
+# qmd-collection-migration.md §2). Runs under .reindex.lock (caller's
+# responsibility — see the call site in _qmd_reindex_locked and the manual
+# actions in heartbeatctl/agentctl). Steps: remove -> add(wiki mask) -> update
+# -> sentinel -> cleanup -> embed (only if `status` reports Pending). The
+# sentinel is written AFTER `update`, BEFORE `cleanup`, so an interruption
+# between remove and add leaves `pending` (safe retry: remove tolerates a
+# missing collection, add recreates); `cleanup` never runs before a successful
+# `add` (it would destroy embeddings qmd could otherwise reuse).
+#
+# No flags (idempotent): sentinel present -> "already migrated", rc 0, no qmd
+# call at all. --dry-run: prints the state + the six steps, executes nothing.
+# --force: migrates even if the sentinel is present (recreates the collection
+# with the same mask — useful after a manual `cleanup` or to repair a stale
+# sentinel).
+qmd_migrate_collection() {
+  local mode="" agent_yml
+  case "${1:-}" in
+    --dry-run) mode="dry-run"; shift ;;
+    --force)   mode="force"; shift ;;
+  esac
+  agent_yml="${1:-/workspace/agent.yml}"
+  local cache_root vault_dir coll pkg slog state
+  cache_root=$(qmd_cache_root)
+  vault_dir=$(qmd_vault_dir "$agent_yml")
+  coll="${QMD_COLLECTION_NAME:-vault}"
+  state=$(qmd_collection_migration_state)
+
+  if [ "$mode" = "dry-run" ]; then
+    _qmd_log "qmd-migrate --dry-run: state=$state collection=$coll vault=$vault_dir"
+    _qmd_log "qmd-migrate --dry-run: steps: collection remove $coll; collection add \"$vault_dir\" --name $coll --mask 'wiki/**/*.md'; update; write sentinel .qmd-collection-wiki; cleanup; embed (if Pending)"
+    return 0
+  fi
+  if [ "$state" = "done" ] && [ "$mode" != "force" ]; then
+    _qmd_log "qmd-migrate: already migrated"
+    return 0
+  fi
+  if [ "$state" = "n/a" ]; then
+    _qmd_log "qmd-migrate: no index yet — nothing to migrate"
+    return 0
+  fi
+  [ -n "$vault_dir" ] || { _qmd_log "qmd-migrate: vault not resolvable — skip"; return 0; }
+  command -v bun >/dev/null 2>&1 || { _qmd_log "qmd-migrate: bun unavailable — skip"; return 0; }
+  pkg=$(qmd_pkg "$agent_yml")
+  slog="$(scratch_dir "$cache_root")/qmd-migrate.err"
+
+  _qmd_run "$pkg" collection remove "$coll" >"$slog" 2>&1 || true
+  if ! _qmd_run "$pkg" collection add "$vault_dir" --name "$coll" --mask 'wiki/**/*.md' >"$slog" 2>&1; then
+    _qmd_log "qmd-migrate: 'collection add' failed/timed out: $(_qmd_tail_redacted "$slog") — retry next tick"
+    qmd_write_state "$(qmd_state_file)" "$(qmd_last_hash "$(qmd_state_file)")" "error"
+    return 1
+  fi
+  if ! _qmd_run "$pkg" update >"$slog" 2>&1; then
+    _qmd_log "qmd-migrate: 'update' failed/timed out: $(_qmd_tail_redacted "$slog") — retry next tick"
+    qmd_write_state "$(qmd_state_file)" "$(qmd_last_hash "$(qmd_state_file)")" "error"
+    return 1
+  fi
+  printf 'wiki-root %s\n' "$(date -u +%F)" > "$cache_root/.qmd-collection-wiki" 2>/dev/null || true
+  _qmd_run "$pkg" cleanup >"$slog" 2>&1 || true
+  local pending; pending=$(_qmd_pending_count "$pkg")
+  if [ -n "$pending" ] && [ "$pending" -gt 0 ] 2>/dev/null; then
+    _qmd_run "$pkg" embed >"$slog" 2>&1 || true
+  fi
+  _qmd_log "qmd: collection migrated to wiki scope"
+  return 0
+}
+
 # Atomic write of qmd-index.json: {hash, last_run, last_status, runs[, pending]}.
 # runs increments from the prior file. Mirrors vault_write_state's tmp+mv.
 #
@@ -301,10 +395,16 @@ qmd_write_state() {
     *) pending_json="$pending" ;;
   esac
   now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  # 037: computed live on EVERY write (including the error path) so `status`/
+  # `doctor` never read a stale layout from before this tick's migration
+  # (data-model.md §8; M U2).
+  local layout migration
+  layout=$(qmd_collection_layout)
+  migration=$(qmd_collection_migration_state)
   tmp=$(mktemp "$dir/.qmd-index.json.XXXXXX") || return 0
   if jq -n --arg hash "$hash" --arg status "$status" --arg run "$now" --argjson runs "$runs" \
-      --argjson pending "$pending_json" \
-      '{hash:$hash, last_run:$run, last_status:$status, runs:$runs} + (if $pending == null then {} else {pending:$pending} end)' \
+      --argjson pending "$pending_json" --arg layout "$layout" --arg migration "$migration" \
+      '{hash:$hash, last_run:$run, last_status:$status, runs:$runs, collection_layout:$layout, migration:$migration} + (if $pending == null then {} else {pending:$pending} end)' \
       > "$tmp" 2>/dev/null; then
     mv -f "$tmp" "$state_file" 2>/dev/null || rm -f "$tmp"
   else
@@ -376,10 +476,16 @@ _qmd_setup_locked() {
   # present we skip straight to `embed` (which is idempotent / re-embeds).
   if [ ! -f "$cache_root/index.sqlite" ]; then
     _qmd_log "setup: collection add via $pkg (vault=$vault_dir)"
-    if ! _qmd_run "$pkg" collection add "$vault_dir" --name "$coll" --mask '**/*.md' >"$slog" 2>&1; then
+    if ! _qmd_run "$pkg" collection add "$vault_dir" --name "$coll" --mask 'wiki/**/*.md' >"$slog" 2>&1; then
       _qmd_log "setup: 'collection add' failed/timed out: $(_qmd_tail_redacted "$slog") — retry next boot"
       return 0
     fi
+    # 037: a scaffold this fresh is already scoped to wiki/ — write the layout
+    # sentinel right away so it never enters "pending" (contracts/
+    # qmd-collection-migration.md §2). The re-entrant branch above (index
+    # present, sentinel absent) deliberately does NOT write it: that index may
+    # be a heredited **/*.md collection and must migrate on the next tick.
+    printf 'wiki-root %s\n' "$(date -u +%F)" > "$cache_root/.qmd-collection-wiki" 2>/dev/null || true
   else
     _qmd_log "setup: index present, sentinel absent — refreshing only"
   fi
@@ -530,6 +636,17 @@ _qmd_reindex_locked() {
   local agent_yml="$1" vault_dir="$2"
   local state_file current last pkg scratch rlog pending
   state_file=$(qmd_state_file)
+
+  # 037: automatic, one-time collection migration to the wiki/ mask. Runs
+  # BEFORE the hash guard below so an otherwise-unchanged vault does not skip
+  # a pending migration (contracts/qmd-collection-migration.md §2). A failed
+  # migration already wrote its own "error" state and must end the tick here
+  # — falling through to the normal update/embed flow below would silently
+  # overwrite that error with a fresh "indexed"/"skipped" state.
+  if [ "$(qmd_collection_migration_state)" = "pending" ]; then
+    qmd_migrate_collection "$agent_yml" || return 0
+  fi
+
   current=$(vault_hash "$vault_dir" 2>/dev/null || echo "")
   last=$(qmd_last_hash "$state_file")
   pending=""

@@ -37,6 +37,7 @@ YML
   cat > "$WS/scripts/lib/qmd_index.sh" << 'SH'
 qmd_setup_if_needed() { echo "setup|$QMD_CACHE_HOME|$QMD_VAULT_DIR|$QMD_INDEX_STATE_FILE|$VAULT_ROOT_OVERRIDE" >> "$QMD_TEST_LOG"; }
 qmd_reindex() { echo "reindex|$1" >> "$QMD_TEST_LOG"; }
+qmd_migrate_collection() { echo "migrate|$*" >> "$QMD_TEST_LOG"; }
 SH
   export QMD_TEST_LOG="$TMP_TEST_DIR/qmd.log"
 
@@ -116,6 +117,31 @@ teardown() { teardown_tmp_dir; }
   [ -f "$DST/.state/.cache/qmd/index.sqlite" ]
   # No absolute path of the ORIGIN workspace embedded in the migrated index state.
   ! grep -rq "$WS" "$DST/.state/.cache/qmd/" 2>/dev/null
+}
+
+# ── 037 US2: --migrate dispatches BEFORE qmd_setup_if_needed ─────────────────
+
+@test "037: --migrate dispatches to qmd_migrate_collection, never runs setup" {
+  run "$ENTRY" --migrate
+  [ "$status" -eq 0 ]
+  run cat "$QMD_TEST_LOG"
+  [[ "$output" == "migrate|"* ]]
+  [[ "$output" != *"setup|"* ]]
+}
+
+@test "037: --migrate --dry-run passes the flag through, never runs setup" {
+  run "$ENTRY" --migrate --dry-run
+  [ "$status" -eq 0 ]
+  run cat "$QMD_TEST_LOG"
+  [[ "$output" == "migrate|--dry-run "* ]]
+  [[ "$output" != *"setup|"* ]]
+}
+
+@test "037: --migrate --force passes the flag through" {
+  run "$ENTRY" --migrate --force
+  [ "$status" -eq 0 ]
+  run cat "$QMD_TEST_LOG"
+  [[ "$output" == "migrate|--force "* ]]
 }
 
 @test "reindex timer: OnCalendar comes from QMD_TIMER_ONCALENDAR, Persistent" {

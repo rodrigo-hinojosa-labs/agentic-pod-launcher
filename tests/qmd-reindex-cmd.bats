@@ -129,6 +129,97 @@ YAML
   [ "$output" = "error" ]
 }
 
+# ── 037 US2: qmd-migrate subcommand ──────────────────────────────────────────
+
+@test "037: qmd-migrate --help lists the subcommand and both flags" {
+  run bash "$HEARTBEATCTL" qmd-migrate --help
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qF "qmd-migrate"
+  echo "$output" | grep -qF -- "--dry-run"
+  echo "$output" | grep -qF -- "--force"
+}
+
+@test "037: qmd-migrate rejects unknown flags" {
+  run bash "$HEARTBEATCTL" qmd-migrate --bogus
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -qi "unknown flag"
+}
+
+@test "037: qmd-migrate --dry-run prints state + the six steps, touches nothing" {
+  export QMD_CACHE_HOME="$BATS_TEST_TMPDIR/cache3"; mkdir -p "$QMD_CACHE_HOME"
+  : > "$QMD_CACHE_HOME/index.sqlite"
+  local before; before=$(cd "$QMD_CACHE_HOME" && find . -type f | LC_ALL=C sort)
+  run bash "$HEARTBEATCTL" qmd-migrate --dry-run
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qF "collection remove"
+  echo "$output" | grep -qF "collection add"
+  echo "$output" | grep -qF "wiki/**/*.md"
+  echo "$output" | grep -qF "update"
+  echo "$output" | grep -qF "sentinel"
+  echo "$output" | grep -qF "cleanup"
+  echo "$output" | grep -qF "embed"
+  local after; after=$(cd "$QMD_CACHE_HOME" && find . -type f | LC_ALL=C sort)
+  [ "$before" = "$after" ]
+}
+
+@test "037: qmd-migrate with sentinel present is 'already migrated', no qmd call at all" {
+  # shellcheck source=/dev/null
+  source "$BATS_TEST_DIRNAME/../scripts/lib/qmd_index.sh"
+  export QMD_CACHE_HOME="$BATS_TEST_TMPDIR/cache4"; mkdir -p "$QMD_CACHE_HOME"
+  : > "$QMD_CACHE_HOME/index.sqlite"
+  printf 'wiki-root 2026-01-01\n' > "$QMD_CACHE_HOME/.qmd-collection-wiki"
+  export QMD_STUB_LOG="$BATS_TEST_TMPDIR/engine4.log"; : > "$QMD_STUB_LOG"
+  TMP_TEST_DIR="$BATS_TEST_TMPDIR" install_qmd_stub
+  run bash "$HEARTBEATCTL" qmd-migrate
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qi "already migrated"
+  [ ! -s "$QMD_STUB_LOG" ]
+}
+
+@test "037: qmd-migrate without flags migrates a pending collection" {
+  # shellcheck source=/dev/null
+  source "$BATS_TEST_DIRNAME/../scripts/lib/qmd_index.sh"
+  export QMD_CACHE_HOME="$BATS_TEST_TMPDIR/cache5"; mkdir -p "$QMD_CACHE_HOME"
+  export QMD_VAULT_DIR="$BATS_TEST_TMPDIR/vault5"; mkdir -p "$QMD_VAULT_DIR/wiki"
+  : > "$QMD_CACHE_HOME/index.sqlite"
+  export QMD_STUB_LOG="$BATS_TEST_TMPDIR/engine5.log"; : > "$QMD_STUB_LOG"
+  TMP_TEST_DIR="$BATS_TEST_TMPDIR" install_qmd_stub
+  run bash "$HEARTBEATCTL" qmd-migrate
+  [ "$status" -eq 0 ]
+  [ -f "$QMD_CACHE_HOME/.qmd-collection-wiki" ]
+  grep -q '^collection add' "$QMD_STUB_LOG"
+}
+
+@test "037: qmd-migrate --force recreates even when sentinel is present" {
+  # shellcheck source=/dev/null
+  source "$BATS_TEST_DIRNAME/../scripts/lib/qmd_index.sh"
+  export QMD_CACHE_HOME="$BATS_TEST_TMPDIR/cache6"; mkdir -p "$QMD_CACHE_HOME"
+  export QMD_VAULT_DIR="$BATS_TEST_TMPDIR/vault6"; mkdir -p "$QMD_VAULT_DIR/wiki"
+  : > "$QMD_CACHE_HOME/index.sqlite"
+  printf 'wiki-root 2026-01-01\n' > "$QMD_CACHE_HOME/.qmd-collection-wiki"
+  export QMD_STUB_LOG="$BATS_TEST_TMPDIR/engine6.log"; : > "$QMD_STUB_LOG"
+  TMP_TEST_DIR="$BATS_TEST_TMPDIR" install_qmd_stub
+  run bash "$HEARTBEATCTL" qmd-migrate --force
+  [ "$status" -eq 0 ]
+  grep -q '^collection add' "$QMD_STUB_LOG"
+}
+
+@test "037: heartbeatctl status shows qmd index: collection=<layout> migration=<state>, live-computed" {
+  export QMD_CACHE_HOME="$BATS_TEST_TMPDIR/cache7"; mkdir -p "$QMD_CACHE_HOME"
+  : > "$QMD_CACHE_HOME/index.sqlite"
+  # a heritage state file lacking the 037 keys entirely (pre-037 upgrade case)
+  cat > "$HEARTBEATCTL_WORKSPACE/scripts/heartbeat/qmd-index.json" <<'EOF'
+{"hash":"abc","last_run":"2026-01-01T00:00:00Z","last_status":"indexed","runs":3}
+EOF
+  export QMD_INDEX_STATE_FILE="$HEARTBEATCTL_WORKSPACE/scripts/heartbeat/qmd-index.json"
+  cat > "$HEARTBEATCTL_WORKSPACE/scripts/heartbeat/state.json" <<'EOF'
+{"schema":1,"enabled":true,"interval":"30m","cron":"*/30 * * * *","prompt":"p","notifier_channel":"none","last_run":{"status":"ok","ts":"2026-01-01T00:00:00Z","duration_ms":10,"attempt":1},"counters":{"total_runs":1,"ok":1,"timeout":0,"error":0,"consecutive_failures":0},"crond":{"alive":true,"pid":1},"updated_at":"2026-01-01T00:00:00Z"}
+EOF
+  run bash "$HEARTBEATCTL" status
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qF "qmd index: indexed pending=unknown collection=vault-root migration=pending"
+}
+
 @test "reindex: a secret whose anchor straddles the 500-byte tail boundary is still redacted (US4/Principle V)" {
   # shellcheck source=/dev/null
   source "$BATS_TEST_DIRNAME/../scripts/lib/qmd_index.sh"

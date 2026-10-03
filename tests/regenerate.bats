@@ -119,6 +119,57 @@ teardown() { teardown_tmp_dir; }
   [ "$(jq '.mcpServers.qmd.args | length' .mcp.json)" = "0" ]
 }
 
+@test "037: --regenerate backfills vault.review/vault.archive/features.heartbeat.review defaults" {
+  cd "$TMP_TEST_DIR"
+  [ "$(yq -r '(.vault | has("review"))' agent.yml)" = "false" ]
+  [ "$(yq -r '(.features.heartbeat | has("review"))' agent.yml)" = "false" ]
+  echo 'n' | ./setup.sh --regenerate
+  [ "$(yq -r '.vault.review.project_days' agent.yml)" = "7" ]
+  [ "$(yq -r '.vault.review.area_days' agent.yml)" = "30" ]
+  [ "$(yq -r '.vault.archive.candidate_days' agent.yml)" = "90" ]
+  [ "$(yq -r '.features.heartbeat.review.enabled' agent.yml)" = "false" ]
+  [ "$(yq -r '.features.heartbeat.review.schedule' agent.yml)" = "7 9 * * 1" ]
+  [ "$(yq -r '.features.heartbeat.review.prompt' agent.yml)" = "" ]
+}
+
+@test "037: --regenerate preserves an operator's existing vault.review.project_days" {
+  cd "$TMP_TEST_DIR"
+  yq -i '.vault.review.project_days = 14' agent.yml
+  echo 'n' | ./setup.sh --regenerate
+  [ "$(yq -r '.vault.review.project_days' agent.yml)" = "14" ]
+}
+
+@test "037: --regenerate preserves an operator's features.heartbeat.review.enabled: true" {
+  cd "$TMP_TEST_DIR"
+  yq -i '.features.heartbeat.review.enabled = true' agent.yml
+  yq -i '.features.heartbeat.review.schedule = "30 8 * * 1"' agent.yml
+  echo 'n' | ./setup.sh --regenerate
+  [ "$(yq -r '.features.heartbeat.review.enabled' agent.yml)" = "true" ]
+  [ "$(yq -r '.features.heartbeat.review.schedule' agent.yml)" = "30 8 * * 1" ]
+}
+
+@test "037: --regenerate preserves an operator's explicit enabled:false + custom schedule (M15)" {
+  # M15 (quickstart.md §4): a `//`-based presence check on .enabled specifically
+  # (instead of has() on the parent .review key) would treat an explicit
+  # `false` as "absent" -- jq's `//` operator treats false the same as null --
+  # and wrongly reset schedule back to the default alongside it.
+  cd "$TMP_TEST_DIR"
+  yq -i '.features.heartbeat.review.enabled = false' agent.yml
+  yq -i '.features.heartbeat.review.schedule = "45 10 * * 3"' agent.yml
+  echo 'n' | ./setup.sh --regenerate
+  [ "$(yq -r '.features.heartbeat.review.enabled' agent.yml)" = "false" ]
+  [ "$(yq -r '.features.heartbeat.review.schedule' agent.yml)" = "45 10 * * 3" ]
+}
+
+@test "037: two --regenerate passes are byte-stable for the new vault/review blocks" {
+  cd "$TMP_TEST_DIR"
+  echo 'n' | ./setup.sh --regenerate
+  yq 'del(.meta.regenerated_at)' agent.yml > pass1.yml
+  echo 'n' | ./setup.sh --regenerate
+  yq 'del(.meta.regenerated_at)' agent.yml > pass2.yml
+  diff -q pass1.yml pass2.yml
+}
+
 @test "--non-interactive regenerate skips plugin prompt" {
   cd "$TMP_TEST_DIR"
   run ./setup.sh --non-interactive

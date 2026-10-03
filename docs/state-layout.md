@@ -52,6 +52,11 @@ memory/
 
 Every file has YAML frontmatter (`name`, `description`, `type`) plus a body. Claude writes them via the `Write` tool; the directory is created lazily on the first save.
 
+When the vault is enabled (launcher 0.27.0+), `project_<slug>.md` for an ACTIVE project is a
+pointer only — one-sentence status, a wikilink to the vault's `wiki/entities/<slug>.md` (the
+single home of that project's `goal`/`due`/`next_action`/`next_review`), the last review date.
+It carries no state of its own; don't duplicate `due`/`next_action` here. See `docs/vault.md`.
+
 `MEMORY.md` is the index — keep it under 200 lines (lines after 200 are truncated when loaded into context). One-line entries with a link to the full file:
 
 ```markdown
@@ -153,7 +158,9 @@ Full feature documentation: [`docs/vault.md`](vault.md).
 |---|---|
 | `<vault>/.graph/graph.json` | nodes (pages) + edges (wikilinks, `related:`, `sources:`, alias→canonical) |
 | `<vault>/.graph/backlinks.json` | reverse index |
-| `<vault>/.graph/findings.json` | structural lint: orphans, broken links, frontmatter violations, index drift, stale pages, alias occurrences |
+| `<vault>/.graph/findings.json` | structural lint (orphans, broken links, frontmatter violations, index drift, stale pages, alias occurrences) plus, as of 037, the PARA actionability queue: `project_incomplete`, `project_overdue`, `review_due`, `pending_ingest`, `description_missing`, `problem_unfed`, `archive_candidate`, `schema_delta_pending` |
+| `<vault>/.graph/policy.json` (037) | effective review cadences, archive threshold, qmd collection layout — read this before assuming a default |
+| `<vault>/.graph/packets.json` (037) | every page with a valid `packet:` value, newest first |
 | `<workspace>/scripts/heartbeat/wiki-graph.json` | runner state (last run/hash) |
 | `<workspace>/scripts/heartbeat/.wiki-graph.lock` | flock — deliberately **outside** the vault (Syncthing) |
 

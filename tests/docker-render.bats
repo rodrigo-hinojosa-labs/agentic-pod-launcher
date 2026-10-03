@@ -343,3 +343,41 @@ teardown() { teardown_tmp_dir; }
   grep -q 'docker/scripts/lib/wiki_graph.sh' "$REPO_ROOT/setup.sh"
   grep -q 'docker/modules/vault-deltas' "$REPO_ROOT/setup.sh"
 }
+
+# ── 037 T031: claude-md.tpl config-surface additions ─────────────────────────
+# contracts/vault-schema-delta-0.27.0.md / data-model.md §6 — the agent's own
+# CLAUDE.md gains PARA/queue vocabulary, scoped inside the pre-existing
+# VAULT_ENABLED/WIKI_GRAPH_ENABLED/VAULT_QMD_ENABLED blocks so a vault-less
+# agent renders byte-identical to the pre-037 template.
+
+@test "037 claude-md.tpl: a vault-less docker agent renders byte-identical to pre-037" {
+  export DEPLOYMENT_MODE_IS_DOCKER=true
+  export WIKI_GRAPH_ENABLED=false
+  export VAULT_QMD_ENABLED=false
+  # sample-agent.yml (this file's default fixture) has vault.enabled: true —
+  # override explicitly rather than relying on fixture content for the one
+  # flag that actually gates the new 037 prose (caught by direct execution:
+  # the fixture's real value silently made this test compare two vault-ON
+  # renders instead of proving a vault-OFF agent is byte-identical).
+  export VAULT_ENABLED=false
+  local old_tpl="$TMP_TEST_DIR/old-claude-md.tpl"
+  git show main:modules/claude-md.tpl > "$old_tpl" 2>/dev/null || skip "git ref 'main' not available in this checkout"
+  local new_out old_out
+  new_out=$(render_template "$REPO_ROOT/modules/claude-md.tpl")
+  old_out=$(render_template "$old_tpl")
+  [ "$new_out" = "$old_out" ]
+}
+
+@test "037 claude-md.tpl: docker agent with vault mentions the queue, packets.json/policy.json and qmd-migrate" {
+  render_load_context "$REPO_ROOT/tests/fixtures/sample-agent-with-vault.yml"
+  export DEPLOYMENT_MODE_IS_DOCKER=true
+  export WIKI_GRAPH_ENABLED=true
+  export VAULT_QMD_ENABLED=true
+  result=$(render_template "$REPO_ROOT/modules/claude-md.tpl")
+  [[ "$result" == *"review_due"* ]]
+  [[ "$result" == *"packets.json"* ]]
+  [[ "$result" == *"policy.json"* ]]
+  [[ "$result" == *"heartbeatctl qmd-migrate"* ]]
+  [[ "$result" == *'Project state → vault project page'* ]]
+  [[ "$result" == *"features.heartbeat.review"* ]]
+}

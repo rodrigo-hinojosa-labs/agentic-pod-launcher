@@ -117,6 +117,30 @@ YML
   [[ "$output" == *"heartbeat.enabled must be a YAML boolean"* ]]
 }
 
+# 037: features.heartbeat.review.{enabled,schedule} — same molds as
+# heartbeat.enabled (boolean) and vault.qmd.schedule (optional non-empty).
+@test "agent_yml_validate: features.heartbeat.review.enabled: maybe → reported" {
+  _write_valid_yml
+  yq -i '.features.heartbeat.review.enabled = "maybe"' "$TMP_TEST_DIR/agent.yml"
+  run agent_yml_validate "$TMP_TEST_DIR/agent.yml"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"features.heartbeat.review.enabled must be a YAML boolean"* ]]
+}
+
+@test "agent_yml_validate: features.heartbeat.review.schedule: \"\" → reported" {
+  _write_valid_yml
+  yq -i '.features.heartbeat.review.schedule = ""' "$TMP_TEST_DIR/agent.yml"
+  run agent_yml_validate "$TMP_TEST_DIR/agent.yml"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"features.heartbeat.review.schedule, if set, must be a non-empty string"* ]]
+}
+
+@test "agent_yml_validate: features.heartbeat.review absent validates (optional block)" {
+  _write_valid_yml
+  run agent_yml_validate "$TMP_TEST_DIR/agent.yml"
+  [ "$status" -eq 0 ]
+}
+
 # 005-fix-schema-false: a required boolean leaf set to its valid `false` value
 # must validate — it is PRESENT, not missing. Regression: `yq '$path // ""'`
 # collapsed a present `false` to "" so the required-leaf check wrongly flagged

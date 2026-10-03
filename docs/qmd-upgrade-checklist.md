@@ -79,6 +79,13 @@ Facts below (versions, defaults) are as of v0.12.0.
       `scripts/lib/qmd_index.sh`; a fixed constant, env-overridable for tests only,
       NOT an `agent.yml` field) so passes x per-pass throughput still bounds a
       full-corpus embed.
+- [ ] **037 mask + migration primitive**: the target version still accepts
+      `--mask` on `collection add` and still exposes `collection remove`/`rm` and
+      `cleanup` — `qmd_migrate_collection` (`scripts/lib/qmd_index.sh`) depends on
+      all three to move a collection from `**/*.md` to `wiki/**/*.md` without a
+      re-embed. If `--mask` or `remove` changed shape, the migration (and the
+      `wiki/`-only collection scope it depends on) needs re-verification against
+      the target's `collection add`/`remove` semantics before bumping the pin.
 - [ ] **013 storage env** (local mode): the target binary still honors
       `XDG_CACHE_HOME` (index + models) and `QMD_CONFIG_DIR` (collections config) —
       the rendered `scripts/local/agent-qmd-{reindex,mcp}.sh` wrappers (from

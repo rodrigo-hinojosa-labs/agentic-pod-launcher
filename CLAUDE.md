@@ -88,6 +88,45 @@ After a `--channels` launch the watchdog first waits for `bun server.ts` to appe
 
 Heartbeat sessions use an isolated `CLAUDE_CONFIG_DIR=/home/agent/.claude-heartbeat` with selective symlinks to auth + plugins so cron ticks don't step on the interactive session's channels/state. The prompt is shell-escaped via `sh_sq` before embedding in the tmux command — preserve that pattern when touching the runner.
 
+### Wiki-graph PARA review queue (037)
+
+Since `037-second-brain-rag`, `scripts/lib/wiki_graph.sh` layers Tiago Forte's PARA
+(Projects/Areas/Resources/Archives) actionability model onto the Karpathy wiki it already
+lints. Frontmatter gains ten optional keys (`para`, `description`, `packet`, `distill`, `due`,
+`next_review`, `archived`, `project`, `area`, `problems`) — absent-or-empty on every existing
+page, so no vault needs migrating. The runner derives a **deterministic review queue** (no LLM)
+as seven new finding kinds — `review_due`, `project_overdue`, `pending_ingest`,
+`description_missing`, `schema_delta_pending`, `problem_unfed`, `archive_candidate` — computed
+from `next_review`/`due` dates, `log.md`/`raw_sources/` scans, and the vault's own schema-delta
+marker, alongside the pre-037 six. Two new artifacts join the JSON-only `.graph/` contract:
+`policy.json` (effective review cadences, archive threshold, qmd collection layout — read this
+before assuming a default) and `packets.json` (every page with a valid `packet:` value, newest
+first — for building deliverables). `synthesis/favorite-problems` gets its own structural rule
+(F6): each numbered problem must be phrased as a question, capped at 12 entries.
+
+Since 037, **qmd's collection is scoped to `wiki/` only** (previously the whole vault, including
+`CLAUDE.md`, `index.md`, `log.md`, `_templates/`, `raw_sources/` — Karpathy's own "gravity
+wells" critique). A one-time auto-migration (`heartbeatctl qmd-migrate`, both modes) recreates
+the collection under the new mask the first time a post-037 binary sees a pre-037 one, gated on
+a sentinel so it runs exactly once; `qmd_setup_if_needed` and `qmd_reindex` share a
+non-blocking `.reindex.lock`, so a manually-invoked migrate/reindex can lose that race against a
+concurrently-backgrounded boot check and silently no-op that tick (measured ~1/7 under
+DOCKER_E2E contention even with a retry loop — a disclosed, bounded characteristic, not
+eliminated).
+
+An **opt-in weekly review notice** (`features.heartbeat.review.{enabled,schedule,prompt}`,
+docker only) adds one crontab line emitting `HEARTBEAT_TRIGGER=review`; its cron validator
+(`_v_cron5` in `docker/scripts/heartbeatctl`) forbids `*`/`*/N` in the **minute** field
+specifically (unlike hour/day/month/dow) to guarantee at most one notice per week. Default
+prompts are localized by `user.language` and deliberately carry no accented characters (same
+byte-safety rule as the 033/034 voice patches).
+
+Full contracts: `specs/037-second-brain-rag/{spec,plan,tasks}.md` +
+`contracts/{vault-schema-delta-0.27.0,graph-findings-extension,qmd-collection-migration,
+heartbeat-review-notice,agent-yml-config-037}.md`. Deep docs: `docs/vault.md` (config keys +
+4 confirmed-dead legacy `vault.*` keys), `docs/architecture.md` (Wiki-graph section),
+`docs/heartbeatctl.md` (`qmd-migrate` + review notice subcommand reference).
+
 ### Workspace-is-the-agent
 
 After PR #3 (2026-04-22) all agent state (OAuth login, Telegram pairing, sessions, plugin cache) lives in `<workspace>/.state/` as a bind-mount to `/home/agent`, not a Docker named volume. Implications for any change touching state lifecycle:
@@ -146,6 +185,89 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 - **A container is a usable Linux oracle, but only if it matches the runner.** Reproducing a CI-only failure locally works — the `E2BIG` above was reproduced RED/GREEN in Alpine in minutes — but the *full suite* under a naive `docker run` lies: as **root** every "unwritable directory" test fails (root ignores the mode bits), and Alpine's busybox/GNU mix fails more. Measured on the same tree: Alpine-as-root reported 20 reds, Debian-as-non-root reported 1, CI reported 2. A faithful replica is `debian:bookworm` + a non-root user + the deps the workflow installs (`age`, `gettext-base` for `envsubst`, `tmux`, `busybox`) + the pinned `yq` — and copy the repo in rather than bind-mounting it writable, or the host tree ends up owned by root.
 
 <!-- SPECKIT START -->
+**037-second-brain-rag SPEC + PLAN + TASKS + IMPLEMENT EN CURSO (2026-09-26/28; rama
+`037-second-brain-rag` desde main=`70214d9` v0.26.0→**0.27.0**; NO mergeada, sin commit — working
+tree de la rama con todo el diff aplicado).** Spec: `specs/037-second-brain-rag/spec.md`
+("Second Brain sobre el LLM Wiki — eje PARA, higiene del retrieval, cola de revisión, packets y
+favorite problems", 9 historias, 36 FR, 10 SC). Plan: `specs/037-second-brain-rag/plan.md`.
+**DISCOVERY previo (9 informes, 2900 líneas, 41/41 citas verificadas por pasada adversarial):**
+el LLM Wiki de Karpathy (010-019) ya está completo (12/22 elementos del gist), pero (a) el
+protocolo de query no lee `index.md` primero pese a mantenerlo/lintearlo, (b) qmd indexa TODO
+el markdown del vault sin exclusiones — `CLAUDE.md`, `index.md`, `log.md`, `_templates/`,
+`raw_sources/`, `normalization/` compiten contra el contenido real ("gravity wells", crítica de
+Karpathy de acumulación, no de precisión), (c) "project" tenía dos casas sin mecanismo real
+(`entity` del vault vs `project_*` de auto-memoria), (d) cero accionabilidad — nada dice qué
+revisar, qué archivar, qué le falta descripción.
+
+**DISEÑO:** diez claves de frontmatter OPCIONALES (`para`, `description`, `packet`, `distill`,
+`due`, `next_review`, `archived`, `project`, `area`, `problems` — CANON-D1..D15 del contrato
+`vault-schema-delta-0.27.0.md`), ausentes-o-vacías en todo vault existente (cero migración de
+contenido). **Cola de revisión determinista** (sin LLM): siete kinds de hallazgo nuevos
+(`review_due`, `project_overdue`, `pending_ingest`, `description_missing`,
+`schema_delta_pending`, `problem_unfed`, `archive_candidate`) sumados a los seis de 014, en
+`scripts/lib/wiki_graph.sh` (awk extrae, jq agrega — mismo runner, misma disciplina "el script
+reporta, el agente corrige"). **Dos artefactos nuevos** en el contrato `.graph/` JSON-only:
+`policy.json` (cadencias efectivas, umbral de archivo, layout de la colección qmd) y
+`packets.json` (páginas con `packet:` válido, más nuevas primero — ordenadas por `updated` con
+tie-break por `id`, NO sort+reverse ingenuo). **Favorite problems (US6):** regla estructural F6
+sobre `synthesis/favorite-problems` — cada problema numerado debe estar en forma de pregunta,
+tope 12 entradas; cruza con `problem_unfed` vía el escaneo de `log.md`. **Migración de qmd
+(US2):** la colección pasa a estar acotada a `wiki/` (antes todo el vault); `heartbeatctl
+qmd-migrate` (ambos modos) recrea la colección UNA vez por agente vía sentinel, detectando el
+salto pre-037→post-037. **Aviso semanal opt-in (US9, docker-only):**
+`features.heartbeat.review.{enabled,schedule,prompt}`, validador `_v_cron5` que prohíbe
+`*`/`*/N` en el campo MINUTO (a diferencia de hora/día/mes/dow) para garantizar como máximo un
+aviso semanal; prompts localizados por `user.language` (CANON-H1-es/en, sin tildes a propósito,
+misma regla de bytes que 033/034). **Delta auto-denunciante (US7):**
+`modules/vault-deltas/schema-updates-0.27.0.md`, mismo patrón aditivo de 014 (sentinel oculto,
+nunca reescribe el `CLAUDE.md` co-evolucionado del vault); doc de `docs/vault.md` documenta
+además 4 claves `vault.*` legacy confirmadas SIN lector (verificado por grep, no supuesto).
+
+**HALLAZGO DE MOTOR DE RENDER (durante US7):** `scripts/lib/render.sh::_render_conditionals`
+usa una regex Perl no-greedy que **no soporta anidar `{{#if}}`** — anidar rompe el pareo de
+tags en silencio. Una edición que agregaba prosa condicional DENTRO de la fila siempre-renderizada
+de la tabla de heartbeat (no vault-gated) rompió el test byte-idéntico-sin-vault; revertida y
+reubicada dentro de la sección wiki-graph, que YA está bajo su propio `{{#if WIKI_GRAPH_ENABLED}}`.
+
+**TEST-FIRST, disciplina RED→GREEN en cada fase, gate dual bash 5.3.15 Y 3.2.57 tras cada
+checkpoint (nunca concurrente — siempre secuencial y limpio). Cierre: 1642 ok / 0 not ok,
+byte-idéntico en ambas versiones.** **DOCKER_E2E corrido de verdad (no diferido) sobre los tres
+archivos e2e tocados — cazó y arregló TRES bugs reales que la suite host jamás podía ver:**
+(1) `in_container()` usaba `-u "$AGENT_NAME"` (nombre del servicio) en vez de `-u agent` (typo
+de copy-paste) — rompía todo exec subsiguiente; (2) una carrera real de arranque: overlayear el
+fixture vía `cp -R` DESPUÉS de `docker compose up -d` competía contra el propio seed de boot del
+contenedor (`vault_seed_if_needed`) — arreglado preseedeando el fixture en `.state/.vault` ANTES
+de levantar el contenedor (patrón ya probado en vault-upgrade-e2e) y endureciendo el chequeo de
+listo a "existe el symlink `/home/agent/vault`" (el último paso real de `boot_side_effects`);
+(3) `qmd_setup_if_needed`/`qmd_reindex` comparten el mismo `.reindex.lock` no bloqueante — un
+`qmd-migrate` manual puede perder la carrera contra un chequeo de boot concurrente y saltarse en
+silencio esa vuelta; mitigado con un retry loop (hasta 45 s) que bajó la tasa medida de fallo de
+~2/3 a ~1/7 en ~9 corridas — **medido y declarado así, NO reclamado como eliminado del todo**
+(precedente del proyecto: medir los flakes antes de nombrarlos). VERSION 0.26.0→**0.27.0**
+(verificado `git show origin/main:VERSION` = 0.26.0 antes del bump). CHANGELOG con entrada
+`### Added` nombrando las nueve piezas. Cinco sitios con el texto caduco "tres artefactos"
+(`{graph,backlinks,findings}.json`) corregidos a los cinco reales en código y docs (el propio
+`CHANGELOG.md:937`, entrada histórica de 014, se dejó INTACTO a propósito — no se reescribe
+historia). `modules/next-steps.{en,es}.tpl` ganan el aviso semanal + `qmd-migrate --dry-run` en
+sus tres bloques de comandos (docker y local). Contrato de graph-artifacts.md de 014 corregido
+con nota: `tags` sale real, `title` nunca sale como texto (solo `title_present` booleano).
+
+**ESTADO (2026-09-28): T001-T041 completos, incluida la mutación M1-M18 corrida de verdad
+contra la implementación real (quickstart.md §4) — 15/18 cazadas de inmediato, 3 sobrevivieron
+a la primera pasada (M5, M15, M17) y el oráculo se endureció antes de seguir (precedente 034
+M6): dos aserciones nuevas de `.kind` en `wiki-graph.bats` para las aristas `project:`/`area:`,
+un test nuevo en `regenerate.bats` para un `enabled: false` explícito del operador (jq's `//`
+colapsa `false` igual que `null` — el mismo gotcha ya documentado en este archivo para otras
+features), y un test nuevo en `vault-upgrade.bats` que reproduce en vivo la carrera SIGPIPE de
+`find | head -1 | grep -q .` bajo `pipefail` (10.000 páginas, nunca antes commiteada como
+regresión pese a estar medida en research.md). Detalle completo por mutación en las Notes de
+`tasks.md`. T042 (gate de hardware: linus, mclaren, ferrari) BLOQUEADO por
+reautenticación de Cloudflare Access que solo el operador puede completar; T043 (opcional,
+`--exclude .graph/` en `qmd_watch.sh` para no disparar un reindex redundante por cada corrida
+del grafo) no iniciada. SIN commit ni PR — pendiente confirmación explícita del operador antes
+de tocar git. NO mezclar con la actualización de flota pendiente (donna/rodri-cenco-admin) ni
+con el gate de hardware de otras features previas.**
+
 **034-voice-spoken-style SPEC + PLAN (2026-09-15/16; rama `034-voice-spoken-style` desde main=`3534c6b`
 v0.24.0→**0.25.0** previsto; la feature de tiempo real pasa a 035).** Plan:
 `specs/034-voice-spoken-style/plan.md`. **PROBLEMA (medido por el operador en linus post-033):** el audio

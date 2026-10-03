@@ -48,6 +48,18 @@ mkdir -p "$QMD_CACHE_HOME" "$QMD_CONFIG_DIR" "$(dirname "$QMD_INDEX_STATE_FILE")
 # shellcheck source=/dev/null
 . "${SCRIPT_DIR}/../lib/qmd_index.sh"
 
+# 037: --migrate must dispatch BEFORE qmd_setup_if_needed. A --dry-run on a
+# workspace with no index yet must report state, never trigger a real setup
+# (model download) as a side effect of --setup-only's fallback below.
+if [ "${1:-}" = "--migrate" ]; then
+  shift
+  case "${1:-}" in
+    --dry-run|--force) qmd_migrate_collection "$1" "$AGENT_YML" || true ;;
+    *)                 qmd_migrate_collection "$AGENT_YML" || true ;;
+  esac
+  exit 0
+fi
+
 qmd_setup_if_needed "$AGENT_YML" || true
 if [ "${1:-}" = "--setup-only" ]; then
   exit 0

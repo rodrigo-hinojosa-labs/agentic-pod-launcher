@@ -329,3 +329,54 @@ teardown() { teardown_tmp_dir; }
   run bash -c "LC_ALL=C grep -rlF 'CHANNEL_HEALTH_TIMEOUT' '$TMP_TEST_DIR/unit' '$TMP_TEST_DIR/env' '$TMP_TEST_DIR/healthcheck.service' '$TMP_TEST_DIR/killswitch.sh' '$TMP_TEST_DIR/qmd-reindex.service' '$TMP_TEST_DIR/qmd-watch.service' '$TMP_TEST_DIR/secret-check.sh' '$TMP_TEST_DIR/vault-backup.service' '$TMP_TEST_DIR/wiki-graph.service' 2>/dev/null | wc -l | tr -d ' '"
   [ "$output" = "0" ]
 }
+
+# ── 037 T031: claude-md.tpl config-surface additions (local mode) ───────────
+
+@test "037 review notice: no local runtime artifact carries FEATURES_HEARTBEAT_REVIEW or --trigger review" {
+  # The weekly review notice is docker-only (heartbeatctl/crontab.tpl); no
+  # local-*.tpl references it at all (extends the FR-011 pattern from 032).
+  export DEPLOYMENT_MODE_IS_DOCKER=false
+  render_to_file "$REPO_ROOT/modules/systemd-remote-control.service.tpl" "$TMP_TEST_DIR/unit"
+  render_to_file "$REPO_ROOT/modules/remote-control.env.tpl" "$TMP_TEST_DIR/env"
+  render_to_file "$REPO_ROOT/modules/local-healthcheck.service.tpl" "$TMP_TEST_DIR/healthcheck.service"
+  render_to_file "$REPO_ROOT/modules/local-killswitch.sh.tpl" "$TMP_TEST_DIR/killswitch.sh"
+  render_to_file "$REPO_ROOT/modules/local-qmd-reindex.service.tpl" "$TMP_TEST_DIR/qmd-reindex.service"
+  render_to_file "$REPO_ROOT/modules/local-qmd-watch.service.tpl" "$TMP_TEST_DIR/qmd-watch.service"
+  render_to_file "$REPO_ROOT/modules/local-secret-check.sh.tpl" "$TMP_TEST_DIR/secret-check.sh"
+  render_to_file "$REPO_ROOT/modules/local-vault-backup.service.tpl" "$TMP_TEST_DIR/vault-backup.service"
+  render_to_file "$REPO_ROOT/modules/local-wiki-graph.service.tpl" "$TMP_TEST_DIR/wiki-graph.service"
+  ! grep -rq -- "--trigger review\|FEATURES_HEARTBEAT_REVIEW" "$TMP_TEST_DIR/unit" "$TMP_TEST_DIR/env" \
+    "$TMP_TEST_DIR/healthcheck.service" "$TMP_TEST_DIR/killswitch.sh" \
+    "$TMP_TEST_DIR/qmd-reindex.service" "$TMP_TEST_DIR/qmd-watch.service" \
+    "$TMP_TEST_DIR/secret-check.sh" "$TMP_TEST_DIR/vault-backup.service" \
+    "$TMP_TEST_DIR/wiki-graph.service"
+}
+
+@test "037 claude-md.tpl: a vault-less local agent renders byte-identical to pre-037" {
+  export DEPLOYMENT_MODE_IS_DOCKER=false
+  export WIKI_GRAPH_ENABLED=false
+  export VAULT_QMD_ENABLED=false
+  export VAULT_ENABLED=false
+  local old_tpl="$TMP_TEST_DIR/old-claude-md.tpl"
+  git show main:modules/claude-md.tpl > "$old_tpl" 2>/dev/null || skip "git ref 'main' not available in this checkout"
+  local new_out old_out
+  new_out=$(render_template "$REPO_ROOT/modules/claude-md.tpl")
+  old_out=$(render_template "$old_tpl")
+  [ "$new_out" = "$old_out" ]
+}
+
+@test "037 claude-md.tpl: local agent with vault mentions the queue and agentctl heartbeat qmd-migrate, notice is docker-only" {
+  render_load_context "$REPO_ROOT/tests/fixtures/sample-agent-with-vault.yml"
+  export DEPLOYMENT_MODE_IS_DOCKER=false
+  export WIKI_GRAPH_ENABLED=true
+  export VAULT_QMD_ENABLED=true
+  result=$(render_template "$REPO_ROOT/modules/claude-md.tpl")
+  [[ "$result" == *"review_due"* ]]
+  [[ "$result" == *"packets.json"* ]]
+  [[ "$result" == *"policy.json"* ]]
+  [[ "$result" == *"./scripts/agentctl heartbeat qmd-migrate"* ]]
+  [[ "$result" == *"Project state → vault project page"* ]]
+  [[ "$result" == *"features.heartbeat.review"* ]]
+  [[ "$result" == *"weekly"* ]]
+  [[ "$result" == *"docker"*"only"* ]]
+}

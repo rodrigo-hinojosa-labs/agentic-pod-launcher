@@ -55,6 +55,10 @@ features:
     provider: elevenlabs
     signoff: "Eso es toda la información. Cambio y fuera, {nickname}."
     currency: "pesos chilenos"
+  review:
+    enabled: false
+    schedule: "7 9 * * 1"
+    prompt: ""
 mcps:
   defaults:
     - fetch
@@ -88,3 +92,8 @@ vault:
   schema:
     frontmatter_required: true
     log_format: "## [{date}] {op} | {title}"
+  review:
+    project_days: 7
+    area_days: 30
+  archive:
+    candidate_days: 90

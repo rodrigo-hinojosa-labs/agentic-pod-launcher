@@ -32,6 +32,19 @@ Norma para `scripts/lib/wiki_graph.sh` (espejada a la imagen) y sus consumidores
      "status": "active", "created": "2026-07-01", "updated": "2026-07-05",
      "tags": ["retail"]}
   ],
+```
+
+Note (037, corrects the example above): `tags` IS emitted as real array text — confirmed in the
+implementation and covered by a dedicated test on the golden fixture (`037 core: graph.json
+nodes carry the new PARA fields...`). `title` is NOT emitted as text in the real node object,
+only `illustrated` here for readability — the runner only ever tracks `title_present` (a
+boolean, used for the `title: key missing` violation) and never surfaces the title string
+itself. The 037 additions (`para`, `description`, `packet`, `distill`, `due`, `next_review`,
+`archived`, `project`, `area`, `problems`) are real fields not shown in this pre-037 example;
+see `specs/037-second-brain-rag/contracts/graph-findings-extension.md` §5 for the current
+node shape.
+
+```json
   "edges": [
     {"from": "summaries/x", "to": "entities/cencosud", "kind": "wikilink", "broken": false},
     {"from": "summaries/x", "to": "raw_sources/transcripts/y.md", "kind": "source", "broken": false},

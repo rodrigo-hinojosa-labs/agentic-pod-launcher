@@ -95,3 +95,122 @@ _vault_hash() { (cd "$1" && find . -type f -exec shasum {} \; | LC_ALL=C sort | 
   grep -q 'vault_seed_missing' "$REPO_ROOT/setup.sh"
   grep -q 'modules/vault-deltas' "$REPO_ROOT/setup.sh"
 }
+
+# ── 037 delta 0.27.0 ─────────────────────────────────────────────────────────
+# contracts/vault-schema-delta-0.27.0.md §4, data-model.md §7. Three states:
+# pre-014 populated (vault-populated), 0.8.0-complete-empty (vault-0.8.0-empty),
+# 0.8.0-with-pages (vault-0.8.0-pages). Additive, idempotent, never touches a
+# preexisting file, CANON-D13/D14 exact.
+
+# sha256 of every preexisting file (path\tsha), sorted — used to prove 0 changes.
+_sha_list() { (cd "$1" && find . -type f -exec shasum -a 256 {} \; | LC_ALL=C sort); }
+
+# same, but excluding log.md — appending to it is the sanctioned mutation; "0
+# preexisting files modified" is about everything ELSE.
+_sha_list_no_log() { (cd "$1" && find . -type f ! -name 'log.md' -exec shasum -a 256 {} \; | LC_ALL=C sort); }
+
+@test "037 delta: vault-populated receives BOTH 0.8.0 and 0.27.0 deltas + both markers" {
+  local d="$TMP_TEST_DIR/populated"
+  cp -R "$REPO_ROOT/tests/fixtures/vault-populated" "$d"
+  local before; before=$(_sha_list_no_log "$d")
+  run vault_seed_missing "$d" "$SKELETON" "$DELTAS" "2030-06-15"
+  [ "$status" -eq 0 ]
+  local after; after=$(_sha_list_no_log "$d")
+  # every preexisting file line is still present verbatim (0 modified, log.md excluded)
+  comm -23 <(printf '%s\n' "$before") <(printf '%s\n' "$after") > "$TMP_TEST_DIR/gone.txt"
+  [ ! -s "$TMP_TEST_DIR/gone.txt" ]
+  [ -f "$d/_templates/schema-updates-0.8.0.md" ]
+  [ -f "$d/_templates/.schema-updates-0.8.0.applied" ]
+  [ -f "$d/_templates/schema-updates-0.27.0.md" ]
+  [ -f "$d/_templates/entity-project.md" ]
+  [ -f "$d/_templates/overview-area.md" ]
+  [ "$(cat "$d/_templates/.schema-updates-0.27.0.applied")" = "deposited: 2030-06-15" ]
+  [ "$(grep -c 'upgrade | schema delta 0.27.0 deposited' "$d/log.md")" -eq 1 ]
+}
+
+@test "037 delta: second run (later date) is a no-op — marker date and log line unchanged" {
+  local d="$TMP_TEST_DIR/populated"
+  cp -R "$REPO_ROOT/tests/fixtures/vault-populated" "$d"
+  vault_seed_missing "$d" "$SKELETON" "$DELTAS" "2030-06-15"
+  local h1; h1=$(_sha_list "$d")
+  vault_seed_missing "$d" "$SKELETON" "$DELTAS" "2030-06-16"
+  local h2; h2=$(_sha_list "$d")
+  [ "$h1" = "$h2" ]
+  [ "$(cat "$d/_templates/.schema-updates-0.27.0.applied")" = "deposited: 2030-06-15" ]
+  [ "$(grep -c 'upgrade | schema delta 0.27.0 deposited' "$d/log.md")" -eq 1 ]
+}
+
+@test "037 delta: vault-0.8.0-empty (no 0.8.0 marker) gets ONLY 0.27.0 — fresh-scaffold guard stays quiet (M10)" {
+  local d="$TMP_TEST_DIR/e"
+  cp -R "$REPO_ROOT/tests/fixtures/vault-0.8.0-empty" "$d"
+  local before; before=$(_sha_list_no_log "$d")
+  run vault_seed_missing "$d" "$SKELETON" "$DELTAS" "2030-06-15"
+  [ "$status" -eq 0 ]
+  comm -23 <(printf '%s\n' "$before") <(printf '%s\n' "$(_sha_list_no_log "$d")") > "$TMP_TEST_DIR/gone.txt"
+  [ ! -s "$TMP_TEST_DIR/gone.txt" ]
+  [ ! -f "$d/_templates/schema-updates-0.8.0.md" ]
+  [ ! -f "$d/_templates/.schema-updates-0.8.0.applied" ]
+  ! grep -q 'schema updates 0.8.0' "$d/log.md"
+  [ -f "$d/_templates/schema-updates-0.27.0.md" ]
+  [ "$(cat "$d/_templates/.schema-updates-0.27.0.applied")" = "deposited: 2030-06-15" ]
+}
+
+@test "037 delta: vault-0.8.0-pages gets ONLY 0.27.0 — the empty 0.8.0 marker stays empty" {
+  local d="$TMP_TEST_DIR/p"
+  cp -R "$REPO_ROOT/tests/fixtures/vault-0.8.0-pages" "$d"
+  local marker_before; marker_before=$(cat "$d/_templates/.schema-updates-0.8.0.applied")
+  local before; before=$(_sha_list_no_log "$d")
+  run vault_seed_missing "$d" "$SKELETON" "$DELTAS" "2030-06-15"
+  [ "$status" -eq 0 ]
+  comm -23 <(printf '%s\n' "$before") <(printf '%s\n' "$(_sha_list_no_log "$d")") > "$TMP_TEST_DIR/gone.txt"
+  [ ! -s "$TMP_TEST_DIR/gone.txt" ]
+  [ -z "$marker_before" ]
+  [ -z "$(cat "$d/_templates/.schema-updates-0.8.0.applied")" ]
+  ! grep -q 'schema updates 0.8.0' "$d/log.md"
+  [ -f "$d/_templates/schema-updates-0.27.0.md" ]
+  [ "$(cat "$d/_templates/.schema-updates-0.27.0.applied")" = "deposited: 2030-06-15" ]
+}
+
+@test "037 delta: fresh scaffold gets the 0.27.0 marker dated at seed time, no delta .md" {
+  local d="$TMP_TEST_DIR/fresh27"
+  run vault_seed_if_empty "$d" "$SKELETON" "2030-06-15"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$d/_templates/.schema-updates-0.27.0.applied")" = "deposited: 2030-06-15" ]
+  [ ! -f "$d/_templates/schema-updates-0.27.0.md" ]
+}
+
+@test "037 delta: vault_seed_missing on a fresh scaffold is a no-op (marker present = delta not owed)" {
+  local d="$TMP_TEST_DIR/fresh27b"
+  vault_seed_if_empty "$d" "$SKELETON" "2030-06-15"
+  local before; before=$(_sha_list "$d")
+  run vault_seed_missing "$d" "$SKELETON" "$DELTAS" "2030-06-20"
+  [ "$status" -eq 0 ]
+  [ "$(_sha_list "$d")" = "$before" ]
+  [ "$(cat "$d/_templates/.schema-updates-0.27.0.applied")" = "deposited: 2030-06-15" ]
+}
+
+@test "037 delta (M17): has_pages27 stays reliable under pipefail on a large populated wiki" {
+  # M17 (quickstart.md §4): the naive `find | head -1 | grep -q .` form reads
+  # FALSE under `set -o pipefail` once find writes enough output that head
+  # closes the pipe before find finishes -- find then dies of SIGPIPE (141)
+  # and pipefail promotes that into the pipeline's own exit status, even
+  # though grep itself matched. `-print -quit` (the real code) has no
+  # downstream reader to close early, so it cannot suffer this race by
+  # construction. Reproduced locally at 10,000 padded filenames (8/8 FALSE
+  # on the naive form measured while designing this test); real vault content
+  # sizes on ferrari are in this range.
+  local d="$TMP_TEST_DIR/large-populated"
+  mkdir -p "$d/wiki/concepts" "$d/wiki/normalization" "$d/_templates"
+  : > "$d/CLAUDE.md"
+  : > "$d/log.md"
+  : > "$d/_templates/.schema-updates-0.8.0.applied"
+  : > "$d/_templates/normalization.md"
+  : > "$d/_templates/entity-project.md"
+  : > "$d/_templates/overview-area.md"
+  local i
+  for i in $(seq 1 10000); do : > "$d/wiki/concepts/a-fairly-long-filename-to-pad-bytes-$i.md"; done
+  run bash -c 'set -o pipefail; source "$1"; vault_seed_missing "$2" "$3" "$4" "$5"' _ \
+    "$REPO_ROOT/scripts/lib/vault.sh" "$d" "$SKELETON" "$DELTAS" "2026-07-07"
+  [ "$status" -eq 0 ]
+  [ -f "$d/_templates/.schema-updates-0.27.0.applied" ]
+}
