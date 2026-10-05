@@ -334,6 +334,82 @@ _in_container() {
   docker exec -u agent "$agent" "$@" 2>/dev/null
 }
 
+# 038: where the vault lives on the HOST for this workspace, or nothing when the vault is
+# disabled. The doctors run on the host in BOTH modes and the vault is a plain directory under
+# the workspace (docker bind-mounts .state, local uses it directly), so the same path works
+# without entering the container. A relative vault.path is relative to the workspace.
+_upgrade_notice_vault_root() {
+  local ws="$1" yml="$2" enabled vpath
+  [ -f "$yml" ] || return 0
+  enabled=$(yq -r '.vault.enabled // false' "$yml" 2>/dev/null)
+  [ "$enabled" = "true" ] || return 0
+  vpath=$(yq -r '.vault.path // ".state/.vault"' "$yml" 2>/dev/null)
+  if [ -z "$vpath" ] || [ "$vpath" = "null" ]; then vpath=".state/.vault"; fi
+  case "$vpath" in
+    /*) printf '%s' "$vpath" ;;
+    *)  printf '%s' "$ws/$vpath" ;;
+  esac
+}
+
+# 038: what an upgrade left behind, one line per layer, in both modes. A pending layer is a WARN
+# with the exact remedy and it repeats on every run until the state changes - there is no
+# "already shown" marker. It reads the DISK through the same two library functions the agent-facing
+# SessionStart hook uses, never wiki-graph's cached finding (up to 6 h stale, 14 days of grace, and
+# it only knows the 0.27.0 delta). Always returns 0: it can warn, it can never fail the doctor.
+# Contract: specs/038-schema-delta-boot-nudge/contracts/upgrade-notice-hook.md section 6.
+_upgrade_notice_doctor() {
+  local ws="$1" vault_root="${2:-}"
+  local c="$ws/CLAUDE.md" u="$ws/.state/launcher/claude-md.upstream.md" b="$ws/.state/launcher/claude-md.baseline.md"
+  local pending state
+
+  # `[ -f ]` guards, not `. file || true`: under errexit bash 3.2 (macOS stock) ends the whole
+  # shell when `.` cannot find its file, even behind `|| true` (measured, 3.2.57; 5.x does not).
+  if ! command -v vault_pending_deltas >/dev/null 2>&1 && [ -f "${ws}/scripts/lib/vault.sh" ]; then
+    # shellcheck source=/dev/null
+    . "${ws}/scripts/lib/vault.sh"
+  fi
+  if ! command -v claude_md_state >/dev/null 2>&1 && [ -f "${ws}/scripts/lib/claude_md.sh" ]; then
+    # shellcheck source=/dev/null
+    . "${ws}/scripts/lib/claude_md.sh"
+  fi
+  if ! command -v vault_pending_deltas >/dev/null 2>&1 || ! command -v claude_md_state >/dev/null 2>&1; then
+    _doctor_skip "Upgrade notice" "workspace predates 038 (run ./setup.sh --regenerate)"
+    return 0
+  fi
+
+  # Vault layer: schema deltas deposited but not integrated into the vault's own CLAUDE.md.
+  if [ -z "$vault_root" ]; then
+    _doctor_skip "Vault schema deltas" "vault disabled"
+  else
+    pending=$(vault_pending_deltas "$vault_root" 2>/dev/null | tr '\n' ' ')
+    pending="${pending% }"
+    if [ -n "$pending" ]; then
+      _doctor_warn "Vault schema delta pending integration: ${pending}" \
+        "the agent is told at session start; each delta's checkpoint and steps are in <vault>/_templates/schema-updates-<version>.md"
+    else
+      _doctor_pass "Vault schema deltas: all integrated"
+    fi
+  fi
+
+  # Workspace layer: CLAUDE.md against the template that renders it (scripts/lib/claude_md.sh).
+  state=$(claude_md_state "$c" "$u" "$b")
+  case "$state" in
+    in_sync)
+      _doctor_pass "Workspace CLAUDE.md: in sync with the current template" ;;
+    customized)
+      _doctor_pass "Workspace CLAUDE.md: local edits on the current template" ;;
+    unknown)
+      _doctor_skip "Workspace CLAUDE.md" "run ./setup.sh --regenerate to render the current template" ;;
+    pending_template)
+      _doctor_warn "Workspace CLAUDE.md: the template changed since the last integration" \
+        "diff .state/launcher/claude-md.baseline.md .state/launcher/claude-md.upstream.md; merge into CLAUDE.md, then cp .state/launcher/claude-md.upstream.md .state/launcher/claude-md.baseline.md" ;;
+    *)
+      _doctor_warn "Workspace CLAUDE.md differs from the current template (no baseline)" \
+        "diff CLAUDE.md .state/launcher/claude-md.upstream.md; template-only differences: ./setup.sh --regenerate --force-claude-md; own content: merge, then cp .state/launcher/claude-md.upstream.md .state/launcher/claude-md.baseline.md" ;;
+  esac
+  return 0
+}
+
 cmd_doctor() {
   local agent
   agent=$(resolve_agent_name) || exit $?
@@ -588,6 +664,16 @@ cmd_doctor() {
     fi
   else
     _doctor_skip "Vault" "vault.enabled=$vault_enabled"
+  fi
+
+  # 11b. 038: what the upgrade left behind (vault schema deltas, workspace CLAUDE.md vs the
+  #      template). Reads the same files on the host that the container sees through its
+  #      bind-mounts, so it needs no docker exec; skipped only when agent.yml was not found
+  #      (check 5 already warned about that).
+  if [ -n "$yml" ]; then
+    local _un_ws
+    _un_ws=$(cd "$(dirname "$yml")" 2>/dev/null && pwd -P)
+    _upgrade_notice_doctor "$_un_ws" "$(_upgrade_notice_vault_root "$_un_ws" "$yml")"
   fi
 
   # 12. Telegram plugin patched
@@ -1575,6 +1661,8 @@ cmd_local_doctor() {
   # a stale vault index, so the operator reads it before scrolling.
   _local_session_doctor "$agent" "$ws"
   _local_vault_qmd_doctor "$agent" "$ws"
+  # 038: what the upgrade left behind (same two lines as the docker doctor).
+  _upgrade_notice_doctor "$ws" "$(_upgrade_notice_vault_root "$ws" "$ws/agent.yml")"
   _local_secrets_doctor "$agent" "$ws"
 
   # 013 FR-009: honest exit codes for scripting/monitoring, matching cmd_doctor —

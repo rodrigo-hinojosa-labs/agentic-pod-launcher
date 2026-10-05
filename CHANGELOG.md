@@ -3,6 +3,51 @@
 ## [Unreleased]
 
 ### Added
+- **The agent is told what an upgrade left behind, and its `CLAUDE.md` stops falling behind —
+  `038-schema-delta-boot-nudge`** (VERSION 0.27.0 → 0.28.0). Measured on donna and linus right after the
+  0.27.0 upgrade: the vault delta was deposited and nobody told the agent to integrate it, and the
+  workspace `CLAUDE.md` (the one Claude loads by itself every session) still carried the pre-037
+  template, because `--regenerate` preserved it unconditionally even though no one had edited it. Donna
+  described its own RAG with the old model weeks after the code was current.
+
+  - **A `SessionStart` hook in both modes.** At the start of every interactive session
+    (`startup`, `resume`, `clear`, `compact`) `scripts/hooks/upgrade-notice.sh` puts one notice into the
+    agent's context while something is pending: a deposited vault schema delta whose checkpoint line is
+    still missing from the vault's `CLAUDE.md`, and/or a workspace `CLAUDE.md` that fell behind the
+    template. With nothing pending it prints nothing (0 bytes); it never writes, never fails (exit 0 on
+    every path) and never emits a half-built notice. Registered at every docker boot
+    (`start_services.sh::pre_install_upgrade_notice_hook`, also after a watchdog respawn) and, in local
+    mode, at login and on every `--regenerate`. Heartbeat ticks never receive it. English or Spanish by
+    `user.language`; ASCII only. Switch it off with `features.upgrade_notice.enabled: false` (default
+    `true`, backfilled by `--regenerate`).
+  - **`agentctl doctor` shows the same two layers to the operator**, in both modes: a WARN with the exact
+    remedy per pending layer, repeated on every run until it is resolved (no "already shown" marker), and
+    a PASS when it is up to date. It reads the disk, not wiki-graph's cached finding.
+  - **Behaviour change — `--regenerate` no longer preserves an unedited `CLAUDE.md`.** Each run renders
+    the current template into `.state/launcher/claude-md.upstream.md` and compares three files byte for
+    byte: `CLAUDE.md`, that render, and `.state/launcher/claude-md.baseline.md` (the render `CLAUDE.md`
+    was last written from). Unedited -> refreshed; with edits of its own -> preserved byte for byte, never
+    overwritten; `--force-claude-md` (confirmed) and the launcher's own dev doc in local mode (027) behave
+    as before. **Your persona is not touched: it lives in `personas/<agent>.md` and is injected by the
+    render.** If `.state/launcher` cannot be written, the pre-038 rules apply unchanged.
+  - **Upgrading an existing agent: one forced render each.** Workspaces from before 0.28.0 have no
+    baseline, so the first `--regenerate` keeps their `CLAUDE.md` and says so. Run
+    `./setup.sh --regenerate --force-claude-md` once per agent (answer `y`) and every later upgrade
+    applies by itself. If a separate overlay re-applies extra configuration after a regenerate (custom MCP
+    injection, for example), run it after that forced render. After merging a template change by hand
+    into an edited file, record it with
+    `cp .state/launcher/claude-md.upstream.md .state/launcher/claude-md.baseline.md`.
+  - **For delta authors:** a new delta must declare its checkpoint and add a row to `vault_delta_versions`
+    and `vault_delta_checkpoint` in `scripts/lib/vault.sh`; four drift guards (G1-G4) in
+    `tests/vault-pending-deltas.bats` fail if it is forgotten (see `docs/vault.md`).
+  - Not mirrored into the image: the hook runs from the workspace, so the only image-baked change is the
+    one-function boot step (`DOCKER_E2E=1 bats tests/docker-e2e-upgrade-notice.bats`).
+  - **Open item, local mode.** Whether the sessions that `claude remote-control` creates run
+    `SessionStart` hooks has not been measured yet (gate G0, `specs/038-schema-delta-boot-nudge/tasks.md`
+    T002). The hook is registered in local mode regardless; until G0 is measured, `agentctl doctor` is
+    the surface that is guaranteed to show a local agent's pending layers. In docker mode the hook is
+    registered in the same `settings.json` that `claude --channels` reads.
+
 - **Second Brain (PARA method) on the vault wiki — `037-second-brain-rag`**
   (VERSION 0.26.0 → 0.27.0). Layers Tiago Forte's PARA method (Projects /
   Areas / Resources / Archives) onto the existing Karpathy LLM Wiki

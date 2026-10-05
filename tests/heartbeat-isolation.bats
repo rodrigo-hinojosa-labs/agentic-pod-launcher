@@ -180,3 +180,19 @@ run_fn() {
   [ "$(jq '.hooks | has("Stop")' "$s")" = "false" ]
   [ "$(jq '.hooks | has("PreToolUse")' "$s")" = "false" ]
 }
+
+@test "038: .hooks.SessionStart is dropped too (an unattended cron tick never receives the upgrade notice)" {
+  jq '.hooks = {"Stop":[{"hooks":[{"type":"command","command":"stop-redeliver.sh"}]}],
+                "PreToolUse":[{"matcher":"AskUserQuestion","hooks":[{"type":"command","command":"askq-guard.sh"}]}],
+                "SessionStart":[{"hooks":[{"type":"command","command":"upgrade-notice.sh","timeout":10}]}]}' \
+    "$TEST_HOME/.claude/settings.json" > "$TMP_TEST_DIR/src-settings.json"
+  mv "$TMP_TEST_DIR/src-settings.json" "$TEST_HOME/.claude/settings.json"
+  run run_fn
+  [ "$status" -eq 0 ]
+  local s="$TEST_HOME/.claude-heartbeat/settings.json"
+  [ "$(jq '.hooks | has("SessionStart")' "$s")" = "false" ]
+  # the other two are still dropped, and nothing else about the isolation changed
+  [ "$(jq '.hooks | has("Stop")' "$s")" = "false" ]
+  [ "$(jq '.hooks | has("PreToolUse")' "$s")" = "false" ]
+  [ "$(jq -c '.enabledPlugins' "$s")" = "{}" ]
+}

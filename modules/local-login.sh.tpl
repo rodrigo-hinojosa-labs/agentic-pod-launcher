@@ -87,6 +87,18 @@ if [ -x "${WORKSPACE}/scripts/hooks/install-askq-guard-hook.sh" ]; then
   echo "  ✓ AskUserQuestion guard hook registered in ${CONFIG_DIR}/settings.json"
 fi
 
+# 4e. 038: register the SessionStart upgrade-notice hook, same mould as 4c/4d: the jq merge lives
+#     in the rendered helper (testable, regenerate-safe) and the merged file is durable under
+#     .state. Unlike those two guards it is NOT inert in local mode: at every session start it
+#     tells the agent what an upgrade left behind (vault schema deltas, a CLAUDE.md that fell
+#     behind its template). A pre-038 workspace lacks the helper -> skipped. `--regenerate`
+#     registers it too, which is how agents that never log in again receive it.
+if [ -x "${WORKSPACE}/scripts/hooks/install-upgrade-notice-hook.sh" ]; then
+  "${WORKSPACE}/scripts/hooks/install-upgrade-notice-hook.sh" \
+    "${CONFIG_DIR}/settings.json" "${WORKSPACE}/scripts/hooks/upgrade-notice.sh" || true
+  echo "  ✓ upgrade notice hook registered in ${CONFIG_DIR}/settings.json"
+fi
+
 # 4b. Pre-accept the "Enable Remote Control? (y/n)" prompt (gotcha #7). The login
 #     resets remoteDialogSeen; without it the systemd unit blocks on the prompt
 #     (no TTY) and never becomes controllable. Non-destructive; runs after login.

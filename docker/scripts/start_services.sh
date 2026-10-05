@@ -804,6 +804,18 @@ pre_install_askq_hook() {
   "$helper" "$HOME/.claude/settings.json" "/workspace/scripts/hooks/askq-guard.sh" || true
 }
 
+# 038: register the SessionStart upgrade-notice hook in the user settings.json BEFORE the
+# session starts, so it lands in Claude's startup hook snapshot - same rationale and
+# idempotent/self-healing shape as the two guards above (boot AND every watchdog respawn). A
+# pre-038 workspace (no installer) is a no-op. Unlike its siblings it resolves the workspace
+# through $WORKDIR (set to /workspace at load) instead of the literal path, so a host test can
+# aim it at a tmpdir - the same precedent as pre_warm_mcps.
+pre_install_upgrade_notice_hook() {
+  local helper="$WORKDIR/scripts/hooks/install-upgrade-notice-hook.sh"
+  [ -x "$helper" ] || return 0
+  "$helper" "$HOME/.claude/settings.json" "$WORKDIR/scripts/hooks/upgrade-notice.sh" || true
+}
+
 # 030: warm the uvx/npx package cache for every MCP the effective .mcp.json
 # declares — catalog AND overlay-injected (e.g. google-workspace, merged by the
 # external custom-apply into .mcp.json AFTER the image build) — SYNCHRONOUSLY,
@@ -835,6 +847,7 @@ start_session() {
   pre_seed_onboarding
   pre_install_stop_hook
   pre_install_askq_hook
+  pre_install_upgrade_notice_hook
   pre_warm_mcps
 
   local cmd

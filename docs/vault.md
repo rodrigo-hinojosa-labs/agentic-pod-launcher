@@ -750,6 +750,38 @@ satisfied that nothing was lost, the backup can be deleted.
 - A full re-seed changes every file → the next QMD reindex re-embeds the corpus and the next
   vault backup pushes a full new tree.
 
+### How the agent finds out a delta is waiting (038)
+
+The additive upgrade deposits a delta document under `_templates/` and a hidden marker
+`_templates/.schema-updates-<version>.applied`, but it never edits the vault's own `CLAUDE.md`:
+integrating the delta is the agent's job. Since 0.28.0 nobody has to remember to ask for it. A
+`SessionStart` hook (`scripts/hooks/upgrade-notice.sh`, registered at boot in docker mode and at
+login / `--regenerate` in local mode) checks, at the start of every interactive session, whether a
+deposited delta's **checkpoint** is still missing from the vault's `CLAUDE.md`. If so it puts one
+notice into the agent's context naming the version, where to read the document and how to tell it
+is integrated. The notice disappears by itself the moment the checkpoint is there. Nothing is
+shown when nothing is pending, heartbeat ticks never receive it, and `agentctl doctor` shows the
+same state to the operator (a WARN per pending layer that repeats until it is resolved).
+
+The checkpoint is a literal line that, once present in the vault's `CLAUDE.md`, proves the delta was
+integrated. They live in one explicit table, `vault_delta_checkpoint` in `scripts/lib/vault.sh`:
+
+| Delta | Checkpoint |
+|---|---|
+| 0.8.0 | `wiki/normalization/` |
+| 0.27.0 | `## Actionability (PARA)` |
+
+**If you author a new delta:** declare its checkpoint in the first lines of the delta document, and
+add one row to `vault_delta_versions` and one to `vault_delta_checkpoint`. The table is manual on
+purpose (the documents are free prose and the agent may delete them after integrating). Three
+guards in `tests/vault-pending-deltas.bats` fail if you forget: every shipped
+`modules/vault-deltas/schema-updates-*.md` needs a row, `modules/vault-skeleton/CLAUDE.md` must
+contain every checkpoint (otherwise a brand-new vault would look pending), and the 0.27.0 literal
+must equal the one `scripts/lib/wiki_graph.sh` already greps.
+
+Switch it off with `features.upgrade_notice.enabled: false` in `agent.yml` (on by default).
+`agentctl doctor` keeps reporting either way.
+
 ### Removing the vault
 
 ```bash

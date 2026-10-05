@@ -127,6 +127,55 @@ heartbeat-review-notice,agent-yml-config-037}.md`. Deep docs: `docs/vault.md` (c
 4 confirmed-dead legacy `vault.*` keys), `docs/architecture.md` (Wiki-graph section),
 `docs/heartbeatctl.md` (`qmd-migrate` + review notice subcommand reference).
 
+### Upgrade notice and CLAUDE.md refresh (038)
+
+Two things an upgrade leaves behind used to go unnoticed: the vault's own `CLAUDE.md` (a schema delta
+was deposited and nobody told the agent to integrate it) and the **workspace** `CLAUDE.md` (a derived
+file that `--regenerate` preserved unconditionally, so donna and linus ran the pre-037 template after a
+0.27.0 upgrade although nobody had edited it: the persona lives in `personas/<agent>.md` via
+`agent.role_file` and is injected by the render, it is not stored in the file).
+
+- **Detection is two pure libraries: no yq, read-only, always rc 0.** `vault_pending_deltas` in
+  `scripts/lib/vault.sh` (a delta is pending iff `_templates/.schema-updates-<v>.applied` exists AND its
+  *checkpoint* line is absent from the vault's `CLAUDE.md`; the version-to-checkpoint table is explicit and
+  manual: 0.8.0 -> `wiki/normalization/`, 0.27.0 -> `## Actionability (PARA)`, with four drift guards (G1-G4) in
+  `tests/vault-pending-deltas.bats`) and `scripts/lib/claude_md.sh` (`claude_md_state`,
+  `claude_md_regenerate_decision`, `cmp -s` only).
+- **Three files decide what `--regenerate` does with the workspace CLAUDE.md** (`_regenerate_claude_md` in
+  `setup.sh`): C = `CLAUDE.md`, U = `.state/launcher/claude-md.upstream.md` (today's render, rewritten on
+  every regenerate), B = `.state/launcher/claude-md.baseline.md` (the render C incorporates). C == B and
+  C != U -> **refresh**; C == U -> adopt/noop; C has edits -> **preserve**, never overwritten;
+  `--force-claude-md` confirmed, or the launcher's own dev doc (027, local only) -> render. No baseline
+  (every pre-0.28.0 agent) -> preserve and report; one forced render per agent starts the chain. **If U
+  cannot be recorded (a read-only `.state/launcher`) the pre-038 rules apply verbatim**
+  (`_regenerate_claude_md_legacy`): that is decided with `test`, never by running the render inside an
+  `if`, which would silently switch errexit off for the whole render. Whatever feature writes persona
+  rules (custom-config 004) must write `personas/<agent>.md`, never `CLAUDE.md`: an edit there makes
+  C != B and stops the refresh for that agent for good.
+- **Delivery is a `SessionStart` hook in both modes** (`modules/upgrade-notice.sh.tpl` ->
+  `scripts/hooks/upgrade-notice.sh`; installer `install-upgrade-notice-hook.sh` in the mould of 028/031 but
+  on `.hooks.SessionStart`, `timeout: 10`, **no matcher**). Registered by
+  `start_services.sh::pre_install_upgrade_notice_hook` (docker, every boot and respawn; it resolves the
+  workspace through `$WORKDIR`), by `agent-login.sh` step 4e, and by `--regenerate` in local mode (only when
+  `.state/.claude` already exists, so an unlogged workspace never looks logged in). It prints nothing when
+  nothing is pending and never writes. Measured in Claude Code 2.1.280: `additionalContext` reaches the model
+  on `startup` and on `--continue` (`resume`). Heartbeat ticks drop it (`del(.hooks.SessionStart)`). The text
+  is ASCII only and built by interpolation, never by `${v//pat/repl}` (023). `agentctl doctor` prints the same
+  two layers in both modes (`_upgrade_notice_doctor`) and repeats the WARN until resolved. Off switch:
+  `features.upgrade_notice.enabled` (default true, `has()` backfill).
+- **Gotchas found while building it.** `render_to_file` redirects straight into its destination, so under
+  `set -e` a failed render aborts regenerate; bash 3.2 ends the whole shell on `. missing-file` under errexit
+  even behind `|| true` (guard with `[ -f ]`); a prefix assignment before a function call (`WS=... func`) is
+  temporary in non-POSIX bash; an `AGENTCTL_NO_RUN` exported by a bats `setup()` is inherited by the child
+  `agentctl` and silences it.
+- **Open measurement (gate G0).** Whether the sessions `claude remote-control --spawn=session` creates run
+  `SessionStart` hooks is NOT measured (docker mode launches `claude --channels` directly and is covered).
+  The hook is registered in local mode either way; until G0 is run on a real local agent, `agentctl doctor`
+  is the only surface guaranteed there. Do not claim in-session delivery for local mode before measuring it.
+
+Contracts: `specs/038-schema-delta-boot-nudge/contracts/{vault-pending-deltas,claude-md-refresh,upgrade-notice-hook}.md`.
+Deep docs: `docs/architecture.md` (*Upgrade & Rollback*), `docs/vault.md` (*How the agent finds out a delta is waiting*).
+
 ### Workspace-is-the-agent
 
 After PR #3 (2026-04-22) all agent state (OAuth login, Telegram pairing, sessions, plugin cache) lives in `<workspace>/.state/` as a bind-mount to `/home/agent`, not a Docker named volume. Implications for any change touching state lifecycle:
@@ -185,6 +234,76 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 - **A container is a usable Linux oracle, but only if it matches the runner.** Reproducing a CI-only failure locally works — the `E2BIG` above was reproduced RED/GREEN in Alpine in minutes — but the *full suite* under a naive `docker run` lies: as **root** every "unwritable directory" test fails (root ignores the mode bits), and Alpine's busybox/GNU mix fails more. Measured on the same tree: Alpine-as-root reported 20 reds, Debian-as-non-root reported 1, CI reported 2. A faithful replica is `debian:bookworm` + a non-root user + the deps the workflow installs (`age`, `gettext-base` for `envsubst`, `tmux`, `busybox`) + the pinned `yq` — and copy the repo in rather than bind-mounting it writable, or the host tree ends up owned by root.
 
 <!-- SPECKIT START -->
+**038-schema-delta-boot-nudge SPEC + PLAN + TASKS + ANALYZE + IMPLEMENT (2026-09-30/10-01; rama `038-schema-delta-boot-nudge`
+sobre `037-second-brain-rag` v0.27.0, NO sobre main; el PR espera el merge de 037, precedente 023-sobre-022;
+borrador previo en `d88cbfb`, notas de hardware de 037 commiteadas en su rama como `91da8c6`).** Origen: donna
+(docker, ferrari) describió su RAG con el modelo pre-037. **DIAGNÓSTICO MEDIDO: dos capas viejas, no una.**
+(1) Vault: donna y linus sin `## Actionability (PARA)` en el `CLAUDE.md` del vault (delta 0.27.0 depositado,
+nadie avisó). (2) Workspace: su `CLAUDE.md` autocargado sigue en la plantilla pre-037 ("three JSON artifacts")
+porque `--regenerate` lo preserva (`setup.sh:2680-2700`). Y la preservación no protege nada: las "Reglas de
+trabajo" viven en `personas/<agente>.md` (`agent.role_file`, `render.sh:63-73`); el render actual con el
+`agent.yml` y la persona de donna difiere de su archivo vivo SOLO en los hunks de 037 y en una sección
+Heartbeat de cuando lo tenía activo (hoy `false`). Cero ediciones a mano. **MEDIDO en Claude Code 2.1.280:**
+`additionalContext` de un hook `SessionStart` llega al modelo en `startup` y en `--continue` (`resume`), y
+una sesión reanudada carga el `CLAUDE.md` vigente. **TRES DECISIONES DEL OPERADOR (AskUserQuestion,
+2026-09-30):** (a) hook `SessionStart` en ambos modos + `agentctl doctor`; reemplaza la decisión previa del
+mismo día (heartbeat aislado en docker + doctor en local), tomada sobre una premisa falsa mía ("sin
+precedente": el repo ya instala hooks en ambos modos, 028/031); (b) cubrir ambas capas; (c) capa workspace:
+re-render automático solo si `CLAUDE.md` coincide byte a byte con su línea base; si tiene ediciones o no hay
+línea base (toda la flota hoy), se preserva y se avisa. **DISEÑO:** `vault_pending_deltas` en
+`scripts/lib/vault.sh` (tabla explícita: 0.8.0 → `wiki/normalization/`, medido en los 3 vaults docker; 0.27.0
+→ `## Actionability (PARA)`; cuatro guardias de deriva por test, incluida "el skeleton contiene todos los
+hitos" porque `vault_seed_if_empty` escribe el `.applied` de 0.27.0 en todo vault nuevo); `claude_md_state`
+y `claude_md_regenerate_decision` en `scripts/lib/claude_md.sh` nueva (comparación `cmp -s` de `C`=CLAUDE.md,
+`U`=`.state/launcher/claude-md.upstream.md` renderizado en cada regenerate y `B`=`.state/launcher/
+claude-md.baseline.md`; estados `in_sync`/`customized`/`pending_template`/`pending_no_baseline`/`unknown`;
+confirmación manual `cp U B`); hook `scripts/hooks/upgrade-notice.sh` + instalador hermano propio (molde
+028/031, dedupe, `timeout: 10`), instalado en `start_session` (docker), en el login y en cada regenerate
+(local); heartbeat descarta `.hooks.SessionStart`; textos CANON-N1..N5 es/en sin tildes; interruptor
+`features.upgrade_notice.enabled` (default true, backfill `has()`). **GATE G0 abierto:** si Remote Control
+ejecuta `SessionStart` (sonda en ferrari-admin antes de US4; si no, local queda solo con doctor). **Fixture
+vivo para SC-001:** no integrar ni forzar linus antes del deploy. **Rollout:** forzar el re-render una vez por
+agente; solo donna tiene overlay de MCPs en custom-config (la única con `overlay.yml`; linus y ferrari-admin solo
+tienen `syncthing.yml`, que consume otro script), y ahí el orden es `--force-claude-md` y luego
+`custom-apply.sh --agent donna --no-regenerate`, o el regenerate pelado le borra sus 4 MCPs. **Interacción:** la feature 004 de
+custom-config debe escribir la persona en `personas/<agente>.md`, nunca en `CLAUDE.md`, o el re-render
+automático se apaga para siempre en ese agente. Constitución 6/6 PASS, Complexity Tracking vacío. VERSION
+prevista 0.28.0. Artefactos: `specs/038-schema-delta-boot-nudge/{spec,plan,research,data-model,quickstart}.md`
++ `contracts/{vault-pending-deltas,claude-md-refresh,upgrade-notice-hook}.md`. **TASKS (2026-09-30): 46 tareas
+test-first** en `specs/038-schema-delta-boot-nudge/tasks.md` (Setup T001-T003 con el gate G0 de Remote Control y la
+auditoría de tests afectados por el re-render; Foundational T004-T010; US1 docker MVP T011-T021; US2 T022-T026;
+US3 doctor T027-T029; US4 local T030-T034; Polish T035-T046 con DOCKER_E2E, mutación M1-M12, revisión de privilegios y gates de
+hardware diferidos al merge de 037). **`/speckit-analyze` (2026-09-30): 16 hallazgos (1 CRITICAL, 7 MEDIUM, 8 LOW),
+todos remediados:** faltaba la tarea del gate de privilegios de la constitución para el cambio en `docker/` (nueva
+T042); research afirmaba que doctor reporta con el contenedor caído, falso (el doctor docker sale con `exit 2`
+antes, `agentctl:343-376`); FR-006 "si y solo si" contradecía las excepciones `--force-claude-md` y 027; T006
+citaba una función inexistente (`schema_validate`, la real es `agent_yml_validate`); E2 sin mecanismo de respawn
+(ahora `docker compose restart`); DOCKER_E2E no mide la inyección (sin OAuth): solo G1, que ahora registra
+`claude --version`; FR-013 y SC-007 ganan tests explícitos.
+**IMPLEMENTADO 2026-10-01 (test-first; T001-T043 hechas salvo T002; commiteada en local, sin push ni PR).** 159 tests nuevos (7 archivos
+nuevos + 3 extendidos; el fixture e2e se salta sin `DOCKER_E2E`), VERSION 0.27.0→**0.28.0** (`origin/main` = 0.26.0,
+037 sin mergear: re-verificar VERSION a mano al rebasar). Línea base 1644/0 en bash 5.3.15 y 3.2.57 (copia aislada); **cierre 1803/0 en
+ambas, 1644 + 159 nuevos**. **DOCKER_E2E corrido de verdad:** 4/4 casos de 038, regresión de vault 3/3, y askq-guard 1/3
+IDÉNTICO a la base sin 038 (dos casos de 031 rotos de antes: llaman al instalador con `--entrypoint sh` antes de
+que exista `~/.claude`, y buscan un plugin de Telegram que la imagen no trae; deuda previa, no tocada). **Mutación
+20/20 cazada** (M1-M12 de la tabla + 8 propias, entre ellas retirar el registro del boot, que el e2e en contenedor
+real también caza). Revisión de privilegios (Principio II): el diff bajo `docker/` es solo +13 líneas de
+`start_services.sh`, corren como `agent`, sin capacidades ni mounts nuevos. **Hallazgos de implementación:** (1)
+HUECO spec-implementación cazado en autorrevisión: el spec exige que con el vault deshabilitado solo aplique la capa
+del workspace y el hook no leía `agent.yml`; se hornea `VAULT_ENABLED` con `{{#if}}` (una variable sin definir no es
+`false`); (2) bash 3.2 termina el shell entero ante `. archivo-inexistente` bajo errexit aun con `|| true` (lo cazó el
+gate dual, no la suite en 5.x); (3) varios tests pasaban en vacío en RED (guardias con tabla vacía, una función
+ausente dentro de `$(...)`, un timer sobre un hook inexistente) y se endurecieron antes del GREEN; (4)
+`wizard-container.sh::refresh_claude_md` cuenta como edición propia y detiene el refresco en ese agente; (5) T006
+pedía `agent.yml` byte-idéntico pero `meta.regenerated_at` cambia en cada regenerate; (6) `WS=... func` como
+asignación prefijada es temporal en bash no-POSIX. **Pendiente, no bloqueante del código:** G0 (¿Remote Control
+ejecuta `SessionStart`? requiere al operador: runbook en quickstart §7; sin medirlo, en local solo `doctor` está
+garantizado y la documentación lo declara), G1 en linus (decisión del operador, 02-10-2026: antes de cualquier merge, desde la rama 038, lo ejecuta él con un
+runbook), G2 y el rollout, y el PR de 038 con confirmación del operador (el PR #100 de 037 se abrió el 02-10-2026).
+037 mergeó el 03-10-2026 (PR #100, squash `6a6ce54`) y 038 se rebasó sobre main sin conflictos (el rebase no cambió
+el árbol; los hashes `d88cbfb` y `91da8c6` de arriba son de antes del rebase). **Siguiente:** G0 y G1 con el
+operador; el PR de 038 se abre con su confirmación y no se mergea antes de G1.
+
 **037-second-brain-rag SPEC + PLAN + TASKS + IMPLEMENT EN CURSO (2026-09-26/28; rama
 `037-second-brain-rag` desde main=`70214d9` v0.26.0→**0.27.0**; NO mergeada, sin commit — working
 tree de la rama con todo el diff aplicado).** Spec: `specs/037-second-brain-rag/spec.md`
