@@ -121,27 +121,29 @@ rm -f "$WS/.state/g0-probe.sh" "$WS/.state/g0-probe.log" "$WS/.state/.claude/set
 Resultado, con fecha, en Notes de `tasks.md`. Si dispara, quitar la reserva "no medido" de CHANGELOG, README,
 `docs/architecture.md` y `CLAUDE.md`; si no, dejarla y documentar que local se cubre con doctor.
 
-**G1. Docker** (linus, desde la rama 038 y antes de cualquier merge, por decisión del operador del 02-10-2026;
-lo ejecuta el operador). Parámetros de linus en ferrari, medidos en el despliegue de 037: workspace
-`/home/rodrigo-hinojosa/Documents/Cencosud/Claude/Agents/linus`, contenedor `linus`, clon del launcher
-`~/apl-src`. El alias de SSH hacia ferrari está por confirmar (`ssh ferrari` en G0; `ssh-ferrari` en notas
-anteriores).
+**G1. Docker** (linus, desde `main`; lo ejecuta el operador). 038 se mergeó el 05-10-2026 (PR #101, squash
+`da22a06`) sin que G1 estuviera registrado; el operador decidió ese día correrlo ahora, ya sobre main (la decisión
+original, del 02-10-2026, era correrlo antes del merge; un fallo se corrige con un PR nuevo). Parámetros de linus en
+ferrari, medidos en el despliegue de 037: workspace `/home/rodrigo-hinojosa/Documents/Cencosud/Claude/Agents/linus`,
+contenedor `linus`, clon del launcher `~/apl-src`. El alias de SSH hacia ferrari está por confirmar (`ssh ferrari` en
+G0; `ssh-ferrari` en notas anteriores).
 
 ```bash
 WS=/home/rodrigo-hinojosa/Documents/Cencosud/Claude/Agents/linus
 SRC=~/apl-src
-BR=038-schema-delta-boot-nudge
 ```
 
-**Fase 0. Llevar la rama a ferrari.** El clon solo sigue `main` en su refspec, así que una rama se trae con un
-fetch explícito que cree la rama local.
+**Fase 0. Llevar `main` a ferrari.** El clon sigue `main` en su refspec, así que basta un fetch. El checkout del
+paso A3 es desatado y fijo en `da22a06` (el squash de 038), así que funciona aunque el clon tenga otra rama o
+`main` desactualizada, y la evidencia de G1 queda atada a ese commit.
 
-- Con la rama en el remoto: `git -C "$SRC" fetch origin "$BR:$BR"`.
-- Sin subirla (bundle): en la Mac, `git bundle create /tmp/038.bundle 70214d9..038-schema-delta-boot-nudge` y
+- Con acceso al remoto: `git -C "$SRC" fetch origin main`. Comprobar con `git -C "$SRC" cat-file -t da22a06`, que debe
+  decir `commit`.
+- Sin acceso al remoto (bundle): en la Mac, `git bundle create /tmp/038.bundle 70214d9..main` y
   `scp /tmp/038.bundle ferrari:/tmp/`; en ferrari, `git -C "$SRC" bundle verify /tmp/038.bundle` y luego
-  `git -C "$SRC" fetch /tmp/038.bundle "$BR:$BR"`. Requiere que el clon tenga `70214d9`, el `main` anterior al
-  merge de 037 (`git -C "$SRC" cat-file -t 70214d9` debe decir `commit`). El bundle lleva tres commits: el squash
-  de 037 (`6a6ce54`) y los dos de 038.
+  `git -C "$SRC" fetch /tmp/038.bundle main:refs/remotes/origin/main`. Requiere que el clon tenga `70214d9`, el
+  `main` anterior al merge de 037 (`git -C "$SRC" cat-file -t 70214d9` debe decir `commit`). El bundle lleva los
+  squash de 037 (`6a6ce54`) y de 038 (`da22a06`), más lo que haya entrado a main después.
 
 **Fase A. Despliegue.** En un `tmux` de ferrari, o con `nohup`: la espera de 150 s no debe morir con la sesión SSH.
 
@@ -159,8 +161,8 @@ cd "$(dirname "$WS")" && ( umask 077; tar czf "$HOME/linus-pre038-$(date +%Y%m%d
   linus/setup.sh linus/VERSION linus/modules linus/docker linus/scripts linus/CLAUDE.md linus/agent.yml \
   linus/docker-compose.yml linus/.mcp.json )
 
-# A3. Swap de archivos de sistema (README, "Upgrade an existing agent"), desde la rama.
-cd "$SRC" && git checkout "$BR" && git log --oneline -1 && cat VERSION      # 0.28.0
+# A3. Swap de archivos de sistema (README, "Upgrade an existing agent"), desde el squash de 038 en main.
+cd "$SRC" && git checkout -q --detach da22a06 && git log --oneline -1 && cat VERSION      # 0.28.0
 cp setup.sh VERSION .gitignore LICENSE "$WS/"
 for d in modules docker; do [ -d "$d" ] && { rm -rf "${WS:?}/${d:?}"; cp -R "$d" "$WS/"; }; done
 cp -R scripts "$WS/"
@@ -249,4 +251,5 @@ el re-render una vez por agente con el orden de la fase C (`custom-apply` solo e
 - [ ] `VERSION` 0.28.0 verificada a mano contra `origin/main` tras el rebase sobre 037 mergeada; `CHANGELOG.md`,
       `docs/vault.md` (convención de hitos para autores de deltas), `docs/architecture.md` (capa workspace).
 - [ ] G0, G1 y G2 registrados con fecha en Notes de `tasks.md`.
-- [ ] PR solo con confirmación del operador (037 mergeó el 03-10-2026, #100); su merge, después de G1.
+- [x] PR con confirmación del operador: #101 mergeado el 05-10-2026 (squash `da22a06`, árbol idéntico al de la rama
+      validada), sin G1 registrado; G1 se corre ahora sobre main.

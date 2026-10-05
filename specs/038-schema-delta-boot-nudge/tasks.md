@@ -151,9 +151,9 @@ llega y que doctor es la superficie.
 - [X] T041 Mutación M1-M12 de quickstart §6 contra la implementación real: aplicar cada una, correr el test predicho, confirmar RED, revertir, confirmar GREEN. Anotar en Notes qué test cazó cada una; si alguna sobrevive, endurecer el oráculo antes de seguir.
 - [X] T042 Gate de privilegios de la constitución ("changes under `docker/` MUST be reviewed against Principle II before merge"): revisar el diff de `docker/` (`start_services.sh`: función nueva y su llamada) contra el Principio II: sin capabilities, mounts, sockets ni `-u root` nuevos; la función corre como `agent` dentro de `start_session` y solo escribe `$HOME/.claude/settings.json` vía el instalador. Anotar el veredicto con fecha en Notes antes de T046.
 - [X] T043 Gates finales: `bats tests/` en bash 5.x y luego `PATH=/bin:$PATH bats tests/` en 3.2.57, conteos en Notes (línea base de T001 más los nuevos); comando exacto de shellcheck de CI rc=0; auditoría de bytes en 0 en `modules/upgrade-notice*.tpl`, tests nuevos y `specs/038-schema-delta-boot-nudge/`; `git diff --stat` revisado (nada fuera de los archivos del plan).
-- [ ] T044 Gate de hardware G1 (quickstart §7), desde la rama 038 y antes de cualquier merge (decisión del operador, 02-10-2026; antes estaba diferido al merge de 037); lo ejecuta el operador con un runbook. Mantener a linus con ambas capas pendientes hasta entonces. Pasos 1-6 de G1 (incluye registrar `claude --version` del contenedor y verificar el aviso tras `/compact`); resultado con fecha en Notes. Precedente 024: el gate corre antes del merge de 038.
+- [ ] T044 Gate de hardware G1 (quickstart §7), desde `main` (decisión del operador, 05-10-2026: 038 se mergeó sin G1 registrado y se corre ahora, ya sobre main; la decisión original, del 02-10-2026, era antes del merge); lo ejecuta el operador con un runbook. Mantener a linus con ambas capas pendientes hasta entonces. Pasos 1-6 de G1 (incluye registrar `claude --version` del contenedor y verificar el aviso tras `/compact`); resultado con fecha en Notes. Precedente 024: allí el gate corrió antes del merge; aquí corre después y un fallo se corrige con un PR nuevo.
 - [ ] T045 Gate G2 (local, si G0 pasó) y rollout a la flota según quickstart §7: forzar el re-render una vez por agente, con `custom-apply.sh --agent donna --no-regenerate` después solo en donna (la única con `overlay.yml`; linus y ferrari-admin solo tienen `syncthing.yml`); registrar en Notes.
-- [ ] T046 Commit y PR solo con confirmación explícita del operador, staging archivo por archivo (nunca `git add -A`); 037 mergeó el 03-10-2026 (PR #100, squash `6a6ce54`) y la rama ya está rebasada sobre main: faltan subirla (`--force-with-lease`) y abrir el PR, que no se mergea antes de G1.
+- [X] T046 Commit y PR solo con confirmación explícita del operador, staging archivo por archivo (nunca `git add -A`). Hecho: 037 mergeó el 03-10-2026 (PR #100, squash `6a6ce54`), la rama se rebasó y se subió con `--force-with-lease`, y el operador mergeó el PR #101 el 05-10-2026 (squash `da22a06`).
 
 ---
 
@@ -341,3 +341,15 @@ las pendientes están marcadas como tales y no se declaran cerradas.
   estos documentos. `VERSION` verificada a mano: `origin/main` 0.27.0, rama 0.28.0. El bundle del runbook pasó de
   `219b45a..` a `70214d9..` porque `219b45a` ya no es base de la rama. Quedan: subir la rama rebasada
   (`--force-with-lease`) y abrir el PR, ambos con confirmación del operador; G0 y G1.
+- **Merge de 038 y decisión sobre G1 (05-10-2026).** El operador mergeó el PR #101 el 05-10-2026 a las 03:02 (hora de
+  Santiago) como squash `da22a06` (padre `6a6ce54`). El árbol es idéntico al de la rama validada `ab990e6`
+  (`ae3b084a…`); el PR tenía 2 commits, 0 comentarios y 0 reviews, y GitHub borró la rama remota. La CI del PR (sobre
+  `ab990e6`) y la de main (sobre `da22a06`) dieron en verde bats con bash 5.x en ubuntu, bats con bash 3.2 en macOS y
+  shellcheck. **G0 y G1 no tenían registro**: no había resultados en el PR ni me llegaron. Decisión del operador, por
+  AskUserQuestion el 05-10-2026: G1 no corrió y se corre ahora desde main. El runbook de §7 se adaptó: la Fase 0
+  trae `main` (bundle `70214d9..main` como alternativa) y A3 fija un checkout desatado en `da22a06`; se reensayó
+  contra un sandbox construido como el clon de la flota (64 de 64 chequeos). **Hallazgo ajeno:** el nightly
+  `docker-e2e` está rojo cinco noches seguidas (01 a 05-10-2026, también antes de 037) con `exit 141`. El log lo
+  ubica en el paso `Verify deps + docker`: `docker info | head -10` bajo `set -euo pipefail` recibe SIGPIPE y el job
+  muere a los pocos segundos (4 a 11 s medidos), antes de `Run docker-e2e suite`, así que no ejecuta ningún e2e. Se atiende como feature aparte,
+  por spec-kit.
