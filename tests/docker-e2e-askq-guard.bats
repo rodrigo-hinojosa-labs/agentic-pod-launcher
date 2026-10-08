@@ -10,6 +10,14 @@
 # Docker-host gate (tasks.md T022). The live-interception ferrari deploy gate
 # (recreate donna; a channel turn calling AskUserQuestion redirects to text) is
 # the separate SC-001 gate (T023). Model: tests/docker-e2e-warm-cache.bats.
+#
+# 039-fix-nightly-e2e-sigpipe: these tests had never run on a machine with Docker
+# (the nightly died before the suite, and the first manual run found two harness
+# defects, neither a product bug). E1 now creates ~/.claude itself, because
+# `--entrypoint sh` skips the boot that normally does and the fail-silent
+# installer then writes nothing. E3 now self-seeds the plugin like
+# tests/docker-e2e-voice.bats does, because the image ships no plugin at all
+# (it is installed post-login). What each test asserts is unchanged.
 
 load helper
 
@@ -40,6 +48,25 @@ TELEGRAM_CHAT_ID=0
 ENV
   chmod 0600 "$E2E_AGENT_DIR/.env"
   cd "$E2E_AGENT_DIR"
+
+  # E3 self-seeds (039): copy the committed pristine plugin source into the
+  # workspace so the container can place it in the plugin cache and run the
+  # image-baked patcher on it. The seed script never interpolates a shell
+  # variable inside the single-quoted `compose run -c '...'` bodies below.
+  # NOTE: the patcher's log() writes to STDOUT, so it goes to a side file and the
+  # caller's `server=$(sh seed.sh)` only ever captures the final path.
+  mkdir -p "$E2E_AGENT_DIR/.e2e"
+  cp "$REPO_ROOT/tests/fixtures/telegram-server-pristine.ts" "$E2E_AGENT_DIR/.e2e/"
+  cat > "$E2E_AGENT_DIR/.e2e/seed.sh" <<'SEED'
+#!/bin/sh
+set -e
+d="$HOME/.claude/plugins/cache/claude-plugins-official/telegram/0.0.6"
+mkdir -p "$d"
+cp /workspace/.e2e/telegram-server-pristine.ts "$d/server.ts"
+python3 /opt/agent-admin/scripts/apply_telegram_typing_patch.py "$d/server.ts" > /tmp/patch.log 2>&1
+echo "$d/server.ts"
+SEED
+
   run docker compose build
   [ "$status" -eq 0 ]
 }
@@ -56,6 +83,10 @@ teardown() {
 @test "E2E 031: pre_install_askq_hook registers PreToolUse+AskUserQuestion in settings.json at boot" {
   run docker compose run --rm -T --user agent --entrypoint sh askqbot -c '
     set -e
+    # the real boot creates ~/.claude before pre_install_askq_hook runs; with
+    # --entrypoint sh the boot is skipped, and the fail-silent installer would
+    # write nothing (039)
+    mkdir -p "$HOME/.claude"
     grep -n "pre_install_askq_hook" /opt/agent-admin/scripts/start_services.sh
     /workspace/scripts/hooks/install-askq-guard-hook.sh \
       "$HOME/.claude/settings.json" "/workspace/scripts/hooks/askq-guard.sh"
@@ -89,7 +120,7 @@ teardown() {
 @test "E2E 031: the patched plugin server.ts carries typing v6 + the askq give-up hunk" {
   run docker compose run --rm -T --user agent --entrypoint sh askqbot -c '
     set -e
-    server=$(find "$HOME/.claude/plugins/cache/claude-plugins-official/telegram" -name server.ts | head -1)
+    server=$(sh /workspace/.e2e/seed.sh)
     test -n "$server"
     grep -q "typing refresh patch v6" "$server"
     grep -q "askq-guard give-up delivery patch v1" "$server"

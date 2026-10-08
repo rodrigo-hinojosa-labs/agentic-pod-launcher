@@ -235,8 +235,41 @@ PY
     if [ -n "$cur" ] && [ "$cur" -gt "$runs_after_cron" ]; then watcher_fired=1; break; fi
     sleep 3
   done
+  # 039-fix-nightly-e2e-sigpipe: the first real nightly run (run 37834784760)
+  # failed on the assertion below with nothing to say why -- start_services.sh
+  # launches the watcher with its output discarded and this phase dumped
+  # nothing. On failure ONLY, show what the container can still tell. The
+  # assertions themselves are unchanged. Order matters: the 45s wait goes
+  # BEFORE the probe, because the probe writes into the vault and would itself
+  # wake the watcher, hiding a late fire of the original event.
+  _watcher_diag() {
+    {
+      echo "--- 039 diag: runs did not rise above $runs_after_cron in 60s (last seen: ${cur:-none}) ---"
+      echo "--- processes:"
+      in_container sh -c 'ps w 2>&1 | grep -E "qmd_watch|inotifywait|crond" | grep -v grep'
+      echo "--- watcher pid file:"
+      in_container sh -c 'cat /tmp/agent-watchdog/qmd-watch.pid 2>&1'
+      echo "--- qmd-index.json:"
+      in_container sh -c 'cat /workspace/scripts/heartbeat/qmd-index.json 2>&1'
+      echo "--- engine calls (every reindex logs update/embed/status):"
+      in_container sh -c 'cat "$HOME/.cache/qmd/engine-calls.log" 2>&1'
+      echo "--- inotify limits (max_user_watches, max_user_instances):"
+      in_container sh -c 'cat /proc/sys/fs/inotify/max_user_watches /proc/sys/fs/inotify/max_user_instances 2>&1'
+      echo "--- waiting 45s more, to tell slow from dead"
+      sleep 45
+      echo "--- qmd-index.json after the extra wait:"
+      in_container sh -c 'cat /workspace/scripts/heartbeat/qmd-index.json 2>&1'
+      echo "--- engine calls after the extra wait:"
+      in_container sh -c 'cat "$HOME/.cache/qmd/engine-calls.log" 2>&1'
+      echo "--- raw inotifywait probe (does the kernel deliver events for an in-container write on this mount?):"
+      in_container sh -c '(inotifywait -q -t 6 -e create,modify /home/agent/.vault > /tmp/probe.out 2>&1 &); sleep 1; echo probe > /home/agent/.vault/probe-note.md; sleep 4; cat /tmp/probe.out; echo "(end of probe)"'
+      echo "--- container logs (tail):"
+      (cd "$DEST" && docker compose logs --tail=60 2>&1)
+    } >&2 || true
+  }
   if [ "$(uname -s)" = "Linux" ]; then
     # Production/CI semantics: the inotify seam MUST fire (Principle II evidence).
+    if [ "$watcher_fired" -ne 1 ]; then _watcher_diag; fi
     [ "$watcher_fired" -eq 1 ]
   else
     # macOS Docker Desktop: VirtioFS may not deliver inotify for bind-mount
