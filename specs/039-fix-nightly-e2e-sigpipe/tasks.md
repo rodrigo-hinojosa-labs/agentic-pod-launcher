@@ -1,0 +1,225 @@
+---
+
+description: "Task list for 039-fix-nightly-e2e-sigpipe"
+---
+
+# Tasks: El nightly de docker-e2e ejecuta la suite de verdad
+
+**Input**: `specs/039-fix-nightly-e2e-sigpipe/` (plan.md, spec.md, research.md, data-model.md, contracts/, quickstart.md)
+
+**Prerequisites**: rama `039-fix-nightly-e2e-sigpipe` desde `main` en `da22a06` (VERSION 0.28.0, 038 ya mergeada). Al generar estas tareas Docker Desktop está apagado y ningún push está autorizado: ver las COMPUERTAS.
+
+**Tests**: obligatorios (Constitución III, test-first). Cada tarea de implementación tiene antes su tarea RED; se confirma que el test falla por la razón correcta antes de tocar un workflow, y se confirma GREEN después. El oráculo y sus fixtures se escriben y se ven en rojo antes de modificar `docker-e2e.yml` o `test.yml`.
+
+**Organización**: por historia de usuario. US1 (el nightly llega a ejecutar la suite) es el MVP. US2 (el oráculo permanente y la auditoría) depende de US1 solo para R3. US3 (rojos reales) depende de la primera corrida real. **Todo lo local se hace sin Docker ni push; las COMPUERTAS esperan al operador.**
+
+## Format: `[ID] [P?] [Story] Description`
+
+- **[P]**: paralelizable (archivo distinto, sin dependencia de una tarea incompleta).
+- **[Story]**: US1 a US3 según spec.md.
+- **COMPUERTA**: tarea que requiere confirmación explícita del operador y no se ejecuta sola (push, `workflow_dispatch`, arrancar Docker Desktop, commit y PR).
+- Rutas relativas a la raíz del repo. Contratos: `WSO` = `contracts/workflow-step-oracle.md`, `SS` = `contracts/suite-step.md`, `CLS` = `contracts/e2e-classification.md`. Decisiones de Fase 0: `D1` a `D10` de `research.md`.
+
+## Reglas transversales (aplican a toda tarea)
+
+- bash 3.2 a 5.x: sin `mapfile`, sin arreglos asociativos, sin `${var,,}`. Todo helper de test debe correr bajo `/bin/bash` 3.2.57 y bajo bash 5.x.
+- Nunca `producer | head` ni `producer | grep -q` bajo `pipefail`: es la regla que esta feature hace cumplir, así que tampoco se rompe en su propio código. Aserciones sobre `$output` con `grep -q … <<< "$output"` (sin pipe); un `[[ ]]` intermedio no falla en bats, así que va al final o se usa `grep`/`[ ]`.
+- Negativos en bats al final del test, o como `run …; [ "$status" -ne 0 ]`.
+- Payloads por archivo, nunca por argv ni por el entorno (límite de 128 KiB por string en Linux).
+- Auditoría de bytes tras cada edición de `.md`, `.yml`, `.bats` o fixture: `LC_ALL=C grep -c $'\xcc\x80'` en 0 y UTF-8 válido.
+- Suites dual bash siempre secuenciales, nunca concurrentes (la contención produce rojos falsos).
+- **No tocar `docker/`, `scripts/`, `modules/` ni `setup.sh`** (FR-015, SC-008). Si una tarea parece exigirlo, detenerse y registrarlo como defecto de producto (se escala, no se corrige aquí).
+- Los nombres de los pasos `Verify deps + docker` y `Run docker-e2e suite` NO cambian: el oráculo los selecciona por nombre.
+- El hook `speckit.agent-context.update` no se ejecuta (borra el bloque SPECKIT de `CLAUDE.md`).
+
+---
+
+## Phase 1: Setup
+
+**Purpose**: base verificada y fixtures congelados antes de escribir el arnés.
+
+- [ ] T001 Verificar la base sin volver a correr la suite completa: `git log --oneline -1 origin/main` debe ser `da22a06` o un descendiente (si main avanzó, `git rebase origin/main` y repetir la verificación), y `git show origin/main:VERSION` debe ser igual a `cat VERSION` (0.28.0). Anotar en las Notes de `specs/039-fix-nightly-e2e-sigpipe/tasks.md` la línea base: la CI de `main` sobre `da22a06` dio verde (bats en ubuntu con bash 5.x y en macOS con bash 3.2, y shellcheck) y el gate local de 038 midió 1803 de 1803 en ambos bash sobre un árbol idéntico. El gate final de esta feature espera **1817** (1803 más los 14 tests de `tests/ci-workflows.bats`). No se repiten los 22 minutos por brazo porque no hay cambios de código desde esa medición.
+- [ ] T002 [P] Congelar el defecto: crear `tests/fixtures/ci/step-verify-with-defect.sh` con el texto verbatim del `run:` del paso `Verify deps + docker` tal como estaba en `da22a06`: `git show da22a06:.github/workflows/docker-e2e.yml | yq '.jobs.e2e.steps[] | select(.name == "Verify deps + docker") | .run' > tests/fixtures/ci/step-verify-with-defect.sh`. Comprobar que tiene 11 líneas, que empieza con `set -euo pipefail`, que contiene `docker info | head -10` (`grep -F`) y que es byte-idéntico (`cmp`) a la extracción del workflow actual, que aún no se arregló. Es la prueba de que el arnés puede fallar (WSO O2).
+- [ ] T003 [P] Crear los cuatro fixtures TAP en `tests/fixtures/ci/` (SS §7): `tap-all-skip.tap` (`1..3` y tres líneas `ok N x # skip motivo`, dos con `set DOCKER_E2E=1 to run` y una con `docker daemon not reachable`), `tap-empty.tap` (solo `1..0`), `tap-mixed.tap` (`1..3`, dos `ok` y un `ok 3 c # skip reason`) y `tap-failing.tap` (`1..2`, un `ok 1 a`, un `not ok 2 b` y una línea `# (in test file x.bats, line 5)`). S5 no necesita archivo: es un `bats` falso sin salida.
+- [ ] T004 [P] Crear los fixtures del ratchet en `tests/fixtures/ci/` (WSO §5): `ratchet-bad.yml`, un workflow mínimo (`name`, `on: workflow_dispatch`, un job con `runs-on`) con un paso por cada consumidor prohibido y el nombre del paso igual al patrón (`head -1`, `head -n 3`, `grep -q`, `grep -m1`, `sed 1q`, `sed -n 1q`, `awk exit`); y `ratchet-good.yml` con pasos que usan `| xargs echo`, `| tee /dev/null`, `| sort`, `| wc -c`, `| grep x` sin `-q` y `true || echo y`. Ambos deben parsear con `yq '.' <archivo>`.
+
+---
+
+## Phase 2: Foundational (bloqueante para todas las historias)
+
+**Purpose**: el arnés (extracción, stubs, ejecución, detector) con sus propios tests, que pasan hoy y prueban que el arnés puede fallar.
+
+**CRITICAL**: ninguna historia empieza antes de cerrar esta fase.
+
+- [ ] T005 (FR-007) Crear `tests/ci-workflows.bats` con el arnés **dentro** del archivo (no en `tests/helper.bash`): cabecera que cite WSO y SS, `load helper`, `WF="$REPO_ROOT/.github/workflows"`, `FIX="$REPO_ROOT/tests/fixtures/ci"`, y un `setup()` que haga `setup_tmp_dir`, cree `$TMP_TEST_DIR/run/tests`, `$TMP_TEST_DIR/stubs`, un `docker-e2e-x.bats` y un `other.bats` vacíos en `run/tests` y llame `_make_stubs`; `teardown()` con `teardown_tmp_dir`. Funciones, todas bash 3.2: `_extract_run FILE JOB NAME` (imprime el `run:`; falla con mensaje a stderr si el paso coincide un número de veces distinto de 1 o el texto está vacío; usa `NAME="$name" yq … select(.name == strenv(NAME))`, con el `PATH` normal y nunca el de los stubs); `_extract_env FILE JOB NAME VAR`; `_make_stubs DIR` (stubs de `bats`, `yq`, `jq`, `git`, `tmux` que imprimen `<herramienta> stub 1.0`, y el `docker` de WSO §3 con `--version`, `compose version`, `info` en dos tandas con `echo` por línea y pausa de `${STUB_INFO_DELAY:-0.3}` s, `info --format` que renderiza los cinco campos (el servidor vale `27.5.1`, distinto a propósito del cliente `28.0.4`; se renderiza con `t=${t//'{{.Campo}}'/valor}`, verificado en bash 3.2.57 y 5.3.15, y ningún valor lleva `&`, la trampa de 023) y falla con `template parsing error` si queda un `{{`, el modo `STUB_DOCKER_DOWN=1`, y que registre en `$STUB_LOG` las líneas `info-chunk client 14` e `info-chunk server 40`); `_run_step SCRIPTFILE [VAR=val…]` (agrega al final una copia con la línea centinela `echo __ORACLE_REACHED_END__`, ejecuta `bash -e` en `$TMP_TEST_DIR/run` con `PATH="$TMP_TEST_DIR/stubs:$PATH"` y deja `$status` y `$output`); `_ratchet_scan YAML…` (con `yq -o=json '.'` y `jq`, imprime `archivo<TAB>paso<TAB>línea` por cada pipe cuyo consumidor sea `head`, `grep` con `q` o `-m`, `sed` con `-n…q` o `Nq`, o `awk` con `exit`; ignora comentarios y `||`; siempre código 0).
+- [ ] T006 Test O1 en `tests/ci-workflows.bats` (WSO §4): `_extract_run "$WF/docker-e2e.yml" e2e "Verify deps + docker"` coincide una vez, no está vacío y contiene `docker`; y, al final del mismo test, el caso negativo `run _extract_run … "no existe"; [ "$status" -ne 0 ]`, que prueba que la extracción puede fallar. Pasa hoy.
+- [ ] T007 Test O5 en `tests/ci-workflows.bats`: autochequeo del stub. Ejecutar `docker info` del stub solo, con `STUB_LOG` apuntando a un archivo temporal: la salida tiene 54 líneas, el log registra `info-chunk client 14` y luego `info-chunk server 40` en ese orden, 14 es mayor que 10, y el archivo del stub contiene un `sleep`. Evita que un stub debilitado deje el oráculo en vacío. Pasa hoy.
+- [ ] T008 Test O2 en `tests/ci-workflows.bats` (WSO O2, SC-003, la prueba de que el oráculo puede fallar): `_run_step "$FIX/step-verify-with-defect.sh"` termina con estado **141** y la salida **no** contiene `__ORACLE_REACHED_END__`. Pasa hoy porque el fixture conserva el defecto; si el arnés dejara de detectarlo, este test se pone rojo (FR-008).
+- [ ] T009 Tests R1 y R2 en `tests/ci-workflows.bats` (WSO §5), prueba del detector: R1, `_ratchet_scan "$FIX/ratchet-bad.yml"` marca los siete pasos prohibidos (siete líneas, una con el nombre de cada paso); R2, `_ratchet_scan "$FIX/ratchet-good.yml"` no imprime nada (aserción al final: `[ -z "$output" ]`). Pasan hoy.
+- [ ] T010 (FR-009) Checkpoint: `bats tests/ci-workflows.bats` y `PATH=/bin:$PATH bats tests/ci-workflows.bats`, secuenciales: **5 de 5** (O1, O2, O5, R1, R2) en ambos bash. Auditoría de bytes de los archivos nuevos. Anotar en Notes.
+
+**Checkpoint**: el arnés está probado; las historias pueden empezar.
+
+---
+
+## Phase 3: User Story 1 - El nightly llega a ejecutar la suite (Priority: P1) MVP
+
+**Goal**: el paso de verificación termina en verde mostrando versiones, servidor y arquitectura; el paso de la suite deja un resumen, propaga el código de `bats` y termina en rojo si no se ejecutó ningún e2e.
+
+**Independent Test**: `bats tests/ci-workflows.bats` con O3 y S1 a S6 en verde; la corrida real (T020) muestra el paso de la suite arrancado.
+
+### RED (antes de tocar el workflow)
+
+- [ ] T011 [US1] Test O3 en `tests/ci-workflows.bats` (WSO O3): `_run_step` sobre el `run:` real de `docker-e2e.yml` (`e2e` / `Verify deps + docker`) con Docker sano: estado 0, `__ORACLE_REACHED_END__` presente, y la salida contiene `Docker version`, `Docker Compose version`, los tokens `server=27.5.1` (el servidor del stub vale distinto que el cliente `28.0.4` a propósito: con el mismo valor `docker --version` bastaría y la aserción sería vacua) y `arch=x86_64`. **Debe fallar hoy** con estado 141 (FR-001, FR-002).
+- [ ] T012 [US1] Test O4 en `tests/ci-workflows.bats` (WSO O4): el mismo paso con `STUB_DOCKER_DOWN=1` termina con estado distinto de 0, sin centinela, y con el mensaje `Cannot connect to the Docker daemon` en la salida. Pasa hoy: es la **guarda de FR-003** que impide arreglar el 141 silenciando el fallo (por ejemplo con `|| true`).
+- [ ] T013 [US1] Tests S1 a S5 en `tests/ci-workflows.bats` (SS §7; FR-004, FR-005, FR-006, SC-007): cada uno extrae el `run:` del paso `Run docker-e2e suite`, crea un segundo directorio de stubs con un `bats` falso que registra sus argumentos en `$FAKE_ARGS`, imprime `$FAKE_TAP` y sale con `$FAKE_RC` (puesto antes que el stub trivial en el `PATH`), y afirma: **S1** `tap-all-skip.tap` con código 0, el paso termina en 1, el resumen dice `executed=0` y aparece `::error::`; **S2** `tap-empty.tap` con 0, termina en 1; **S3** `tap-mixed.tap` con 0, termina en 0, el resumen es `total=3 executed=2 skipped=1 failed=0` y `$FAKE_ARGS` contiene `--tap` y `tests/docker-e2e-x.bats` pero no `tests/other.bats` (FR-004: el glob toma todos los e2e y solo ellos); **S4** `tap-failing.tap` con 1, termina en 1 y el resumen dice `failed=1`; **S5** sin salida y con 127, termina en 127. S1 a S4 **deben fallar hoy** (el paso actual no imprime resumen ni guarda el verde vacío); S5 pasa hoy y es guarda.
+- [ ] T014 [US1] Test S6 en `tests/ci-workflows.bats` (SS §1, FR-004): `_extract_env "$WF/docker-e2e.yml" e2e "Run docker-e2e suite" DOCKER_E2E` es exactamente `1`. Pasa hoy: es guarda contra perder la variable.
+- [ ] T015 [US1] Checkpoint RED: correr `tests/ci-workflows.bats` y confirmar que fallan **exactamente** O3, S1, S2, S3 y S4 (5 `not ok`) y pasan O1, O2, O4, O5, S5, S6, R1 y R2 (8 `ok`); cada rojo por la razón correcta (O3 por estado 141, no por un error del arnés; S1 y S2 por estado 0 en vez de 1; S3 y S4 por falta de la línea de resumen). Anotar la lista y los motivos en Notes: es la evidencia de RED.
+
+### GREEN
+
+- [ ] T016 [US1] En `.github/workflows/docker-e2e.yml`, paso `Verify deps + docker`: reemplazar el `run:` por el texto de D3, sin pipes. Tras `set -euo pipefail`, definir `first_line() { local v; v=$("$@"); printf '%s\n' "${v%%$'\n'*}"; }` y usar `first_line bash --version`; mantener `bats --version`, `yq --version`, `jq --version`, `git --version`, `tmux -V`, `docker --version` y `docker compose version`; y cerrar con `docker info --format 'server={{.ServerVersion}} os={{.OperatingSystem}} arch={{.Architecture}} cgroup={{.CgroupVersion}} storage={{.Driver}}'`. No cambiar el nombre del paso. Verificado en M3 y M4: rc 0 con Docker sano, rc 1 con Docker caído, en bash 3.2.57 y 5.3.15.
+- [ ] T017 [US1] (FR-004, FR-005, FR-006) En el mismo workflow, paso `Run docker-e2e suite`: reemplazar el `run:` por el texto de referencia de SS §2 (`tee e2e.tap`, conteos con `grep -c … || true`, línea `e2e summary:`, `[ "$rc" -eq 0 ] || exit "$rc"` y la guarda de `executed` igual a 0 con `::error::`), conservando `env: DOCKER_E2E: '1'` y el nombre del paso. Mismo archivo que T016: secuencial.
+- [ ] T018 [US1] (FR-009) Checkpoint GREEN: `tests/ci-workflows.bats` en bash 5.x y luego con `PATH=/bin:$PATH` (3.2.57): **13 de 13** (O1, O2, O3, O4, O5, S1 a S6, R1, R2; R3 llega con US2). Confirmar que O3 y S1 a S4 pasaron de rojo a verde y anotarlo en Notes.
+- [ ] T019 [US1] Invariantes del workflow tras la edición: `yq '.' .github/workflows/docker-e2e.yml > /dev/null` parsea; `yq '.jobs.e2e.steps | length'` sigue en 5 (el `Checkout` es un paso `uses:`; los pasos con `run:` son 4: `yq '[.jobs.e2e.steps[] | select(.run != null)] | length'`); `yq '.permissions'` sigue en `contents: read`; `yq '.jobs.e2e."timeout-minutes"'` sigue en 30; `grep -c '\${{' .github/workflows/docker-e2e.yml` no aumentó respecto de `git show origin/main:.github/workflows/docker-e2e.yml` (la plantilla `{{.ServerVersion}}` no lleva `$`, así que no es una expresión de Actions).
+- [ ] T020 [US1] **COMPUERTA** (requiere confirmación explícita del operador, pedida para este alcance: pushes normales, sin `--force`, de la rama `039-fix-nightly-e2e-sigpipe` y despachos del workflow sobre ella hasta cerrar T034; cualquier otra cosa se vuelve a consultar): corrida de evidencia (FR-014, SC-001). (a) Con staging archivo por archivo (nunca `git add -A`) crear el commit local con mensaje ASCII; (b) empujar la rama por HTTPS con el helper de `gh` (`git -c credential.helper='' -c credential.helper='!gh auth git-credential' push https://github.com/rodrigo-hinojosa-labs/agentic-pod-launcher.git 039-fix-nightly-e2e-sigpipe:039-fix-nightly-e2e-sigpipe`; el token ya tiene el scope `workflow`); (c) `gh workflow run docker-e2e.yml --ref 039-fix-nightly-e2e-sigpipe` y `gh run watch`; (d) registrar en Notes el `run_id`, que el paso de verificación terminó en verde con las versiones y la arquitectura del runner, que el paso de la suite arrancó, la línea `e2e summary:` y la duración. Si el Docker real rechaza un campo de la plantilla de `--format` (riesgo declarado en D3), el paso falla fuerte aquí: corregir la plantilla, volver a correr el oráculo y re-despachar.
+
+**Checkpoint**: US1 completa y, tras T020, validada en un runner real.
+
+---
+
+## Phase 4: User Story 2 - La regresión no puede volver sin que la suite del host la note (Priority: P1)
+
+**Goal**: el oráculo es permanente y cubre la clase en todos los workflows; la auditoría de FR-010 queda con disposición escrita.
+
+**Independent Test**: R3 en verde y las mutaciones M1 y M7 en rojo.
+
+- [ ] T021 [US2] RED, test R3 en `tests/ci-workflows.bats` (WSO §5): primero comprueba que el barrido no es vacío (`$WF` contiene al menos 3 archivos `.yml` y `yq '[.jobs[].steps[] | select(.run != null)] | length'` da al menos 1 en cada uno) y después que `_ratchet_scan "$WF"/*.yml` no imprime nada (aserción al final: `[ -z "$output" ]`; si falla, el mensaje muestra los infractores). **Debe fallar hoy**: tras T016 `docker-e2e.yml` ya está limpio y quedan los dos `| head -1` de `test.yml`.
+- [ ] T022 [US2] Checkpoint RED: correr R3 y confirmar que su salida lista **exactamente** dos líneas, ambas del paso `Verify deps + pin the bash target (025/023: never run an assumed version)` de `test.yml`. Anotar la salida en Notes.
+- [ ] T023 [US2] En `.github/workflows/test.yml`, paso `Verify deps + pin the bash target (025/023: never run an assumed version)`: tras `set -euo pipefail` definir `first_line() { local v; v=$("$@"); printf '%s\n' "${v%%$'\n'*}"; }` y reemplazar `bash --version | head -1` por `first_line bash --version` y `/bin/bash --version | head -1` por `first_line /bin/bash --version`. No tocar nada más: las expresiones `${{ runner.os }}`, el orden de los pasos y la matriz de 025 quedan idénticos. Es un archivo distinto de T016 y T017: puede ir en paralelo con ellos una vez escrito T021.
+- [ ] T024 [US2] (FR-009) Checkpoint GREEN: R3 en verde y `tests/ci-workflows.bats` **14 de 14** en bash 5.x y con `PATH=/bin:$PATH`. Comprobar que `yq '.' .github/workflows/test.yml > /dev/null` parsea y que la lista de nombres de pasos (`yq '.jobs.bats.steps[].name' .github/workflows/test.yml`) es idéntica a la de `git show origin/main:.github/workflows/test.yml`.
+- [ ] T025 [P] [US2] Registrar en Notes la auditoría de FR-010 y SC-005 con su disposición final, tomando como fuente la tabla de D5 de `research.md` y confirmándola tras T016 y T023: 14 pasos `run:`, 5 pipes reales, 4 con consumidor que cierra antes (todos `| head`, uno fallaba y tres eran seguros por construcción) **eliminados**, `| xargs shellcheck` seguro, y los scripts de los e2e sin hallazgos. Dejar escrito que el conteo ingenuo de `|` incluye falsos positivos de `||`.
+
+**Checkpoint**: US2 completa; el ratchet y el oráculo vigilan todos los workflows.
+
+---
+
+## Phase 5: User Story 3 - Los rojos reales dejan de estar escondidos (Priority: P2)
+
+**Goal**: cada e2e que falle queda clasificado y con disposición; E1 y E3 de 031 corregidos.
+
+**Independent Test**: tras la corrida real, la tabla de Notes tiene el 100% de los rojos con tipo, evidencia y disposición, y `docker-e2e-askq-guard.bats` da 3 de 3.
+
+**Camino por Docker local (T026 a T030) y camino por CI**: si el operador no autoriza arrancar Docker, T026, T027 y T030 se omiten y la demostración rojo a verde de E1 y E3 sale de CI: el RED es la corrida de T020 (que corre con E1 y E3 sin corregir) y el GREEN es la re-despachada tras T028 y T029.
+
+- [ ] T026 [US3] **COMPUERTA** (requiere confirmación explícita del operador): arrancar Docker Desktop (hoy apagado; el Mac tiene carga ~9 por aplicaciones del usuario, así que se avisa antes). `open -a Docker` y esperar hasta que `docker info >/dev/null 2>&1` responda; anotar la versión de Docker en Notes.
+- [ ] T027 [US3] RED local de E1 y E3 (requiere T026): con el archivo **sin modificar**, `DOCKER_E2E=1 bats --tap tests/docker-e2e-askq-guard.bats` debe dar `1..3` con E1 y E3 en `not ok` y E1b en `ok`. Guardar la salida de los dos fallos en Notes y confirmar con ella las causas de D7 (E1: `jq` sin `~/.claude/settings.json`; E3: `test -n "$server"` falla). Si la causa real difiere, corregir D7 en `research.md` antes de seguir.
+- [ ] T028 [US3] E1 en `tests/docker-e2e-askq-guard.bats`: dentro del script del contenedor del test `pre_install_askq_hook registers PreToolUse+AskUserQuestion…`, agregar `mkdir -p "$HOME/.claude"` justo después de `set -e` y antes de invocar el instalador, con un comentario que diga que el arranque real ya creó `~/.claude` antes de `pre_install_askq_hook` y que `--entrypoint sh` se lo salta. No cambiar las aserciones ni el nombre del test (FR-012: arreglo acotado al test).
+- [ ] T029 [US3] E3 en el mismo archivo (después de T028): auto-sembrado con el patrón de `tests/docker-e2e-voice.bats`. En `setup()`, tras el scaffold, `mkdir -p "$E2E_AGENT_DIR/.e2e"`, copiar `tests/fixtures/telegram-server-pristine.ts` allí y escribir `$E2E_AGENT_DIR/.e2e/seed.sh` (`#!/bin/sh`, `set -e`, crear `$HOME/.claude/plugins/cache/claude-plugins-official/telegram/0.0.6`, copiar el fixture a `server.ts`, ejecutar `python3 /opt/agent-admin/scripts/apply_telegram_typing_patch.py <server.ts> > /tmp/patch.log 2>&1` y hacer `echo` de la ruta). El cuerpo de E3 pasa a `server=$(sh /workspace/.e2e/seed.sh)` y conserva las tres aserciones (`typing refresh patch v6`, `askq-guard give-up delivery patch v1` y la cadena en español con `menú`). Mantener la disciplina de comillas simples de ese archivo: ninguna variable de shell interpolada dentro de los `-c '…'`.
+- [ ] T030 [US3] GREEN local de E1 y E3 (requiere T026): `DOCKER_E2E=1 bats --tap tests/docker-e2e-askq-guard.bats` da **3 de 3** `ok`, sin saltos. Anotar en Notes el cambio de 1 de 3 a 3 de 3 (FR-012, R4 de CLS). Correr también `bats tests/ci-workflows.bats` para confirmar que nada del oráculo se movió.
+- [ ] T031 [US3] Depende de T020, la compuerta; solo lee los logs de GitHub: clasificar la primera corrida real (FR-011, SC-004, SC-006). Con `gh run view <run_id> --log | grep -E 'e2e summary|^not ok|# skip|::error::'` construir en Notes un bullet **"Primera corrida real del nightly"** con el formato de CLS §2: primera línea con `run_id` y la línea `e2e summary:`, y una fila por cada test que no terminó verde con test, archivo, estado, causa (mecanismo nombrado), tipo (arnés, producto o entorno), evidencia (`run_id` y fragmento del log) y disposición. La causa de cada rojo se mide, no se supone. Un test intermitente no se etiqueta "flake" sin repeticiones (R6 de CLS).
+- [ ] T032 [US3] Aplicar las disposiciones de T031, una por fila (FR-012, FR-013; reglas R2 a R5 de CLS). **Corregido**: solo si la causa ya estaba diagnosticada o el arreglo queda acotado al test o a su arnés, sin tocar producción, y se verifica en una re-despachada. **Aislado**: un `skip "<causa> (seguimiento: <referencia>)"` en el propio test, condicionado al entorno cuando el tipo sea entorno (por ejemplo `[ "$(uname -m)" = "x86_64" ] && skip …`), que debe aparecer en el TAP como `# skip <motivo>` y tener seguimiento concreto. **Escalado**: un defecto de producto se registra y no se esconde con un salto ni se corrige aquí. Anotar cada seguimiento en Notes.
+- [ ] T033 [US3] **COMPUERTA** (dentro del alcance autorizado en T020: push normal de la rama y re-despacho): tiempo (FR-016, SC-009). Si una corrida terminó `timed_out`, subir `timeout-minutes` de 30 a 60 en `.github/workflows/docker-e2e.yml`, actualizar la expectativa de T019, re-despachar y anotar la duración medida. No dividir la suite en jobs paralelos salvo evidencia de que 60 minutos no bastan; en ese caso se decide con el operador. Si la primera corrida cupo en los 30 minutos, anotar "N/A" con la duración medida.
+- [ ] T034 [US3] **COMPUERTA** (dentro del alcance autorizado en T020: push normal de la rama y re-despacho): corrida de cierre. Una corrida real en la que **todos** los e2e están contabilizados (verde, rojo clasificado con disposición, o salto visible con motivo): anotar su `run_id` en Notes. Cierra SC-001, SC-004, SC-006 y SC-009. Si queda un rojo sin clasificar, volver a T031.
+- [ ] T035 [US3] **COMPUERTA** (opcional; requiere T026 y confirmación del operador): línea base local arm64 de los 48 e2e, secuencial y fuera de horas de uso: `DOCKER_E2E=1 bats --tap --timing tests/docker-e2e-*.bats > /tmp/e2e-local.tap 2>&1` (30 a 90 minutos). Compararla con la clasificación de CI para atribuir rojos a la arquitectura (amd64 contra arm64) y anotar el resultado en Notes. No bloquea nada: es solo un comparador.
+
+**Checkpoint**: US3 completa; el nightly pasó de ciego a una señal con cada rojo explicado.
+
+---
+
+## Phase 6: Polish & Cross-Cutting
+
+**Purpose**: documentación, mutaciones, gates y cierre.
+
+- [ ] T036 [P] `CHANGELOG.md` (redactar en paralelo y **cerrar tras T034**: la entrada afirma E1 y E3 corregidos, que solo se verifican en T030 o en la corrida de T034): entrada bajo `## [Unreleased]`, en el estilo (inglés) de las entradas vecinas, que diga: el nightly `docker-e2e` abortaba a los pocos segundos en el paso de verificación por SIGPIPE (`docker info | head -10` bajo `pipefail`) y no ejecutaba ningún e2e; el paso ahora no usa pipe y muestra versión de servidor y arquitectura; el paso de la suite imprime un resumen y termina en rojo si no se ejecutó ningún e2e; `tests/ci-workflows.bats` ejecuta los pasos reales contra un `docker` falso y un ratchet prohíbe los consumidores que cierran el pipe antes de tiempo en los workflows; E1 y E3 de 031 corregidos. Dejar escrito **sin cambio de runtime y sin bump de `VERSION`** (precedente 019 y 025).
+- [ ] T037 [P] `CLAUDE.md`, a mano (redactar en paralelo y **cerrar tras T034**: el estado final incluye la clasificación y la corrida de cierre): llevar la entrada de 039 a su estado final y agregar un viñeta en "Common gotchas", después de la de `PRODUCER | grep -q`, sobre los `run:` de workflows: un `| head` bajo `pipefail` falla con 141 cuando el productor escribe tras el cierre (`docker info` lo hacía siempre), el shell por defecto de Actions es `bash -e {0}` sin `pipefail` salvo que el script lo active, y `tests/ci-workflows.bats` ejecuta el paso real y barre los workflows. No tocar el resto del bloque SPECKIT ni sus marcadores; nunca ejecutar el hook de contexto de agente.
+- [ ] T038 Mutación M1 (quickstart §2, SC-003): sobre una copia de seguridad de `.github/workflows/docker-e2e.yml` (`cp` a `/tmp`), reintroducir `docker info | head -10` en el paso de verificación y correr `tests/ci-workflows.bats`: deben ponerse rojos **O3** (estado 141) y **R3**. Restaurar con `cp` y confirmar con `cmp`. Anotar el resultado en Notes.
+- [ ] T039 Mutación M2: reemplazar la línea de `docker info --format …` por la misma con `|| true` al final: debe ponerse rojo **O4** (con Docker caído el paso ya no falla). Restaurar y anotar.
+- [ ] T040 Mutación M3, en dos corridas: quitar `arch={{.Architecture}}` de la plantilla de `--format` y, tras restaurar, quitar `server={{.ServerVersion}}`: en **ambas** debe ponerse rojo **O3** (faltan `arch=x86_64` o `server=27.5.1` en la salida; la segunda es la que cierra C1, porque con el servidor igual al cliente habría sobrevivido). Restaurar y anotar.
+- [ ] T041 Mutación M4 (SC-007): quitar de la suite la guarda `if [ "$executed" -eq 0 ]` (el bloque completo): deben ponerse rojos **S1** y **S2**. Restaurar y anotar.
+- [ ] T042 Mutación M5: quitar `DOCKER_E2E: '1'` del `env:` del paso de la suite: debe ponerse rojo **S6**. Restaurar y anotar.
+- [ ] T043 Mutación M6: reemplazar `exit "$rc"` por `exit 0` en el paso de la suite: deben ponerse rojos **S4** y **S5**. Y, en corridas aparte, estrechar el glob a `tests/docker-e2e-smoke.bats`, ensancharlo a `tests/*.bats` y quitar `--tap`: en cada una debe ponerse rojo **S3** (FR-004). Restaurar tras cada una y anotar.
+- [ ] T044 Mutación M7: agregar `| head -1` a cualquier línea con un comando de un paso de `.github/workflows/test.yml` (sobre una copia de seguridad): debe ponerse rojo **R3**. Restaurar y anotar. **Si alguna de M1 a M7 sobrevive** (ningún test se pone rojo), endurecer el oráculo antes de seguir y registrarlo, como en 033 y 034. Las siete tocan los mismos archivos: secuenciales, nunca en paralelo.
+- [ ] T045 Auditoría de bytes de todo lo creado o editado (`tests/ci-workflows.bats`, `tests/fixtures/ci/*`, `tests/docker-e2e-askq-guard.bats`, los dos workflows, `CHANGELOG.md`, `CLAUDE.md` y los `.md` de la feature): `LC_ALL=C grep -c $'\xcc\x80'` en 0 y `iconv -f UTF-8 -t UTF-8` sin error; los fixtures y los workflows, además, en ASCII salvo los textos que ya traigan acentos.
+- [ ] T046 (FR-009) Gates finales: `bats tests/` en bash 5.x y luego `PATH=/bin:$PATH bats tests/` en 3.2.57, secuenciales; esperado **1817 ok y 0 not ok** en ambos (1803 más 14), con los saltos de siempre; y `shellcheck -S error -e SC1090,SC1091` con el comando **exacto** del job de CI (`find` más `xargs`, ver `quickstart.md` §3) en rc 0 y sin salida. Anotar conteos y duraciones en Notes.
+- [ ] T047 Alcance acotado (FR-015, SC-008): `git diff --stat origin/main..HEAD -- docker scripts modules setup.sh` debe estar vacío; `yq '.permissions' .github/workflows/docker-e2e.yml` sigue en `contents: read`; `git diff origin/main..HEAD -- .github/workflows > /tmp/wf.diff` y `grep -c 'secrets\.' /tmp/wf.diff` da 0 (sin secretos nuevos, SC-008; sin pipe); tras `git fetch origin`, `git show origin/main:VERSION` es igual a `cat VERSION`. Si `main` avanzó, rebasar y **volver a verificar `VERSION` a mano** (la lección de 023: git no avisa de ese conflicto semántico).
+- [ ] T048 **COMPUERTA** (requiere confirmación explícita del operador): commit final y PR. Staging archivo por archivo (nunca `git add -A`), commits adicionales a los de T020 con mensaje ASCII, push con el helper de `gh`, y `gh pr create` contra `main` con un cuerpo que incluya la tabla de gates (T046), el resumen de la clasificación (T031) con el `run_id` de la corrida de cierre (T034), las mutaciones (T038 a T044) y los pendientes. El PR no se mergea antes de T034.
+- [ ] T049 **COMPUERTA** (posterior al merge; requiere esperar tres noches): SC-002. Registrar en Notes los ids de las tres corridas nocturnas siguientes y comprobar que ninguna aborta en el paso de verificación: `for id in …; do gh run view "$id" --log | grep -c 'exit code 141'; done` debe dar 0 en cada una. Un rojo por otra causa es válido y debe estar clasificado en la tabla de T031.
+
+---
+
+## Dependencies & Execution Order
+
+### Phase Dependencies
+
+- **Setup (T001-T004)**: T001 primero (verifica la base); T002, T003 y T004 en paralelo entre sí (archivos distintos).
+- **Foundational (T005-T010)**: después de T002 a T004 (los tests O2, R1 y R2 usan los fixtures). Bloquea todas las historias.
+- **US1 (T011-T020)**: después de Foundational. T020 es una COMPUERTA.
+- **US2 (T021-T025)**: después de Foundational; R3 (T021) solo queda en verde tras T016 (arreglo de `docker-e2e.yml`) y T023 (arreglo de `test.yml`).
+- **US3 (T026-T035)**: T028 y T029 pueden escribirse en cualquier momento (no necesitan Docker), pero su demostración exige T026 o la corrida de CI; T031 depende de T020; T033 a T035 dependen de las COMPUERTAS.
+- **Polish (T036-T049)**: después de las historias que se entreguen. Las mutaciones (T038-T044) después de US1 y US2. T036 y T037 se cierran tras T034; T048 después de T046 y T047; T049 solo tras el merge.
+
+### Dependencias dentro de las historias
+
+- RED antes de GREEN, siempre: T011→T016, T013→T017, T014→T017, T021→T023.
+- Mismo archivo, secuencial: `tests/ci-workflows.bats` (T005→T006→T007→T008→T009→T011→T012→T013→T014→T021); `.github/workflows/docker-e2e.yml` (T016→T017→T033→T038 a T043); `.github/workflows/test.yml` (T023→T044); `tests/docker-e2e-askq-guard.bats` (T028→T029).
+- El checkpoint RED (T015) antes de T016; el checkpoint RED de R3 (T022) antes de T023.
+
+### COMPUERTAS (nada de esto corre sin confirmación del operador)
+
+| Compuerta | Tareas que dependen | Qué se autoriza |
+|-----------|---------------------|-----------------|
+| Push de la rama y `workflow_dispatch` | T020, T033, T034 (T031 solo lee los logs que estas generan) | Commit local, pushes normales (sin `--force`) de la rama `039-fix-nightly-e2e-sigpipe` por HTTPS con el helper de `gh`, y despachos del workflow sobre ella hasta cerrar T034; el token ya tiene el scope `workflow`. Un `--force`, un push a otra rama o cualquier otra acción se vuelve a consultar |
+| Docker Desktop local | T026, T027, T030, T035 | Arrancar Docker Desktop (hoy apagado, Mac cargado) para verificar E1 y E3 y, opcional, medir la línea base local |
+| Commit final y PR | T048 | Commits adicionales, push y `gh pr create` |
+| Tiempo (esperar noches) | T049 | Observar tres nocturnas tras el merge |
+
+### Parallel Opportunities
+
+- Setup: T002, T003 y T004 en paralelo.
+- US1 GREEN y US2 GREEN: T023 (`test.yml`) en paralelo con T016 y T017 (`docker-e2e.yml`) una vez escrito T021.
+- US3: T028 y T029 (`tests/docker-e2e-askq-guard.bats`) en paralelo con cualquier tarea de otro archivo; entre sí son secuenciales.
+- Polish: T036 y T037 en paralelo; T025 en paralelo con T036 y T037.
+
+---
+
+## Parallel Example: Setup y primeras ediciones
+
+```bash
+# Setup en paralelo (archivos distintos):
+T002 tests/fixtures/ci/step-verify-with-defect.sh
+T003 tests/fixtures/ci/tap-*.tap
+T004 tests/fixtures/ci/ratchet-bad.yml  tests/fixtures/ci/ratchet-good.yml
+
+# GREEN en paralelo, una vez escritos T011, T013 y T021 (RED confirmado en T015 y T022):
+T016+T017 .github/workflows/docker-e2e.yml   # secuenciales entre si
+T023      .github/workflows/test.yml
+```
+
+---
+
+## Implementation Strategy
+
+### MVP (US1)
+
+1. Setup y Foundational: el arnés queda probado y se ve que puede fallar (O2) antes de usarlo.
+2. US1: RED visible (O3, S1 a S4), luego el arreglo del paso de verificación y la reestructuración del paso de la suite. Con eso el nightly ya no puede morir por el pipe ni dar un verde vacío.
+3. Validar en un runner real (T020, COMPUERTA) antes de seguir con la triage.
+
+### Entrega incremental
+
+1. US2: el oráculo se vuelve permanente (R3 y el ratchet) y la auditoría queda escrita.
+2. US3: clasificar los rojos reales de la primera corrida y tratar cada uno; E1 y E3 ya tienen causa fundada.
+3. Polish: mutaciones, gates dual y PR. Si la triage de US3 se alarga, la política clarificada permite aislar con seguimiento lo que exceda un arreglo acotado, en vez de bloquear el PR.
+
+---
+
+## Notes
+
+Estado al 05-10-2026: tareas generadas, ninguna ejecutada. Spec clarificado el 05-10-2026 (dos preguntas, ambas con la opción recomendada) y plan completo con mediciones M1 a M8 en `research.md`.
+
+- **Compuertas abiertas al generar las tareas**: ningún push autorizado; Docker Desktop apagado y el Mac con carga ~9 por aplicaciones del usuario; el token de `gh` ya tiene el scope `workflow`. Hasta que el operador las abra, solo se hace lo local (T001 a T019, T021 a T025, T028, T029 y T038 a T047; T036 y T037 se redactan en local y se cierran tras T034).
+- **Pregunta (c) de Fase 0** (cuántos e2e fallan realmente): sin medir. Se mide por CI en la primera corrida real (T031) y, opcionalmente, en local (T035).
+- **Cobertura reducida por diseño, no es un salto**: `qmd real (016)` corre su Tier A y pasa sin ejercer el embed si falta `QMD_EMBED_E2E=1`; no aparece como `# skip`. Cambiarlo queda fuera de alcance.
+- **Riesgo declarado (D3)**: los nombres de campo de `docker info --format` se validan contra el stub, no contra un Docker real; la validación real es T020.
+- A completar durante la implementación, con fecha: evidencia RED (T015, T022), cambio de 1 de 3 a 3 de 3 en `docker-e2e-askq-guard.bats` (T030), tabla de la primera corrida real (T031), disposiciones y seguimientos (T032), duración medida (T033), corrida de cierre (T034), mutaciones (T038 a T044), gates (T046), las tres nocturnas posteriores al merge (T049).

@@ -234,6 +234,57 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 - **A container is a usable Linux oracle, but only if it matches the runner.** Reproducing a CI-only failure locally works — the `E2BIG` above was reproduced RED/GREEN in Alpine in minutes — but the *full suite* under a naive `docker run` lies: as **root** every "unwritable directory" test fails (root ignores the mode bits), and Alpine's busybox/GNU mix fails more. Measured on the same tree: Alpine-as-root reported 20 reds, Debian-as-non-root reported 1, CI reported 2. A faithful replica is `debian:bookworm` + a non-root user + the deps the workflow installs (`age`, `gettext-base` for `envsubst`, `tmux`, `busybox`) + the pinned `yq` — and copy the repo in rather than bind-mounting it writable, or the host tree ends up owned by root.
 
 <!-- SPECKIT START -->
+**039-fix-nightly-e2e-sigpipe SPEC (2026-10-05; rama `039-fix-nightly-e2e-sigpipe` desde main=`da22a06` v0.28.0; feature de CI y
+tests, sin bump de VERSION previsto, precedente 019/025).** Origen: hallazgo posterior al merge de 038. El job
+`docker-e2e (nightly)` está rojo cinco noches seguidas (01 a 05-10-2026; runs 36855651113, 36998460203, 37116000464,
+37197340169 y 37307700006), todas con `exit 141`, y el job dura entre 4 y 11 s. **CAUSA CONFIRMADA con el log del run
+37197340169:** el paso `Verify deps + docker` (`set -euo pipefail`) termina en `docker info | head -10`; el log muestra
+exactamente 10 líneas de `docker info` y 2 ms después `exit code 141` (SIGPIPE: `head` cierra el pipe, `docker info` sigue
+escribiendo y `pipefail` entrega el 141). El job muere antes de `Run docker-e2e suite`: **el nightly no ejecutó ni un solo
+e2e en las cinco corridas medidas** (025 ya lo daba rojo por `exit 141` el 26-07-2026; la fecha de inicio no está medida).
+Los 48 e2e en 13 archivos solo corren a mano, y esconden al menos E1 y E3 de 031 (`docker-e2e-askq-guard.bats`, defectos de
+arnés ya medidos); además solo constan corridos en arm64 y el runner es amd64. El operador decidió (AskUserQuestion,
+05-10-2026) abrir el fix por spec-kit en paralelo a G1 de 038. **Spec:** `specs/039-fix-nightly-e2e-sigpipe/spec.md` (3
+historias, 16 FR, 9 SC, checklist 16/16, sin marcadores). **CLARIFY (05-10-2026, 2 preguntas, ambas con la opción
+recomendada):** ante los rojos reales se corrige lo ya diagnosticado (E1 y E3 de 031) y se aísla el resto con salto
+explícito y seguimiento; si la suite no cabe en el tope de 30 min, el primer remedio es subirlo y volver a medir (dividir
+en jobs paralelos solo con evidencia). El repo es público:
+los minutos de Actions no se facturan. Empujar cambios a `.github/workflows/` exige el scope `workflow` del token de `gh`.
+El hook `speckit.agent-context.update` NO se ejecuta (borra este bloque).
+**PLAN (2026-10-05):** `specs/039-fix-nightly-e2e-sigpipe/{plan,research,data-model,quickstart}.md` +
+`contracts/{workflow-step-oracle,suite-step,e2e-classification}.md`; Constitución 6/6 PASS (I, IV y V N/A), Complexity
+Tracking vacío. **Medido en Fase 0:** el paso real extraído del workflow y ejecutado con un `docker` falso realista da
+**141 en 30 de 30 corridas** con bash 3.2.57 y con 5.3.15 (las escrituras por línea bastan; no depende de la espera); el
+arreglo sin pipe (`docker info --format 'server=… arch=…'` y una captura `v=$("$@")` para las líneas de `bash --version`)
+da rc 0 en 30 de 30, y con Docker caído sigue fallando fuerte (rc 1 con el mensaje del daemon); **con `DOCKER_E2E` sin
+definir, `bats --tap tests/docker-e2e-*.bats` da rc 0 con 48 `# skip`: el verde vacío es real**. Auditoría: 14 pasos `run:`,
+ninguno fija `shell:` (rige `bash -e {0}` sin `pipefail`, que solo activa el script: 10 de 14), 5 pipes reales y 4 con
+consumidor que cierra antes (`| head`; uno falla, tres son seguros por construcción), que se eliminan igual. **Diseño:**
+`tests/ci-workflows.bats` (14 tests: oráculo de ejecución con autotest del arnés sobre el paso congelado de `da22a06`,
+`docker` falso que renderiza `--format`, y ratchet estático sin excepciones) más un paso de la suite con `tee`, resumen
+`e2e summary:` y guarda de verde vacío. E1 de 031 falla porque `--entrypoint sh` deja `$HOME/.claude` sin crear y el
+instalador fail-silent no escribe nada; E3 porque la imagen no trae el plugin (se auto-siembra como el e2e de voz): causa
+por lectura de código, demostración pendiente de Docker. **Línea base (c) con compuerta:** por CI con `workflow_dispatch`
+sobre la rama (necesita push autorizado; el token de `rodrigo-hinojosa` ya tiene el scope `workflow`) y local solo con
+visto bueno (Docker Desktop apagado, Mac con carga ~9 por apps del usuario). Hallazgo: `qmd real (016)` corre reducido sin
+`QMD_EMBED_E2E=1` y pasa sin ejercer el embed. Sin bump de VERSION (precedente 019 y 025).
+**TASKS (2026-10-05): 49 tareas test-first** en `specs/039-fix-nightly-e2e-sigpipe/tasks.md`: Setup T001-T004 (fixtures
+congelados, entre ellos el paso con el defecto copiado verbatim de `da22a06`); Foundational T005-T010 (el arnés y sus 5
+tests, que pasan hoy y prueban que el oráculo puede fallar); US1 MVP T011-T020 (RED visible en O3 y S1-S4 antes de tocar el
+workflow); US2 T021-T025 (R3 y el cambio de dos líneas de `test.yml`); US3 T026-T035 (E1 y E3 de 031 y la triage de la
+primera corrida real); Polish T036-T049 (siete mutaciones explícitas, gate dual que espera **1817** tests, y PR).
+**Compuertas, que no se ejecutan solas:** push de la rama y `workflow_dispatch` (T020, T033, T034), Docker Desktop local
+(T026, T035), commit final y PR (T048) y la observación de tres noches tras el merge (T049). Lo demás es local.
+**ANALYZE (2026-10-06): 11 hallazgos (0 CRITICAL, 1 HIGH, 5 MEDIUM, 5 LOW), todos remediados con la aprobación del
+operador.** El HIGH era un defecto de mi propio contrato: la aserción de versión de servidor de O3 era vacua, porque el stub
+devolvía `28.0.4` tanto para `docker --version` como para `{{.ServerVersion}}` y el oráculo no habría notado que el paso
+dejaba de pedir `ServerVersion`; ahora el servidor vale `27.5.1` y O3 afirma los tokens `server=27.5.1` y `arch=x86_64`
+(probado con mutaciones del prototipo en bash 3.2.57 y 5.3.15). Además: T019 esperaba 4 pasos y son 5 (el `Checkout` es
+`uses:`); FR-004 no tenía aserción en el host (S3 ahora verifica los argumentos de `bats`: `--tap`, el glob y que no tome
+`tests/other.bats`); R3 podía pasar con un barrido vacío; SC-008 no tenía chequeo de secretos nuevos (T047); y el Out of
+Scope se enmendó para declarar la excepción de las dos líneas de `test.yml`. Conteos intactos: 14 tests, 49 tareas, 1817
+finales. Decisión del operador (AskUserQuestion, 06-10-2026): enmendar el spec y mantener T023.
+
 **038-schema-delta-boot-nudge SPEC + PLAN + TASKS + ANALYZE + IMPLEMENT (2026-09-30/10-01; rama `038-schema-delta-boot-nudge`
 sobre `037-second-brain-rag` v0.27.0, NO sobre main; el PR espera el merge de 037, precedente 023-sobre-022;
 borrador previo en `d88cbfb`, notas de hardware de 037 commiteadas en su rama como `91da8c6`).** Origen: donna
