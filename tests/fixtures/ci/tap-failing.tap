@@ -1,0 +1,5 @@
+1..2
+ok 1 a
+not ok 2 b
+# (in test file x.bats, line 5)
+#   `false' failed

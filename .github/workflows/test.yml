@@ -108,14 +108,18 @@ jobs:
           tmux -V
           age --version
 
+      # first_line captures the whole output and prints line 1 only: no pipe, so
+      # no consumer can close it early under pipefail (039-fix-nightly-e2e-sigpipe;
+      # tests/ci-workflows.bats keeps every workflow free of that pattern).
       - name: "Verify deps + pin the bash target (025/023: never run an assumed version)"
         run: |
           set -euo pipefail
+          first_line() { local v; v=$("$@"); printf '%s\n' "${v%%$'\n'*}"; }
           echo "runner.os=${{ runner.os }}"
-          bash --version | head -1
+          first_line bash --version
           if [ "${{ runner.os }}" = "macOS" ]; then
             echo "--- /bin/bash (the interpreter the 3.2 branch below forces) ---"
-            /bin/bash --version | head -1
+            first_line /bin/bash --version
           fi
           bats --version
           yq --version

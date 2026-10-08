@@ -41,10 +41,18 @@ jobs:
           sudo /tmp/bats/install.sh /usr/local
           bats --version
 
+      # No pipe in this step: `docker info | head -10` under pipefail made head
+      # close the pipe after 10 lines, docker took SIGPIPE and the step died
+      # with 141 before the suite ever started (039-fix-nightly-e2e-sigpipe).
+      # first_line captures the whole output and prints line 1 only, and docker
+      # is asked for the few fields worth reading in a log instead of being cut
+      # with head: it still fails loudly when the daemon is down, and it shows
+      # what head never reached (engine version and architecture).
       - name: Verify deps + docker
         run: |
           set -euo pipefail
-          bash --version | head -1
+          first_line() { local v; v=$("$@"); printf '%s\n' "${v%%$'\n'*}"; }
+          first_line bash --version
           bats --version
           yq --version
           jq --version
@@ -52,9 +60,28 @@ jobs:
           tmux -V
           docker --version
           docker compose version
-          docker info | head -10
+          docker info --format 'server={{.ServerVersion}} os={{.OperatingSystem}} arch={{.Architecture}} cgroup={{.CgroupVersion}} storage={{.Driver}}'
 
+      # --tap + tee: the log shows every test live and e2e.tap stays for
+      # counting (tee reads to EOF, so it cannot close the pipe early). bats
+      # exits 0 when every test is skipped or the list is empty (DOCKER_E2E not
+      # propagated, no daemon), so the step turns "nothing executed" into a RED
+      # run: a green that ran no test is not a green. A non-zero code from bats
+      # always wins over that guard.
       - name: Run docker-e2e suite
         env:
           DOCKER_E2E: '1'
-        run: bats --print-output-on-failure tests/docker-e2e-*.bats
+        run: |
+          set -euo pipefail
+          rc=0
+          bats --print-output-on-failure --tap tests/docker-e2e-*.bats | tee e2e.tap || rc=$?
+          total=$(grep -c -E '^(ok|not ok) [0-9]+' e2e.tap || true)
+          skipped=$(grep -c -E '^ok [0-9]+ .*# skip' e2e.tap || true)
+          failed=$(grep -c -E '^not ok [0-9]+' e2e.tap || true)
+          executed=$((total - skipped))
+          echo "e2e summary: total=$total executed=$executed skipped=$skipped failed=$failed"
+          [ "$rc" -eq 0 ] || exit "$rc"
+          if [ "$executed" -eq 0 ]; then
+            echo "::error::ningun e2e se ejecuto: todos saltados o lista vacia (revisar DOCKER_E2E, el daemon de Docker y la ruta de los tests)"
+            exit 1
+          fi

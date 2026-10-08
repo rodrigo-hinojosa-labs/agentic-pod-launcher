@@ -1,0 +1,4 @@
+1..3
+ok 1 a # skip set DOCKER_E2E=1 to run
+ok 2 b # skip set DOCKER_E2E=1 to run
+ok 3 c # skip docker daemon not reachable

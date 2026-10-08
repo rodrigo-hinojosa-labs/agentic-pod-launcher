@@ -1,0 +1,4 @@
+1..3
+ok 1 a
+ok 2 b
+ok 3 c # skip reason
