@@ -292,8 +292,9 @@ GREEN de E1 y E3 salieron de CI; commits `a111361`, `fad0b7b` y `4f54f57` sobre 
 runtime: `git diff origin/main -- docker scripts modules setup.sh` vacío, VERSION 0.28.0 sin bump (precedente 019 y 025), `permissions:
 contents: read`, cero `secrets.` nuevos. Gate T046 sobre el árbol de `182f99b` más los cambios locales: `shellcheck` con el comando exacto de CI
 en rc 0, **1817 ok y 0 not ok en bash 5.3.15 y en 3.2.57** (1803 más los 14 de `tests/ci-workflows.bats`), paridad del oráculo 14 de 14 en
-Ubuntu 24.04 (bash 5.2.21, no root; ese contenedor no reproducía la SIGPIPE ignorada del runner, ver abajo); los commits posteriores solo tocan los dos e2e (que cargan y se saltan limpio sin Docker en ambos bash) y
-documentos. 14 mutaciones cazadas por los tests previstos, ninguna sobrevivió. **Tres corridas reales de `workflow_dispatch` en
+Ubuntu 24.04 (bash 5.2.21, no root; ese contenedor no reproducía la SIGPIPE ignorada del runner, ver abajo); los commits posteriores tocan el arnés de los dos e2e (que cargan y se saltan limpio sin Docker en ambos bash), el arreglo de
+`_run_step` y de O2 en `tests/ci-workflows.bats` (14 de 14 en cuatro combinaciones locales) y documentos, y la CI del PR #102 repitió la matriz
+entera sobre `a55e81b`: 1817 ok y 0 not ok en ubuntu (bash 5.2.21) y en macOS (bash 3.2.57). 14 mutaciones cazadas por los tests previstos, ninguna sobrevivió. **Tres corridas reales de `workflow_dispatch` en
 ubuntu-latest/amd64, las primeras en que la suite se ejecutó en CI:** run 37834784760 (`total=48 executed=48 skipped=0 failed=3`, 15 min 40 s),
 run 37868087664 (`failed=1`, 16 min 27 s) y run 37873376103 (**`failed=0`: 48 de 48 verdes**, 14 min 46 s); el tope de 30 min cabe con holgura y
 `timeout-minutes` no se tocó. **Los tres rojos eran defectos del arnés, ninguno de producto:** E1 de 031 (`--entrypoint sh` salta el arranque que
