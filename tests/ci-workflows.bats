@@ -127,7 +127,11 @@ STUB
 # its end never prints it. The interpreter is the bash that runs bats (3.2.57 or
 # 5.x: the dual gate applies to the oracle too). An optional leading -N is the
 # exit status the step is EXPECTED to end with (bats warns on an unexpected-looking
-# 127; S5 expects it on purpose). Leaves $status and $output.
+# 127; S5 expects it on purpose). SIGPIPE is put back to its default disposition
+# right before the step starts (perl: an ignored signal survives exec and a bash
+# reset of it is refused): the CI runner hands bats a process tree that ignores
+# it, and a bash fake of docker could then no longer die of it (see O2). Leaves
+# $status and $output.
 _run_step() {
   local expect=""
   case "${1:-}" in -[0-9]*) expect="$1"; shift ;; esac
@@ -137,7 +141,8 @@ _run_step() {
   cp "$script" "$copy"
   printf '\necho __ORACLE_REACHED_END__\n' >> "$copy"
   cd "$TMP_TEST_DIR/run"
-  run ${expect:+"$expect"} env "$@" "PATH=${STEP_STUBS:-$TMP_TEST_DIR/stubs}:$PATH" "$BASH" -e "$copy"
+  run ${expect:+"$expect"} env "$@" "PATH=${STEP_STUBS:-$TMP_TEST_DIR/stubs}:$PATH" \
+    perl -e '$SIG{PIPE} = "DEFAULT"; exec @ARGV' "$BASH" -e "$copy"
 }
 
 # _write_ratchet_jq FILE: the scanner program (WSO section 5). Lines of every
@@ -227,6 +232,20 @@ _ratchet_scan() {
   _lacks "$output" "__ORACLE_REACHED_END__"
   # the 141 comes from `docker info | head -10` and not from anything else:
   # head printed exactly ten lines of the first batch and closed the pipe
+  _has "$output" "client line 10"
+  _lacks "$output" "client line 11"
+  # ...and it must not depend on how the CALLER left SIGPIPE. This oracle's first
+  # CI run (PR #102, ubuntu-latest) failed right here: the process tree that runs
+  # bats there ignores SIGPIPE, an ignored signal survives exec, and a bash fake
+  # cannot die of it -- `echo` just reports "write error: Broken pipe" and the
+  # script goes on to exit 0. The real docker is Go, which dies of SIGPIPE on a
+  # broken stdout whatever it inherited (measured with gh: 141 either way), so the
+  # nightly did see the 141. _run_step resets SIGPIPE to its default before the
+  # step starts; this leg proves it with a caller that ignores the signal.
+  trap '' PIPE
+  _run_step "$FIX/step-verify-with-defect.sh"
+  [ "$status" -eq 141 ]
+  _lacks "$output" "__ORACLE_REACHED_END__"
   _has "$output" "client line 10"
   _lacks "$output" "client line 11"
 }

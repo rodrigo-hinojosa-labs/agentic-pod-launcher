@@ -119,7 +119,9 @@
   - **`tests/ci-workflows.bats` (14 tests) keeps it from coming back.** It extracts the REAL `run:`
     of those two steps with `yq` and runs it under `bash -e` against a fake `docker` that writes in two
     batches like the real one, and it proves the harness itself on a frozen copy of the defective step
-    (which must end in 141). A ratchet with no exceptions rejects, in every workflow `run:`, a pipe
+    (which must end in 141, also when the caller ignores SIGPIPE, as the process tree that runs bats
+    on the Actions runner does: a bash fake cannot die of an ignored signal, so the harness resets it
+    before launching the step). A ratchet with no exceptions rejects, in every workflow `run:`, a pipe
     into `head`, `grep -q`/`-m`, `sed Nq` or `awk` with `exit`. The two `| head -1` diagnostics in
     `test.yml` (safe by construction, but the ratchet has no exceptions) became `first_line` calls;
     the bash matrix of 025 and every other line of that file are untouched.
