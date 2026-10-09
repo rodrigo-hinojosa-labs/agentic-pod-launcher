@@ -98,6 +98,61 @@
     `.graph/` from the inotify watch) rather than blocking this release.
 
 ### Fixed
+- **The nightly `docker-e2e` job reaches its suite again, and a green now means tests ran —
+  `039-fix-nightly-e2e-sigpipe`** (no VERSION change: CI and tests only, no runtime code; the
+  precedent of 019 and 025). The nightly was red on every night measured and died within 4 to 11
+  seconds, in its `Verify deps + docker` step, before a single e2e ran: `docker info | head -10` under
+  `set -o pipefail`. `head` closes the pipe after ten lines, `docker info` keeps writing, takes
+  SIGPIPE, and `pipefail` hands the step a 141. The 48 e2e tests (13 files) therefore never ran in CI,
+  and whatever was wrong in them stayed hidden for as long.
+
+  - **The verification step has no pipe.** `first_line` captures a tool's output and prints line 1
+    (for `bash --version`), and `docker info --format` asks Docker for the fields worth reading in a
+    log (server version, OS, architecture, cgroup version, storage driver) instead of cutting its
+    output with `head`. A dead daemon still fails the step loudly, and the log now shows what
+    `head -10` never reached.
+  - **A green means tests ran.** The suite step streams TAP through `tee`, prints one
+    `e2e summary: total=N executed=N skipped=N failed=N` line, exits with bats's own code when that is
+    not 0, and exits 1 with an `::error::` annotation when bats exits 0 but nothing executed (every
+    test skipped, an empty list, `DOCKER_E2E` not propagated). Measured: `bats` alone gives rc 0 with
+    48 skips.
+  - **`tests/ci-workflows.bats` (14 tests) keeps it from coming back.** It extracts the REAL `run:`
+    of those two steps with `yq` and runs it under `bash -e` against a fake `docker` that writes in two
+    batches like the real one, and it proves the harness itself on a frozen copy of the defective step
+    (which must end in 141). A ratchet with no exceptions rejects, in every workflow `run:`, a pipe
+    into `head`, `grep -q`/`-m`, `sed Nq` or `awk` with `exit`. The two `| head -1` diagnostics in
+    `test.yml` (safe by construction, but the ratchet has no exceptions) became `first_line` calls;
+    the bash matrix of 025 and every other line of that file are untouched.
+  - **Two red e2e of 031 fixed (harness defects, not product).** The first real runs showed them
+    exactly as diagnosed beforehand. `pre_install_askq_hook registers PreToolUse+AskUserQuestion in
+    settings.json at boot` ran the installer with `--entrypoint sh`, which skips the boot that
+    creates `~/.claude`; the fail-silent installer wrote nothing and the next `jq` aborted. `the
+    patched plugin server.ts carries typing v6 + the askq give-up hunk` looked for a Telegram plugin
+    the image never ships (it is installed after login). The first test now creates the directory the
+    way the real boot does; the second seeds the pristine fixture and runs the image's patcher, the
+    way `docker-e2e-voice.bats` already does. No assertion and no test name changed. Same amd64
+    runner, red in run 37834784760 and green in run 37868087664.
+  - **The qmd e2e was a race in the test, and is fixed.** The third red of the first real run,
+    `qmd e2e: first-boot setup, watcher+cron wiring, reindex on vault change, caps intact`, failed on
+    an assertion that is soft on macOS and enforced only on Linux, so no local run had ever shown it.
+    A dump added to the test for the failing case only (processes, state file, engine calls, inotify
+    limits, a raw `inotifywait` probe) measured the cause: the test wrote its note about 12 s before
+    `start_services.sh` launches the watcher (`main()` starts it only after the initial session
+    returns, and the marketplace registration alone took 12 s on the runner), and inotify never
+    replays an event that predates the watch. The "watcher alive" check of phase 2 had passed with no
+    watcher running. The test now waits, up to 120 s, for the real watcher (the pidfile the product
+    itself uses plus the `inotifywait` process) before it writes anything; no assertion changed. Red
+    in runs 37834784760 and 37868087664, green in run 37873376103. That is one green after two reds:
+    it says the cause is right, not that the test is stable, and the nightly will supply the
+    repetitions. The watcher only covers the vault once the initial session is up; anything written
+    earlier waits for the `*/5` cron backstop, which the code already declares as the backstop.
+  - **What the nightly shows now.** The suite ran in CI for the first time: 48 of 48 e2e executed on
+    ubuntu-latest (amd64) in 14 to 16 minutes of the 30 allowed, all green in run 37873376103
+    (`e2e summary: total=48 executed=48 skipped=0 failed=0`). All three reds that the first run
+    exposed were harness defects, none of the product; `timeout-minutes` stays at 30.
+  - **Not a coverage claim.** A green nightly still does not exercise the `qmd real (016)` embed: that
+    test passes without it unless `QMD_EMBED_E2E=1`, and it does not appear as a skip.
+
 - **Cold-start boot resilience + honest diagnostics — `036-cold-start-boot-resilience`**
   (VERSION 0.25.1 → 0.26.0). `donna` was down for 25 minutes after a routine
   image rebuild: a cold MCP cache made the first boot lose the channel-health
