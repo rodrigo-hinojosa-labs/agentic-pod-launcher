@@ -184,8 +184,29 @@ PY
   [[ "$output" == *"embed"* ]]
 
   # ── Phase 2: wiring — watcher alive, cron line present, inotifywait installed ─
-  run in_container sh -c 'pgrep -f qmd_watch.sh >/dev/null && echo WATCHER_UP'
-  [[ "$output" == *"WATCHER_UP"* ]]
+  # 039-fix-nightly-e2e-sigpipe: WAIT for the watcher instead of checking once.
+  # start_services.sh main() launches it only after the initial session has
+  # returned (the marketplace registration alone took 12s on the CI runner),
+  # while the engine stub lets phases 1-3 finish in seconds. The old one-shot
+  # `pgrep -f qmd_watch.sh` passed with no watcher running (run 37868087664:
+  # the watcher logged its start 15s after phase 3's state write), and phase 4
+  # then wrote its note to a vault nobody was watching yet -- inotify never
+  # replays an event that predates the watch. Liveness is what the product
+  # itself uses (qmd_watch_alive: the pidfile) plus the inotifywait process,
+  # looked up in `ps` with a bracket so this very command line cannot match.
+  local up_deadline=$(( $(date +%s) + 120 )) watcher_up=0
+  while [ "$(date +%s)" -lt "$up_deadline" ]; do
+    if in_container sh -c 'kill -0 "$(cat /tmp/agent-watchdog/qmd-watch.pid 2>/dev/null)" 2>/dev/null && ps w | grep "[i]notifywait" >/dev/null' 2>/dev/null; then
+      watcher_up=1; break
+    fi
+    sleep 2
+  done
+  if [ "$watcher_up" -ne 1 ]; then
+    echo "--- the qmd watcher did not come up in 120s; container logs ---" >&2
+    (cd "$DEST" && docker compose logs --tail=60 2>&1) >&2 || true
+  fi
+  [ "$watcher_up" -eq 1 ]
+  sleep 2   # inotifywait -r adds its watches right after exec; give it a beat
   # The */5 backstop line reaches /etc/crontabs/agent via entrypoint's root
   # crontab-sync loop, which polls every 15s. The engine stub makes first-boot
   # setup finish in seconds, so POLL for the line rather than racing the first
@@ -263,6 +284,10 @@ PY
       in_container sh -c 'cat "$HOME/.cache/qmd/engine-calls.log" 2>&1'
       echo "--- raw inotifywait probe (does the kernel deliver events for an in-container write on this mount?):"
       in_container sh -c '(inotifywait -q -t 6 -e create,modify /home/agent/.vault > /tmp/probe.out 2>&1 &); sleep 1; echo probe > /home/agent/.vault/probe-note.md; sleep 4; cat /tmp/probe.out; echo "(end of probe)"'
+      echo "--- 20s after the probe write: does the WATCHER react to a write made after it started? (debounce is 15s)"
+      sleep 20
+      in_container sh -c 'cat /workspace/scripts/heartbeat/qmd-index.json 2>&1'
+      in_container sh -c 'cat "$HOME/.cache/qmd/engine-calls.log" 2>&1'
       echo "--- container logs (tail):"
       (cd "$DEST" && docker compose logs --tail=60 2>&1)
     } >&2 || true
