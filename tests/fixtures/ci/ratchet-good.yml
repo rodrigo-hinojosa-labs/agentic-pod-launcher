@@ -1,0 +1,26 @@
+# Frozen fixture for the 039 ratchet (tests/ci-workflows.bats, R2): pipes whose
+# consumer reads its input to EOF, plus an `||` list and a commented-out
+# offender. The scanner MUST report none of them (it must not block more than
+# the class it exists for).
+name: ratchet-good
+on: workflow_dispatch
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - name: xargs
+        run: printf 'a\n' | xargs echo
+      - name: tee
+        run: printf 'a\n' | tee /dev/null
+      - name: sort
+        run: printf 'b\na\n' | sort
+      - name: wc
+        run: printf 'a\n' | wc -c
+      - name: grep without q
+        run: printf 'x\n' | grep x
+      - name: or list
+        run: true || echo y
+      - name: commented out
+        run: |
+          # producer | head -1
+          true

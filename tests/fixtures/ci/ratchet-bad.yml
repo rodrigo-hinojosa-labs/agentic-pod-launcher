@@ -1,0 +1,25 @@
+# Frozen fixture for the 039 ratchet (tests/ci-workflows.bats, R1): one step per
+# consumer that closes its pipe before the producer is done. Every step MUST be
+# reported by the scanner; the step name is the pattern it carries.
+name: ratchet-bad
+on: workflow_dispatch
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - name: head -1
+        run: |
+          set -euo pipefail
+          producer | head -1
+      - name: head -n 3
+        run: producer | head -n 3
+      - name: grep -q
+        run: producer | grep -q x
+      - name: grep -m1
+        run: producer | grep -m1 x
+      - name: sed 1q
+        run: producer | sed 1q
+      - name: sed -n 1q
+        run: producer | sed -n 1q
+      - name: awk exit
+        run: producer | awk '{print; exit}'
