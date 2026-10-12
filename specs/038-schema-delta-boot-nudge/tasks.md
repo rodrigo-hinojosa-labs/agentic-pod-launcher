@@ -353,3 +353,4 @@ las pendientes están marcadas como tales y no se declaran cerradas.
   ubica en el paso `Verify deps + docker`: `docker info | head -10` bajo `set -euo pipefail` recibe SIGPIPE y el job
   muere a los pocos segundos (4 a 11 s medidos), antes de `Run docker-e2e suite`, así que no ejecuta ningún e2e. Se atiende como feature aparte,
   por spec-kit.
+- **Seguimiento del hallazgo ajeno (12-10-2026).** Lo atendió la feature 039: PR #102 mergeado el 09-10-2026 (squash `d345a5f`) y las tres nocturnas programadas siguientes (10, 11 y 12-10) pasaron con la suite completa, 48 de 48; el detalle y los ids se registran en T049 de `specs/039-fix-nightly-e2e-sigpipe/tasks.md`. La nota de arriba queda como estaba el 05-10-2026.

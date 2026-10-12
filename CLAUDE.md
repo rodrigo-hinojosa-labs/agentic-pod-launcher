@@ -387,8 +387,8 @@ runbook), G2 y el rollout, y el PR de 038 con confirmación del operador (el PR 
 el árbol; los hashes `d88cbfb` y `91da8c6` de arriba son de antes del rebase). **038 mergeó el 05-10-2026 (PR #101,
 squash `da22a06`, VERSION 0.28.0; árbol idéntico al de la rama validada), sin G0 ni G1 registrados.** **Siguiente:** G1
 en linus, ahora desde main (decisión del operador, 05-10-2026; runbook de §7 adaptado) y G0 en ferrari-admin; después
-el rollout. Aparte: el nightly `docker-e2e` no ejecuta ningún e2e, porque aborta a los pocos segundos por SIGPIPE en
-`docker info | head -10` bajo pipefail (cinco noches seguidas, confirmado el 05-10-2026); fix por spec-kit.
+el rollout. Aparte: el nightly `docker-e2e` no ejecutaba ningún e2e, porque abortaba a los pocos segundos por SIGPIPE en
+`docker info | head -10` bajo pipefail (cinco noches seguidas, confirmado el 05-10-2026); lo atendió 039, mergeada el 09-10-2026 (PR #102): ver su entrada.
 
 **037-second-brain-rag SPEC + PLAN + TASKS + IMPLEMENT EN CURSO (2026-09-26/28; rama
 `037-second-brain-rag` desde main=`70214d9` v0.26.0→**0.27.0**; NO mergeada, sin commit — working

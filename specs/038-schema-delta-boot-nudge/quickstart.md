@@ -135,7 +135,9 @@ SRC=~/apl-src
 
 **Fase 0. Llevar `main` a ferrari.** El clon sigue `main` en su refspec, así que basta un fetch. El checkout del
 paso A3 es desatado y fijo en `da22a06` (el squash de 038), así que funciona aunque el clon tenga otra rama o
-`main` desactualizada, y la evidencia de G1 queda atada a ese commit.
+`main` desactualizada, y la evidencia de G1 queda atada a ese commit. Desde el 12-10-2026 `main` está en `13cafc3` (la
+feature 039 y la actualización de spec-kit entraron después), pero el código de runtime es idéntico al de `da22a06`
+(`git diff da22a06 origin/main -- docker scripts modules setup.sh` sale vacío), así que el pin se mantiene.
 
 - Con acceso al remoto: `git -C "$SRC" fetch origin main`. Comprobar con `git -C "$SRC" cat-file -t da22a06`, que debe
   decir `commit`.
