@@ -20,7 +20,7 @@ Una corrida manual con los valores por defecto se comporta como hoy: corre la su
   1. Cada paso gana un `id` legible, que es lo que `collect` reporta como "paso que falló": `checkout`, `install_yq`, `install_bats`, `verify_deps`, `run_suite`, `simulate`, `collect`.
   2. `run_suite` gana `if: ${{ !inputs.alert_trial }}`.
   3. Paso nuevo `simulate` (`if: ${{ inputs.alert_trial }}`, entorno `TRIAL_OUTCOME: ${{ inputs.trial_outcome }}`): `run: .github/scripts/nightly-alert.sh simulate "$TRIAL_OUTCOME"`.
-  4. Paso nuevo `collect`, el último (`if: ${{ always() }}`, entorno `STEPS_JSON: ${{ toJSON(steps) }}`): `run: .github/scripts/nightly-alert.sh collect`.
+  4. Paso nuevo `collect`, el último (`if: ${{ always() }}`, `continue-on-error: true`, entorno `STEPS_JSON: ${{ toJSON(steps) }}`): `run: .github/scripts/nightly-alert.sh collect`. El script sale siempre con 0; el `continue-on-error` cubre lo único que el script no puede: que ni siquiera arranque (un bit ejecutable perdido en el commit, un `checkout` que falló). Sin él, esa falla volvería roja una noche verde, que es justo lo que FR-009 prohíbe (hallazgo de la implementación, 13-10-2026; no estaba en el contrato original).
   5. `outputs` del job: `failed_step`, `summary` y `failed_tests`, cada uno `${{ steps.collect.outputs.<nombre> }}`.
   6. `timeout-minutes: ${{ (inputs.alert_trial && inputs.trial_outcome == 'timeout') && 1 || 30 }}`: vale 30 en las corridas programadas y en las manuales normales (`inputs` no define esas claves) y 1 solo en el ensayo de tiempo agotado.
 
@@ -38,9 +38,11 @@ alert:
     issues: write
   steps:
     - name: Checkout
+      continue-on-error: true
       uses: actions/checkout@v6
     - name: Publish the nightly notice
       continue-on-error: true
+      timeout-minutes: 3
       env:
         GH_TOKEN: ${{ github.token }}
         GH_REPO: ${{ github.repository }}
@@ -57,6 +59,7 @@ alert:
       run: .github/scripts/nightly-alert.sh notify
 ```
 
+- **Ningún paso de este job puede volver roja una noche verde** (FR-009; hallazgo de la revisión independiente del 13-10-2026): el `Checkout` lleva `continue-on-error: true` (un fallo transitorio de GitHub), y el paso que publica lleva `continue-on-error: true` y un tope propio de 3 minutos, menor que los 5 del job, para que un `gh` colgado termine como un **paso** fallido (que se absorbe) y no como un **job** que agotó su tiempo (que pondría roja la corrida). Si el `Checkout` falla, el paso siguiente no encuentra el script, también falla y también se absorbe: la noche conserva su color y el aviso se pierde con un icono rojo dentro de un job verde.
 - El job no arranca en una corrida manual normal (la expresión `if` lo excluye) y, además, el script rechaza ese caso por su cuenta (defensa en profundidad).
 - `contents: read` está solo para el `checkout` que trae el script; el único permiso nuevo es `issues: write` (FR-013, research R1).
 - Los valores externos llegan por **entorno**, nunca interpolados dentro de `run:` (evita la inyección de comandos por nombres de test o entradas).
@@ -72,11 +75,11 @@ alert:
 | AW-1 | El job `alert` existe, tiene `needs: e2e`, su `if` es exactamente la expresión de la sección 3 y `timeout-minutes` vale 5 |
 | AW-2 | `permissions` del job `alert` es exactamente `{contents: read, issues: write}` |
 | AW-3 | El nivel del workflow y el job `e2e` no tienen `issues` en `permissions` (solo `contents: read`) |
-| AW-4 | El paso `notify` lleva `continue-on-error: true` y su `run` llama al script con `notify` |
+| AW-4 | El paso `notify` lleva `continue-on-error: true` y `timeout-minutes: 3`; el `Checkout` del job `alert` lleva `continue-on-error: true`; su `run` llama al script con `notify` sin `${{ }}` dentro; y cada una de las 12 variables de su entorno (y ninguna más) vale exactamente la expresión de la sección 3 |
 | AW-5 | No hay `secrets.` en el workflow |
 | AW-6 | Las entradas `alert_trial` y `trial_outcome` existen con tipo, valores y por defecto de la sección 1 |
 | AW-7 | `run_suite` y `simulate` tienen las condiciones de la sección 2; `timeout-minutes` del job `e2e` es el literal de la sección 2, punto 6 |
-| AW-8 | `collect` es el último paso, con `if: ${{ always() }}`; las tres salidas del job apuntan a `steps.collect.outputs.*`; todos los pasos tienen `id` |
+| AW-8 | `collect` es el último paso, con `if: ${{ always() }}` y `continue-on-error: true`; las tres salidas del job apuntan a `steps.collect.outputs.*`; todos los pasos tienen `id` |
 | AW-9 | El script referenciado existe, es ejecutable y empieza con `#!/usr/bin/env bash` |
 
 ## 6. Limitaciones declaradas

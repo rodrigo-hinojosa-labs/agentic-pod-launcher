@@ -15,7 +15,7 @@ Qué prueba la suite del host (sin Docker ni red) y con qué instrumentos, de mo
 
 Ejecuta el script con un entorno explícito (las variables de `data-model.md` sección 1), `PATH=<directorio del falso>:$PATH`, en un directorio temporal (allí vive `e2e.tap`), con la disposición de SIGPIPE que pida `SIGPIPE_MODE`, fijada con `perl` justo antes de lanzarlo: `ignore` por defecto (es la que el script hereda en el runner de GitHub) o `default`. A diferencia de 039, donde el `docker` falso en bash necesitaba el valor por defecto para morir como el binario Go, aquí el script debe dar el mismo resultado con las dos, y N17 lo comprueba.
 
-**Costuras de prueba** (el workflow no las define): `ALERT_SCRIPT` y `ALERT_WORKFLOW` apuntan a las rutas bajo prueba (por defecto `.github/scripts/nightly-alert.sh` y `.github/workflows/docker-e2e.yml` del repositorio), de modo que cada mutación se aplica a una copia sin tocar el árbol; `NIGHTLY_ALERT_NOW` fija el "ahora" del script (épocas del 20, 21 y 22-10-2026 a las 12:00 UTC: `1792497600`, `1792584000` y `1792670400`), así que ningún test depende del reloj ni de la medianoche UTC. Deja `status`, `output` y el estado del falso para las aserciones. Las afirmaciones negativas se escriben con `_lacks` o `run …; [ "$status" -ne 0 ]`, nunca con `!` intermedio (bats no lo convierte en falla); los `[[ ]]` intermedios se evitan (muertos en bash 3.2).
+**Costuras de prueba** (el workflow no las define): `ALERT_SCRIPT` y `ALERT_WORKFLOW` apuntan a las rutas bajo prueba (por defecto `.github/scripts/nightly-alert.sh` y `.github/workflows/docker-e2e.yml` del repositorio), de modo que cada mutación se aplica a una copia sin tocar el árbol; `NIGHTLY_ALERT_NOW` fija el "ahora" del script (épocas del 20, 21 y 22-10-2026 a las 12:00 UTC: `1792497600`, `1792584000` y `1792670400`), así que ningún test depende del reloj ni de la medianoche UTC. Si el `gh` falso registró una llamada `UNSUPPORTED` (una que el `gh` real rechazaría), el propio arnés hace fallar el test que la provocó: el script la convierte en un `::warning::` y sale 0, así que sin esto ninguna aserción la vería. Los argumentos con forma `VAR=valor` van al entorno del script y los demás van al script tras el subcomando (`_alert simulate red`). Deja `status`, `output` y el estado del falso para las aserciones. Las afirmaciones negativas se escriben con `_lacks` o `run …; [ "$status" -ne 0 ]`, nunca con `!` intermedio (bats no lo convierte en falla); los `[[ ]]` intermedios se evitan (muertos en bash 3.2).
 
 ## 3. Guardias de no-vacuidad
 
@@ -32,19 +32,19 @@ Ejecuta el script con un entorno explícito (las variables de `data-model.md` se
 |---|---|---|---|
 | N01 | rojo nuevo | crea la etiqueta y el issue con título, etiqueta, asignado y cuerpo (marcador `total=1`, enlace, paso fallido, resumen, nombres en bloque cercado) | FR-001, FR-002, FR-019, SC-001 |
 | N02 | rojo sin resumen | `FAILED_STEP=verify_deps`, sin `SUMMARY` ni tests: el cuerpo dice "no disponible" y "ninguno informado" | FR-002 |
-| N03 | rojo repetido | con un aviso abierto no se crea otro; `total` +1; fila y comentario nuevos | FR-005 |
+| N03 | rojo repetido | con un aviso abierto no se crea otro; `total` +1; fila y comentario nuevos. Dos piernas más: un cuerpo convertido a CRLF (lo que guarda el editor web) sigue reconociéndose, sin advertencia y sin perder las filas; y un `total` con ceros a la izquierda (`08`) se lee como decimal y no mata el script | FR-005 |
 | N04 | racha de tres | tres corridas rojas con ids distintos dejan un solo aviso con `total=3` y tres filas | SC-002 |
 | N05 | verde tras rojo | marcador `resolved`, comentario con el enlace verde y cierre con razón `completed` | FR-006, SC-003 |
 | N06 | verde sin aviso previo | sin aviso, o con el último en `resolved`: cero llamadas mutantes | FR-006 |
 | N07 | cancelada y desconocidos | `cancelled`, `skipped` y un valor desconocido: cero llamadas mutantes y el valor aparece en la salida | FR-007, R7 |
 | N08 | corrida manual normal | `workflow_dispatch` sin ensayo, en rojo y en verde: cero llamadas, ni siquiera `list` | FR-011 |
 | N09 | cierre manual | último aviso `CLOSED` con `state=open` y rojo: se reabre con comentario, `total` +1, no se crea otro | FR-008 |
-| N10 | nueva racha | (a) último aviso `CLOSED` con `state=resolved` y rojo: se crea uno nuevo y el anterior no se toca; (b) último aviso `CLOSED` con `state=open` (cerrado a mano) y **verde**: solo se reescribe su marcador a `resolved` con `edit` (sin reabrir, comentar ni cerrar) y el rojo siguiente crea uno nuevo sin reabrir el viejo | FR-008 |
+| N10 | nueva racha | (a) el ciclo completo por el propio script (rojo, verde, rojo): el segundo rojo crea un aviso nuevo y el cerrado no se toca; y, con un aviso `CLOSED` sembrado con `state=resolved`, lo mismo; (b) último aviso `CLOSED` con `state=open` (cerrado a mano) y **verde**: solo se reescribe su marcador a `resolved` con `edit` (sin reabrir, comentar ni cerrar) y el rojo siguiente crea uno nuevo sin reabrir el viejo | FR-008 |
 | N11 | ensayo aislado | con un aviso real abierto, un ensayo rojo crea el de ensayo con su etiqueta y no toca el real; un ensayo verde cierra solo el de ensayo | FR-011, FR-016 |
-| N12 | fallas de gh | con cada comando fallando por turnos el script sale con 0 y avisa; si falla la asignación, el aviso se crea igual sin asignado | FR-009, FR-019, SC-004 |
+| N12 | fallas de gh | con cada comando fallando por turnos el script sale con 0 y avisa; si falla la asignación, el aviso se crea igual sin asignado. Las piernas que hacen fallar `edit`, `comment`, `reopen` y `close` ejercen los flujos de la historia 3, así que N12 completo queda verde con ella. Un verde cuyo `edit` del marcador falla **no cierra** el aviso (queda abierto) y la noche verde siguiente lo cierra | FR-009, FR-019, SC-004 |
 | N13 | idempotencia | el mismo `RUN_ID` dos veces, en rojo y en verde: la segunda no cambia nada | Principio IV |
-| N14 | cotas | 25 tests fallidos: 20 nombres y `... y 5 mas`; nombres largos recortados; total 155 con 10 filas; cuerpo menor de 60.000 caracteres | FR-003 |
-| N15 | texto inerte | nombres con `@usuario`, `#12`, comillas invertidas, `~~~`, `<!--` y `-->`: saneados, bloque cercado íntegro y marcador intacto | FR-004 |
+| N14 | cotas | 25 tests fallidos: 20 nombres y `... y 5 mas`; nombres largos recortados; total 155 con 10 filas; cuerpo menor de 60.000 caracteres; y la cadena real: lo que `collect` entrega con 25 fallos (20 nombres y la línea de resto) entra a `notify` y el encabezado dice 25 | FR-003 |
+| N15 | texto inerte | nombres con `@usuario`, `#12`, comillas invertidas, `~~~`, `<!--` y `-->`, caracteres de control y bytes no ASCII (generados con `printf` en la prueba: no hay fixture con bytes de control), un resumen y un paso fallido hostiles y una URL de corrida con paréntesis y corchetes: saneados, cuerpo de ASCII imprimible, bloque cercado íntegro, marcador intacto y un solo enlace en la fila | FR-004 |
 | N16 | marcador inválido | cuerpo editado a mano: se comenta y se reabre si hacía falta, sin reescribir el cuerpo, con advertencia | NF sección 2 |
 | N17 | independencia de SIGPIPE | el caso N03 con `SIGPIPE_MODE=ignore` y con `SIGPIPE_MODE=default` da el mismo estado final, la misma salida (incluida `stderr`) y el mismo código; una sonda del arnés (`yes` hacia `head -1`, mirando `PIPESTATUS`) demuestra que cada modo aplica de verdad su disposición (141 en `default`, otro valor en `ignore`) | R14 |
 
@@ -62,7 +62,7 @@ Ejecuta el script con un entorno explícito (las variables de `data-model.md` se
 | Id | Caso | Afirma | Cubre |
 |---|---|---|---|
 | N22 | higiene del script | `bash -n`, shebang, bit de ejecución, sin construcciones de bash 4, sin pipes que cierren antes de tiempo (con las mismas reglas del ratchet de 039) | R14, Principio III |
-| N23 a N31 | AW-1 a AW-9 | las pruebas estructurales de `contracts/alert-workflow.md` sección 5 | FR-009, FR-011, FR-013, SC-007 |
+| N23 a N31 | AW-1 a AW-9 | las pruebas estructurales de `contracts/alert-workflow.md` sección 5. N26 compara el **valor exacto** de las 12 variables de entorno del paso que publica, el `continue-on-error` del `Checkout` del job `alert` y el tope de 3 minutos del paso (el oráculo de comportamiento fija esas variables él mismo, así que sin esta comparación una expresión equivocada dejaría mudo el aviso con todo en verde) | FR-009, FR-011, FR-013, SC-007 |
 
 Son **32 tests** (N00 más N01 a N31); `tasks.md` fija el número final y el esperado total (1817 más los nuevos).
 

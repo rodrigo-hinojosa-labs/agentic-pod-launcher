@@ -29,7 +29,7 @@ nightly-alert.sh notify           # decide y publica el aviso
 |---|---|
 | `failed_step` | el primer id, en el orden de `STEPS_JSON`, cuyo `outcome` es `failure` o `cancelled`; vacío si ninguno o si `STEPS_JSON` no es JSON válido |
 | `summary` | si hay `e2e.tap`: `total=N executed=N skipped=N failed=N`, con las mismas tres cuentas del paso `Run docker-e2e suite` (`^(ok\|not ok) [0-9]+`, `^ok [0-9]+ .*# skip`, `^not ok [0-9]+`; `executed = total - skipped`); vacío si no hay archivo |
-| `failed_tests` | los nombres de las líneas `not ok N <nombre>`, uno por línea, cada uno recortado a 120 caracteres, hasta 20, más `... y M más` si había más; vacío si no hay fallos o no hay archivo |
+| `failed_tests` | los nombres de las líneas `not ok N <nombre>`, uno por línea, cada uno saneado (sección 4, "Texto inerte") y recortado a 120 caracteres con `...`, hasta 20, más la línea `... y M mas` (en ASCII, sin tilde) si había más; vacío si no hay fallos o no hay archivo. Siempre se escribe con delimitador aleatorio, vacío incluido |
 
 **Paridad**: la cadena `summary` es idéntica a la que imprime el paso de la suite (`e2e summary: ` más estas cuentas) para el mismo TAP; una prueba lo exige (AO N19).
 
@@ -59,15 +59,19 @@ La primera línea de salida siempre incluye el valor de `RUN_RESULT` recibido (e
 **Llamadas a `gh`**, en este orden y solo las que la decisión necesita (flags de research R8):
 
 1. `gh issue list --label L --state all --limit 1 --json number,state,body,url` (siempre que haya modo y clase `red` o `green`).
-2. Si hay que crear: `gh label create L --color D93F0B --description "..."` (se ignora el error si ya existe) y `gh issue create --title T --label L --assignee A --body-file F`; si falla con asignado, un segundo intento sin `--assignee` y una anotación.
+2. Si hay que crear: `gh label create L --color D93F0B --description "..."` **solo cuando no hay ningún aviso previo** (con uno previo, aunque esté cerrado, la etiqueta ya existe); su error se ignora y solo deja un `::notice::`, porque si la etiqueta de verdad falta lo vuelve a decir la llamada siguiente. Después `gh issue create --title T --label L --assignee A --body-file F`; si falla con asignado, un segundo intento sin `--assignee` y un `::warning::` ("el aviso se creo sin asignado").
 3. Si hay que actualizar: `gh issue edit N --body-file F` y `gh issue comment N --body-file F`.
 4. Si hay que reabrir: `gh issue reopen N --comment C`, y luego lo de 3.
-5. Si hay que cerrar: `gh issue edit N --body-file F` (marcador `state=resolved`), `gh issue comment N --body-file F` y `gh issue close N --reason completed`.
+5. Si hay que cerrar: `gh issue edit N --body-file F` (marcador `state=resolved`), `gh issue comment N --body-file F` y `gh issue close N --reason completed`. **Si el `edit` del marcador falla, no se comenta ni se cierra** (un `::warning::` lo dice): un aviso cerrado que todavía dice `state=open` pasaría por uno cerrado a mano y el rojo siguiente lo reabriría con un motivo falso y seguiría la racha vieja; abierto, la noche verde siguiente rehace todo el trabajo. Con un marcador inválido no se reescribe el cuerpo: solo el comentario y el cierre, con un `::warning::`. Limitación declarada: si el `edit` y el comentario pasan pero el `close` falla, el aviso queda abierto con `state=resolved`; una noche verde lo cierra (y repite el comentario), y una roja lo trata como la misma racha (vuelve el marcador a `open` y suma la noche).
 6. Verde con el último aviso cerrado a mano (`state=open`): solo `gh issue edit N --body-file F` con el marcador en `state=resolved`; no reabre, no comenta y no cierra (hallazgo I1).
+
+**Texto inerte** (FR-004, detalle en `notice-format.md` sección 6): todo texto que viene de fuera pasa por un saneo antes de llegar al cuerpo o a una anotación. Los nombres de test y el resumen salen como una línea de ASCII imprimible (controles fuera, bytes no ASCII a `?`, comillas invertidas y virgulillas a apóstrofos, `<!--` y `-->` neutralizados, corte a 120); el paso fallido se limita a `[A-Za-z0-9_-]`; `RUN_ID` queda en dígitos y `RUN_URL` en un juego de caracteres de URL sin espacios, paréntesis, corchetes ni comillas, para que el enlace de la corrida siga siendo uno solo.
+
+**Cuerpo leído**: antes de buscar el marcador y las filas, el script quita los `\r` del cuerpo que `gh` devuelve. GitHub guarda los saltos de línea tal como se le envían y el editor web envía CRLF, así que un aviso que una persona guardó desde la web seguiría siendo reconocido (sin esto el marcador parecería inválido y se perdería la racha); N03 lo ejerce con un cuerpo convertido a CRLF y M23 lo cuelga.
 
 **Manejo de errores**: cada llamada pasa por una función que captura el código y la salida, anota la falla y devuelve; una falla en `list` termina el subcomando con una anotación (sin `list` no se puede decidir) y las demás no impiden el resto de los pasos. Nunca hay `set -e`.
 
-**Idempotencia**: si el cuerpo ya contiene la fila `run=<RUN_ID>`, no se suma la noche ni se comenta de nuevo. Cerrar un aviso ya cerrado no hace nada.
+**Idempotencia**: si el cuerpo ya contiene la fila de esa corrida (el texto `[run <RUN_ID>](`, que es como `notice-format.md` identifica cada fila), no se suma la noche ni se comenta de nuevo. Cerrar un aviso ya cerrado no hace nada. Limitación declarada: con un marcador inválido el cuerpo no se reescribe y no hay fila contra la cual comparar, así que reejecutar el mismo job `alert` puede repetir el comentario de la noche.
 
 **Archivos temporales**: el cuerpo y los comentarios se arman en un directorio temporal propio (`mktemp -d`) que se borra al salir (`trap … EXIT`); nada de datos del log pasa por argv o por el entorno hacia `gh`.
 

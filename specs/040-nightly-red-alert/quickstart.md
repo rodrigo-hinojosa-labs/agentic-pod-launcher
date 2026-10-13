@@ -56,11 +56,13 @@ Son 20 mutaciones (M2, M12 y M19 con dos variantes cada una). Cada fila se aplic
 | M13 | quitar la cota de 20 nombres | N14 |
 | M14 | no sanear comillas invertidas ni `~~~` | N15 |
 | M15 | `collect` cuenta `executed` igual que `total` | N19 |
-| M16 | quitar la guarda de idempotencia (`run=<id>`) | N13 |
+| M16 | quitar la guarda de idempotencia (`[run <id>](`) | N13 |
 | M17 | el ensayo usa la etiqueta del aviso real | N11 |
 | M18 | `run_suite` pierde su `if` de ensayo | N29 |
-| M19 | (a) introducir `\| head -1` en el script; (b) introducir un pipe que lee una línea y cierra, con una carga de más de 64 KiB (solo se nota si cambia la disposición de SIGPIPE) | N22; N17 |
+| M19 | (a) introducir `\| head -1` en el script; (b) introducir un pipe que lee una línea y cierra, con un **productor externo** (`yes \| { read -r _first; }`; solo se nota si cambia la disposición de SIGPIPE) | N22; N17 |
 | M20 | cambiar el literal de `timeout-minutes` | N29 |
+
+Extras, fuera de las 20 de la tabla, que la implementación y la revisión independiente agregaron con su cazador (tabla completa en las Notes de `tasks.md`): **M21** quitar `continue-on-error: true` del paso `collect` (N30); **M22** quitar el filtro de la URL de la corrida (N15); **M23** quitar la normalización de CRLF del cuerpo leído (N03); **M24 a M26** una expresión equivocada en el entorno del paso que publica (`job.status` por `needs.e2e.result`, `ASSIGNEE` vacío, un typo en la salida `failed_tests`) (N26); **M27** quitar el `continue-on-error` del `Checkout` del job `alert` y **M28** quitar el tope de 3 minutos del paso que publica (N26); **M29** que `notify` deje de reconocer la línea `... y N mas` (N14); **M30** leer el total del marcador sin pasarlo a decimal (N03); **M31** cerrar el aviso aunque falle la reescritura del marcador (N12); **M33** una llamada que el `gh` real rechazaría (N03 y otros; M32 queda sin usar). Nota sobre M19(b): con el `printf` interno de bash como productor (`printf '%070000d\n%070000d\n' 0 0 \| { read -r _first; }`) la mutación cae en bash 5.x pero **no en 3.2.57**, cuyo `printf` interno no informa los errores de escritura (con SIGPIPE ignorada calla igual que cuando el proceso muere de la señal): es un mutante equivalente en 3.2, no una debilidad de N17; por eso la variante vigente usa un productor externo.
 
 ## 4. Evidencia real **[COMPUERTA]**
 

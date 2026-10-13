@@ -62,7 +62,7 @@ Fase 0 de `/speckit-plan` para `specs/040-nightly-red-alert/spec.md`. Cada decis
 
 ## R5. Cotas
 
-**Decisión**: hasta 20 nombres de test por aviso, cada uno recortado a 120 caracteres con `...`, y si hay más se agrega `... y N más`; hasta 10 filas de detalle de noches en el cuerpo; el total acumulado va en el marcador; si el cuerpo superara los 60.000 caracteres se recortan primero las filas de detalle. Un comentario por noche (una línea) avisa de la noche nueva.
+**Decisión**: hasta 20 nombres de test por aviso, cada uno recortado a 120 caracteres con `...`, y si hay más se agrega `... y N mas` (sin tilde: el cuerpo es ASCII); hasta 10 filas de detalle de noches en el cuerpo; el total acumulado va en el marcador; si el cuerpo superara los 60.000 caracteres se recortan primero las filas de detalle. Un comentario por noche (una línea) avisa de la noche nueva.
 
 **Razón**: la API limita el cuerpo y los comentarios a 65.536 caracteres (límite documentado, no medido aquí); 20 nombres de 120 caracteres son unos 2,4 KB, lejos del tope; con 155 noches seguidas, 155 filas habrían sido ilegibles (FR-003).
 
@@ -108,7 +108,7 @@ Todas existen en 2.102.0 con esas banderas. El script usa `--json` y filtra con 
 
 ## R10. Idempotencia y reintentos
 
-**Decisión**: cada noche queda registrada con el id de la corrida (`run=<id>`) en su fila del cuerpo. Si el script ve una fila con el mismo id, no suma la noche ni vuelve a comentar. El comentario de cierre por verde y el cambio de marcador también son idempotentes (si el issue ya está cerrado, no hace nada).
+**Decisión**: cada noche queda registrada con el id de la corrida en su fila del cuerpo (el texto `[run <id>](`). Si el script ve una fila con el mismo id, no suma la noche ni vuelve a comentar. El comentario de cierre por verde y el cambio de marcador también son idempotentes (si el issue ya está cerrado, no hace nada).
 
 **Razón**: Principio IV; reintentar el job `alert` desde la interfaz no debe contar dos veces una noche.
 
