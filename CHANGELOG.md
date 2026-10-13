@@ -3,6 +3,54 @@
 ## [Unreleased]
 
 ### Added
+- **A red night of the nightly now reaches someone — `040-nightly-red-alert`** (no VERSION change: CI
+  and tests only, no runtime code; the precedent of 019, 025 and 039). The `docker-e2e` nightly was red
+  on 155 of the 158 scheduled nights measured (07-05-2026 to 12-10-2026) and nothing told anyone: the
+  only signal was a red icon in a tab nobody was watching, so a broken nightly could stay broken for
+  months.
+
+  - **One GitHub issue per streak, assigned to the maintainer.** The first red scheduled night opens
+    `docker-e2e nightly en rojo` (label `nightly-red`) assigned to the maintainer, so GitHub notifies them
+    even if they do not watch the repository. Each further red night of the streak adds a row to its
+    table and a one-line comment instead of opening another issue; the first green night marks it
+    resolved, comments and closes it. It carries the link to the run, the step that failed, the suite
+    summary line and the names of the failed tests (at most 20, 120 characters each, inside a fenced block:
+    nothing in a name can mention a user, make a link, close a code span or forge the marker). If a person
+    closes it by hand while the streak goes on, the next red night reopens it with a comment; an issue
+    closed by the green night is history and the next streak opens a new one. No new secret: the
+    workflow token does it.
+  - **It cannot change the verdict of the night.** The logic lives in a job of its own (`alert`,
+    `needs: e2e`, `if: always()`), the first identifiable failure of a red run stays the suite step,
+    every step of that job is `continue-on-error` (the checkout, and the publishing step, which also
+    has its own 3-minute limit so a hung `gh` ends as a failed step and not as a job that timed out), and
+    the script always exits 0: a failure to publish is a `::warning::` and the night keeps its real
+    colour. The `collect` step that feeds the job is `continue-on-error` too. `issues: write` is the only permission added, and only
+    to that job (`contents: read` is repeated there for the checkout of the script).
+  - **Which runs move the notice.** Only scheduled runs move the real one. A normal manual run does
+    nothing, not even a read. A cancelled or skipped run does nothing and the value is logged. Repeating
+    the same run changes nothing. The new inputs `alert_trial` and `trial_outcome` (red, green or timeout)
+    of `workflow_dispatch` replace the 15-minute suite with a simulated outcome and publish to a separate
+    notice (`[ensayo] docker-e2e nightly en rojo`, label `nightly-red-trial`) that never touches the
+    real one.
+  - **The logic is one script, `.github/scripts/nightly-alert.sh`** (`collect`, `simulate`, `notify`),
+    linted by the existing shellcheck job. The workflow gets a step id per step, a last `collect` step
+    that hands the notice job the failed step, the summary and the failed tests as job outputs, and the
+    job `alert`. The text of the `Verify deps + docker` and `Run docker-e2e suite` steps is untouched
+    (the 14 tests of 039 pass unedited).
+  - **`tests/nightly-alert.bats` (32 tests) keeps it from going silent.** It runs the real script under
+    `env -i`, with SIGPIPE ignored as on the runner and also with its default, against a `gh` fake that
+    keeps state (issues, labels, comments, a call log) and accepts only the flags `gh` 2.102.0
+    accepts, so the oracle cannot approve a call the real `gh` would reject. 20 mutations of the notice,
+    the script and the workflow each have a test that must fall.
+  - **What the notice does NOT cover.** A nightly that never starts (a stuck queue, a workflow disabled
+    after months without activity) cannot be reported from inside the same workflow. The `schedule` branch
+    of the condition of the `alert` job only runs on a scheduled night: the host oracle and the first
+    real red night are its only exercise. The notice complements the native GitHub notifications; it does
+    not replace them. Text that comes from the log is shown as printable ASCII (a name with an accent
+    shows `?`).
+  - **Real-run evidence.** Pending: it is recorded in `specs/040-nightly-red-alert/tasks.md` (Notes)
+    after the trial runs E1 to E8, and the first scheduled night after the merge.
+
 - **The agent is told what an upgrade left behind, and its `CLAUDE.md` stops falling behind —
   `038-schema-delta-boot-nudge`** (VERSION 0.27.0 → 0.28.0). Measured on donna and linus right after the
   0.27.0 upgrade: the vault delta was deposited and nobody told the agent to integrate it, and the
