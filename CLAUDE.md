@@ -314,8 +314,7 @@ PR #102 dejó en rojo O2, el autotest del propio arnés: el runner entrega a bat
 escrito en bash no puede morir de ella (su `echo` informa `write error: Broken pipe` y el script sale 0) y el contenedor de paridad no lo
 reprodujo. Se reprodujo en local con `perl -e '$SIG{PIPE}="IGNORE"; exec @ARGV' bats …` (cae solo O2, en ambos bash), y el arnés ahora restablece
 la señal con `perl` antes de lanzar el paso; O2 gana una pierna con un llamador que la ignora (viñeta del oráculo en contenedor, en "Common
-gotchas"). **PR #102 abierto el 09-10-2026. Pendiente:** su revisión y su merge por el operador, y las tres noches posteriores al merge (T049): el
-nightly programado de las 05:00 UTC ejecuta el workflow de `main`, así que seguirá en rojo hasta que 039 mergee.
+gotchas"). **PR #102 mergeado el 09-10-2026 (squash `d345a5f`) y T049 cerrada el 12-10-2026:** las tres nocturnas programadas siguientes (10, 11 y 12-10, runs 38047040835, 38135162982 y 38252436900, sobre `13cafc3`) pasaron 48 de 48 sin `exit code 141`. Medido por paginación ese día: el historial expone 158 corridas programadas (07-05 a 12-10-2026), 155 rojas y 3 verdes (las tres de arriba), o sea que antes de 039 el nightly no pasó nunca, y empezaron entre las 05:30Z y las 17:17Z, no a las 05:00Z que declara el cron. Que un rojo llegue a alguien sin abrir Actions lo atiende la feature 040.
 
 **038-schema-delta-boot-nudge SPEC + PLAN + TASKS + ANALYZE + IMPLEMENT (2026-09-30/10-01; rama `038-schema-delta-boot-nudge`
 sobre `037-second-brain-rag` v0.27.0, NO sobre main; el PR espera el merge de 037, precedente 023-sobre-022;
