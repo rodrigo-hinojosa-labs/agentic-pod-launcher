@@ -1,0 +1,81 @@
+1..30
+ok 1 alpha passing test 1
+ok 2 alpha passing test 2
+ok 3 alpha passing test 3
+ok 4 alpha passing test 4
+ok 5 alpha passing test 5
+not ok 6 beta failing test 1
+# (in test file tests/docker-e2e-x.bats, line 18)
+#   `false' failed
+not ok 7 beta failing test 2
+# (in test file tests/docker-e2e-x.bats, line 21)
+#   `false' failed
+not ok 8 beta failing test 3
+# (in test file tests/docker-e2e-x.bats, line 24)
+#   `false' failed
+not ok 9 beta failing test 4
+# (in test file tests/docker-e2e-x.bats, line 27)
+#   `false' failed
+not ok 10 beta failing test 5
+# (in test file tests/docker-e2e-x.bats, line 30)
+#   `false' failed
+not ok 11 beta failing test 6
+# (in test file tests/docker-e2e-x.bats, line 33)
+#   `false' failed
+not ok 12 beta failing test 7
+# (in test file tests/docker-e2e-x.bats, line 36)
+#   `false' failed
+not ok 13 beta failing test 8
+# (in test file tests/docker-e2e-x.bats, line 39)
+#   `false' failed
+not ok 14 beta failing test 9
+# (in test file tests/docker-e2e-x.bats, line 42)
+#   `false' failed
+not ok 15 beta failing test 10
+# (in test file tests/docker-e2e-x.bats, line 45)
+#   `false' failed
+not ok 16 beta failing test 11
+# (in test file tests/docker-e2e-x.bats, line 48)
+#   `false' failed
+not ok 17 beta failing test 12
+# (in test file tests/docker-e2e-x.bats, line 51)
+#   `false' failed
+not ok 18 beta failing test 13
+# (in test file tests/docker-e2e-x.bats, line 54)
+#   `false' failed
+not ok 19 beta failing test 14
+# (in test file tests/docker-e2e-x.bats, line 57)
+#   `false' failed
+not ok 20 beta failing test 15
+# (in test file tests/docker-e2e-x.bats, line 60)
+#   `false' failed
+not ok 21 beta failing test 16
+# (in test file tests/docker-e2e-x.bats, line 63)
+#   `false' failed
+not ok 22 beta failing test 17
+# (in test file tests/docker-e2e-x.bats, line 66)
+#   `false' failed
+not ok 23 beta failing test 18
+# (in test file tests/docker-e2e-x.bats, line 69)
+#   `false' failed
+not ok 24 beta failing test 19
+# (in test file tests/docker-e2e-x.bats, line 72)
+#   `false' failed
+not ok 25 beta failing test 20
+# (in test file tests/docker-e2e-x.bats, line 75)
+#   `false' failed
+not ok 26 beta failing test 21
+# (in test file tests/docker-e2e-x.bats, line 78)
+#   `false' failed
+not ok 27 beta failing test 22
+# (in test file tests/docker-e2e-x.bats, line 81)
+#   `false' failed
+not ok 28 beta failing test 23
+# (in test file tests/docker-e2e-x.bats, line 84)
+#   `false' failed
+not ok 29 beta failing test 24
+# (in test file tests/docker-e2e-x.bats, line 87)
+#   `false' failed
+not ok 30 beta failing test 25
+# (in test file tests/docker-e2e-x.bats, line 90)
+#   `false' failed

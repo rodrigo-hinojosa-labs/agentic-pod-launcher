@@ -6,6 +6,22 @@ on:
   schedule:
     - cron: '0 5 * * *'
   workflow_dispatch:
+    # Trial of the red-night notice (040-nightly-red-alert): skip the suite,
+    # simulate the outcome below and publish to a SEPARATE trial notice, so the
+    # real one is never touched. A manual run with the defaults is a normal run.
+    inputs:
+      alert_trial:
+        description: 'Trial of the red-night notice: skip the suite and simulate trial_outcome'
+        type: boolean
+        default: false
+      trial_outcome:
+        description: 'Simulated outcome of the trial (timeout also lowers the job limit to 1 minute)'
+        type: choice
+        options:
+          - red
+          - green
+          - timeout
+        default: red
 
 permissions:
   contents: read
@@ -20,12 +36,23 @@ jobs:
   e2e:
     name: docker e2e suite (DOCKER_E2E=1)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 30 minutes for the scheduled run and for a normal manual run (inputs has no
+    # such keys then); 1 minute only in the timeout trial, which sleeps on purpose
+    # to see how the platform reports a job that hits its limit.
+    timeout-minutes: ${{ (inputs.alert_trial && inputs.trial_outcome == 'timeout') && 1 || 30 }}
+    # What the notice job needs to know about this run: the step that failed, the
+    # suite summary and the failed tests, all computed by the last step (collect).
+    outputs:
+      failed_step: ${{ steps.collect.outputs.failed_step }}
+      summary: ${{ steps.collect.outputs.summary }}
+      failed_tests: ${{ steps.collect.outputs.failed_tests }}
     steps:
       - name: Checkout
+        id: checkout
         uses: actions/checkout@v6
 
       - name: Install yq v4 (mikefarah)
+        id: install_yq
         run: |
           set -euo pipefail
           sudo curl -fsSL -o /usr/local/bin/yq \
@@ -34,6 +61,7 @@ jobs:
           yq --version
 
       - name: Install bats-core
+        id: install_bats
         run: |
           set -euo pipefail
           git clone --depth 1 --branch v1.11.0 \
@@ -49,6 +77,7 @@ jobs:
       # with head: it still fails loudly when the daemon is down, and it shows
       # what head never reached (engine version and architecture).
       - name: Verify deps + docker
+        id: verify_deps
         run: |
           set -euo pipefail
           first_line() { local v; v=$("$@"); printf '%s\n' "${v%%$'\n'*}"; }
@@ -69,6 +98,8 @@ jobs:
       # run: a green that ran no test is not a green. A non-zero code from bats
       # always wins over that guard.
       - name: Run docker-e2e suite
+        id: run_suite
+        if: ${{ !inputs.alert_trial }}
         env:
           DOCKER_E2E: '1'
         run: |
@@ -85,3 +116,68 @@ jobs:
             echo "::error::ningun e2e se ejecuto: todos saltados o lista vacia (revisar DOCKER_E2E, el daemon de Docker y la ruta de los tests)"
             exit 1
           fi
+
+      # Trial of the notice (workflow_dispatch with alert_trial): stands in for the
+      # suite and ends red, green or by timeout as trial_outcome says, so the notice
+      # can be exercised for real in about a minute instead of ~15.
+      - name: Simulate the trial outcome
+        id: simulate
+        if: ${{ inputs.alert_trial }}
+        env:
+          TRIAL_OUTCOME: ${{ inputs.trial_outcome }}
+        run: .github/scripts/nightly-alert.sh simulate "$TRIAL_OUTCOME"
+
+      # Last step, whatever happened before: it reads the steps context and e2e.tap
+      # and hands the notice job the step that failed, the suite summary and the
+      # failed tests as job outputs (040-nightly-red-alert). The script always exits
+      # 0, and continue-on-error covers the one thing it cannot: failing to start
+      # (a lost executable bit, say). Either way the notice machinery must not turn
+      # a green night red.
+      - name: Collect the facts for the nightly notice
+        id: collect
+        if: ${{ always() }}
+        continue-on-error: true
+        env:
+          STEPS_JSON: ${{ toJSON(steps) }}
+        run: .github/scripts/nightly-alert.sh collect
+
+  # The red-night notice (040-nightly-red-alert). A job of its own, so the first
+  # identifiable failure of a red run stays the suite step, and the only place that
+  # holds `issues: write` (contents: read is here only for the checkout of the
+  # script). The publishing step cannot change the color of the run.
+  alert:
+    name: nightly alert
+    needs: e2e
+    if: ${{ always() && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.alert_trial)) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      # Every step of this job is the notice machinery, so none may turn a green night
+      # red: the checkout (a transient failure of GitHub) and the publishing step both
+      # carry continue-on-error, and the publishing step has its own limit, shorter than
+      # the job's, so a hung gh ends as a failed STEP (absorbed) and not as a job that
+      # hit its timeout.
+      - name: Checkout
+        continue-on-error: true
+        uses: actions/checkout@v6
+
+      - name: Publish the nightly notice
+        continue-on-error: true
+        timeout-minutes: 3
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          TRIAL: ${{ inputs.alert_trial }}
+          RUN_RESULT: ${{ needs.e2e.result }}
+          FAILED_STEP: ${{ needs.e2e.outputs.failed_step }}
+          SUMMARY: ${{ needs.e2e.outputs.summary }}
+          FAILED_TESTS: ${{ needs.e2e.outputs.failed_tests }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ASSIGNEE: rodrigo-hinojosa
+        run: .github/scripts/nightly-alert.sh notify

@@ -1,0 +1,238 @@
+#!/bin/bash
+# Fake `gh` for tests/nightly-alert.bats (feature 040-nightly-red-alert).
+# Contract: specs/040-nightly-red-alert/contracts/alert-oracle.md section 1.
+#
+# It keeps its state in $FAKE_GH_STATE (required, exit 99 without it):
+#   issues.json  array of issues {number,state,stateReason,title,body,labels,assignees,comments,url}
+#   labels.txt   one label name per line
+#   calls.log    one line per call: VERB<TAB>arguments
+#
+# The accepted flags are EXACTLY the ones verified against the real gh 2.102.0
+# (research R8); any other subcommand or flag exits 64, writes UNSUPPORTED to
+# calls.log and fails the test, so the oracle cannot approve a script that the
+# real gh would reject. FAKE_GH_FAIL is a comma list of operations to make fail:
+# list, label, create, create_assignee (only when --assignee is passed), edit,
+# comment, reopen, close.
+#
+# Written for bash 3.2 and 5.x, ASCII only. jq does the JSON work.
+
+STATE="${FAKE_GH_STATE:-}"
+if [ -z "$STATE" ]; then
+  echo "fake gh: FAKE_GH_STATE is required" >&2
+  exit 99
+fi
+mkdir -p "$STATE"
+LOG="$STATE/calls.log"
+ISSUES="$STATE/issues.json"
+LABELS="$STATE/labels.txt"
+[ -f "$ISSUES" ] || printf '[]\n' > "$ISSUES"
+[ -f "$LABELS" ] || : > "$LABELS"
+FAIL=",${FAKE_GH_FAIL:-},"
+
+fails() { case "$FAIL" in *",$1,"*) return 0 ;; esac; return 1; }
+log() { printf '%s\t%s\n' "$1" "$2" >> "$LOG"; }
+unsupported() {
+  log UNSUPPORTED "$*"
+  echo "fake gh: unsupported: $*" >&2
+  exit 64
+}
+inject() {
+  if fails "$1"; then
+    echo "fake gh: injected failure ($1)" >&2
+    exit 1
+  fi
+}
+# need_value FLAG COUNT: a flag with no value after it is a usage error.
+need_value() { [ "$2" -ge 2 ] || unsupported "flag without value: $1"; }
+issue_exists() {
+  [ "$(jq --argjson n "$1" 'map(select(.number == $n)) | length' "$ISSUES")" = "1" ]
+}
+save() { mv "$ISSUES.tmp" "$ISSUES"; }
+
+# The real gh needs credentials and a repository; the script must supply both
+# through GH_TOKEN and GH_REPO (it never passes --repo).
+if [ -z "${GH_TOKEN:-}" ]; then
+  echo "fake gh: GH_TOKEN is required (as the real gh in Actions)" >&2
+  exit 4
+fi
+if [ -z "${GH_REPO:-}" ]; then
+  echo "fake gh: GH_REPO is required (the script must not depend on a git remote)" >&2
+  exit 4
+fi
+
+do_list() {
+  local label="" state="open" limit=30 json=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --label) need_value "$1" $#; label="$2"; shift 2 ;;
+      --state) need_value "$1" $#; state="$2"; shift 2 ;;
+      --limit) need_value "$1" $#; limit="$2"; shift 2 ;;
+      --json)  need_value "$1" $#; json="$2"; shift 2 ;;
+      *) unsupported "issue list $*" ;;
+    esac
+  done
+  [ -n "$json" ] || unsupported "issue list without --json"
+  case "$state" in open|closed|all) ;; *) unsupported "issue list --state $state" ;; esac
+  case "$limit" in ''|*[!0-9]*) unsupported "issue list --limit $limit" ;; esac
+  log list "--label $label --state $state --limit $limit --json $json"
+  inject list
+  jq -c --arg label "$label" --arg state "$state" --argjson limit "$limit" --arg fields "$json" '
+    def keep($f): with_entries(select(.key as $k | ($f | index($k)) != null));
+    map(select(($label == "") or (((.labels // []) | map(.name) | index($label)) != null)))
+    | map(select($state == "all" or ((.state | ascii_downcase) == $state)))
+    | sort_by(-.number)
+    | .[0:$limit]
+    | map(keep($fields | split(",")))
+  ' "$ISSUES"
+}
+
+do_create() {
+  local title="" bodyfile="" labels="" assignees="" have_assignee=0 l num url
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --title)     need_value "$1" $#; title="$2"; shift 2 ;;
+      --label)     need_value "$1" $#; labels="$labels $2"; shift 2 ;;
+      --assignee)  need_value "$1" $#; assignees="$assignees $2"; have_assignee=1; shift 2 ;;
+      --body-file) need_value "$1" $#; bodyfile="$2"; shift 2 ;;
+      *) unsupported "issue create $*" ;;
+    esac
+  done
+  [ -n "$title" ] && [ -n "$bodyfile" ] || unsupported "issue create without --title or --body-file"
+  [ -r "$bodyfile" ] || { echo "fake gh: cannot read body file: $bodyfile" >&2; exit 1; }
+  log create "--title $title --label${labels} --assignee${assignees}"
+  inject create
+  if [ "$have_assignee" = 1 ]; then inject create_assignee; fi
+  for l in $labels; do
+    if ! grep -qx -- "$l" "$LABELS"; then
+      echo "could not add label: '$l' not found" >&2
+      exit 1
+    fi
+  done
+  num=$(jq 'map(.number) | (max // 0) + 1' "$ISSUES")
+  url="https://github.com/fake/repo/issues/$num"
+  jq --argjson n "$num" --arg t "$title" --rawfile b "$bodyfile" --arg labels "$labels" \
+     --arg assignees "$assignees" --arg u "$url" '
+    . + [{number: $n, state: "OPEN", stateReason: null, title: $t, body: $b,
+          labels: ($labels | split(" ") | map(select(length > 0)) | map({name: .})),
+          assignees: ($assignees | split(" ") | map(select(length > 0)) | map({login: .})),
+          comments: [], url: $u}]
+  ' "$ISSUES" > "$ISSUES.tmp" && save
+  printf '%s\n' "$url"
+}
+
+do_comment() {
+  local n="" bodyfile=""
+  [ $# -ge 1 ] || unsupported "issue comment without number"
+  n="$1"; shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --body-file) need_value "$1" $#; bodyfile="$2"; shift 2 ;;
+      *) unsupported "issue comment $n $*" ;;
+    esac
+  done
+  [ -n "$bodyfile" ] || unsupported "issue comment without --body-file"
+  log comment "$n"
+  inject comment
+  issue_exists "$n" || { echo "fake gh: issue #$n not found" >&2; exit 1; }
+  jq --argjson n "$n" --rawfile b "$bodyfile" \
+     'map(if .number == $n then .comments += [{body: $b}] else . end)' "$ISSUES" > "$ISSUES.tmp" && save
+}
+
+do_edit() {
+  local n="" bodyfile=""
+  [ $# -ge 1 ] || unsupported "issue edit without number"
+  n="$1"; shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --body-file) need_value "$1" $#; bodyfile="$2"; shift 2 ;;
+      *) unsupported "issue edit $n $*" ;;
+    esac
+  done
+  [ -n "$bodyfile" ] || unsupported "issue edit without --body-file"
+  log edit "$n"
+  inject edit
+  issue_exists "$n" || { echo "fake gh: issue #$n not found" >&2; exit 1; }
+  jq --argjson n "$n" --rawfile b "$bodyfile" \
+     'map(if .number == $n then .body = $b else . end)' "$ISSUES" > "$ISSUES.tmp" && save
+}
+
+do_reopen() {
+  local n="" comment=""
+  [ $# -ge 1 ] || unsupported "issue reopen without number"
+  n="$1"; shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --comment) need_value "$1" $#; comment="$2"; shift 2 ;;
+      *) unsupported "issue reopen $n $*" ;;
+    esac
+  done
+  log reopen "$n"
+  inject reopen
+  issue_exists "$n" || { echo "fake gh: issue #$n not found" >&2; exit 1; }
+  jq --argjson n "$n" --arg c "$comment" '
+    map(if .number == $n
+        then .state = "OPEN" | .stateReason = "REOPENED"
+             | (if $c != "" then .comments += [{body: $c}] else . end)
+        else . end)
+  ' "$ISSUES" > "$ISSUES.tmp" && save
+}
+
+do_close() {
+  local n="" reason="" comment="" sr="null"
+  [ $# -ge 1 ] || unsupported "issue close without number"
+  n="$1"; shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --reason)  need_value "$1" $#; reason="$2"; shift 2 ;;
+      --comment) need_value "$1" $#; comment="$2"; shift 2 ;;
+      *) unsupported "issue close $n $*" ;;
+    esac
+  done
+  case "$reason" in
+    "") ;;
+    completed) sr='"COMPLETED"' ;;
+    "not planned") sr='"NOT_PLANNED"' ;;
+    duplicate) sr='"DUPLICATE"' ;;
+    *) unsupported "issue close --reason $reason" ;;
+  esac
+  log close "$n --reason $reason"
+  inject close
+  issue_exists "$n" || { echo "fake gh: issue #$n not found" >&2; exit 1; }
+  jq --argjson n "$n" --argjson sr "$sr" --arg c "$comment" '
+    map(if .number == $n
+        then .state = "CLOSED" | .stateReason = $sr
+             | (if $c != "" then .comments += [{body: $c}] else . end)
+        else . end)
+  ' "$ISSUES" > "$ISSUES.tmp" && save
+}
+
+do_label_create() {
+  local name="" color=""
+  [ $# -ge 1 ] || unsupported "label create without name"
+  name="$1"; shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --color)       need_value "$1" $#; color="$2"; shift 2 ;;
+      --description) need_value "$1" $#; shift 2 ;;
+      *) unsupported "label create $name $*" ;;
+    esac
+  done
+  log label-create "$name --color $color"
+  inject label
+  if grep -qx -- "$name" "$LABELS"; then
+    echo "label with name \"$name\" already exists; use \`--force\` to update its color and description" >&2
+    exit 1
+  fi
+  printf '%s\n' "$name" >> "$LABELS"
+}
+
+case "${1:-} ${2:-}" in
+  "issue list")    shift 2; do_list "$@" ;;
+  "issue create")  shift 2; do_create "$@" ;;
+  "issue comment") shift 2; do_comment "$@" ;;
+  "issue edit")    shift 2; do_edit "$@" ;;
+  "issue reopen")  shift 2; do_reopen "$@" ;;
+  "issue close")   shift 2; do_close "$@" ;;
+  "label create")  shift 2; do_label_create "$@" ;;
+  *) unsupported "$*" ;;
+esac
