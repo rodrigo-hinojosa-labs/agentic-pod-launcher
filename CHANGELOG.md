@@ -10,15 +10,32 @@
   months.
 
   - **One GitHub issue per streak, assigned to the maintainer.** The first red scheduled night opens
-    `docker-e2e nightly en rojo` (label `nightly-red`) assigned to the maintainer, so GitHub notifies them
-    even if they do not watch the repository. Each further red night of the streak adds a row to its
+    `docker-e2e nightly en rojo` (label `nightly-red`) assigned to the maintainer. Each further red night of the streak adds a row to its
     table and a one-line comment instead of opening another issue; the first green night marks it
     resolved, comments and closes it. It carries the link to the run, the step that failed, the suite
     summary line and the names of the failed tests (at most 20, 120 characters each, inside a fenced block:
     nothing in a name can mention a user, make a link, close a code span or forge the marker). If a person
     closes it by hand while the streak goes on, the next red night reopens it with a comment; an issue
-    closed by the green night is history and the next streak opens a new one. No new secret: the
-    workflow token does it.
+    closed by the green night is history and the next streak opens a new one. The issue needs no
+    secret: the workflow token does it. It is the state and the history of the streak; what reaches the
+    maintainer where they look is the Telegram push below (the first trial run, 14-10-2026, measured that
+    GitHub does create the assignment notification but it never reached the maintainer's Telegram).
+  - **A push to Telegram (amendment 1, 14-10-2026).** Right after acting on the issue, the `alert` job
+    sends one plain-text message to the maintainer's chat from a bot created only for the CI: `EN ROJO` on
+    the first night of a streak, `SIGUE EN ROJO` on the following nights (and `(aviso reabierto)` when a
+    closed notice is reopened), and `VOLVIO A VERDE` when the first green scheduled night closes the
+    notice. A message has up to 6 lines (status, streak, failed step, summary line, link to the run, link
+    to the issue; a line is left out when its datum is not known), no test names, printable ASCII, and the recovery is sent without sound. It needs two
+    repository secrets that the maintainer creates, `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`, read
+    only by the step that publishes the notice; without them the push is left out with a `::warning::`
+    and the issue is published all the same. The token is checked against the shape of a real one, taken
+    out of the environment of every child process, kept in a 0600 `curl` config file (never on a command
+    line) and masked in anything printed; one attempt of at most 15 seconds, and any failure is a
+    `::warning::` with the HTTP code and the description Telegram gave, never a change of the exit code.
+    Every `gh` call is cut at 30 seconds (and none starts after 100 seconds of the run), so a GitHub
+    that stalls instead of failing cannot swallow the push: a red night is told even when the issue
+    cannot be reached. The recovery message goes out only when the notice was really closed. A trial run
+    prefixes the message with `[ensayo]`.
   - **It cannot change the verdict of the night.** The logic lives in a job of its own (`alert`,
     `needs: e2e`, `if: always()`), the first identifiable failure of a red run stays the suite step,
     every step of that job is `continue-on-error` (the checkout, and the publishing step, which also
@@ -37,17 +54,22 @@
     that hands the notice job the failed step, the summary and the failed tests as job outputs, and the
     job `alert`. The text of the `Verify deps + docker` and `Run docker-e2e suite` steps is untouched
     (the 14 tests of 039 pass unedited).
-  - **`tests/nightly-alert.bats` (32 tests) keeps it from going silent.** It runs the real script under
+  - **`tests/nightly-alert.bats` (43 tests) keeps it from going silent.** It runs the real script under
     `env -i`, with SIGPIPE ignored as on the runner and also with its default, against a `gh` fake that
     keeps state (issues, labels, comments, a call log) and accepts only the flags `gh` 2.102.0
-    accepts, so the oracle cannot approve a call the real `gh` would reject. 20 mutations of the notice,
-    the script and the workflow each have a test that must fall.
+    accepts, so the oracle cannot approve a call the real `gh` would reject. The push is tested with the
+    REAL `curl` against a local HTTP server that answers like the Telegram Bot API (ok, rejected token,
+    chat not found, rate limit, server error, `ok: false`, no answer, server gone) and a sentinel token
+    that must appear nowhere but in the path of the request. Every mutation of the notice, the push, the
+    script and the workflow (70 identifiers) has a test that must fall.
   - **What the notice does NOT cover.** A nightly that never starts (a stuck queue, a workflow disabled
     after months without activity) cannot be reported from inside the same workflow. The `schedule` branch
     of the condition of the `alert` job only runs on a scheduled night: the host oracle and the first
     real red night are its only exercise. The notice complements the native GitHub notifications; it does
     not replace them. Text that comes from the log is shown as printable ASCII (a name with an accent
-    shows `?`).
+    shows `?`). A rotated secret that nobody updated leaves the push as a visible `::warning::` and the
+    issue keeps working. Anyone who can change a workflow in the repository can read its secrets, as with
+    any Actions secret.
   - **Real-run evidence.** Pending: it is recorded in `specs/040-nightly-red-alert/tasks.md` (Notes)
     after the trial runs E1 to E8, and the first scheduled night after the merge.
 
