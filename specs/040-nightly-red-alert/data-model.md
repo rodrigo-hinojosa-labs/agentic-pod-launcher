@@ -1,6 +1,6 @@
 # Data Model: Una noche en rojo del nightly le llega a alguien
 
-Fase 1 de `/speckit-plan`. Esta feature no guarda datos en disco: el estado de una racha vive en el propio issue. Las entidades son tres (la corrida, el aviso y la racha) y una tabla de decisión que dice qué hace el script con cada combinación. Los campos son lógicos; el formato exacto del issue está en `contracts/notice-format.md`.
+Fase 1 de `/speckit-plan`. Esta feature no guarda datos en disco: el estado de una racha vive en el propio issue. Las entidades son tres (la corrida, el aviso y la racha; desde la enmienda 1, también el empuje por Telegram: sección 6) y una tabla de decisión que dice qué hace el script con cada combinación. Los campos son lógicos; el formato exacto del issue está en `contracts/notice-format.md`.
 
 ## 1. Corrida (entrada del script)
 
@@ -18,6 +18,8 @@ Lo que el job `alert` recibe como entorno, ya resuelto por el workflow.
 | `NIGHTLY_ALERT_NOW` | solo pruebas (el workflow no la define) | segundos desde la época que el script usa como "ahora" para fechar la noche; ausente: el reloj |
 | `ASSIGNEE` | `env` fijo del workflow (no es secreto) | usuario a asignar; `rodrigo-hinojosa` |
 | `GH_TOKEN`, `GH_REPO` | `github.token`, `github.repository` | lo que `gh` necesita; el token nunca se imprime |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | secretos del repositorio del mismo nombre (enmienda 1, FR-021) | token del bot de la CI y chat de destino; validados por formato; el script los copia a variables del shell y los quita del entorno; nunca se imprimen |
+| `TELEGRAM_API_BASE`, `TELEGRAM_MAX_TIME` | solo pruebas (el workflow no las define) | base de la API (por defecto `https://api.telegram.org`) y segundos de `--max-time` (por defecto 15) |
 
 **Modo derivado**: `real` si `EVENT=schedule`; `trial` si `EVENT=workflow_dispatch` y `TRIAL=true`; en cualquier otro caso **ninguno** (corrida manual normal: no abre, actualiza ni cierra nada, FR-011).
 
@@ -88,3 +90,35 @@ Transición que el diagrama no dibuja: desde **CERRADO (`state=open`)**, un **ve
 | cualquiera | cualquiera | (falla una llamada a `gh`) | anota `::warning::` y sigue; el script sale con 0 | FR-009 |
 
 El modo `trial` usa su propia etiqueta y su propio título, de modo que un ensayo jamás lee ni modifica el aviso real, y viceversa.
+
+## 6. Empuje por Telegram (enmienda 1, 14-10-2026)
+
+No guarda estado: es una función de la acción que `notify` decidió sobre el issue (sección 5) y de los datos de la corrida. Detalle de formato y de la petición en `contracts/telegram-push.md`.
+
+| Campo | Valor |
+|---|---|
+| Tipo | `rojo-nuevo`, `rojo-sigue`, `rojo-reabierto`, `verde` o `rojo-sin-aviso`, según la acción |
+| Sonido | normal; `verde` en silencio |
+| Prefijo | `[ensayo] ` cuando el modo es `trial` |
+| Destino | `TELEGRAM_CHAT_ID` |
+| Racha | `N` noches y fecha de inicio, tomadas del marcador cuando es válido (sin marcador válido la línea se omite) |
+| Enlaces | la corrida (`RUN_URL`) y el issue (la URL que imprime `gh issue create` o la del issue leído); si el issue no se conoce, solo la corrida |
+
+Qué hace cada fila de la tabla de decisión de la sección 5 con el empuje:
+
+| Fila de la sección 5 | Empuje |
+|---|---|
+| modo ninguno (manual normal) | no |
+| clase `none` (cancelada, saltada, otro valor) | no |
+| rojo y no hay aviso previo (crear) | `rojo-nuevo` |
+| rojo con aviso abierto y la noche aún no registrada (actualizar) | `rojo-sigue` |
+| rojo con aviso abierto y la noche ya registrada | no |
+| rojo con el último aviso cerrado a mano (reabrir) | `rojo-reabierto` si el `reopen` funcionó; `rojo-sigue` si falló |
+| rojo con el último aviso cerrado por el verde (crear otra racha) | `rojo-nuevo` |
+| verde con aviso abierto (cerrar) y el aviso quedó cerrado | `verde` (en silencio) |
+| verde con aviso abierto, pero el cierre no se completó | no (la noche verde siguiente lo cierra y lo envía) |
+| verde sin aviso, o con el último ya resuelto | no |
+| verde con el último aviso cerrado a mano (solo marcador) | no |
+| no se pudo consultar el issue | rojo: `rojo-sin-aviso`; verde: no |
+
+Cualquier falla de la llamada a Telegram solo produce un `::warning::`; no cambia la tabla ni el código de salida.

@@ -56,17 +56,20 @@ alert:
         RUN_ATTEMPT: ${{ github.run_attempt }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         ASSIGNEE: rodrigo-hinojosa
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       run: .github/scripts/nightly-alert.sh notify
 ```
 
 - **Ningún paso de este job puede volver roja una noche verde** (FR-009; hallazgo de la revisión independiente del 13-10-2026): el `Checkout` lleva `continue-on-error: true` (un fallo transitorio de GitHub), y el paso que publica lleva `continue-on-error: true` y un tope propio de 3 minutos, menor que los 5 del job, para que un `gh` colgado termine como un **paso** fallido (que se absorbe) y no como un **job** que agotó su tiempo (que pondría roja la corrida). Si el `Checkout` falla, el paso siguiente no encuentra el script, también falla y también se absorbe: la noche conserva su color y el aviso se pierde con un icono rojo dentro de un job verde.
 - El job no arranca en una corrida manual normal (la expresión `if` lo excluye) y, además, el script rechaza ese caso por su cuenta (defensa en profundidad).
 - `contents: read` está solo para el `checkout` que trae el script; el único permiso nuevo es `issues: write` (FR-013, research R1).
+- **Los dos secretos del empuje por Telegram** (enmienda 1, FR-021) se leen **solo** en el entorno de este paso; no existen a nivel del workflow ni en el job `e2e`. Un secreto no definido llega como cadena vacía y el script omite el empuje con una advertencia (`contracts/telegram-push.md` sección 6). `TELEGRAM_API_BASE` y `TELEGRAM_MAX_TIME` son costuras de prueba y el workflow no las define.
 - Los valores externos llegan por **entorno**, nunca interpolados dentro de `run:` (evita la inyección de comandos por nombres de test o entradas).
 
 ## 4. Lo que no cambia
 
-`permissions: contents: read` del workflow, el `concurrency` (`group: docker-e2e`, `cancel-in-progress: false`), el cron, `yq` v4.44.3 y `bats-core` v1.11.0, y cero referencias a `secrets.` (SC-007).
+`permissions: contents: read` del workflow, el `concurrency` (`group: docker-e2e`, `cancel-in-progress: false`), el cron, `yq` v4.44.3 y `bats-core` v1.11.0, y, fuera del paso que publica el aviso, cero referencias a `secrets.` (SC-007 enmendado el 14-10-2026).
 
 ## 5. Pruebas estructurales (AW)
 
@@ -75,8 +78,8 @@ alert:
 | AW-1 | El job `alert` existe, tiene `needs: e2e`, su `if` es exactamente la expresión de la sección 3 y `timeout-minutes` vale 5 |
 | AW-2 | `permissions` del job `alert` es exactamente `{contents: read, issues: write}` |
 | AW-3 | El nivel del workflow y el job `e2e` no tienen `issues` en `permissions` (solo `contents: read`) |
-| AW-4 | El paso `notify` lleva `continue-on-error: true` y `timeout-minutes: 3`; el `Checkout` del job `alert` lleva `continue-on-error: true`; su `run` llama al script con `notify` sin `${{ }}` dentro; y cada una de las 12 variables de su entorno (y ninguna más) vale exactamente la expresión de la sección 3 |
-| AW-5 | No hay `secrets.` en el workflow |
+| AW-4 | El paso `notify` lleva `continue-on-error: true` y `timeout-minutes: 3`; el `Checkout` del job `alert` lleva `continue-on-error: true`; su `run` llama al script con `notify` sin `${{ }}` dentro; y cada una de las 14 variables de su entorno (y ninguna más) vale exactamente la expresión de la sección 3 |
+| AW-5 | Hay exactamente dos referencias a `secrets.` en el workflow (`TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID`), ambas en el entorno del paso `Publish the nightly notice` del job `alert`; ninguna a nivel del workflow ni en el job `e2e` |
 | AW-6 | Las entradas `alert_trial` y `trial_outcome` existen con tipo, valores y por defecto de la sección 1 |
 | AW-7 | `run_suite` y `simulate` tienen las condiciones de la sección 2; `timeout-minutes` del job `e2e` es el literal de la sección 2, punto 6 |
 | AW-8 | `collect` es el último paso, con `if: ${{ always() }}` y `continue-on-error: true`; las tres salidas del job apuntan a `steps.collect.outputs.*`; todos los pasos tienen `id` |

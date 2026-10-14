@@ -13,8 +13,11 @@ Fase 0 de `/speckit-plan` para `specs/040-nightly-red-alert/spec.md`. Cada decis
 | M5 | ¿Hay en el historial algún job reportado como `timed_out` o por tiempo agotado? | No hay muestra: 18 corridas `cancelled` en `tests` y `shellcheck` (cancelación por `concurrency`, 16 y 2) y ninguna `timed_out`, 417 corridas leídas | API de corridas, 5 páginas |
 | M6 | Historial del nightly | 158 corridas programadas: 155 rojas y 3 verdes; inicio entre 05:30Z y 17:17Z | paginación completa (spec, Contexto) |
 | M7 | Cómo reporta la plataforma un job que agota `timeout-minutes` | **[COMPUERTA]** sin medir; se mide con `trial_outcome=timeout` (R7) | corrida de ensayo |
-| M8 | ¿Le llega de verdad la notificación al asignado cuando el issue lo crea el token del workflow? | **[COMPUERTA]** sin medir; la confirma el mantenedor (SC-009) | corrida de ensayo, confirmación humana |
-| M9 | ¿Acepta el token del workflow crear etiquetas e issues con `issues: write` en esta organización? | **[COMPUERTA]** sin medir; la política de la organización podría limitarlo | corrida de ensayo |
+| M8 | ¿Le llega de verdad la notificación al asignado cuando el issue lo crea el token del workflow? | **MEDIDO el 14-10-2026 (E1, run 38497730831): NO llegó al operador.** GitHub sí la creó (`reason: assign` en la bandeja web, 21 s después de crear el issue #106), pero no apareció donde el operador mira (esperaba Telegram); no se sabe si su correo o la aplicación móvil están activos. Origen de la enmienda 1 (R17 a R24) | corrida de ensayo, confirmación humana y `gh api --method GET notifications` |
+| M9 | ¿Acepta el token del workflow crear etiquetas e issues con `issues: write` en esta organización? | **MEDIDO el 14-10-2026 (E1): sí.** La corrida creó la etiqueta `nightly-red-trial` y el issue #106 con el token del workflow | corrida de ensayo |
+| M10 | Forma de los errores de la API de Telegram | Con un token falso pero bien formado: HTTP 401 y `{"ok":false,"error_code":401,"description":"Unauthorized"}`; con un token mal formado: HTTP 404 y `{"ok":false,"error_code":404,"description":"Not Found"}`; el POST con `application/x-www-form-urlencoded` llega hasta la comprobación del token | `curl` contra `api.telegram.org` con valores falsos, sin credenciales ni efectos |
+| M11 | Qué dice la documentación oficial de Telegram | URL `https://api.telegram.org/bot<token>/METHOD_NAME`; GET y POST; parámetros por query, `application/x-www-form-urlencoded`, JSON o multipart; respuesta con `ok`, `result` o `description` y `error_code`, y a veces `parameters`; ejemplo de token `123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11`; Bot API 7.0 reemplazó `disable_web_page_preview` por `link_preview_options` en `sendMessage`; límites de la FAQ: cerca de 1 mensaje por segundo por chat, 20 por minuto en un grupo y unos 30 por segundo en difusión, con errores 429 al excederlos. **No verificado en la documentación** (la página es demasiado grande para la herramienta de lectura): la tabla de parámetros de `sendMessage` (`disable_notification`, límite de 4096 caracteres del texto) y `retry_after` | lectura de `core.telegram.org/bots/api`, `/bots/faq` y `/bots/api-changelog` |
+| M12 | Orden de `gh issue list --label ... --limit 1` | Con `--label` `gh` usa la API de búsqueda (consulta GraphQL `IssueSearch`, `last: $limit`, sin `sort:`) y en un repositorio público real (`cli/cli`, etiqueta `bug`) devuelve el issue más nuevo primero | consulta de solo lectura del 13-10-2026 |
 
 ## R1. Dónde vive la lógica del aviso
 
@@ -136,10 +139,85 @@ Los nombres de test vienen del log y pueden contener `@usuario`, `#123`, comilla
 
 `gh api repos/<repo>/actions/jobs/<id>/logs` exige `--allow-escape-sequences` en gh 2.102.0; sin ello baja un archivo de 99 bytes y los conteos dan 0 en silencio. Siempre se verifica que el archivo contenga una línea esperada (por ejemplo `nightly-alert`) antes de contar.
 
+## R17. Por qué un empuje por Telegram (medición M8, enmienda 1)
+
+**Decisión** (operador, AskUserQuestion, 14-10-2026): el issue sigue siendo el estado y el historial de la racha, y el job `alert` envía además un mensaje por Telegram con un bot nuevo solo para la CI.
+
+**Razón**: la premisa del clarify del 12-10-2026 ("GitHub notifica de forma activa al asignado") se midió y no se cumplió para este operador: la notificación existe en la bandeja web de GitHub (21 s después de crear el issue) pero él no la ve; mira Telegram, donde ya vive su flota de agentes. El objetivo de la feature es que un rojo le llegue donde mira; el issue solo no lo logra.
+
+**Alternativas descartadas**: (B) dejar solo el issue y pedirle que active el correo o la aplicación móvil de GitHub para la organización: costo cero de código, pero no hay garantía de que mire esos canales y el riesgo es repetir los 155 rojos sin aviso; se ofreció y no se eligió. (C) esperar a que revise su configuración: aplaza el problema.
+
+**Consecuencia**: cambian FR-012, FR-013, SC-007 y SC-009 y entran FR-020 a FR-023 y SC-010; la evidencia de E1 a E6 se repite sobre el texto que se mergee (regla de T084).
+
+## R18. API de Telegram: qué se usa y qué se verificó
+
+Se usa `POST https://api.telegram.org/bot<token>/sendMessage` con `application/x-www-form-urlencoded` y los campos `chat_id`, `text`, `link_preview_options` (`{"is_disabled":true}`, para que los enlaces de GitHub no agreguen una vista previa; reemplazó a `disable_web_page_preview` en Bot API 7.0) y, solo en la recuperación, `disable_notification=true`. Sin `parse_mode`: el texto es plano y Telegram no interpreta formato, de modo que un nombre o una cadena del log no puede romper el mensaje. Verificado (M10 y M11): forma de la URL, métodos y tipos de contenido, forma de las respuestas, ejemplo de token y límites de frecuencia. **No verificado en la documentación**: el límite de 4096 caracteres y el parámetro `disable_notification`; el mensaje mide menos de 1000 caracteres y la primera entrega real (E1 repetido) confirma que Telegram acepta ambos campos.
+
+**Límites**: el mensaje es de a lo sumo 6 líneas y se envía una vez por noche, muy por debajo del tope de unos 1 mensaje por segundo por chat.
+
+## R19. Cómo se llama a `curl` sin el token en los argumentos
+
+**Decisión**: el script escribe un archivo de configuración de `curl` en su directorio temporal privado (permisos 0600) con `url`, `data-urlencode` (el texto se lee de un archivo con `text@archivo`), `max-time`, `silent`, `show-error`, `output` y `write-out`, y ejecuta `curl -K archivo`. Los argumentos del proceso son solo `-K <ruta>`. El token vive únicamente en ese archivo, que el `trap EXIT` borra.
+
+**Razón**: la petición del operador (el token no viaja por argv: la lista de procesos de la máquina lo mostraría) y la regla de CLAUDE.md de que las cargas no viajan por argumentos. El notificador de heartbeat del repo pasa el token en la URL por argv; aquí se hace mejor porque el runner comparte la máquina con el resto de los pasos.
+
+**Defensa contra inyección en el archivo de configuración**: los dos secretos se validan con una expresión antes de escribirlos: token `^[0-9]{3,20}:[A-Za-z0-9_-]{20,80}$` (más laxo que un token real de 8 a 10 dígitos y 35 caracteres porque la documentación oficial muestra un ejemplo más corto) y chat id `^(-?[0-9]{1,20}|@[A-Za-z0-9_]{5,32})$`. Un valor con comillas, barras invertidas, espacios o saltos de línea no pasa y el empuje se omite con una advertencia que **no** repite el valor.
+
+## R20. Secretos: lectura mínima
+
+El script lee `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` una vez en variables del shell y los quita del entorno (`unset`): los procesos hijos que no los necesitan (`gh`, `jq`, `date`) no los heredan. Cualquier texto que se imprima y pudiera contener el token se pasa antes por una redacción que lo reemplaza por `***`. GitHub además enmascara en los logs los valores de los secretos. Alcance del riesgo: quien puede escribir en el repositorio puede, cambiando un workflow, leer los secretos; es igual que cualquier secreto de Actions y hoy ese acceso es del operador. Los secretos no están disponibles para `pull_request` desde forks, y el job `alert` solo corre con `schedule` y `workflow_dispatch`.
+
+## R21. Cuándo y qué se envía
+
+| Acción sobre el issue | Mensaje | Sonido |
+|---|---|---|
+| crear (primera noche) | `docker-e2e nightly EN ROJO`, noche 1 y fecha de inicio, paso, resumen, corrida y aviso | normal |
+| actualizar (noche siguiente) | `docker-e2e nightly SIGUE EN ROJO`, noche N, paso, resumen, corrida y aviso | normal |
+| reabrir (cierre manual) | `docker-e2e nightly SIGUE EN ROJO (aviso reabierto)`, noche N, paso, resumen, corrida y aviso | normal |
+| cerrar (verde), solo si el aviso quedó cerrado | `docker-e2e nightly VOLVIO A VERDE`, cuántas noches duró la racha y desde cuándo, corrida y aviso | silencio |
+| solo reescribir el marcador, o ninguna | nada | |
+| no se pudo consultar el issue en un rojo | `docker-e2e nightly EN ROJO`, paso, resumen y solo el enlace de la corrida | normal |
+
+El mensaje de ensayo antepone `[ensayo] ` a la primera línea. Todo es ASCII sin tildes (como el resto de los textos de CI del repositorio), de 2 a 6 líneas según los datos (de 4 a 6 en los casos normales), sin nombres de tests y con el texto del log saneado como el cuerpo del issue. Si el marcador del issue es inválido no se conoce el número de noche y la línea de racha se omite.
+
+## R22. Fallas y reintentos
+
+**Decisión**: un solo intento por mensaje, con `--max-time 15`. Cualquier falla (no hay secretos, formato inválido, `curl` con error, HTTP distinto de 200, `ok` distinto de `true`) deja un `::warning::` con el motivo (el código HTTP y la `description` de Telegram, saneada y sin el token) y el script sigue; el código de salida no cambia.
+
+**Razón**: el empuje se repite cada noche roja (FR-020) y el issue conserva la noche; un segundo intento agrega latencia y casos de prueba para una falla que el siguiente rojo corrige. **Costo aceptado**: relanzar el job `alert` no reenvía un mensaje que falló, porque el issue ya registró la noche y el empuje sigue a la acción sobre el issue; el log de la primera ejecución dice qué pasó.
+
+## R23. El oráculo del empuje
+
+**Decisión**: probar el script con el `curl` **real** contra un servidor HTTP local de la biblioteca estándar de Python (`tests/fixtures/nightly-alert/tg-server.py`, en `127.0.0.1` y un puerto libre, que registra cada petición y responde según un modo: `ok`, `ok-false`, `unauthorized`, `chat-not-found`, `rate-limit`, `server-error`, `hang`), con un `curl` espía delante en el `PATH` (`tests/fixtures/nightly-alert/curl`) que anota los argumentos y delega en el real. Dos costuras de prueba que el workflow no define: `TELEGRAM_API_BASE` (por defecto `https://api.telegram.org`, el mismo mecanismo que `NOTIFY_TELEGRAM_API_BASE` del notificador de heartbeat) y `TELEGRAM_MAX_TIME` (por defecto 15).
+
+**Razón**: lo que un `curl` falso no puede asegurar es justo lo que más puede fallar aquí: la gramática del archivo de configuración, la codificación de `text@archivo` y la lectura de `write-out`. Con el `curl` real contra un servidor local el oráculo comprueba la petición HTTP que de verdad saldría. El espía responde a la pregunta del token en los argumentos. Python 3 ya es una dependencia de la suite (`apply-telegram-patches.bats`) y está en los runners de macOS y de Ubuntu. El `gh` falso gana una anotación `env_leak` para comprobar que el token no llega a los hijos.
+
+**Alternativas descartadas**: un `curl` falso en bash (no ejercita el `curl` real); sustituir la función de envío con un doble dentro del script (el oráculo dejaría de ejecutar el texto real); `nc` o `socat` (no portables entre macOS y Ubuntu).
+
+## R24. Aprovisionamiento: lo que hace el operador y lo que el agente nunca ve
+
+1. En Telegram, con @BotFather, `/newbot`: nombre y usuario del bot nuevo de la CI; BotFather entrega el token (no pegarlo en ningún chat con el agente).
+2. Abrir el chat con el bot nuevo y enviarle `/start`: un bot no puede iniciar la conversación.
+3. Obtener el chat id con `getUpdates` leyendo el token sin eco (por ejemplo `read -rs T; printf 'url = "https://api.telegram.org/bot%s/getUpdates"\n' "$T" | curl -sS -K - | jq '.result[].message.chat.id'; unset T`: la configuración entra por la entrada estándar, así que el token no queda en la línea de comandos que `ps` muestra, igual que hace el script).
+4. Definir los secretos sin que el valor pase por ningún archivo ni por el historial: `gh secret set TELEGRAM_BOT_TOKEN --repo rodrigo-hinojosa-labs/agentic-pod-launcher` y `gh secret set TELEGRAM_CHAT_ID --repo rodrigo-hinojosa-labs/agentic-pod-launcher` (piden el valor por la entrada estándar).
+5. Comprobar que existen: `gh secret list --repo rodrigo-hinojosa-labs/agentic-pod-launcher` (solo muestra los nombres).
+
+El agente no lee los valores, no los pide y no los escribe en ningún archivo; solo verifica con `gh secret list` que los nombres existen.
+
+## R25. Tope de tiempo de las llamadas a `gh` (hallazgo de la revisión independiente)
+
+**Hallazgo**: `gh_run` no tenía tope propio. Si `gh` acepta la llamada y no responde, el único límite es el `timeout-minutes: 3` del paso, y el empuje va después de todas las llamadas: la noche roja quedaba sin issue y sin mensaje, el silencio que la feature existe para terminar. FR-020 ("un rojo no se pierde porque GitHub falle") cubría un `gh` que falla, no uno que se cuelga.
+
+**Decisión**: cada llamada a `gh` corre en segundo plano y el script la vigila cada 50 ms; a los `GH_CALL_TIMEOUT` segundos (30 por defecto) la corta con `kill`, y después de `GH_BUDGET` segundos del arranque (100 por defecto) ya no inicia ninguna. El peor caso es ~30 s por llamada con a lo sumo cuatro o cinco llamadas, repartidas dentro de los 100 s de presupuesto, más los 15 s de `curl`: unos 145 s, por debajo de los 180 del paso. Una llamada cortada se trata como cualquier otra falla de `gh` y una noche roja sin `list` entra por el camino `rojo-sin-aviso` ya probado.
+
+**Alternativas descartadas**: `timeout` de coreutils (macOS no lo trae y las pruebas corren allí; ubuntu sí); una trampa de `TERM` que envíe el mensaje mínimo (en bash 3.2 la trampa espera a que termine el proceso en primer plano, y la gracia que da el runner antes de `KILL` no está medida); enviar el empuje antes que el issue (contradice "después de la acción sobre el issue" y no sabría el tipo de mensaje ni la racha).
+
+**Fuera de alcance, declarado**: que una falla del empuje en una noche roja deje solo un `::warning::` en un job verde (token revocado, bot bloqueado) es el estado de la medición M8, y el único rastro está en el log de Actions. FR-021 pide exactamente una advertencia; anotar el motivo en el comentario del issue o en el resumen del paso queda como mejora candidata, no se hace aquí.
+
 ## Preguntas que quedan abiertas (todas con compuerta)
 
 1. M7: cómo reporta la plataforma un job que agota su tope (decide R7).
-2. M8: si la notificación al asignado le llega al mantenedor sin abrir Issues ni Actions (SC-009).
-3. M9: si la organización permite al token del workflow crear etiquetas e issues.
+2. ~~M8 y M9~~ **medidas el 14-10-2026** (E1): M9 sí; M8 no llegó, y de ahí la enmienda 1 (R17).
+3. M8 repetido para Telegram: que el mantenedor reciba el mensaje de Telegram sin abrir Issues ni Actions (SC-009 reformulado) y que Telegram acepte `disable_notification` y `link_preview_options` (R18). Necesita que el operador cree el bot y los dos secretos (R24).
 
-Ninguna bloquea el oráculo ni el script, que se desarrollan con el `gh` falso; las tres se contestan en la secuencia de ensayo de `quickstart.md`.
+Ninguna bloquea el oráculo ni el script, que se desarrollan con el `gh` falso (y, para el empuje, con el servidor local de R23); las que quedan se contestan en la secuencia de ensayo de `quickstart.md`.
