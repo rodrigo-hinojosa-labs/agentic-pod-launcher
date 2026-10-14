@@ -180,4 +180,9 @@ jobs:
           RUN_ATTEMPT: ${{ github.run_attempt }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           ASSIGNEE: rodrigo-hinojosa
+          # The push to Telegram (contracts/telegram-push.md): the bot token and the chat
+          # id come from two repository secrets that only this step reads. Without them the
+          # script leaves the push out with a warning and the notice is published anyway.
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: .github/scripts/nightly-alert.sh notify

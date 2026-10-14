@@ -6,6 +6,9 @@
 #   issues.json  array of issues {number,state,stateReason,title,body,labels,assignees,comments,url}
 #   labels.txt   one label name per line
 #   calls.log    one line per call: VERB<TAB>arguments
+#   events.log   one line per call: "gh VERB"; the Telegram test server appends "tg"
+#                to the same file, so the tests can tell which came first (the push
+#                must follow the action on the issue)
 #
 # The accepted flags are EXACTLY the ones verified against the real gh 2.102.0
 # (research R8); any other subcommand or flag exits 64, writes UNSUPPORTED to
@@ -13,6 +16,18 @@
 # real gh would reject. FAKE_GH_FAIL is a comma list of operations to make fail:
 # list, label, create, create_assignee (only when --assignee is passed), edit,
 # comment, reopen, close.
+#
+# Amendment 1 (Telegram push): a call whose environment still carries
+# TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID, even empty, writes ENVLEAK to calls.log and
+# fails the test: the script must take the two secrets out of the environment before
+# it starts any child that does not need them. The VALUE of the token is searched for
+# too, under any variable name (the test server's control file in $TG_DIR holds it):
+# `export TG_TOKEN` would pass the check by name and leak the value all the same.
+#
+# Test seams for the failures a real gh has besides failing: FAKE_GH_HANG is a comma list
+# of operations (the names of FAKE_GH_FAIL) that never answer, FAKE_GH_LIST=garbage makes
+# `issue list` answer something that is not a list (rc 0), and FAKE_GH_CREATE_OUT is what
+# `issue create` prints instead of the URL of the issue it created.
 #
 # Written for bash 3.2 and 5.x, ASCII only. jq does the JSON work.
 
@@ -23,14 +38,19 @@ if [ -z "$STATE" ]; then
 fi
 mkdir -p "$STATE"
 LOG="$STATE/calls.log"
+EVENTS="$STATE/events.log"
 ISSUES="$STATE/issues.json"
 LABELS="$STATE/labels.txt"
 [ -f "$ISSUES" ] || printf '[]\n' > "$ISSUES"
 [ -f "$LABELS" ] || : > "$LABELS"
 FAIL=",${FAKE_GH_FAIL:-},"
+HANG=",${FAKE_GH_HANG:-},"
 
 fails() { case "$FAIL" in *",$1,"*) return 0 ;; esac; return 1; }
-log() { printf '%s\t%s\n' "$1" "$2" >> "$LOG"; }
+log() {
+  printf '%s\t%s\n' "$1" "$2" >> "$LOG"
+  printf 'gh %s\n' "$1" >> "$EVENTS"
+}
 unsupported() {
   log UNSUPPORTED "$*"
   echo "fake gh: unsupported: $*" >&2
@@ -41,6 +61,8 @@ inject() {
     echo "fake gh: injected failure ($1)" >&2
     exit 1
   fi
+  # a gh that accepts the call and never answers; exec, so that killing it leaves no orphan
+  case "$HANG" in *",$1,"*) exec sleep 20 ;; esac
 }
 # need_value FLAG COUNT: a flag with no value after it is a usage error.
 need_value() { [ "$2" -ge 2 ] || unsupported "flag without value: $1"; }
@@ -60,6 +82,18 @@ if [ -z "${GH_REPO:-}" ]; then
   exit 4
 fi
 
+# a secret of the Telegram push in the environment of a child is a leak, by name or by value
+if [ "${TELEGRAM_BOT_TOKEN+set}" = set ] || [ "${TELEGRAM_CHAT_ID+set}" = set ]; then
+  log ENVLEAK "TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is set in the environment of gh"
+fi
+if [ -n "${TG_DIR:-}" ] && [ -r "$TG_DIR/tg-token" ]; then
+  tg_tok=$(cat "$TG_DIR/tg-token")
+  tg_env=$(env)
+  case "$tg_env" in
+    *"$tg_tok"*) if [ -n "$tg_tok" ]; then log ENVLEAK "the value of the bot token is in the environment of gh"; fi ;;
+  esac
+fi
+
 do_list() {
   local label="" state="open" limit=30 json=""
   while [ $# -gt 0 ]; do
@@ -76,6 +110,10 @@ do_list() {
   case "$limit" in ''|*[!0-9]*) unsupported "issue list --limit $limit" ;; esac
   log list "--label $label --state $state --limit $limit --json $json"
   inject list
+  if [ "${FAKE_GH_LIST:-}" = garbage ]; then
+    printf '{"message":"unexpected"}\n'
+    return 0
+  fi
   jq -c --arg label "$label" --arg state "$state" --argjson limit "$limit" --arg fields "$json" '
     def keep($f): with_entries(select(.key as $k | ($f | index($k)) != null));
     map(select(($label == "") or (((.labels // []) | map(.name) | index($label)) != null)))
@@ -117,7 +155,7 @@ do_create() {
           assignees: ($assignees | split(" ") | map(select(length > 0)) | map({login: .})),
           comments: [], url: $u}]
   ' "$ISSUES" > "$ISSUES.tmp" && save
-  printf '%s\n' "$url"
+  if [ -n "${FAKE_GH_CREATE_OUT:-}" ]; then printf '%s\n' "$FAKE_GH_CREATE_OUT"; else printf '%s\n' "$url"; fi
 }
 
 do_comment() {

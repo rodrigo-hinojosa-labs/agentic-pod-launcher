@@ -1,8 +1,9 @@
 #!/usr/bin/env bats
 # 040-nightly-red-alert: oracle for the nightly notice.
 #
-# Contracts: specs/040-nightly-red-alert/contracts/alert-oracle.md (AO: N00-N31),
-# alert-script.md (AS), alert-workflow.md (AW) and notice-format.md (NF).
+# Contracts: specs/040-nightly-red-alert/contracts/alert-oracle.md (AO: N00-N42),
+# alert-script.md (AS), alert-workflow.md (AW), notice-format.md (NF) and, for the
+# push to Telegram (amendment 1, N32-N42), telegram-push.md (TP).
 #
 # The nightly docker-e2e run was red for 155 of 158 scheduled nights and nobody
 # was told. This file runs the REAL text of .github/scripts/nightly-alert.sh
@@ -20,6 +21,8 @@
 #   SIGPIPE_MODE                   ignore (default: what the GitHub runner hands the
 #                                  script) or default; set with perl right before exec
 #   FAKE_GH_FAIL                   comma list of gh operations that must fail
+#   TELEGRAM_API_BASE / _MAX_TIME  where the push goes and how long curl waits; the
+#                                  harness points them at tg-server.py (_tg_up)
 #
 # Rules this file lives by (it is the code that enforces them):
 #   - bash 3.2 and 5.x: no mapfile, no associative arrays, no ${v,,}.
@@ -46,6 +49,10 @@ T3=1792670400   # 22-10-2026 12:00 UTC
 # argument and then execs the rest (an ignored signal survives exec; a bash reset
 # of it is refused). _alert and the N17 probe both go through it.
 SIGPIPE_PERL='$SIG{PIPE} = shift @ARGV; exec @ARGV'
+# The only secrets the oracle ever uses: a recognisable sentinel in the shape of a real
+# bot token, and a chat id. N39 searches every output, argument and environment for it.
+TG_TOKEN='987654321:SENTINELtokenSENTINELtoken0123456789a'
+TG_CHAT='424242'
 
 setup() {
   setup_tmp_dir
@@ -54,11 +61,15 @@ setup() {
   printf '[]\n' > "$FAKE_GH_STATE/issues.json"
   : > "$FAKE_GH_STATE/labels.txt"
   : > "$FAKE_GH_STATE/calls.log"
+  : > "$FAKE_GH_STATE/events.log"
   cp "$FIX/gh" "$TMP_TEST_DIR/bin/gh"
   chmod +x "$TMP_TEST_DIR/bin/gh"
-  unset FAKE_GH_FAIL SIGPIPE_MODE
+  unset FAKE_GH_FAIL SIGPIPE_MODE TG_DIR TG_PORT TG_PID
 }
-teardown() { teardown_tmp_dir; }
+teardown() {
+  _tg_down
+  teardown_tmp_dir
+}
 
 # -- harness ------------------------------------------------------------------
 
@@ -96,7 +107,7 @@ _extract_run() {
 # red`). Leaves $status and $output (stdout and stderr merged).
 _alert() {
   local sub="$1" a run_id=1001 sig nl=$'\n'
-  local -a envs=() sargs=()
+  local -a envs=() sargs=() tgenv=()
   shift
   for a in "$@"; do
     case "$a" in
@@ -114,6 +125,16 @@ _alert() {
     echo "nightly-alert oracle: the script under test does not exist: $ALERT_SCRIPT" >&2
     return 1
   fi
+  # after _tg_up the job hands the script the two secrets, the address of the local
+  # server and a short curl limit (a test can override any of them with VAR=value);
+  # before it the variables are not passed at all
+  if [ -n "${TG_PORT:-}" ]; then
+    tgenv[0]="TELEGRAM_BOT_TOKEN=$TG_TOKEN"
+    tgenv[1]="TELEGRAM_CHAT_ID=$TG_CHAT"
+    tgenv[2]="TELEGRAM_API_BASE=http://127.0.0.1:$TG_PORT"
+    tgenv[3]="TELEGRAM_MAX_TIME=3"
+    tgenv[4]="TG_DIR=$TG_DIR"
+  fi
   mkdir -p "$TMP_TEST_DIR/work"
   cd "$TMP_TEST_DIR/work"
   run env -i \
@@ -125,6 +146,7 @@ _alert() {
     "FAILED_TESTS=beta failing test 1${nl}beta failing test 2" \
     RUN_ID=1001 RUN_ATTEMPT=1 "RUN_URL=https://github.com/o/r/actions/runs/$run_id" \
     "NIGHTLY_ALERT_NOW=$T1" "GITHUB_OUTPUT=$TMP_TEST_DIR/github_output" \
+    ${tgenv[@]+"${tgenv[@]}"} \
     ${envs[@]+"${envs[@]}"} \
     perl -e "$SIGPIPE_PERL" "$sig" "$BASH" "$ALERT_SCRIPT" "$sub" ${sargs[@]+"${sargs[@]}"}
   # a gh call the real gh 2.102.0 would reject makes the fake answer 64, which the script
@@ -134,6 +156,27 @@ _alert() {
     echo "nightly-alert oracle: the script made a gh call the real gh does not accept:" >&2
     grep '^UNSUPPORTED' "$FAKE_GH_STATE/calls.log" >&2
     return 1
+  fi
+  # the same for a secret of the Telegram push that reached a child (amendment 1): the
+  # script must take both out of its environment before it starts gh
+  if grep -q '^ENVLEAK' "$FAKE_GH_STATE/calls.log"; then
+    echo "nightly-alert oracle: a Telegram secret reached the environment of gh" >&2
+    return 1
+  fi
+  # SC-010: the sentinel of the bot token is in nothing the script prints, in nothing it gave
+  # the issue, in no gh call and on no curl command line. Every test that talks to the local
+  # server is held to it after every run, not only N39.
+  if [ -n "${TG_PORT:-}" ]; then
+    case "$output" in
+      *"$TG_TOKEN"*)
+        echo "nightly-alert oracle: the bot token reached the output of the script" >&2
+        return 1
+        ;;
+    esac
+    if grep -qF -- "$TG_TOKEN" "$FAKE_GH_STATE/issues.json" "$FAKE_GH_STATE/calls.log" "$TG_DIR/curl-argv.log"; then
+      echo "nightly-alert oracle: the bot token reached an issue, a gh call or a curl command line" >&2
+      return 1
+    fi
   fi
 }
 
@@ -338,6 +381,83 @@ _only_printable() {
   printf '%s\n' "${n//[[:space:]]/}"
 }
 
+# _warnings OUTPUT: the ::warning:: lines of OUTPUT other than the one that says the push
+# to Telegram was left out. A test that never starts the server runs the script without
+# secrets, so that line is expected there and says nothing about what the test checks.
+_warnings() {
+  local line
+  while IFS= read -r line; do
+    case "$line" in
+      *'::warning::'*'empuje por Telegram omitido'*) ;;
+      *'::warning::'*) printf '%s\n' "$line" ;;
+    esac
+  done <<< "$1"
+}
+
+# -- the Telegram test server (amendment 1) -----------------------------------------
+
+# _tg_up [MODE]: start tg-server.py (the stand-in for the Telegram Bot API, answering as
+# MODE says, ok by default) with the spy curl in front of the real one. From here on
+# _alert hands the script the two secrets, the address of the server and a short curl
+# time limit. The server writes its requests to $TG_DIR/tg-requests.jsonl and a "tg" line
+# to the same events.log the fake gh writes to. fd 3 and fd 4 are closed for the server: a
+# background process that keeps one of bats' descriptors open can make the run hang at the end.
+_tg_up() {
+  local mode="${1:-ok}" i=0
+  TG_DIR="$TMP_TEST_DIR/tg"
+  mkdir -p "$TG_DIR"
+  : > "$TG_DIR/tg-requests.jsonl"
+  : > "$TG_DIR/curl-argv.log"
+  : > "$TG_DIR/curl-conf.log"
+  printf '%s\n' "$TG_TOKEN" > "$TG_DIR/tg-token"
+  printf '%s\n' "$TG_CHAT" > "$TG_DIR/tg-chat"
+  printf '%s\n' "$mode" > "$TG_DIR/tg-mode"
+  cp "$FIX/curl" "$TMP_TEST_DIR/bin/curl"
+  chmod +x "$TMP_TEST_DIR/bin/curl"
+  TG_DIR="$TG_DIR" EVENTS_LOG="$FAKE_GH_STATE/events.log" python3 "$FIX/tg-server.py" > "$TG_DIR/server.out" 2>&1 3>&- 4>&- &
+  TG_PID=$!
+  while [ ! -s "$TG_DIR/tg-port" ] && [ "$i" -lt 100 ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  if [ ! -s "$TG_DIR/tg-port" ]; then
+    echo "nightly-alert oracle: tg-server.py did not start: $(cat "$TG_DIR/server.out")" >&2
+    return 1
+  fi
+  TG_PORT=$(cat "$TG_DIR/tg-port")
+}
+
+# _tg_mode MODE: change how the server answers from the next request on.
+_tg_mode() { printf '%s\n' "$1" > "$TG_DIR/tg-mode"; }
+
+# _tg_down: stop the server (idempotent). teardown calls it for every test; a test that
+# wants "the server is down" calls it first and keeps the address, so curl is refused.
+_tg_down() {
+  if [ -n "${TG_PID:-}" ]; then
+    kill "$TG_PID" 2> /dev/null || true
+    wait "$TG_PID" 2> /dev/null || true
+    TG_PID=""
+  fi
+  return 0
+}
+
+# _tg_count: how many requests the server has received.
+_tg_count() {
+  local n
+  n=$(wc -l < "$TG_DIR/tg-requests.jsonl")
+  printf '%s\n' "${n//[[:space:]]/}"
+}
+
+# _tg_req N JQ_EXPR: a field of request N (1 is the first), raw; null if there is none.
+_tg_req() { jq -r -s ".[$(($1 - 1))] | $2" "$TG_DIR/tg-requests.jsonl"; }
+
+# _tg_text N: the message text of request N, exactly as Telegram would receive it.
+_tg_text() { _tg_req "$1" '.fields.text // ""'; }
+
+# _events: the order of the calls of both services, one word per line ("gh list",
+# "gh create", "tg", ...).
+_events() { cat "$FAKE_GH_STATE/events.log"; }
+
 # -- N00: calibration of the instrument ------------------------------------------
 
 @test "N00 el gh falso: exige FAKE_GH_STATE, registra cada llamada y rechaza lo que el gh real no acepta" {
@@ -384,6 +504,73 @@ _only_printable() {
   # every call above, including the refused ones, left a line
   [ "$(_count_calls close)" = "1" ]
   [ "$(_count_calls label-create)" = "2" ]
+  # amendment 1: every call also leaves a "gh VERB" line in events.log, in the same order
+  # (the Telegram server appends "tg" there, which is how the tests check the push order)
+  grep -qx 'gh list' "$FAKE_GH_STATE/events.log"
+  [ "$(grep -c '^gh ' "$FAKE_GH_STATE/events.log")" = "$(grep -c . "$FAKE_GH_STATE/calls.log")" ]
+  # and a call whose environment still carries a Telegram secret, even an empty one, is
+  # recorded as ENVLEAK (the script must have taken both out before it starts gh)
+  [ "$(_count_calls ENVLEAK)" = "0" ]
+  run -0 env -i "PATH=$PATH" "FAKE_GH_STATE=$FAKE_GH_STATE" GH_TOKEN=t GH_REPO=o/r TELEGRAM_CHAT_ID= "$TMP_TEST_DIR/bin/gh" issue list --label x --state all --limit 1 --json number
+  [ "$(_count_calls ENVLEAK)" = "1" ]
+  run -0 env -i "PATH=$PATH" "FAKE_GH_STATE=$FAKE_GH_STATE" GH_TOKEN=t GH_REPO=o/r TELEGRAM_BOT_TOKEN=x "$TMP_TEST_DIR/bin/gh" issue list --label x --state all --limit 1 --json number
+  [ "$(_count_calls ENVLEAK)" = "2" ]
+}
+
+@test "N32 calibracion del servidor de Telegram y del curl espia: el curl real recibe lo que Telegram responderia" {
+  local url
+  _tg_up
+  url="http://127.0.0.1:$TG_PORT"
+  # the right token and chat: 200, ok true, and the request on record with its decoded fields
+  run -0 env -i "PATH=$TMP_TEST_DIR/bin:$PATH" "HOME=$TMP_TEST_DIR" "TG_DIR=$TG_DIR" curl -s -o "$TMP_TEST_DIR/r.json" -w '%{http_code}' --max-time 5 \
+    --data-urlencode "chat_id=$TG_CHAT" --data-urlencode $'text=line one\nline two' "$url/bot$TG_TOKEN/sendMessage"
+  [ "$output" = "200" ]
+  [ "$(jq -r .ok "$TMP_TEST_DIR/r.json")" = "true" ]
+  [ "$(_tg_count)" = "1" ]
+  [ "$(_tg_req 1 .method)" = "POST" ]
+  [ "$(_tg_req 1 .token)" = "$TG_TOKEN" ]
+  [ "$(_tg_req 1 .fields.chat_id)" = "$TG_CHAT" ]
+  [ "$(_tg_text 1)" = $'line one\nline two' ]
+  # another well-formed token is a 401, another chat a 400, a malformed token a 404
+  run -0 env -i "PATH=$TMP_TEST_DIR/bin:$PATH" "HOME=$TMP_TEST_DIR" "TG_DIR=$TG_DIR" curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+    --data-urlencode "chat_id=$TG_CHAT" --data-urlencode text=x "$url/bot111111111:WRONGtokenWRONGtokenWRONGtoken000/sendMessage"
+  [ "$output" = "401" ]
+  run -0 env -i "PATH=$TMP_TEST_DIR/bin:$PATH" "HOME=$TMP_TEST_DIR" "TG_DIR=$TG_DIR" curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+    --data-urlencode "chat_id=999" --data-urlencode text=x "$url/bot$TG_TOKEN/sendMessage"
+  [ "$output" = "400" ]
+  run -0 env -i "PATH=$TMP_TEST_DIR/bin:$PATH" "HOME=$TMP_TEST_DIR" "TG_DIR=$TG_DIR" curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+    --data-urlencode "chat_id=$TG_CHAT" --data-urlencode text=x "$url/bot-not-a-token/sendMessage"
+  [ "$output" = "404" ]
+  [ "$(_tg_count)" = "4" ]
+  # the failure modes answer as the mode says even with the right token
+  _tg_mode rate-limit
+  run -0 env -i "PATH=$TMP_TEST_DIR/bin:$PATH" "HOME=$TMP_TEST_DIR" "TG_DIR=$TG_DIR" curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+    --data-urlencode "chat_id=$TG_CHAT" --data-urlencode text=x "$url/bot$TG_TOKEN/sendMessage"
+  [ "$output" = "429" ]
+  _tg_mode server-error
+  run -0 env -i "PATH=$TMP_TEST_DIR/bin:$PATH" "HOME=$TMP_TEST_DIR" "TG_DIR=$TG_DIR" curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+    --data-urlencode "chat_id=$TG_CHAT" --data-urlencode text=x "$url/bot$TG_TOKEN/sendMessage"
+  [ "$output" = "500" ]
+  _tg_mode ok-false
+  run -0 env -i "PATH=$TMP_TEST_DIR/bin:$PATH" "HOME=$TMP_TEST_DIR" "TG_DIR=$TG_DIR" curl -s -o "$TMP_TEST_DIR/r.json" -w '%{http_code}' --max-time 5 \
+    --data-urlencode "chat_id=$TG_CHAT" --data-urlencode text=x "$url/bot$TG_TOKEN/sendMessage"
+  [ "$output" = "200" ]
+  [ "$(jq -r .ok "$TMP_TEST_DIR/r.json")" = "false" ]
+  # a server that never answers ends in curl's timeout (28); a server that is gone is
+  # refused (7)
+  _tg_mode hang
+  run -28 env -i "PATH=$TMP_TEST_DIR/bin:$PATH" "HOME=$TMP_TEST_DIR" "TG_DIR=$TG_DIR" curl -s -o /dev/null --max-time 2 \
+    --data-urlencode "chat_id=$TG_CHAT" --data-urlencode text=x "$url/bot$TG_TOKEN/sendMessage"
+  _tg_down
+  run -7 env -i "PATH=$TMP_TEST_DIR/bin:$PATH" "HOME=$TMP_TEST_DIR" "TG_DIR=$TG_DIR" curl -s -o /dev/null --max-time 2 \
+    --data-urlencode "chat_id=$TG_CHAT" --data-urlencode text=x "$url/bot$TG_TOKEN/sendMessage"
+  # the spy saw every call, and the real curl ran behind it (the codes above are the
+  # real curl's): one header per call and the arguments one per line
+  [ "$(grep -c '^--- curl$' "$TG_DIR/curl-argv.log")" = "9" ]
+  grep -qx -- "$url/bot$TG_TOKEN/sendMessage" "$TG_DIR/curl-argv.log"
+  grep -qx -- '--max-time' "$TG_DIR/curl-argv.log"
+  # the events file got one "tg" line per request that reached the server
+  [ "$(grep -c '^tg$' "$FAKE_GH_STATE/events.log")" = "8" ]
 }
 
 # -- US1: the first red night leaves a notice -----------------------------------
@@ -434,6 +621,491 @@ _only_printable() {
   # nothing was invented to fill the gap
   _lacks "$body" 'total=48'
   _lacks "$body" '~~~text'
+}
+
+# -- US1 (amendment 1): the red night reaches Telegram ----------------------------------
+
+@test "N33 empuje, rojo nuevo: un mensaje de 6 lineas con estado, racha, paso, resumen y los dos enlaces, con sonido y despues del issue (FR-020, FR-022)" {
+  local expected
+  _tg_up
+  _alert notify
+  [ "$status" -eq 0 ]
+  [ "$(_tg_count)" = "1" ]
+  # the request Telegram expects: the right bot, the right chat, a form, plain text
+  [ "$(_tg_req 1 .method)" = "POST" ]
+  [ "$(_tg_req 1 .token)" = "$TG_TOKEN" ]
+  [ "$(_tg_req 1 .content_type)" = "application/x-www-form-urlencoded" ]
+  [ "$(_tg_req 1 .fields.chat_id)" = "$TG_CHAT" ]
+  [ "$(_tg_req 1 '.fields | has("parse_mode")')" = "false" ]
+  # a red night rings (no disable_notification) and carries no link preview
+  [ "$(_tg_req 1 '.fields | has("disable_notification")')" = "false" ]
+  [ "$(_tg_req 1 .fields.link_preview_options)" = '{"is_disabled":true}' ]
+  # exactly the six lines of TP section 3, and nothing from the log beyond them
+  expected="docker-e2e nightly EN ROJO"$'\n'"Racha: noche 1 (desde 20-10-2026)"$'\n'"Paso que fallo: run_suite"$'\n'"Resumen: total=48 executed=48 skipped=0 failed=2"$'\n'"Corrida: https://github.com/o/r/actions/runs/1001"$'\n'"Aviso: https://github.com/fake/repo/issues/1"
+  [ "$(_tg_text 1)" = "$expected" ]
+  _lacks "$(_tg_text 1)" 'beta failing'
+  _has "$output" '::notice::nightly-alert: telegram enviado (tipo=rojo-nuevo)'
+  # the push follows the action on the issue: every gh call first, then the message
+  [ "$(_events)" = $'gh list\ngh label-create\ngh create\ntg' ]
+  # (b) the values production uses: when the job defines neither seam, the endpoint, the time
+  # limit and the flags are the script's own. TG_SPY_FAIL=url ends the call before the network,
+  # after the spy copied the configuration (token masked) for this test to read
+  local conf v chat
+  conf="$TG_DIR/curl-conf.log"
+  _reset_state
+  _alert notify TELEGRAM_API_BASE= TELEGRAM_MAX_TIME= TG_SPY_FAIL=url
+  [ "$status" -eq 0 ]
+  [ "$(_tg_count)" = "0" ]
+  grep -qxF -- 'url = "https://api.telegram.org/bot<T>/sendMessage"' "$conf"
+  grep -qxF -- 'max-time = "15"' "$conf"
+  grep -qxF -- 'silent' "$conf"
+  grep -qxF -- 'show-error' "$conf"
+  grep -qxF -- 'data-urlencode = "link_preview_options={\"is_disabled\":true}"' "$conf"
+  # nothing that weakens or redirects the request
+  [ "$(grep -c -E '^(insecure|proxy|noproxy|proto|cacert|capath|resolve|connect-to|doh-url|ssl|tls)' "$conf" || true)" = "0" ]
+  # a time limit that is not a plain positive number is the default, never "no limit"
+  for v in '3"' 0 abc 00; do
+    _reset_state
+    _alert notify "TELEGRAM_MAX_TIME=$v" TG_SPY_FAIL=url
+    grep -qxF -- 'max-time = "15"' "$conf"
+  done
+  # (c) the kinds of chat id Telegram has: a group or supergroup (negative) and a channel by name
+  for chat in -1001234567890 @mi_canal_ci; do
+    _reset_state
+    printf '%s\n' "$chat" > "$TG_DIR/tg-chat"
+    _alert notify "TELEGRAM_CHAT_ID=$chat"
+    [ "$status" -eq 0 ]
+    [ "$(_tg_count)" = "1" ]
+    [ "$(_tg_req 1 .fields.chat_id)" = "$chat" ]
+  done
+}
+
+@test "N37 empuje sin secretos validos: se omite con una advertencia que nombra la variable y no repite su valor, y el issue sale igual (FR-021)" {
+  local row var rest val why
+  _tg_up
+  for row in \
+    "TELEGRAM_BOT_TOKEN||falta TELEGRAM_BOT_TOKEN" \
+    "TELEGRAM_CHAT_ID||falta TELEGRAM_CHAT_ID" \
+    "TELEGRAM_BOT_TOKEN|not a token|TELEGRAM_BOT_TOKEN tiene un formato inesperado" \
+    "TELEGRAM_BOT_TOKEN|123:short|TELEGRAM_BOT_TOKEN tiene un formato inesperado" \
+    "TELEGRAM_CHAT_ID|chat with spaces|TELEGRAM_CHAT_ID tiene un formato inesperado" \
+    "TELEGRAM_CHAT_ID|'x';y|TELEGRAM_CHAT_ID tiene un formato inesperado" \
+    "TELEGRAM_API_BASE|http://example.com|TELEGRAM_API_BASE no es la API de Telegram" \
+    "TELEGRAM_API_BASE|https://api.telegram.org.evil.example|TELEGRAM_API_BASE no es la API de Telegram"; do
+    var="${row%%|*}"
+    rest="${row#*|}"
+    val="${rest%%|*}"
+    why="${rest#*|}"
+    _reset_state
+    _alert notify "$var=$val"
+    [ "$status" -eq 0 ]
+    # the notice is published all the same, and nothing went to Telegram
+    [ "$(_issue_count)" = "1" ]
+    [ "$(_tg_count)" = "0" ]
+    _has "$output" "::warning::nightly-alert: empuje por Telegram omitido: $why"
+    _lacks "$output" 'telegram enviado'
+    if [ -n "$val" ]; then _lacks "$output" "$val"; fi
+  done
+}
+
+# -- US2 (amendment 1): the push cannot change the verdict nor leak the token ---------------
+
+@test "N38 empuje, Telegram falla: una advertencia con el motivo, un solo intento, el issue ya publicado, salida 0 y el token redactado (FR-009, FR-021)" {
+  local row mode rest extra want also
+  _tg_up
+  # (server mode | extra environment | what the warning must carry | what else the output must
+  # carry). Two rows make the failure text quote the token, the way a gateway or a curl error
+  # can: the warning must show it redacted, and not even a fragment of it may survive. In
+  # echo-token the token sits across the 120-character cut the script applies to the
+  # description, so a redaction done AFTER the cut would leave half a token behind.
+  for row in \
+    "unauthorized||HTTP 401 Unauthorized|" \
+    "chat-not-found||HTTP 400 Bad Request: chat not found|" \
+    "rate-limit||HTTP 429 Too Many Requests: retry after 5|" \
+    "server-error||HTTP 500|" \
+    "ok-false||HTTP 200 Bad Request: message is too long|" \
+    "echo-token||HTTP 400 Bad Request: bad path|/bot***/sendMessage" \
+    "hang|TELEGRAM_MAX_TIME=2|curl salio con 28: curl: (28) Operation timed out|" \
+    "spy-url|TG_SPY_FAIL=url|curl salio con 3|/bot***/sendMessage" \
+    "down||curl salio con 7: curl: (7) Failed to connect|"; do
+    mode="${row%%|*}"
+    rest="${row#*|}"
+    extra="${rest%%|*}"
+    rest="${rest#*|}"
+    want="${rest%%|*}"
+    also="${rest#*|}"
+    _reset_state
+    case "$mode" in
+      down)    _tg_down ;;
+      spy-url) _tg_mode ok ;;
+      *)       _tg_mode "$mode" ;;
+    esac
+    _alert notify ${extra:+"$extra"}
+    [ "$status" -eq 0 ]
+    # the notice was published first and stays
+    [ "$(_issue_count)" = "1" ]
+    _has "$output" "::warning::nightly-alert: no se pudo enviar el empuje por Telegram (tipo=rojo-nuevo): $want"
+    _lacks "$output" 'telegram enviado'
+    _lacks "$output" "$TG_TOKEN"
+    _lacks "$output" "${TG_TOKEN:0:12}"
+    if [ -n "$also" ]; then _has "$output" "$also"; fi
+    # one attempt, no retry (research R22); the server hears nothing when it is gone or when
+    # the failure is the spy's
+    case "$mode" in
+      down|spy-url) [ "$(_tg_count)" = "0" ] ;;
+      *)            [ "$(_tg_count)" = "1" ] ;;
+    esac
+  done
+}
+
+@test "N39 empuje, el token no se filtra: ni a la salida, ni al issue, ni a los argumentos, ni al entorno de gh o de curl; el archivo que lo guarda es privado y no sobrevive (FR-021, SC-010)" {
+  local mode cfg
+  _tg_up
+  # every outcome the server can have, the server gone included. (The same sentinel is
+  # searched after every _alert call of every test that talks to the server: see _alert.)
+  for mode in ok unauthorized chat-not-found rate-limit server-error ok-false echo-token hang down; do
+    _reset_state
+    if [ "$mode" = down ]; then _tg_down; else _tg_mode "$mode"; fi
+    _alert notify TELEGRAM_MAX_TIME=2
+    [ "$status" -eq 0 ]
+    # the sentinel did travel, once, in the path of the one request: this is not the test
+    # of a push that never happened
+    if [ "$mode" != down ]; then
+      [ "$(_tg_count)" = "1" ]
+      [ "$(_tg_req 1 .token)" = "$TG_TOKEN" ]
+    fi
+    # it is in nothing the script printed, in nothing it gave the issue, in no gh call
+    _lacks "$output" "$TG_TOKEN"
+    _lacks "$(cat "$FAKE_GH_STATE/issues.json")" "$TG_TOKEN"
+    _lacks "$(cat "$FAKE_GH_STATE/calls.log")" "$TG_TOKEN"
+    [ "$(_count_calls ENVLEAK)" = "0" ]
+    # curl was given a config file and nothing else: not the token on its command line, and
+    # neither secret in its environment
+    _lacks "$(cat "$TG_DIR/curl-argv.log")" "$TG_TOKEN"
+    [ "$(grep -c '^--- curl$' "$TG_DIR/curl-argv.log")" = "1" ]
+    [ "$(sed -n '2p' "$TG_DIR/curl-argv.log")" = "-K" ]
+    [ "$(grep -c . "$TG_DIR/curl-argv.log")" = "4" ]
+    [ "$(grep -c '^ENVLEAK$' "$TG_DIR/curl-argv.log" || true)" = "0" ]
+    # the file that holds the token is private, and it is gone with its directory
+    grep -qx 'config-perms -rw-------' "$TG_DIR/curl-argv.log"
+    cfg=$(sed -n '3p' "$TG_DIR/curl-argv.log")
+    [ -n "$cfg" ]
+    [ ! -e "$cfg" ]
+    [ ! -d "$(dirname "$cfg")" ]
+  done
+}
+
+@test "N42 empuje, independencia de los canales: cada uno sale aunque el otro falle (FR-009, FR-020)" {
+  local expected before
+  _tg_up
+  # (a) the notice cannot be created: the message goes out all the same, without the link
+  # to a notice that does not exist
+  FAKE_GH_FAIL=create
+  _alert notify
+  unset FAKE_GH_FAIL
+  [ "$status" -eq 0 ]
+  [ "$(_issue_count)" = "0" ]
+  [ "$(_tg_count)" = "1" ]
+  expected=$'docker-e2e nightly EN ROJO\nRacha: noche 1 (desde 20-10-2026)\nPaso que fallo: run_suite\nResumen: total=48 executed=48 skipped=0 failed=2\nCorrida: https://github.com/o/r/actions/runs/1001'
+  [ "$(_tg_text 1)" = "$expected" ]
+  _has "$output" '::warning::nightly-alert: no se pudo crear el aviso'
+  _has "$output" '::notice::nightly-alert: telegram enviado (tipo=rojo-nuevo)'
+  # (b) the notice cannot even be looked up and the night is red: still a message, with
+  # neither streak nor link to the notice
+  _reset_state
+  FAKE_GH_FAIL=list
+  _alert notify
+  unset FAKE_GH_FAIL
+  [ "$status" -eq 0 ]
+  [ "$(_tg_count)" = "1" ]
+  expected=$'docker-e2e nightly EN ROJO\nPaso que fallo: run_suite\nResumen: total=48 executed=48 skipped=0 failed=2\nCorrida: https://github.com/o/r/actions/runs/1001'
+  [ "$(_tg_text 1)" = "$expected" ]
+  _has "$output" '::notice::nightly-alert: telegram enviado (tipo=rojo-sin-aviso)'
+  # (c) the same lookup failure on a green night says nothing to Telegram
+  _reset_state
+  FAKE_GH_FAIL=list
+  _alert notify RUN_RESULT=success
+  unset FAKE_GH_FAIL
+  [ "$status" -eq 0 ]
+  [ "$(_tg_count)" = "0" ]
+  _has "$output" '::warning::nightly-alert: no se pudo buscar el aviso'
+  # (d) the notice does not depend on Telegram: the same night leaves the same issue whether
+  # the message is delivered or rejected
+  _reset_state
+  _alert notify
+  before=$(jq -S . "$FAKE_GH_STATE/issues.json")
+  _reset_state
+  _tg_mode unauthorized
+  _alert notify
+  [ "$status" -eq 0 ]
+  [ "$(jq -S . "$FAKE_GH_STATE/issues.json")" = "$before" ]
+  # (e) gh stalls without answering: each call is cut at its limit and the red night still
+  # reaches Telegram -- a stalled GitHub is the same kind of failure as a failing one
+  local start
+  _tg_mode ok
+  _reset_state
+  start=$SECONDS
+  _alert notify FAKE_GH_HANG=list GH_CALL_TIMEOUT=2
+  [ "$status" -eq 0 ]
+  [ $((SECONDS - start)) -lt 15 ]
+  _has "$output" '::warning::nightly-alert: no se pudo buscar el aviso: gh salio con 143'
+  [ "$(_tg_count)" = "1" ]
+  [ "$(_tg_text 1)" = $'docker-e2e nightly EN ROJO\nPaso que fallo: run_suite\nResumen: total=48 executed=48 skipped=0 failed=2\nCorrida: https://github.com/o/r/actions/runs/1001' ]
+  _has "$output" '::notice::nightly-alert: telegram enviado (tipo=rojo-sin-aviso)'
+  # (f) the time budget of all the gh calls is spent: no call at all, and the red night is
+  # still told
+  _reset_state
+  _alert notify GH_BUDGET=0
+  [ "$status" -eq 0 ]
+  [ "$(grep -c . "$FAKE_GH_STATE/calls.log" || true)" = "0" ]
+  _has "$output" '::warning::nightly-alert: no se pudo buscar el aviso'
+  [ "$(_tg_count)" = "1" ]
+  [ "$(_tg_text 1)" = $'docker-e2e nightly EN ROJO\nPaso que fallo: run_suite\nResumen: total=48 executed=48 skipped=0 failed=2\nCorrida: https://github.com/o/r/actions/runs/1001' ]
+  _has "$output" '::notice::nightly-alert: telegram enviado (tipo=rojo-sin-aviso)'
+  # (g) gh answers something that is not a list (rc 0): same as not being able to look it up
+  _reset_state
+  _alert notify FAKE_GH_LIST=garbage
+  [ "$status" -eq 0 ]
+  _has "$output" '::warning::nightly-alert: no se pudo buscar el aviso: gh no devolvio una lista'
+  [ "$(_tg_count)" = "1" ]
+  _has "$output" '::notice::nightly-alert: telegram enviado (tipo=rojo-sin-aviso)'
+}
+
+# -- US3 (amendment 1): the streak and the recovery are different messages -------------------
+
+@test "N34 empuje, el rojo que sigue y el aviso reabierto: la noche N de la racha, con sonido, y una sola peticion por noche (FR-020, FR-022)" {
+  local head6
+  _tg_up
+  # (a) an open notice of two nights: the third night is "sigue en rojo", night 3, started on the 20th
+  _seed_issue 1 OPEN open 2
+  _alert notify RUN_ID=1003 "NIGHTLY_ALERT_NOW=$T3"
+  [ "$status" -eq 0 ]
+  [ "$(_tg_count)" = "1" ]
+  [ "$(_tg_text 1)" = $'docker-e2e nightly SIGUE EN ROJO\nRacha: noche 3 (desde 20-10-2026)\nPaso que fallo: run_suite\nResumen: total=48 executed=48 skipped=0 failed=2\nCorrida: https://github.com/o/r/actions/runs/1003\nAviso: https://github.com/fake/repo/issues/1' ]
+  [ "$(_tg_req 1 '.fields | has("disable_notification")')" = "false" ]
+  _has "$output" '::notice::nightly-alert: telegram enviado (tipo=rojo-sigue)'
+  # (b) a notice closed by hand while the streak went on is reopened: the message says so
+  _reset_state
+  _seed_issue 1 CLOSED open 2
+  _alert notify RUN_ID=1003 "NIGHTLY_ALERT_NOW=$T3"
+  [ "$status" -eq 0 ]
+  [ "$(_tg_count)" = "1" ]
+  [ "$(_tg_text 1)" = $'docker-e2e nightly SIGUE EN ROJO (aviso reabierto)\nRacha: noche 3 (desde 20-10-2026)\nPaso que fallo: run_suite\nResumen: total=48 executed=48 skipped=0 failed=2\nCorrida: https://github.com/o/r/actions/runs/1003\nAviso: https://github.com/fake/repo/issues/1' ]
+  [ "$(_tg_req 1 '.fields | has("disable_notification")')" = "false" ]
+  _has "$output" '::notice::nightly-alert: telegram enviado (tipo=rojo-reabierto)'
+  # (c) a notice whose marker a person broke: the night is still reported, without a streak
+  _reset_state
+  _seed_issue 1 OPEN broken 2
+  _alert notify RUN_ID=1003 "NIGHTLY_ALERT_NOW=$T3"
+  [ "$status" -eq 0 ]
+  [ "$(_tg_count)" = "1" ]
+  [ "$(_tg_text 1)" = $'docker-e2e nightly SIGUE EN ROJO\nPaso que fallo: run_suite\nResumen: total=48 executed=48 skipped=0 failed=2\nCorrida: https://github.com/o/r/actions/runs/1003\nAviso: https://github.com/fake/repo/issues/1' ]
+  # (d) the first night after a streak that a green night resolved is a new streak: night 1
+  # and the link of the NEW notice, not of the old one
+  _reset_state
+  _seed_issue 1 CLOSED resolved 3
+  _alert notify RUN_ID=1004 "NIGHTLY_ALERT_NOW=$T3"
+  [ "$status" -eq 0 ]
+  [ "$(_tg_count)" = "1" ]
+  head6=$(_tg_text 1)
+  [ "$head6" = $'docker-e2e nightly EN ROJO\nRacha: noche 1 (desde 22-10-2026)\nPaso que fallo: run_suite\nResumen: total=48 executed=48 skipped=0 failed=2\nCorrida: https://github.com/o/r/actions/runs/1004\nAviso: https://github.com/fake/repo/issues/2' ]
+  # (e) the reopen fails: the notice stays closed and the message does not claim it was reopened
+  _reset_state
+  _seed_issue 1 CLOSED open 2
+  FAKE_GH_FAIL=reopen
+  _alert notify RUN_ID=1003 "NIGHTLY_ALERT_NOW=$T3"
+  unset FAKE_GH_FAIL
+  [ "$status" -eq 0 ]
+  [ "$(_issue_field 1 .state)" = "CLOSED" ]
+  [ "$(_tg_count)" = "1" ]
+  [ "$(_tg_text 1)" = $'docker-e2e nightly SIGUE EN ROJO\nRacha: noche 3 (desde 20-10-2026)\nPaso que fallo: run_suite\nResumen: total=48 executed=48 skipped=0 failed=2\nCorrida: https://github.com/o/r/actions/runs/1003\nAviso: https://github.com/fake/repo/issues/1' ]
+  _has "$output" '::notice::nightly-alert: telegram enviado (tipo=rojo-sigue)'
+  # (f) an OPEN notice whose marker already says resolved (its close failed after the rest
+  # went through): that streak is over, so the message does not print a streak number that
+  # would be wrong
+  _reset_state
+  _seed_issue 1 OPEN resolved 3
+  _alert notify RUN_ID=1003 "NIGHTLY_ALERT_NOW=$T3"
+  [ "$status" -eq 0 ]
+  [ "$(_tg_count)" = "1" ]
+  [ "$(_tg_text 1)" = $'docker-e2e nightly SIGUE EN ROJO\nPaso que fallo: run_suite\nResumen: total=48 executed=48 skipped=0 failed=2\nCorrida: https://github.com/o/r/actions/runs/1003\nAviso: https://github.com/fake/repo/issues/1' ]
+}
+
+@test "N35 empuje, la recuperacion: cuantas noches duro la racha, los dos enlaces, sin paso ni resumen y en silencio; solo si el aviso se cerro de verdad (FR-020, FR-022, FR-023)" {
+  _tg_up
+  # (a) a streak of three nights ends
+  _seed_issue 1 OPEN open 3
+  _alert notify RUN_RESULT=success RUN_ID=1004 "NIGHTLY_ALERT_NOW=$T3"
+  [ "$status" -eq 0 ]
+  [ "$(_tg_count)" = "1" ]
+  # the environment of _alert still carries a failed step and a summary: a green message
+  # does not mention them
+  [ "$(_tg_text 1)" = $'docker-e2e nightly VOLVIO A VERDE\nLa racha duro 3 noches (desde 20-10-2026)\nCorrida: https://github.com/o/r/actions/runs/1004\nAviso: https://github.com/fake/repo/issues/1' ]
+  # silent: the one message that does not ring
+  [ "$(_tg_req 1 .fields.disable_notification)" = "true" ]
+  [ "$(_tg_req 1 .fields.link_preview_options)" = '{"is_disabled":true}' ]
+  _has "$output" '::notice::nightly-alert: telegram enviado (tipo=verde)'
+  # the push follows the action on the issue
+  [ "$(_events | tail -n 1)" = "tg" ]
+  [ "$(_events | grep -c '^gh close$')" = "1" ]
+  # (b) a streak of one night is one "noche"
+  _reset_state
+  _seed_issue 1 OPEN open 1
+  _alert notify RUN_RESULT=success RUN_ID=1004 "NIGHTLY_ALERT_NOW=$T3"
+  [ "$status" -eq 0 ]
+  [ "$(_tg_count)" = "1" ]
+  [ "$(_tg_text 1)" = $'docker-e2e nightly VOLVIO A VERDE\nLa racha duro 1 noche (desde 20-10-2026)\nCorrida: https://github.com/o/r/actions/runs/1004\nAviso: https://github.com/fake/repo/issues/1' ]
+  # (c) a notice whose marker a person broke is closed with a comment, and the message
+  # leaves out the length of a streak nobody can measure
+  _reset_state
+  _seed_issue 1 OPEN broken 3
+  _alert notify RUN_RESULT=success RUN_ID=1004 "NIGHTLY_ALERT_NOW=$T3"
+  [ "$status" -eq 0 ]
+  [ "$(_tg_count)" = "1" ]
+  [ "$(_tg_text 1)" = $'docker-e2e nightly VOLVIO A VERDE\nCorrida: https://github.com/o/r/actions/runs/1004\nAviso: https://github.com/fake/repo/issues/1' ]
+  [ "$(_tg_req 1 .fields.disable_notification)" = "true" ]
+  # (d) the recovery is announced when the notice is closed, not when the night is green: a
+  # green night that could not close it says nothing, and the next green night, which closes
+  # it, says it once (otherwise the same recovery would be announced twice)
+  _reset_state
+  _seed_issue 1 OPEN open 3
+  FAKE_GH_FAIL=edit
+  _alert notify RUN_RESULT=success RUN_ID=1004 "NIGHTLY_ALERT_NOW=$T3"
+  unset FAKE_GH_FAIL
+  [ "$status" -eq 0 ]
+  [ "$(_issue_field 1 .state)" = "OPEN" ]
+  [ "$(_tg_count)" = "0" ]
+  _alert notify RUN_RESULT=success RUN_ID=1005 "NIGHTLY_ALERT_NOW=$T3"
+  [ "$status" -eq 0 ]
+  [ "$(_issue_field 1 .state)" = "CLOSED" ]
+  [ "$(_tg_count)" = "1" ]
+  [ "$(_tg_text 1)" = $'docker-e2e nightly VOLVIO A VERDE\nLa racha duro 3 noches (desde 20-10-2026)\nCorrida: https://github.com/o/r/actions/runs/1005\nAviso: https://github.com/fake/repo/issues/1' ]
+  # the same when it is the close itself that fails
+  _reset_state
+  _seed_issue 1 OPEN open 3
+  FAKE_GH_FAIL=close
+  _alert notify RUN_RESULT=success RUN_ID=1004 "NIGHTLY_ALERT_NOW=$T3"
+  unset FAKE_GH_FAIL
+  [ "$status" -eq 0 ]
+  [ "$(_issue_field 1 .state)" = "OPEN" ]
+  [ "$(_tg_count)" = "0" ]
+}
+
+@test "N36 empuje, sin accion sobre el issue no hay mensaje: la noche ya registrada, cancelada, manual normal, verde sin aviso y verde sobre un aviso ya cerrado (FR-020)" {
+  _tg_up
+  # (a) the same night twice: the second run changes nothing, so it says nothing
+  _alert notify
+  [ "$(_tg_count)" = "1" ]
+  : > "$TG_DIR/tg-requests.jsonl"
+  _alert notify
+  [ "$status" -eq 0 ]
+  [ "$(_tg_count)" = "0" ]
+  _has "$output" 'accion=ninguna motivo=la noche ya esta registrada'
+  # the other cases, each one from a clean state. Every one proves the script ran and
+  # decided (its own notice line) and that the push was not left out for lack of secrets
+  # (no omission warning): the zero requests are the decision, not an accident
+  local row env_a env_b seed why
+  for row in \
+    "RUN_RESULT=cancelled||none|accion=ninguna" \
+    "RUN_RESULT=skipped||none|accion=ninguna" \
+    "EVENT=workflow_dispatch||none|corrida manual normal" \
+    "EVENT=workflow_dispatch|RUN_RESULT=success|none|corrida manual normal" \
+    "RUN_RESULT=success||none|no hay aviso" \
+    "RUN_RESULT=success||handclosed|cerrado a mano" \
+    "RUN_RESULT=success||resolved|ya esta resuelto"; do
+    env_a="${row%%|*}"
+    row="${row#*|}"
+    env_b="${row%%|*}"
+    row="${row#*|}"
+    seed="${row%%|*}"
+    why="${row#*|}"
+    _reset_state
+    case "$seed" in
+      handclosed) _seed_issue 1 CLOSED open 2 ;;
+      resolved)   _seed_issue 1 CLOSED resolved 2 ;;
+    esac
+    _alert notify ${env_a:+"$env_a"} ${env_b:+"$env_b"}
+    [ "$status" -eq 0 ]
+    [ "$(_tg_count)" = "0" ]
+    _has "$output" '::notice::nightly-alert: modo='
+    _has "$output" "$why"
+    _lacks "$output" 'omitido'
+  done
+}
+
+# -- US4 (amendment 1): a trial is not a real night, and hostile text stays inert -------------
+
+@test "N40 empuje, el ensayo: el mensaje lleva [ensayo] al principio, en rojo y en verde, y el verde del ensayo tambien va en silencio (FR-020)" {
+  _tg_up
+  # (a) a trial that fails: the same six lines as a real night, behind the prefix
+  _alert notify EVENT=workflow_dispatch TRIAL=true
+  [ "$status" -eq 0 ]
+  [ "$(_tg_count)" = "1" ]
+  [ "$(_tg_text 1)" = $'[ensayo] docker-e2e nightly EN ROJO\nRacha: noche 1 (desde 20-10-2026)\nPaso que fallo: run_suite\nResumen: total=48 executed=48 skipped=0 failed=2\nCorrida: https://github.com/o/r/actions/runs/1001\nAviso: https://github.com/fake/repo/issues/1' ]
+  [ "$(_tg_req 1 '.fields | has("disable_notification")')" = "false" ]
+  # (b) a trial that passes closes the notice of the trial, and the message says so in silence
+  _reset_state
+  _seed_issue 1 OPEN open 2 nightly-red-trial
+  _alert notify EVENT=workflow_dispatch TRIAL=true RUN_RESULT=success RUN_ID=1004 "NIGHTLY_ALERT_NOW=$T3"
+  [ "$status" -eq 0 ]
+  [ "$(_tg_count)" = "1" ]
+  [ "$(_tg_text 1)" = $'[ensayo] docker-e2e nightly VOLVIO A VERDE\nLa racha duro 2 noches (desde 20-10-2026)\nCorrida: https://github.com/o/r/actions/runs/1004\nAviso: https://github.com/fake/repo/issues/1' ]
+  [ "$(_tg_req 1 .fields.disable_notification)" = "true" ]
+}
+
+@test "N41 empuje, texto hostil: el mensaje sigue siendo ASCII imprimible de a lo sumo 6 lineas, sin comillas invertidas ni comentarios, con el paso reducido a su palabra (FR-004, FR-022)" {
+  local hstep hsum text summary_line lines
+  _tg_up
+  # a failed step and a summary with a backtick, a control character, non-ASCII bytes, the
+  # opener and the closer of an HTML comment, a mention and 300 characters; failed test
+  # names that must not reach the message at all
+  hstep=$'run_suite`\x01\xc3\xa9;@# <'
+  hsum=$'total=48 `x` <!-- y --> \x01 \xc3\xa9 @all '"$(printf '%0300d' 0)"
+  _alert notify "FAILED_STEP=$hstep" "SUMMARY=$hsum" $'FAILED_TESTS=evil name @all\nsecond'
+  [ "$status" -eq 0 ]
+  [ "$(_tg_count)" = "1" ]
+  text=$(_tg_text 1)
+  printf '%s' "$text" > "$TMP_TEST_DIR/tg-text.out"
+  # printable ASCII and newlines only, in at most six lines
+  [ "$(_only_printable "$TMP_TEST_DIR/tg-text.out")" = "0" ]
+  lines=$(grep -c '' "$TMP_TEST_DIR/tg-text.out")
+  [ "$lines" -le 6 ]
+  _lacks "$text" '`'
+  _lacks "$text" '<!--'
+  _lacks "$text" '-->'
+  _lacks "$text" 'evil name'
+  # the step is reduced to what a step id can be
+  _has "$text" $'\nPaso que fallo: run_suite\n'
+  # the summary is one line, cut to 120 characters and marked as cut
+  summary_line=$(grep '^Resumen: ' "$TMP_TEST_DIR/tg-text.out")
+  [ "${#summary_line}" -le 129 ]
+  case "$summary_line" in
+    *...) ;;
+    *) false ;;
+  esac
+  # (b) the URL of the notice comes back hostile, printed by gh on creation or listed by the
+  # API: the message keeps only the characters of a URL, so it stays one link on one line
+  local hostile cleaned
+  hostile=$'https://github.com/o/r/issues/9 <b>"x"</b> [l](u)'
+  cleaned='https://github.com/o/r/issues/9bx/blu'
+  _reset_state
+  _alert notify "FAKE_GH_CREATE_OUT=$hostile"
+  [ "$status" -eq 0 ]
+  [ "$(_tg_count)" = "1" ]
+  printf '%s' "$(_tg_text 1)" > "$TMP_TEST_DIR/tg-text.out"
+  [ "$(grep -c '' "$TMP_TEST_DIR/tg-text.out")" -le 6 ]
+  [ "$(grep '^Aviso: ' "$TMP_TEST_DIR/tg-text.out")" = "Aviso: $cleaned" ]
+  # (c) the same for the URL the API lists (a night that updates an open notice)
+  _reset_state
+  _seed_issue 1 OPEN open 2
+  jq --arg u "$hostile" '.[0].url = $u' "$FAKE_GH_STATE/issues.json" > "$FAKE_GH_STATE/issues.tmp"
+  mv "$FAKE_GH_STATE/issues.tmp" "$FAKE_GH_STATE/issues.json"
+  _alert notify RUN_ID=1003 "NIGHTLY_ALERT_NOW=$T3"
+  [ "$status" -eq 0 ]
+  [ "$(_tg_count)" = "1" ]
+  printf '%s' "$(_tg_text 1)" > "$TMP_TEST_DIR/tg-text.out"
+  [ "$(grep -c '' "$TMP_TEST_DIR/tg-text.out")" -le 6 ]
+  [ "$(grep '^Aviso: ' "$TMP_TEST_DIR/tg-text.out")" = "Aviso: $cleaned" ]
 }
 
 @test "N18 collect: el paso fallido sale de toJSON(steps), vacio si no hay fallo o el JSON no sirve" {
@@ -529,18 +1201,33 @@ _reset_state() {
   printf '[]\n' > "$FAKE_GH_STATE/issues.json"
   : > "$FAKE_GH_STATE/labels.txt"
   : > "$FAKE_GH_STATE/calls.log"
+  : > "$FAKE_GH_STATE/events.log"
+  if [ -n "${TG_DIR:-}" ]; then
+    : > "$TG_DIR/tg-requests.jsonl"
+    : > "$TG_DIR/curl-argv.log"
+    : > "$TG_DIR/curl-conf.log"
+  fi
 }
 
-@test "N12 fallas de gh: con cada llamada fallando por turnos el script sale con 0 y avisa; sin asignado el aviso se crea igual" {
-  local op body
+@test "N12 fallas de gh: con cada llamada fallando por turnos el script sale con 0 y avisa con el motivo; sin asignado el aviso se crea igual" {
+  local op body want
+  # A failed call is announced by its own warning. The push to Telegram, which these tests
+  # leave without secrets, adds a warning of its own ("empuje por Telegram omitido") to every
+  # night that moves the notice, so a bare "there is a warning" would be satisfied by it
+  # alone: each leg names the warning of the call that failed.
+  #
   # a night with no notice yet: a failure to list, to create the label or to create
   # the issue leaves nothing published, says so, and does not touch the exit code
   for op in list label create; do
+    case "$op" in
+      list) want='no se pudo buscar el aviso' ;;
+      *)    want='no se pudo crear el aviso' ;;
+    esac
     _reset_state
     FAKE_GH_FAIL="$op"
     _alert notify
     [ "$status" -eq 0 ]
-    _has "$output" '::warning::nightly-alert:'
+    _has "$output" "::warning::nightly-alert: $want"
     [ "$(_issue_count)" = "0" ]
   done
   # without a decision there is nothing to change: a failed list makes no mutating call
@@ -554,7 +1241,7 @@ _reset_state() {
   FAKE_GH_FAIL=create_assignee
   _alert notify
   [ "$status" -eq 0 ]
-  _has "$output" '::warning::nightly-alert:'
+  _has "$output" '::warning::nightly-alert: el aviso se creo sin asignado'
   [ "$(_issue_count)" = "1" ]
   [ "$(_issue_field 1 '.assignees | length')" = "0" ]
   [ "$(_issue_field 1 '.labels[0].name')" = "nightly-red" ]
@@ -562,12 +1249,16 @@ _reset_state() {
   # an open notice and a new red night: a failed edit or comment still lets the
   # other one through
   for op in edit comment; do
+    case "$op" in
+      edit)    want='no se pudo actualizar el aviso' ;;
+      comment) want='no se pudo comentar la noche' ;;
+    esac
     _reset_state
     _seed_issue 1 OPEN open 1
     FAKE_GH_FAIL="$op"
     _alert notify RUN_ID=1002
     [ "$status" -eq 0 ]
-    _has "$output" '::warning::nightly-alert:'
+    _has "$output" "::warning::nightly-alert: $want"
     [ "$(_count_calls edit)" = "1" ]
     [ "$(_count_calls comment)" = "1" ]
   done
@@ -577,7 +1268,7 @@ _reset_state() {
   FAKE_GH_FAIL=reopen
   _alert notify RUN_ID=1002
   [ "$status" -eq 0 ]
-  _has "$output" '::warning::nightly-alert:'
+  _has "$output" '::warning::nightly-alert: no se pudo reabrir el aviso'
   [ "$(_count_calls reopen)" = "1" ]
   [ "$(_count_calls edit)" = "1" ]
   [ "$(_count_calls comment)" = "1" ]
@@ -587,7 +1278,7 @@ _reset_state() {
   FAKE_GH_FAIL=close
   _alert notify RUN_RESULT=success RUN_ID=1003
   [ "$status" -eq 0 ]
-  _has "$output" '::warning::nightly-alert:'
+  _has "$output" '::warning::nightly-alert: no se pudo cerrar el aviso'
   [ "$(_count_calls close)" = "1" ]
   [ "$(_count_calls edit)" = "1" ]
   [ "$(_count_calls comment)" = "1" ]
@@ -599,7 +1290,7 @@ _reset_state() {
   FAKE_GH_FAIL=edit
   _alert notify RUN_RESULT=success RUN_ID=1004
   [ "$status" -eq 0 ]
-  _has "$output" '::warning::nightly-alert:'
+  _has "$output" '::warning::nightly-alert: el aviso #1 sigue abierto'
   [ "$(_count_calls close)" = "0" ]
   [ "$(_count_calls comment)" = "0" ]
   [ "$(_issue_field 1 .state)" = "OPEN" ]
@@ -667,7 +1358,9 @@ _reset_state() {
     'RUN_ID|${{ github.run_id }}' \
     'RUN_ATTEMPT|${{ github.run_attempt }}' \
     'RUN_URL|${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}' \
-    'ASSIGNEE|rodrigo-hinojosa'; do
+    'ASSIGNEE|rodrigo-hinojosa' \
+    'TELEGRAM_BOT_TOKEN|${{ secrets.TELEGRAM_BOT_TOKEN }}' \
+    'TELEGRAM_CHAT_ID|${{ secrets.TELEGRAM_CHAT_ID }}'; do
     name="${pair%%|*}"
     want="${pair#*|}"
     if [ "$(yq "$step | .[\"env\"].$name" "$f")" != "$want" ]; then
@@ -676,18 +1369,24 @@ _reset_state() {
     fi
   done
   # and nothing else is passed
-  [ "$(yq "$step | .[\"env\"] | keys | length" "$f")" = "12" ]
+  [ "$(yq "$step | .[\"env\"] | keys | length" "$f")" = "14" ]
   # FR-010: the notice is not a step of the suite job
   [ "$(yq '[.jobs.e2e.steps[] | select(.name == "Publish the nightly notice")] | length' "$f")" = "0" ]
 }
 
-@test "N27 AW-5: el workflow no referencia ningun secreto (SC-007)" {
-  local n
-  # the file parses and has the suite job: the count below is about a real workflow
-  [ -n "$(yq '.name' "$ALERT_WORKFLOW")" ]
-  [ "$(yq '.jobs | has("e2e")' "$ALERT_WORKFLOW")" = "true" ]
-  n=$(grep -c 'secrets\.' "$ALERT_WORKFLOW" || true)
-  [ "$n" = "0" ]
+@test "N27 AW-5: el workflow menciona exactamente dos secretos, los del empuje, y solo en el entorno del paso que publica (SC-007, FR-013)" {
+  local f="$ALERT_WORKFLOW" step
+  step='.jobs.alert.steps[] | select(.name == "Publish the nightly notice")'
+  # the file parses and has the suite job: the counts below are about a real workflow
+  [ -n "$(yq '.name' "$f")" ]
+  [ "$(yq '.jobs | has("e2e")' "$f")" = "true" ]
+  # every STRING of the workflow that mentions secrets, whatever the form (`secrets.NAME`,
+  # `secrets['NAME']`, `toJSON(secrets)`): comments are not nodes, so a comment may talk about
+  # them. Two in the whole file, and both in the step that publishes the notice
+  [ "$(yq '[.. | select(tag == "!!str") | select(test("secrets"))] | length' "$f")" = "2" ]
+  [ "$(yq "$step | [.. | select(tag == \"!!str\") | select(test(\"secrets\"))] | length" "$f")" = "2" ]
+  [ "$(yq "$step | .[\"env\"].TELEGRAM_BOT_TOKEN" "$f")" = '${{ secrets.TELEGRAM_BOT_TOKEN }}' ]
+  [ "$(yq "$step | .[\"env\"].TELEGRAM_CHAT_ID" "$f")" = '${{ secrets.TELEGRAM_CHAT_ID }}' ]
 }
 
 @test "N28 AW-6: workflow_dispatch tiene las entradas del ensayo con su tipo, valores y defecto" {
@@ -763,7 +1462,7 @@ _reset_state() {
   _has "$(jq -r '.[0].body' "$FAKE_GH_STATE/issues.json")" $'-->\r\n'
   _alert notify RUN_ID=1002 "NIGHTLY_ALERT_NOW=$T2"
   [ "$status" -eq 0 ]
-  _lacks "$output" '::warning::'
+  [ -z "$(_warnings "$output")" ]
   [ "$(_issue_count)" = "1" ]
   body=$(_issue_field 1 .body)
   [ "${body%%$'\n'*}" = '<!-- nightly-red:v1 state=open total=2 first=2026-10-20 -->' ]
@@ -774,7 +1473,7 @@ _reset_state() {
   _seed_issue 1 OPEN open 08
   _alert notify RUN_ID=1003
   [ "$status" -eq 0 ]
-  _lacks "$output" '::warning::'
+  [ -z "$(_warnings "$output")" ]
   body=$(_issue_field 1 .body)
   [ "${body%%$'\n'*}" = '<!-- nightly-red:v1 state=open total=9 first=2026-10-20 -->' ]
 }
@@ -1005,12 +1704,15 @@ _reset_state() {
 
 @test "N16 marcador invalido: un cuerpo editado a mano se comenta (y se reabre si hacia falta) sin reescribirlo, con advertencia" {
   local before
+  # Each leg names the warning about the marker itself: the push to Telegram, left without
+  # secrets in these tests, adds its own warning and must not be what satisfies the check.
+  #
   # open notice whose body lost the marker: the night is commented, the body is left alone
   _seed_issue 1 OPEN none 3
   before=$(_issue_field 1 .body)
   _alert notify RUN_ID=5001
   [ "$status" -eq 0 ]
-  _has "$output" '::warning::nightly-alert:'
+  _has "$output" '::warning::nightly-alert: el marcador del aviso #1 no es valido'
   [ "$(_count_calls edit)" = "0" ]
   [ "$(_count_calls create)" = "0" ]
   [ "$(_count_calls comment)" = "1" ]
@@ -1023,7 +1725,7 @@ _reset_state() {
   before=$(_issue_field 1 .body)
   _alert notify RUN_ID=5002
   [ "$status" -eq 0 ]
-  _has "$output" '::warning::nightly-alert:'
+  _has "$output" '::warning::nightly-alert: el marcador del aviso #1 no es valido'
   [ "$(_count_calls reopen)" = "1" ]
   [ "$(_count_calls edit)" = "0" ]
   [ "$(_count_calls create)" = "0" ]
@@ -1035,7 +1737,7 @@ _reset_state() {
   before=$(_issue_field 1 .body)
   _alert notify RUN_RESULT=success RUN_ID=5003 FAILED_STEP= SUMMARY= FAILED_TESTS=
   [ "$status" -eq 0 ]
-  _has "$output" '::warning::nightly-alert:'
+  _has "$output" '::warning::nightly-alert: el marcador del aviso #1 no es valido'
   [ "$(_count_calls edit)" = "0" ]
   [ "$(_count_calls comment)" = "1" ]
   [ "$(_count_calls close)" = "1" ]

@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# Spy curl for tests/nightly-alert.bats (feature 040-nightly-red-alert, amendment 1).
+# Contract: specs/040-nightly-red-alert/contracts/alert-oracle.md section 6.
+#
+# It sits in front of the real curl on PATH. When TG_DIR is set it appends the
+# whole argv of each call to $TG_DIR/curl-argv.log (a "--- curl" header line, then
+# one argument per line), which is how the tests prove that the bot token never
+# travels on a command line; then it hands over to the real curl untouched with
+# exec, so the exit status and the output are the real ones. The real curl is the
+# first one on PATH that is not in this script's own directory.
+#
+# Written for bash 3.2 and 5.x, ASCII only.
+
+self_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+real=""
+old_ifs=$IFS
+IFS=:
+for d in $PATH; do
+  [ -n "$d" ] || continue
+  here=$(cd "$d" 2>/dev/null && pwd -P) || continue
+  [ "$here" = "$self_dir" ] && continue
+  if [ -x "$here/curl" ]; then
+    real="$here/curl"
+    break
+  fi
+done
+IFS=$old_ifs
+
+if [ -z "$real" ]; then
+  echo "spy curl: no real curl found on PATH" >&2
+  exit 127
+fi
+
+if [ -n "${TG_DIR:-}" ] && [ -d "$TG_DIR" ]; then
+  {
+    printf '%s\n' '--- curl'
+    for a in "$@"; do printf '%s\n' "$a"; done
+    # the contract says the config file that holds the token is private (0600) and that
+    # no secret reaches curl through its environment: both are facts of the moment of the
+    # call (the file is gone when the script ends), so they are recorded here
+    if [ "${1:-}" = "-K" ] && [ -f "${2:-}" ]; then
+      printf 'config-perms %s\n' "$(ls -ld "$2" | cut -c1-10)"
+    fi
+    if [ "${TELEGRAM_BOT_TOKEN+set}" = set ] || [ "${TELEGRAM_CHAT_ID+set}" = set ]; then
+      printf '%s\n' 'ENVLEAK'
+    fi
+    # ... nor the VALUE of the token under any other variable name
+    tg_tok=$(cat "$TG_DIR/tg-token" 2> /dev/null)
+    tg_env=$(env)
+    case "$tg_env" in
+      *"$tg_tok"*) if [ -n "$tg_tok" ]; then printf '%s\n' 'ENVLEAK'; fi ;;
+    esac
+  } >> "$TG_DIR/curl-argv.log"
+  # what curl is told to do, with the token masked: the tests read the endpoint, the time
+  # limit and the flags of the request from here
+  if [ "${1:-}" = "-K" ] && [ -f "${2:-}" ]; then
+    {
+      printf '%s\n' '--- config'
+      if [ -n "$tg_tok" ]; then sed "s#$tg_tok#<T>#g" "$2"; else cat "$2"; fi
+    } >> "$TG_DIR/curl-conf.log"
+  fi
+fi
+
+# test hook (TG_SPY_FAIL=url): fail the way curl does for some malformed or unreachable URLs,
+# with an error line that quotes the URL (and so the token), without touching the network
+if [ "${TG_SPY_FAIL:-}" = url ] && [ "${1:-}" = "-K" ] && [ -f "${2:-}" ]; then
+  printf 'curl: (3) URL rejected: %s\n' "$(sed -n 's/^url = "\(.*\)"$/\1/p' "$2")" >&2
+  exit 3
+fi
+
+exec "$real" "$@"
