@@ -49,6 +49,7 @@ jobs:
       # with head: it still fails loudly when the daemon is down, and it shows
       # what head never reached (engine version and architecture).
       - name: Verify deps + docker
+        id: verify_deps
         run: |
           set -euo pipefail
           first_line() { local v; v=$("$@"); printf '%s\n' "${v%%$'\n'*}"; }
@@ -62,15 +63,32 @@ jobs:
           docker compose version
           docker info --format 'server={{.ServerVersion}} os={{.OperatingSystem}} arch={{.Architecture}} cgroup={{.CgroupVersion}} storage={{.Driver}}'
 
+      # 041: the qmd models the embed phase uses (embeddings + query expansion, ~1.6 GB)
+      # are fetched and verified HERE, in a step of their own: a Hugging Face or network
+      # failure must read as infrastructure (this step), never as a regression of the
+      # embed. Bounded retries; a persistent failure turns the night red in this step
+      # and the suite still runs, with the embed phase skipped (see the `if:` of the
+      # suite step).
+      - name: Fetch the qmd models
+        id: fetch_models
+        env:
+          # A recorded open defect switches the embed phase off (FR-014): '#<issue> <short
+          # reason>' in plain ASCII, or the URL of an issue. Empty means the phase runs.
+          QMD_EMBED_DEFECT: ''
+        run: .github/scripts/fetch-qmd-models.sh
+
       # --tap + tee: the log shows every test live and e2e.tap stays for
       # counting (tee reads to EOF, so it cannot close the pipe early). bats
       # exits 0 when every test is skipped or the list is empty (DOCKER_E2E not
       # propagated, no daemon), so the step turns "nothing executed" into a RED
       # run: a green that ran no test is not a green. A non-zero code from bats
       # always wins over that guard.
+      # 041: !cancelled() lets the suite run when only the model fetch failed.
       - name: Run docker-e2e suite
+        if: ${{ !cancelled() && steps.verify_deps.outcome == 'success' }}
         env:
           DOCKER_E2E: '1'
+          QMD_EMBED_E2E: '1'
         run: |
           set -euo pipefail
           rc=0

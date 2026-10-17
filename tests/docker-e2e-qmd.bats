@@ -35,9 +35,12 @@
 #   RED detection    : rebuild with --build-arg QMD_NATIVE_TOOLCHAIN=0 → bigstack.so
 #                      AND vec0.so are absent (both gated by the toolchain) — a
 #                      deterministic SC-003 proof, both directions.
-#   Tier 2 (embed)   : gated by QMD_EMBED_E2E=1 — a real reindex (update + embed)
-#                      downloads the model; embed SUCCEEDS only if vec0 loaded (017),
-#                      and a semantic vsearch returns the right doc (SC-001).
+#   Tier 2 (embed)   : its own test since 041 (`qmd real (041)`), gated by
+#                      QMD_EMBED_E2E=1 and fed with the models the nightly fetches
+#                      beforehand (.github/scripts/fetch-qmd-models.sh), so nothing is
+#                      downloaded inside the container; a real reindex (update + embed)
+#                      SUCCEEDS only if vec0 loaded (017), and a semantic vsearch returns
+#                      the right doc (SC-001). Closed gate = a skip with a reason.
 # Mirrors tests/docker-e2e-vault.bats (claude stub, compose-run gotchas).
 #
 # Skipped by default (slow + requires Docker). Enable with DOCKER_E2E=1.
@@ -51,7 +54,34 @@ setup() {
   export AGENT_NAME="qmd-e2e"
 }
 
+# 041: what a first red run needs and cannot reproduce afterwards, best effort (the container may
+# be gone, and nothing here may turn the red it reports on into a different one): the free disk,
+# the verdict of the container itself (OOM kill, exit code, restarts) and, from inside it, the
+# CPU, the vector extension the install laid down, the memory counters of its cgroup and the state
+# and output files of the reindex and of the semantic search (the cause of a failure that is not a
+# timeout lives there, and the workspace is gone when the job ends).
+# "qmd-embed" is the compose service of the 041 workspace (NAME in the test).
+_embed_failure_state() {
+  local d="$TMP_TEST_DIR/agent-qmd-embed" ids
+  echo "# --- state at the failure: disk, container verdict, vector extension ---" >&3
+  echo "# disk: $(df -Pk "$TMP_TEST_DIR" 2>/dev/null | awk 'END {print "free_kb=" $4}')" >&3 || true
+  ids=$(cd "$d" && docker compose ps -aq 2>/dev/null) || true
+  if [ -n "$ids" ]; then
+    docker inspect --format '{{.Name}} oom={{.State.OOMKilled}} exit={{.State.ExitCode}} restarts={{.RestartCount}}' $ids 2>&1 | sed 's/^/# /' >&3 || true
+  fi
+  (cd "$d" && docker compose exec -T -u agent qmd-embed sh -c 'uname -m; sh /workspace/.e2e/vec0-libc.sh "$HOME/.cache/qmd/pkg"; ls -la "$HOME"/.cache/qmd/pkg/node_modules/sqlite-vec-linux-* 2>&1; cat /sys/fs/cgroup/memory.events /sys/fs/cgroup/memory.peak 2>&1; echo "--- qmd-index.json"; cat /workspace/scripts/heartbeat/qmd-index.json 2>&1; echo "--- qmd-reindex.out (tail)"; tail -n 40 /tmp/qmd-reindex.out 2>&1; echo "--- vsearch.out (tail)"; tail -n 40 "$HOME/.cache/qmd/tmp/vsearch.out" 2>&1' 2>&1) | sed 's/^/# /' >&3 || true
+}
+
 teardown() {
+  # 041 (FR-004, research D9): a failed embed test dumps the container logs ONCE, before the
+  # project goes down, so the job log says what the container was doing when the phase marked
+  # last failed. A skip also sets BATS_TEST_COMPLETED, so a skipped test dumps nothing. The
+  # dump goes through fd 3 as TAP comments: it shows whatever flags the runner passes bats.
+  if [ -z "${BATS_TEST_COMPLETED:-}" ] && [ -f "$TMP_TEST_DIR/agent-qmd-embed/docker-compose.yml" ]; then
+    echo "# --- container logs of the failed embed test (last 150 lines) ---" >&3
+    (cd "$TMP_TEST_DIR/agent-qmd-embed" && docker compose logs --tail=150 --no-color 2>&1) | sed 's/^/# /' >&3 || true
+    _embed_failure_state
+  fi
   # Sweep every per-test workspace under $TMP_TEST_DIR, not just $DEST: the
   # 037 tests use their OWN isolated D2/D3 dirs (distinct compose project
   # names, to avoid the container/network name collisions a shared $DEST/
@@ -603,18 +633,25 @@ PY
   [ "$(_wg_count para_project)" = "5" ]
 }
 
-# 016: the des-stubbed, real-qmd test. Slow (native build + network). NOT executed
-# in the authoring session (no Docker) — validate/adjust the exact qmd subcommand
-# names against `qmd --help` in-container when the gate runs.
-@test "qmd real (016): native deps compile with toolchain; RED without it (SC-003)" {
-  local D="$TMP_TEST_DIR/agent-qmd-real" NAME="qmd-real"
+# 041: the workspace of the real-qmd tests (`qmd real (016)` and `qmd real (041)`), as
+# one helper instead of two copies (specs/041-nightly-qmd-embed/contracts/embed-test.md
+# section 1). The qmd version comes from qmd_pkg(), the single source of the pin, and not
+# from a literal nothing guarded (041 analysis C1).
+_qmd_real_ws() {
+  local D="$1" NAME="$2" TAG="$3" qver
   mkdir -p "$D"
+  qver=$(source "$REPO_ROOT/scripts/lib/qmd_index.sh"; qmd_pkg "$D/none.yml")
+  qver="${qver##*@}"
+  # The schedule of the cron backstop is a date that never exists (31 February). These tests run
+  # the reindex by hand, and a cron tick between the end of the setup and that call would take
+  # the reindex lock: the manual reindex would lose it and a healthy run would turn red. The
+  # --regenerate below warns that this form has no systemd equivalent; that matters only in local mode.
   cat > "$D/agent.yml" <<YML
 version: 1
 agent: {name: $NAME, display_name: "qmd real", role: "test", vibe: "terse"}
 user: {name: "Tester", nickname: "Tester", timezone: "UTC", email: "t@e.x", language: "en"}
 deployment: {host: "test", workspace: "$D", install_service: false, claude_cli: "claude"}
-docker: {image_tag: "agent-admin:qmd-real", uid: $(id -u), gid: $(id -g), state_volume: "${NAME}-state", base_image: "alpine:3.24.1"}
+docker: {image_tag: "$TAG", uid: $(id -u), gid: $(id -g), state_volume: "${NAME}-state", base_image: "alpine:3.24.1"}
 claude: {config_dir: "/home/agent/.claude", profile_new: true}
 notifications: {channel: none}
 features:
@@ -626,7 +663,7 @@ vault:
   seed_skeleton: true
   initial_sources: []
   mcp: {enabled: true, server: vault}
-  qmd: {enabled: true, version: "2.5.3", schedule: "*/5 * * * *"}
+  qmd: {enabled: true, version: "$qver", schedule: "0 0 31 2 *"}
   schema: {frontmatter_required: true, log_format: "## [{date}] {op} | {title}"}
 plugins: []
 YML
@@ -635,7 +672,7 @@ YML
   (cd "$D" && ./setup.sh --regenerate --non-interactive)
   touch "$D/.env"; chmod 0600 "$D/.env"
   mkdir -p "$D/.state"   # macOS: absent .state breaks the /home/agent bind-mount
-  # claude stub only — NO bunx stub (that's the whole point of this test).
+  # claude stub only — NO bunx stub (that's the whole point of these tests).
   mkdir -p "$D/bin"; printf '#!/bin/bash\nexec sleep 86400\n' > "$D/bin/claude"; chmod +x "$D/bin/claude"
   python3 - "$D/docker-compose.yml" <<'PY'
 import sys
@@ -644,6 +681,18 @@ n='      - ./:/workspace'; inj='      - ./bin/claude:/usr/local/bin/claude:ro'
 if inj not in t: t=t.replace(n, n+'\n'+inj, 1)
 open(p,'w').write(t)
 PY
+  # The libc check of the vector extension runs INSIDE the container (busybox sh); the
+  # workspace is bind-mounted as /workspace, so /workspace/.e2e/vec0-libc.sh is this copy.
+  mkdir -p "$D/.e2e"
+  cp "$REPO_ROOT/tests/fixtures/qmd-e2e/vec0-libc.sh" "$D/.e2e/vec0-libc.sh"
+}
+
+# 016: the des-stubbed, real-qmd test. Slow (native build + network). NOT executed
+# in the authoring session (no Docker) — validate/adjust the exact qmd subcommand
+# names against `qmd --help` in-container when the gate runs.
+@test "qmd real (016): native deps compile with toolchain; RED without it (SC-003)" {
+  local D="$TMP_TEST_DIR/agent-qmd-real" NAME="qmd-real"
+  _qmd_real_ws "$D" "$NAME" "agent-admin:qmd-real"
 
   # ── GREEN build (toolchain on) + Tier 1 build-detector (Fase A) ──
   (cd "$D" && docker compose build)
@@ -665,60 +714,9 @@ PY
   run qr 'command -v cmake'
   [ "$status" -eq 0 ]                    # apk cmake present (not the glibc xpack)
 
-  # ── Tier 2 (embed): real reindex downloads the model — gated + slow ──
-  if [ "${QMD_EMBED_E2E:-0}" = "1" ]; then
-    (cd "$D" && docker compose up -d)
-    inc() { (cd "$D" && docker compose exec -T -u agent "$NAME" "$@"); }
-    # First-boot setup (collection add + update + embed) runs backgrounded under the
-    # SAME flock reindex uses. Wait for its sentinel before touching the index —
-    # otherwise our reindex just loses the lock (exit 91) and writes nothing. The
-    # embed here already exercises vec0 end-to-end; a glibc prebuilt would make it
-    # fail with "sqlite-vec extension is unavailable" and no sentinel would appear.
-    local sdeadline=$(( $(date +%s) + 600 )) setup_done=0
-    while [ "$(date +%s)" -lt "$sdeadline" ]; do
-      if inc sh -c 'test -f "$HOME/.cache/qmd/.qmd-setup-ok"' 2>/dev/null; then setup_done=1; break; fi
-      sleep 5
-    done
-    if [ "$setup_done" -ne 1 ]; then
-      echo "--- setup did not complete; container logs ---" >&2
-      (cd "$D" && docker compose logs --tail=120 2>&1) >&2 || true
-    fi
-    [ "$setup_done" -eq 1 ]
-    run inc sh -c 'ls "$HOME/.cache/qmd/models/"*.gguf 2>/dev/null && echo HAVE_MODEL'
-    echo "$output" | grep -q HAVE_MODEL
-    # 017: the swap put a MUSL vec0 in the managed prefix (not the glibc prebuilt).
-    run inc bash -lc 'f="$HOME/.cache/qmd/pkg/node_modules/sqlite-vec-linux-arm64/vec0.so"; if strings "$f" | grep -q GLIBC_; then echo GLIBC; else echo MUSL; fi'
-    echo "$output" | grep -q MUSL
-    # 017 (SC-001): a SEMANTIC query returns the right doc — vec0 stores/retrieves
-    # vectors and the query embeds too. Add a distinct doc, reindex (the lock is free
-    # now setup is done), and assert last_status=indexed (only reachable if vec0
-    # LOADED — a glibc prebuilt → "sqlite-vec unavailable" → embed error).
-    inc sh -c 'printf -- "---\ntitle: gatos\n---\nEl gato duerme sobre el teclado del computador.\n" > /home/agent/.vault/gatos.md'
-    run inc /usr/local/bin/heartbeatctl qmd-reindex
-    [ "$status" -eq 0 ]
-    run inc sh -c 'jq -r .last_status /workspace/scripts/heartbeat/qmd-index.json'
-    echo "$output" | grep -qE 'ok|indexed'
-    # 018: a small e2e vault embeds within a single pass, so the completion
-    # loop drives pending to 0 in this run (not the multi-pass scenario a
-    # multi-thousand-chunk vault needs — that is the ferrari hardware gate).
-    run inc sh -c 'jq -r .pending /workspace/scripts/heartbeat/qmd-index.json'
-    [ "$output" = "0" ]
-    # Preload bigstack (query embedding hits the same musl std::regex/stack guard the
-    # MCP uses) and run qmd from the prefix. The semantic query has no lexical overlap.
-    run inc bash -lc 's="$HOME/.cache/qmd/tmp"; mkdir -p "$s"; . /opt/agent-admin/scripts/lib/qmd_index.sh; LD_PRELOAD="$QMD_BIGSTACK_SO" TMPDIR="$s" "$(_qmd_prefix)/node_modules/.bin/qmd" vsearch "animal encima del pc" 2>&1'
-    echo "$output" | grep -qi 'gato'
-    # 016 T036: the MCP server (Claude's search reader) launches from the SAME managed
-    # prefix, via the wrapper, NOT bunx. Feed EOF + a short timeout and assert it
-    # started without a native-build/bunx/missing-binary failure (BUG-4 signatures).
-    # if+false so the check is subject to set -e (a bare `! ... | grep` never fails).
-    inc test -x /opt/agent-admin/scripts/qmd-mcp
-    run inc sh -lc 'timeout 25 /opt/agent-admin/scripts/qmd-mcp </dev/null >/tmp/m 2>&1; cat /tmp/m'
-    if echo "$output" | grep -qiE 'tree-sitter.*exited with|node-gyp|cannot find module|bunx|no such file'; then
-      echo "MCP start showed a BUG-4 signature: $output" >&2
-      false
-    fi
-    (cd "$D" && docker compose down -v --remove-orphans || true)
-  fi
+  # The embed phase (Tier 2) lives in `qmd real (041)` since 041: it needs the models
+  # fetched by .github/scripts/fetch-qmd-models.sh and reports "skipped" out loud when
+  # it does not run, which a conditional block inside this test could not do.
 
   # ── RED: rebuild WITHOUT the toolchain → the native artifacts are gated off ─────
   # Both bigstack.so (016) and the musl sqlite-vec vec0.so (017) are produced ONLY
@@ -732,4 +730,209 @@ PY
   echo "$output" | grep -q ABSENT
   run qr 'if [ -f /opt/agent-admin/bigstack.so ]; then echo PRESENT; else echo ABSENT; fi'
   echo "$output" | grep -q ABSENT
+}
+
+# 041: marks the start of a phase of the embed test as a TAP comment (fd 3). The last mark
+# before a `not ok` names the phase that failed, with nothing to reproduce locally
+# (research D9, FR-004). The names and their order are the ones of data-model section 4.
+_embed_phase() { echo "# qmd embed phase: $1" >&3; }
+
+# 041: a value that may span several lines (ls and find print one line per file) as TAP
+# comments: every line needs its own '#', or the rest of the report is noise in the stream.
+_embed_note() { printf '%s\n' "$1" | sed 's/^/#   /' >&3; }
+
+# 041: the last lines of a command's output, for a report. A negative substring offset is NOT used:
+# it is EMPTY when the value is shorter than the offset, in bash 3.2 and 5.x alike (measured).
+_embed_tail() { printf '%s\n' "$1" | tail -n "${2:-12}"; }
+
+# 041: the embed phase of the real qmd (the old Tier 2 of `qmd real (016)`): first boot
+# with its setup, vector extension, reindex, semantic search and the MCP server, against
+# the models the nightly fetched beforehand (.github/scripts/fetch-qmd-models.sh). It is a
+# test of its own so that "not executed" is a skip with a reason in the TAP stream and in
+# the `e2e summary:` line, never a silent green.
+@test "qmd real (041): embed phase - setup, models, vector extension, reindex, semantic search, MCP" {
+  # The gate is the first thing this test does, and it never calls docker or curl. A closed
+  # gate, or an open defect named by the fetch step, is a skip that carries its reason; an
+  # open gate without the models is a harness error and fails, naming the variable.
+  if [ "${QMD_EMBED_E2E:-0}" != "1" ]; then
+    skip "${QMD_EMBED_SKIP_REASON:-embed phase needs QMD_EMBED_E2E=1 and the models fetched by .github/scripts/fetch-qmd-models.sh (about 1.6 GB)}"
+  fi
+  if [ -n "${QMD_EMBED_SKIP_REASON:-}" ]; then
+    skip "$QMD_EMBED_SKIP_REASON"
+  fi
+  if [ -z "${QMD_E2E_MODELS_DIR:-}" ]; then
+    echo "# QMD_E2E_MODELS_DIR is required with QMD_EMBED_E2E=1: run .github/scripts/fetch-qmd-models.sh first" >&3
+    false
+  fi
+
+  local D="$TMP_TEST_DIR/agent-qmd-embed" NAME="qmd-embed"
+  _qmd_real_ws "$D" "$NAME" "agent-admin:qmd-embed"
+
+  _embed_phase models-seed
+  # The models the fetch step verified go into the directory qmd reads, under the name it
+  # looks for, so qmd uses them with no network (research D2). Hard links when both
+  # directories share a filesystem (no second copy of 1.6 GB), a copy otherwise. The step
+  # only leaves verified files there; if one is missing, qmd would download it inside the
+  # container and models-untouched names exactly that.
+  local mdir="$D/.state/.cache/qmd/models" f seeded=0 seeded_list
+  mkdir -p "$mdir" "$D/.e2e"
+  for f in "$QMD_E2E_MODELS_DIR"/*.gguf; do
+    if [ ! -f "$f" ]; then continue; fi
+    ln "$f" "$mdir/${f##*/}" 2>/dev/null || cp "$f" "$mdir/${f##*/}"
+    seeded=$((seeded + 1))
+  done
+  if [ "$seeded" -lt 1 ]; then
+    echo "# models-seed: no *.gguf in QMD_E2E_MODELS_DIR" >&3
+    false
+  fi
+  seeded_list="$(ls -iA "$mdir")"
+  touch "$D/.e2e/seed-marker"
+
+  _embed_phase boot
+  # The vault the agent boots with. qmd's collection covers wiki/**/*.md only (since 037) and
+  # the skeleton ships wiki/ empty, so a page at the vault root, where the Tier 2 of 016 wrote
+  # its document, is never indexed: the semantic search below could not find it with a healthy
+  # product, and the first-boot setup would have nothing to embed. The vault is pre-seeded
+  # BEFORE the first boot, the way the PARA e2e test does it (vault_seed_if_empty never touches
+  # a vault that has content), with the skeleton plus one page under wiki/, so that the setup
+  # embeds a real page and exercises the models and the vector extension right there.
+  mkdir -p "$D/.state/.vault"
+  cp -R "$REPO_ROOT/modules/vault-skeleton/." "$D/.state/.vault/"
+  printf -- '---\ntitle: computadores\n---\nUn computador portatil tiene teclado, pantalla y bateria.\n' > "$D/.state/.vault/wiki/concepts/computadores.md"
+  (cd "$D" && docker compose build)
+  (cd "$D" && docker compose up -d)
+  inc() { (cd "$D" && docker compose exec -T -u agent "$NAME" "$@"); }
+  # qmd turns embed, query expansion and rerank off when CI has a value (llm.js:384), and it
+  # reads its models from $XDG_CACHE_HOME/qmd/models. Either one different from what the seed
+  # assumes would fail the phases below with a message that looks like a regression, so both
+  # are checked here, inside the container, as the agent user.
+  run inc sh -c 'if [ -n "${CI:-}" ]; then echo "CI is set (CI=${CI}): qmd turns embed and query expansion off"; exit 1; fi; x="${XDG_CACHE_HOME:-}"; if [ -n "$x" ] && [ "$x" != "$HOME/.cache" ]; then echo "XDG_CACHE_HOME=$x is not \$HOME/.cache: qmd would not find the seeded models"; exit 2; fi'
+  if [ "$status" -ne 0 ]; then
+    echo "# boot: $output" >&3
+    false
+  fi
+
+  _embed_phase setup
+  # First-boot setup (collection add + update + embed) runs backgrounded under the
+  # SAME flock reindex uses. Wait for its sentinel before touching the index —
+  # otherwise our reindex just loses the lock (exit 91) and writes nothing. The
+  # embed here already exercises vec0 end-to-end; a glibc prebuilt would make it
+  # fail with "sqlite-vec extension is unavailable" and no sentinel would appear.
+  # The wait ends the moment the container log says a step of the setup failed: waiting
+  # out the whole deadline to then say "setup did not complete" costs minutes and hides
+  # which step it was (research D11). The deadline includes the native compile of
+  # llama.cpp, which this test pays in its own state directory.
+  local sdl="${QMD_E2E_SETUP_DEADLINE_S:-600}" sdeadline setup_done=0 sfail
+  # whole seconds from 1 to 3600; a leading zero ('08', '010') must not be read as octal by $(( ))
+  case "$sdl" in ''|*[!0-9]*|?????*) sdl=600 ;; *) sdl=$((10#$sdl)) ;; esac
+  if [ "$sdl" -le 0 ] || [ "$sdl" -gt 3600 ]; then sdl=600; fi
+  sdeadline=$(( $(date +%s) + sdl ))
+  while [ "$(date +%s)" -lt "$sdeadline" ]; do
+    if inc sh -c 'test -f "$HOME/.cache/qmd/.qmd-setup-ok"' 2>/dev/null; then setup_done=1; break; fi
+    (cd "$D" && docker compose logs --no-color > "$D/.e2e/compose.log" 2>&1) || true
+    sfail="$(grep -E -m1 "\[qmd\] (setup: '[^']+' (failed|timed out)|install: bun install failed)" "$D/.e2e/compose.log" || true)"
+    if [ -n "$sfail" ]; then
+      echo "# setup: the container log reports a failure: $sfail" >&3
+      false
+    fi
+    sleep 5
+  done
+  if [ "$setup_done" -ne 1 ]; then
+    echo "# setup: .qmd-setup-ok did not appear within ${sdl}s" >&3
+    false
+  fi
+  # The models were seeded before the boot, so this only proves that the container sees them
+  # through the bind mount; what proves the setup is the sentinel above.
+  run inc sh -c 'ls "$HOME/.cache/qmd/models/"*.gguf 2>/dev/null && echo HAVE_MODEL'
+  echo "$output" | grep -q HAVE_MODEL
+
+  _embed_phase vector-extension
+  # 017: the swap must have put a MUSL vec0 in the managed prefix (not the glibc prebuilt).
+  # vec0-libc.sh looks at whichever sqlite-vec-linux-* package the install laid down, for any
+  # CPU, and an absent file fails instead of passing: the check it replaces looked at one
+  # architecture only and printed MUSL when there was nothing to look at (FR-003).
+  run inc sh -c 'sh /workspace/.e2e/vec0-libc.sh "$HOME/.cache/qmd/pkg"'
+  if [ "$status" -ne 0 ]; then
+    echo "# vector-extension: vec0-libc.sh says '$output' (rc $status)" >&3
+    false
+  fi
+  [ "${output%% *}" = "MUSL" ]
+
+  _embed_phase reindex
+  # 017 (SC-001): a SEMANTIC query returns the right doc — vec0 stores/retrieves
+  # vectors and the query embeds too. Add a distinct doc UNDER wiki/ (the only part of the
+  # vault the collection covers), reindex (the lock is free now setup is done), and assert
+  # last_status=indexed (only reachable if vec0 LOADED — a glibc prebuilt → "sqlite-vec
+  # unavailable" → embed error).
+  inc sh -c 'printf -- "---\ntitle: gatos\n---\nEl gato duerme sobre el teclado del computador.\n" > /home/agent/.vault/wiki/concepts/gatos.md'
+  # Bounded inside the container, with its output in a file: a reindex that hangs must end THIS
+  # phase with its name (a job cancelled by its cap names nothing and loses the rest of the
+  # suite), and a child that outlives the timeout cannot hold the pipe of docker exec open.
+  # Measured on busybox 1.37 (Alpine 3.24): a plain timeout sends TERM only, so a child that
+  # ignores it blocks the timeout as long as the child lives, and -k 10 adds the KILL; the exit
+  # status is 143 after TERM and 137 after KILL (GNU timeout would say 124).
+  local t0=$SECONDS
+  run inc sh -c 'timeout -k 10 600 /usr/local/bin/heartbeatctl qmd-reindex > /tmp/qmd-reindex.out 2>&1; rc=$?; cat /tmp/qmd-reindex.out; exit $rc'
+  if [ "$status" -eq 124 ] || [ "$status" -eq 137 ] || [ "$status" -eq 143 ]; then
+    _embed_note "reindex: qmd-reindex did not finish in 600s (rc $status after $((SECONDS - t0))s; a 137 long before the limit is a kill from outside, see oom= in the failure state). Last lines of its output:"$'\n'"$(_embed_tail "$output" 12)"
+    false
+  fi
+  [ "$status" -eq 0 ]
+  run inc sh -c 'jq -r .last_status /workspace/scripts/heartbeat/qmd-index.json'
+  echo "$output" | grep -qE 'ok|indexed'
+  # 018: a small e2e vault embeds within a single pass, so the completion
+  # loop drives pending to 0 in this run (not the multi-pass scenario a
+  # multi-thousand-chunk vault needs — that is the ferrari hardware gate).
+  run inc sh -c 'jq -r .pending /workspace/scripts/heartbeat/qmd-index.json'
+  [ "$output" = "0" ]
+
+  _embed_phase semantic-search
+  # Preload bigstack (query embedding hits the same musl std::regex/stack guard the
+  # MCP uses) and run qmd from the prefix. The semantic query has no lexical overlap, and
+  # vsearch also loads the query-expansion model, which was seeded like the embeddings one.
+  # The one call that loads both models into CPU memory: bounded like the reindex, for the same
+  # reasons. env and not a prefix assignment, so that LD_PRELOAD reaches qmd and not timeout.
+  t0=$SECONDS
+  run inc bash -lc 's="$HOME/.cache/qmd/tmp"; mkdir -p "$s"; . /opt/agent-admin/scripts/lib/qmd_index.sh; timeout -k 10 300 env LD_PRELOAD="$QMD_BIGSTACK_SO" TMPDIR="$s" "$(_qmd_prefix)/node_modules/.bin/qmd" vsearch "animal encima del pc" > "$s/vsearch.out" 2>&1; rc=$?; cat "$s/vsearch.out"; exit $rc'
+  if [ "$status" -eq 124 ] || [ "$status" -eq 137 ] || [ "$status" -eq 143 ]; then
+    _embed_note "semantic-search: vsearch did not finish in 300s (rc $status after $((SECONDS - t0))s; a 137 long before the limit is a kill from outside, see oom= in the failure state). Last lines of its output:"$'\n'"$(_embed_tail "$output" 12)"
+    false
+  fi
+  echo "$output" | grep -qi 'gato'
+
+  _embed_phase mcp
+  # 016 T036: the MCP server (Claude's search reader) launches from the SAME managed
+  # prefix, via the wrapper, NOT bunx. Feed EOF + a short timeout and assert it
+  # started without a native-build/bunx/missing-binary failure (BUG-4 signatures).
+  # if+false so the check is subject to set -e (a bare `! ... | grep` never fails).
+  inc test -x /opt/agent-admin/scripts/qmd-mcp
+  run inc sh -lc 'timeout 25 /opt/agent-admin/scripts/qmd-mcp </dev/null >/tmp/m 2>&1; cat /tmp/m'
+  if echo "$output" | grep -qiE 'tree-sitter.*exited with|node-gyp|cannot find module|bunx|no such file'; then
+    echo "MCP start showed a BUG-4 signature: $output" >&2
+    false
+  fi
+
+  _embed_phase models-untouched
+  # qmd must have used the seeded models as they are: the same files with the same inodes,
+  # nothing new beside them (a half-finished download would show here) and nothing rewritten
+  # since the seed marker. A model that qmd had to fetch itself is a failure of the fetch
+  # step's contract (FR-007), not a pass.
+  local now_list newer
+  now_list="$(ls -iA "$mdir")"
+  newer="$(find "$mdir" -type f -newer "$D/.e2e/seed-marker")"
+  if [ "$now_list" != "$seeded_list" ] || [ -n "$newer" ]; then
+    echo "# models-untouched: qmd downloaded or rewrote a model inside the container" >&3
+    _embed_note "seeded: $seeded_list"
+    _embed_note "now:    $now_list"
+    _embed_note "newer than the seed marker: ${newer:-none}"
+    false
+  fi
+
+  # Not an assertion: what this run cost in disk and memory, for the evidence record
+  # (data-model section 6). memory.peak is the cgroup v2 high-water mark of the container.
+  local disk_kb mem_peak
+  disk_kb="$(df -Pk "$D" | awk 'END {print $4}')"
+  mem_peak="$(inc sh -c 'cat /sys/fs/cgroup/memory.peak 2>/dev/null || echo unknown' 2>/dev/null || echo unknown)"
+  echo "# qmd embed resources: disk_free_kb=$disk_kb mem_peak_bytes=$mem_peak" >&3
+  (cd "$D" && docker compose down -v --remove-orphans || true)
 }
