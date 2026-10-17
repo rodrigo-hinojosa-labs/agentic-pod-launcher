@@ -74,7 +74,10 @@ jobs:
         env:
           # A recorded open defect switches the embed phase off (FR-014): '#<issue> <short
           # reason>' in plain ASCII, or the URL of an issue. Empty means the phase runs.
-          QMD_EMBED_DEFECT: ''
+          # On since 17-10-2026 (first real run, E1): on amd64 the sqlite-vec x64 package has
+          # no musl replacement, so the embed cannot load its vector extension. Empty this
+          # value when #107 is fixed; the issue lists what to run before closing it.
+          QMD_EMBED_DEFECT: '#107 sqlite-vec x64 sin reemplazo musl, el embed falla en amd64'
         run: .github/scripts/fetch-qmd-models.sh
 
       # --tap + tee: the log shows every test live and e2e.tap stays for
