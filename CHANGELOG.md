@@ -98,6 +98,89 @@
     `.graph/` from the inotify watch) rather than blocking this release.
 
 ### Fixed
+- **The nightly runs the real qmd embed, and says so when it does not —
+  `041-nightly-qmd-embed`** (no VERSION change: CI and tests only, no runtime code; the precedent
+  of 019, 025 and 039). Until now the nightly passed `qmd real (016)` without ever running its embed
+  phase: it sat behind `QMD_EMBED_E2E=1`, the workflow never set it, and the test did not even show
+  up as skipped. A regression of the embed (the vector extension, llama.cpp, the models, the musl
+  stack, the semantic search) only surfaced on the hardware gate. This supersedes the "Not a
+  coverage claim" bullet of the 039 entry below.
+
+  - **The embed phase is a test of its own, `qmd real (041)`.** It moved out of `qmd real (016)`,
+    which keeps its name, its build detector and its RED rebuild. It opens with its gate, before any
+    Docker call: a closed gate, or an open defect, is a **skip with a written reason** that the
+    `e2e summary:` line counts; a gate open with no models fails and names the variable. Its eight
+    phases (`models-seed`, `boot`, `setup`, `vector-extension`, `reindex`, `semantic-search`, `mcp`,
+    `models-untouched`) print `# qmd embed phase: <name>`, so the last mark before a `not ok` names
+    the phase that failed; a failed test dumps the container log once. The wait for the setup ends
+    the moment the container log reports a failed step instead of running out its 600 s.
+  - **The models are fetched in a step of their own, `fetch_models`**
+    (`.github/scripts/fetch-qmd-models.sh`): the embeddings model and the query-expansion model
+    (`qmd vsearch` expands every query, which the first assumption of this work missed), 1,616,029,856
+    bytes in all, fetched on every run (no cache between nights: a decision to revisit with the
+    numbers this change logs), each verified by size and sha256 against one table, with bounded
+    retries (3 attempts, 10 s and 30 s of back-off, a 480 s budget). A failure turns `fetch_models`
+    red, which is the step the 040 notice names, and the suite still runs with the embed skipped. A
+    file that changed at origin (same size, another sha256) is not retried and says so. The models are
+    placed where qmd reads them, under the name node-llama-cpp expects, so qmd uses them with no
+    network; the last phase checks that qmd did not download or rewrite any. The version of qmd the
+    table was checked for is recorded in the script and a guard test fails when the qmd pin moves
+    without anyone revisiting it (`docs/qmd-upgrade-checklist.md` has the step).
+  - **The vector-extension check no longer passes on nothing.** The assertion it replaces looked at
+    the `linux-arm64` package only and printed MUSL when the file did not exist. `vec0-libc.sh` takes
+    whichever `sqlite-vec-linux-*` package the install laid down, for any CPU, and an absent file
+    fails. Separately, `_qmd_swap_sqlite_vec` (`scripts/lib/qmd_index.sh`) still only knows the arm64
+    path and does nothing, silently, with the x64 layout: whether that breaks the embed on the amd64
+    runner is **pending the first real run** and is not fixed here (out of scope: no change under
+    `scripts/`).
+  - **The test page now lives where qmd looks.** The Tier 2 that moved here wrote its page at the
+    vault root, which stopped being part of qmd's collection in 037 (it covers `wiki/**/*.md` only,
+    and the skeleton ships `wiki/` empty). It had not run since, so with a healthy product the
+    semantic search could not have found it and the first boot had nothing to embed: found by the
+    independent review before the first real run. The vault is now seeded before the first boot with
+    the skeleton and one page under `wiki/`, and the page the `reindex` phase adds goes under
+    `wiki/` too.
+  - **A phase that hangs ends as that phase, and a red run leaves the evidence it cannot be asked for
+    afterwards.** The reindex and the semantic search run bounded inside the container
+    (`timeout -k 10 600` and `-k 10 300`, with the output in a file). Measured on busybox 1.37: a plain
+    `timeout` sends TERM only, so a child that ignores it blocks the timeout for as long as it lives,
+    and the exit status is 143 after TERM and 137 after KILL, not 124. A hang therefore fails as
+    `reindex` or `semantic-search` instead of cancelling the job at its 30 minute cap with no
+    `e2e summary:` and with the 33 e2e tests that run after this file lost; the report gives the exit
+    status, how many seconds the command ran (a 137 long before the limit is a kill from outside, not
+    a hang) and the last lines of its output. When the test fails, its teardown dumps, after the
+    container log, the free disk, the verdict of the container itself (OOM kill, exit code, restarts)
+    and, from inside it, the architecture, the verdict of `vec0-libc.sh` on the prefix, the
+    `sqlite-vec-linux-*` packages, the memory counters of its cgroup and the state and output files of
+    the reindex and of the semantic search (a failure that is not a timeout names its cause only
+    there, and the workspace is gone when the job ends): the most likely first red (the x64 package is glibc and `_qmd_swap_sqlite_vec` only knows arm64) is then
+    conclusive in one run instead of two. The workspace of the real-qmd tests schedules the qmd cron
+    backstop for 31 February: a tick between the end of the setup and the manual reindex could take the lock
+    and turn a healthy night red (about 3% of the nights; inferred, not measured).
+  - **The fetch step is stricter about its own output.** A budget that runs out keeps the cause of
+    the last attempt (`budget (480s) tras: curl exit 28`, not a bare `budget`); a `GITHUB_ENV` it
+    cannot write fails this step (on the open-defect branch too) instead of leaving it green and
+    blaming the suite; a size with a
+    leading zero in the table is refused (shell arithmetic reads it as octal); the default directory,
+    when it cannot be created, no longer blames a `QMD_MODELS_DIR` nobody set; and the script pins
+    `LC_ALL=C`, because bash translates its own error messages into the language of the user even from
+    a clean environment (seen on a Spanish macOS).
+  - **A known open defect switches the phase off by name, never in silence.** `QMD_EMBED_DEFECT` in
+    the fetch step takes `'#<issue> <reason>'` or the URL of an issue and nothing else (anything else
+    is a configuration error): no model is downloaded, the night stays green and the skip carries the
+    defect. Empty means the phase runs. Pending the first real run: whether it ships empty or set.
+  - **For whoever runs the embed phase by hand:** `QMD_EMBED_E2E=1` now also needs
+    `QMD_E2E_MODELS_DIR` (fetch first with the script, choosing the directory with
+    `QMD_MODELS_DIR`; two commands in `docs/qmd-upgrade-checklist.md`) and fails, not skips,
+    without it. The cache variable
+    `QMD_E2E_MODEL_CACHE` that the 016 entry mentions never existed: no test, script or document ever
+    read it. Nothing implements it here and that entry is history, so it stays as written.
+  - **Counts.** The e2e suite goes from 48 tests to 49 (13 files). The host suite grows by 37 tests:
+    the 36 of `tests/qmd-embed-nightly.bats` plus the new e2e, which counts as a skip without Docker.
+    The `run:` text of the two steps 039 froze did not change; a test pins their sha256.
+  - **Not a claim of parity.** The nightly runs amd64 and the deployed agents run aarch64: it catches
+    regressions of the stack in one architecture, and the hardware gate on ferrari stays.
+
 - **The nightly `docker-e2e` job reaches its suite again, and a green now means tests ran —
   `039-fix-nightly-e2e-sigpipe`** (no VERSION change: CI and tests only, no runtime code; the
   precedent of 019 and 025). The nightly was red on every night measured and died within 4 to 11
