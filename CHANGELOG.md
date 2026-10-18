@@ -129,10 +129,13 @@
   - **The vector-extension check no longer passes on nothing.** The assertion it replaces looked at
     the `linux-arm64` package only and printed MUSL when the file did not exist. `vec0-libc.sh` takes
     whichever `sqlite-vec-linux-*` package the install laid down, for any CPU, and an absent file
-    fails. Separately, `_qmd_swap_sqlite_vec` (`scripts/lib/qmd_index.sh`) still only knows the arm64
-    path and does nothing, silently, with the x64 layout: whether that breaks the embed on the amd64
-    runner is **pending the first real run** and is not fixed here (out of scope: no change under
-    `scripts/`).
+    fails. Separately, `_qmd_swap_sqlite_vec` (`scripts/lib/qmd_index.sh`) only knows the arm64 path
+    and does nothing, silently, with the x64 layout. The first real run (17-10-2026, run
+    39069243972, amd64) **confirmed that it breaks the embed there**: the `vec0.so` of the x64
+    package is a glibc binary inside a musl container, `setup` fails with `sqlite-vec extension is
+    unavailable`, and the failure dump names the cause in that one run. It is not fixed here (out of
+    scope: no change under `scripts/`); it is tracked as #107, and the deployed agents run aarch64,
+    where the swap works.
   - **The test page now lives where qmd looks.** The Tier 2 that moved here wrote its page at the
     vault root, which stopped being part of qmd's collection in 037 (it covers `wiki/**/*.md` only,
     and the skeleton ships `wiki/` empty). It had not run since, so with a healthy product the
@@ -153,8 +156,8 @@
     and, from inside it, the architecture, the verdict of `vec0-libc.sh` on the prefix, the
     `sqlite-vec-linux-*` packages, the memory counters of its cgroup and the state and output files of
     the reindex and of the semantic search (a failure that is not a timeout names its cause only
-    there, and the workspace is gone when the job ends): the most likely first red (the x64 package is glibc and `_qmd_swap_sqlite_vec` only knows arm64) is then
-    conclusive in one run instead of two. The workspace of the real-qmd tests schedules the qmd cron
+    there, and the workspace is gone when the job ends): the first real red (the x64 package is glibc and `_qmd_swap_sqlite_vec` only knows arm64) was
+    conclusive in that one run instead of two. The workspace of the real-qmd tests schedules the qmd cron
     backstop for 31 February: a tick between the end of the setup and the manual reindex could take the lock
     and turn a healthy night red (about 3% of the nights; inferred, not measured).
   - **The fetch step is stricter about its own output.** A budget that runs out keeps the cause of
@@ -168,7 +171,9 @@
   - **A known open defect switches the phase off by name, never in silence.** `QMD_EMBED_DEFECT` in
     the fetch step takes `'#<issue> <reason>'` or the URL of an issue and nothing else (anything else
     is a configuration error): no model is downloaded, the night stays green and the skip carries the
-    defect. Empty means the phase runs. Pending the first real run: whether it ships empty or set.
+    defect. Empty means the phase runs. It ships **set** to `#107` (the amd64 defect above): the night stays
+    green with the phase off, the skip line names the defect and a `::warning::` repeats it on every
+    run; the issue lists what to run before emptying it.
   - **For whoever runs the embed phase by hand:** `QMD_EMBED_E2E=1` now also needs
     `QMD_E2E_MODELS_DIR` (fetch first with the script, choosing the directory with
     `QMD_MODELS_DIR`; two commands in `docs/qmd-upgrade-checklist.md`) and fails, not skips,
@@ -178,8 +183,24 @@
   - **Counts.** The e2e suite goes from 48 tests to 49 (13 files). The host suite grows by 37 tests:
     the 36 of `tests/qmd-embed-nightly.bats` plus the new e2e, which counts as a skip without Docker.
     The `run:` text of the two steps 039 froze did not change; a test pins their sha256.
+  - **What the real runs measured (17-10-2026; the amd64 runs on GitHub runners, the arm64 run
+    local).** E1 (run 39069243972, phase on): 48 of 49 e2e green and `qmd real (041)` red at `setup`
+    after 369 s, for the product defect above; the models took 40 s to fetch (191 s on a Mac); the
+    job ran 21 min 19 s and stopped before `reindex`, so the duration of a green run with the phase
+    on is **not measured**. E2 (run 39081039747, phase off by #107): green in 11 min 52 s, 18 min 8 s
+    under the 30 minute cap, with `e2e summary: total=49 executed=48 skipped=1 failed=0`. E3 (run
+    39086250738, an embeddings file that does not exist at origin): `fetch_models` red after three
+    attempts (`curl exit 22 (http 404)`), the suite still ran, `qmd real (041)` came out as a skip
+    carrying the reason and the job ended red; the runner applies what a step wrote to
+    `$GITHUB_ENV` even when that step exits 1. The same 48 e2e took 11 min 45 s in E2 and 15 min 8 s
+    in E3, so the cap decision for the active phase (30 minutes today; raise it first if the margin
+    is under 5) needs more than one run and stays with #107. The whole embed phase also ran green on
+    arm64 (Docker Desktop, local): eight marks in order, 8 min 42 s for 016 and 041 together, 4.3 GiB
+    of container memory at the peak.
   - **Not a claim of parity.** The nightly runs amd64 and the deployed agents run aarch64: it catches
-    regressions of the stack in one architecture, and the hardware gate on ferrari stays.
+    regressions of the stack in one architecture, and the hardware gate on ferrari stays. While #107
+    is open the nightly does not run the embed at all, so the evidence on arm64 is the manual run
+    above.
 
 - **The nightly `docker-e2e` job reaches its suite again, and a green now means tests ran —
   `039-fix-nightly-e2e-sigpipe`** (no VERSION change: CI and tests only, no runtime code; the
