@@ -95,6 +95,16 @@ Facts below (versions, defaults) are as of v0.12.0.
       and relies on qmd's own `~/.cache/qmd` default, which lands in the `.state`
       bind-mount. Either way, a storage-resolution change in the target version
       would orphan the existing index under `.state`.
+- [ ] **041 model table** (the nightly's embed phase): the models the target version loads by
+      default are still the ones in the table at the top of
+      `.github/scripts/fetch-qmd-models.sh` — the embedding model and the query-expansion model
+      (`vsearch` expands every query), found in the target's `dist/llm.js` as the default model
+      URIs. For each row re-check the Hugging Face repo and file, the local name node-llama-cpp
+      gives it (`hf_<user>_<file>`, which needs the repo name to end in `-gguf` and the file to
+      start with the rest of it), the size in bytes and the sha256 (the `oid` of the LFS file in
+      `https://huggingface.co/api/models/<repo>/tree/main`). Then update
+      `QMD_MODELS_QMD_VERSION` in that script to the new pin: `tests/qmd-embed-nightly.bats` (G1)
+      fails until you do, which is the point.
 - [ ] **MCP**: the `qmd mcp` stdio subcommand still exists (`qmd_mcp_exec` execs it
       from the managed prefix — the MCP server must never fall back to `bunx`).
 - [ ] `tests/qmd-version-guard.bats` updated to assert the new version string, AND
@@ -104,10 +114,24 @@ Facts below (versions, defaults) are as of v0.12.0.
       that word when rewriting the tree-sitter item.
 - [ ] `DOCKER_E2E=1` (Phase A build-detector: baked `vec0.so` is musl + `_qmd_run
       --help` RC 0 from the managed prefix, plus the RED rebuild with
-      `--build-arg QMD_NATIVE_TOOLCHAIN=0`) and `QMD_EMBED_E2E=1` (Tier 2: real
-      update + embed + semantic vsearch) re-run green on the new version
-      (`tests/docker-e2e-qmd.bats`); confirmatory hardware gate on Alpine musl
-      aarch64 re-run.
+      `--build-arg QMD_NATIVE_TOOLCHAIN=0`; `qmd real (016)`) and the embed phase
+      (`qmd real (041)`: real update + embed + semantic vsearch + MCP server) re-run green
+      on the new version (`tests/docker-e2e-qmd.bats`). Since 041 the embed phase does not
+      download its models inside the container: it needs them fetched beforehand, so running
+      it takes two commands (about 1.6 GB of models; `QMD_E2E_MODELS_DIR` is required with
+      `QMD_EMBED_E2E=1` and the test fails, not skips, without it):
+
+          QMD_MODELS_DIR="$HOME/.cache/agentic-qmd-e2e/models" .github/scripts/fetch-qmd-models.sh
+          DOCKER_E2E=1 QMD_EMBED_E2E=1 QMD_E2E_MODELS_DIR="$HOME/.cache/agentic-qmd-e2e/models" \
+            bats tests/docker-e2e-qmd.bats -f 'qmd real'
+
+      The nightly (`.github/workflows/docker-e2e.yml`) runs the same two steps on amd64.
+      A red run prints a block that starts with `# --- state at the failure` after the container
+      log (free disk, the verdict of the container itself, the architecture, what `vec0-libc.sh`
+      says about the vector extension, and the state and output files of the reindex and of the
+      semantic search): read it before suspecting qmd. A reindex or a semantic search that does
+      not finish fails as its own phase, after 600 s or 300 s.
+      Confirmatory hardware gate on Alpine musl aarch64 re-run.
 - [ ] Post-upgrade (both modes): run a full reindex against a real vault and confirm
       the state file `<workspace>/scripts/heartbeat/qmd-index.json` reaches
       `last_status=indexed` with `pending: 0` (the multi-pass loop ran to
