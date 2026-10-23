@@ -6,7 +6,7 @@
 
 ## Summary
 
-En la imagen del agente (Alpine/musl) sobre un host amd64, `qmd embed` y `qmd vsearch` fallan porque el reemplazo de la extensión vectorial (`_qmd_swap_sqlite_vec`, `scripts/lib/qmd_index.sh:128-144`) tiene el destino fijo en el paquete `sqlite-vec-linux-arm64` y, con el paquete x64 que `bun install` instala en amd64, sale sin hacer nada y sin registrar nada (issue #107; evidencia de la corrida 39069243972 de 041). El arreglo es chico y local: la función elige el paquete que corresponde a la arquitectura de la máquina (`x86_64` o `amd64` dan `x64`; `aarch64` o `arm64` dan `arm64`), no toca jamás un paquete ajeno, deja una línea de log cuando no hay nada que reemplazar (hoy es callado) y sigue siendo idempotente, de estado 0 y sin romper el índice léxico. Se escribe test-first sobre `tests/qmd-sqlite-vec.bats` (de 7 a 18 pruebas, con un seam `QMD_MACHINE_ARCH` para que el oráculo sea hermético en ubuntu amd64 y en macOS arm64), con un catálogo de 15 mutaciones (M1 a M15, con M9 y M13 en variantes).
+En la imagen del agente (Alpine/musl) sobre un host amd64, `qmd embed` y `qmd vsearch` fallan porque el reemplazo de la extensión vectorial (`_qmd_swap_sqlite_vec`, `scripts/lib/qmd_index.sh:128-144`) tiene el destino fijo en el paquete `sqlite-vec-linux-arm64` y, con el paquete x64 que `bun install` instala en amd64, sale sin hacer nada y sin registrar nada (issue #107; evidencia de la corrida 39069243972 de 041). El arreglo es chico y local: la función elige el paquete que corresponde a la arquitectura de la máquina (`x86_64` o `amd64` dan `x64`; `aarch64` o `arm64` dan `arm64`), no toca jamás un paquete ajeno, deja una línea de log cuando no hay nada que reemplazar (hoy es callado) y sigue siendo idempotente, de estado 0 y sin romper el índice léxico. Se escribe test-first sobre `tests/qmd-sqlite-vec.bats` (de 7 a 21 pruebas, con un seam `QMD_MACHINE_ARCH` para que el oráculo sea hermético en ubuntu amd64 y en macOS arm64), con un catálogo de 15 mutaciones de diseño (M1 a M15, con M9 y M13 en variantes) al que la revisión independiente sumó M16 a M50.
 
 La Fase 0 midió el mecanismo antes de diseñar: el script de producción compila la build musl en un Alpine amd64 (8 s, ELF x86-64, 0 símbolos `GLIBC_`), la extensión musl carga con el CLI `sqlite3` y devuelve `v0.1.9`, y el `vec0.so` glibc del paquete x64 publicado falla con `__memcpy_chk: symbol not found`, como en E1. Con 041 ya en `main` (#108, squash `0fc08a8`), se reactiva el nightly vaciando `QMD_EMBED_DEFECT`, se mide la duración del job en al menos 3 corridas (subiendo el tope primero si el margen baja de 5 minutos), se repite la rotura inducida y se cierra #107. La cobertura permanente en arm64 dentro del nightly es otra feature (decisión del operador del 18-10-2026).
 
@@ -38,7 +38,7 @@ La Fase 0 midió el mecanismo antes de diseñar: el script de producción compil
 | --- | --- | --- |
 | I. Fuente única (`agent.yml`) | N/A | No hay configuración nueva ni archivos derivados; el cambio es código de biblioteca y un valor del workflow. |
 | II. Contenedor de menor privilegio (NO NEGOCIABLE) | PASA | Sin capacidades, montajes ni sockets nuevos. La función copia dentro del prefijo del propio agente (como `agent`), desde un archivo horneado de solo lectura. El único archivo bajo `docker/` que se toca es un comentario de `docker/scripts/build-sqlite-vec.sh`; la compuerta de privilegios se cumple (sin efecto sobre ningún modo de ejecución). Caso contingente: si la primera corrida de amd64 muestra que la build musl horneada no existe en la imagen (el supuesto 2 del spec, FR-013), el arreglo tocaría el Dockerfile o ese script y esta revisión se rehace antes de implementarlo. |
-| III. Test-first, ejecutable en el host | PASA | El comportamiento nuevo nace con pruebas del host (11 nuevas y tres reforzadas) con el ROJO visto antes; el oráculo no necesita Docker; el código horneado en la imagen se verifica además con DOCKER_E2E (V3 y V4); `shellcheck` limpio. |
+| III. Test-first, ejecutable en el host | PASA | El comportamiento nuevo nace con pruebas del host (14 nuevas, 11 del diseño y 3 de la revisión independiente, y tres reforzadas) con el ROJO visto antes del arreglo (caen 14 contra `origin/main`; N6 y N10 nacen verdes a propósito y las cubre una mutación); el oráculo no necesita Docker; el código horneado en la imagen se verifica además con DOCKER_E2E (V3 y V4); `shellcheck` limpio. |
 | IV. Ciclo idempotente y que degrada sin caer | PASA | `cmp -s` mantiene la idempotencia; cada camino que no puede reemplazar registra y devuelve 0, sin romper el índice léxico; la guarda de la arquitectura no soportada también degrada. |
 | V. El workspace es el agente | N/A | El prefijo vive en `.state/` como hasta hoy; no se agrega ni se mueve estado, y nada se versiona. |
 | VI. Dependencias fijadas a propósito | PASA | Ningún pin nuevo ni duplicado (sqlite-vec 0.1.9 y qmd 2.5.3 siguen fijados con su guarda de versiones); el cambio se registra en `CHANGELOG.md` y se refleja en `VERSION`. |
@@ -63,7 +63,7 @@ specs/042-qmd-sqlite-vec-x64/
 ├── quickstart.md        # Fase 1: escenarios de validación V1 a V7
 ├── contracts/
 │   ├── swap-sqlite-vec.md        # interfaz, seams, mapa de arquitectura, textos CANON del log, invariantes
-│   ├── host-oracle.md            # las 18 pruebas y el catálogo de mutaciones M1 a M15
+│   ├── host-oracle.md            # las 21 pruebas y el catálogo de mutaciones M1 a M15 (más M16 a M50 de la revisión)
 │   └── nightly-reactivation.md   # cambios al workflow, orden de la evidencia, medición y rotura inducida
 ├── checklists/
 │   └── requirements.md
@@ -74,7 +74,7 @@ specs/042-qmd-sqlite-vec-x64/
 
 ```text
 scripts/lib/qmd_index.sh               # la función _qmd_swap_sqlite_vec (líneas 128-144; su comentario, 122-127) y el comentario de QMD_VEC0_MUSL_SO, que también nombra la ruta arm64 (105-111)
-tests/qmd-sqlite-vec.bats              # de 7 a 18 pruebas, seam QMD_MACHINE_ARCH
+tests/qmd-sqlite-vec.bats              # de 7 a 21 pruebas, seam QMD_MACHINE_ARCH
 docker/scripts/build-sqlite-vec.sh     # solo el comentario de cabecera (nombra el paquete arm64)
 docs/qmd-upgrade-checklist.md          # el ítem "017 swap path" y la nota de la línea 32
 docs/architecture.md                   # la viñeta de la línea 336

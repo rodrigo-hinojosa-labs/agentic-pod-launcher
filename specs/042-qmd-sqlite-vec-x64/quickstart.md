@@ -13,13 +13,13 @@ Guía de validación ejecutable, de la más barata a la más cara. Cada escenari
 
 ## V1. El oráculo del host (segundos; SC-003, SC-006)
 
-1. **ROJO primero** (test-first): con las pruebas nuevas escritas y la función sin cambiar, `bats tests/qmd-sqlite-vec.bats` debe fallar en la reforzada E5 y en N1 a N5, N7 a N9 y N11 (10 pruebas); las demás siguen en verde: E1 a E4 (E1 y E3 reforzadas con la línea del log, que guardan FR-002 y caen con M13a y M13b), G1, G2 y las dos que nacen verdes a propósito, N6 y N10, que guardan comportamiento actual y caen con M6 y M14 (N6) y con M9a (N10). Se anota cuáles cayeron.
-2. **VERDE** con la función arreglada: `bats tests/qmd-sqlite-vec.bats` da 18 de 18 en bash 5.x; en bash 3.2 con `PATH=/bin:$PATH bats tests/qmd-sqlite-vec.bats`.
-3. **Mutaciones** M1 a M15 del catálogo ([contracts/host-oracle.md](contracts/host-oracle.md) §3, con M9 y M13 en sus variantes M9a y M9b, M13a, M13b y M13c), como usuario no root: cada una cae por la prueba prevista.
+1. **ROJO primero** (test-first): con las pruebas nuevas escritas y la función sin cambiar, `bats tests/qmd-sqlite-vec.bats` debe fallar en 14 pruebas: E3 (su vuelta amd64 sin build horneada), E5, N1 a N5, N7 a N9, N11 y N12 a N14 (medido contra `origin/main` en bash 5.3.15 y 3.2.57 con `scratchpad/042/red_check_042.py`; con el oráculo de 18 pruebas del diseño eran 10); las demás siguen en verde: E1, E2, E4, G1 y G2 (E1 reforzada con la línea exacta, que guarda FR-002 y cae con M13a y M29) y las dos que nacen verdes a propósito, N6 y N10, que guardan comportamiento actual y caen con M6 y M14 (N6) y con M9a (N10). Se anota cuáles cayeron.
+2. **VERDE** con la función arreglada: `bats tests/qmd-sqlite-vec.bats` da 21 de 21 en bash 5.x; en bash 3.2 con `PATH=/bin:$PATH bats tests/qmd-sqlite-vec.bats`.
+3. **Mutaciones** M1 a M50 del catálogo ([contracts/host-oracle.md](contracts/host-oracle.md) §3: 56 variantes, con M9, M12, M13 y M15 en las suyas; M1 a M15 son las del diseño y M16 a M50 las de la revisión independiente), como usuario no root: cada una cae por la prueba prevista.
 4. **shellcheck** con las opciones del paso `Run shellcheck` de `.github/workflows/shellcheck.yml` (`shellcheck -S error -e SC1090,SC1091 scripts/lib/qmd_index.sh`): rc 0; el paso completo, que recorre todo el árbol, se corre en V7.
 5. **Paridad**: lo mismo con la señal SIGPIPE ignorada (`perl -e '$SIG{PIPE}="IGNORE"; exec @ARGV' bats ...`) y con el `uname` del host distinto del que usa la prueba (macOS arm64 y ubuntu amd64 dan el mismo resultado porque las pruebas fijan la arquitectura).
 
-**Se espera**: 18 de 18 en los dos bash, 15 de 15 mutaciones cazadas (M9 y M13 en sus variantes), shellcheck limpio.
+**Se espera**: 21 de 21 en los dos bash, 56 de 56 variantes del catálogo cazadas (M1 a M15 con sus variantes, más M16 a M50), shellcheck limpio.
 
 ## V2. Humo local con la función real: amd64 emulado y pata arm64 nativa (unos 2 minutos; FR-001, FR-002, research M4 y M6)
 
@@ -37,7 +37,7 @@ Los pasos 1 a 3 y la carga final ya se midieron en la Fase 0 (research M4 y M6);
 
 **Pata arm64 (FR-002, SC-002)**: el mismo procedimiento con `--platform linux/arm64` (nativo en este Mac), el paquete `sqlite-vec-linux-arm64@0.1.9` y, uno tras otro, la biblioteca de `origin/main` y la de esta rama. **Se espera** que las dos dejen el `vec0.so` del paquete idéntico a la build horneada (`cmp -s`), impriman la misma línea `swapped glibc prebuilt for musl build` y callen en la segunda llamada: es la evidencia, con la función real, de que arm64 queda igual que hoy, porque el DOCKER_E2E de V3 no muestra esa línea en una corrida verde (solo vuelca el log del contenedor cuando falla).
 
-## V3. DOCKER_E2E arm64 local sin cambio de resultado (unos 9 minutos; FR-002, SC-002)
+## V3. DOCKER_E2E arm64 local sin cambio de resultado (unos 9 minutos con la imagen en la caché de capas, más el build de las capas que T015 invalida, que no está medido; FR-002, SC-002)
 
 Con Docker Desktop encendido, en este Mac (arm64):
 
@@ -46,7 +46,7 @@ DOCKER_E2E=1 QMD_EMBED_E2E=1 QMD_E2E_MODELS_DIR=$HOME/.cache/agentic-qmd-e2e/mod
   bats --tap tests/docker-e2e-qmd.bats -f 'qmd real'
 ```
 
-**Se espera**: `ok qmd real (016)` y `ok qmd real (041)` con las ocho marcas en orden, la línea `# qmd embed resources:` y un tiempo en el orden de los 8 min 42 s de T026 (con la imagen en la caché de capas). Con la variable `QMD_EMBED_DEFECT` del workflow vacía o no (el local no lee el workflow). La línea `swapped glibc prebuilt for musl build` no aparece en una corrida verde: la guardan E1 (V1) y la pata arm64 de V2. Se anota el resultado en las Notes.
+**Se espera**: `ok qmd real (016)` y `ok qmd real (041)` con las ocho marcas en orden, la línea `# qmd embed resources:` y un tiempo en el orden de los 8 min 42 s de T026 (con la imagen en la caché de capas) más el build de las capas desde `docker/Dockerfile:64`, que T015 invalida y cuyo costo no está medido. Con la variable `QMD_EMBED_DEFECT` del workflow vacía o no (el local no lee el workflow). La línea `swapped glibc prebuilt for musl build` no aparece en una corrida verde: la guardan E1 (V1) y la pata arm64 de V2. Se anota el resultado en las Notes.
 
 ## V4. CI amd64 con la fase activa (3 o más corridas; FR-008, FR-009, FR-010, SC-001, SC-004)
 
@@ -69,7 +69,7 @@ Tras el merge, para cada una de las tres nocturnas siguientes: `gh run list --wo
 
 ## V7. La compuerta completa (antes del PR)
 
-`bats --tap tests/` secuencial en bash 5.x y en 3.2 sobre un árbol congelado, con la salida de error vacía. **Se espera**: 0 pruebas fallidas y el conteo de la línea base medida más las 11 pruebas nuevas; shellcheck con el comando de la CI en rc 0; la CI del PR en verde en sus tres checks.
+`bats --tap tests/` secuencial en bash 5.x y en 3.2 sobre un árbol congelado, con la salida de error vacía. **Se espera**: 0 pruebas fallidas y el conteo de la línea base medida más las 14 pruebas nuevas (1854 + 14 = 1868); shellcheck con el comando de la CI en rc 0; la CI del PR en verde en sus tres checks.
 
 ## Qué escenario prueba qué criterio
 

@@ -98,6 +98,89 @@
     `.graph/` from the inotify watch) rather than blocking this release.
 
 ### Fixed
+- **The sqlite-vec musl swap follows the machine's architecture, and says why when it cannot replace
+  anything — `042-qmd-sqlite-vec-x64`** (VERSION 0.28.0 → 0.29.0; issue #107). qmd's vector search
+  (`qmd embed`, `qmd vsearch`) needs the `vec0` extension of sqlite-vec. The glibc prebuilt that
+  `bun install` lays down cannot be loaded inside the Alpine (musl) image, so the image bakes a musl
+  build and `_qmd_swap_sqlite_vec` (`scripts/lib/qmd_index.sh`) copies it over the prebuilt at
+  runtime. That copy only knew the arm64 package. On an amd64 machine bun installs
+  `sqlite-vec-linux-x64`, the arm64 path did not exist, and the function returned without a word,
+  leaving a glibc binary inside a musl container. The first real amd64 run of the 041 embed phase (a
+  manual dispatch of the nightly workflow on a rehearsal branch, 17-10-2026, run 39069243972)
+  measured the consequence: `qmd real (041)` red at `setup` with `sqlite-vec extension is
+  unavailable`. The deployed agents run aarch64, which is why nothing had shown it before. The 041
+  entry below records this defect as open; this entry fixes its cause.
+
+  - **The swap follows the architecture of the machine.** `uname -m` `x86_64` or `amd64` selects the
+    `sqlite-vec-linux-x64` package, `aarch64` or `arm64` selects `sqlite-vec-linux-arm64`. Only the
+    package of the machine's own architecture is touched; the other one, when it is there, is left
+    alone. On glibc (local mode) nothing changes: the function still returns before it asks `uname`.
+    (Musl is recognized by the presence of `/lib/ld-musl-*.so.1`; a glibc host that also carries that
+    file is treated as musl, which on arm64 already logged `musl build absent` since 017 and now does
+    on x86_64 too.)
+  - **A swap that cannot happen leaves a line in the log, where it used to be mute.** One line per
+    call and always exit 0. `sqlite-vec: no sqlite-vec-linux-<x64|arm64> package in the managed
+    prefix (found: <list or none>) - vector embed unavailable, lexical index intact` when the prefix
+    has no package for this architecture (a workspace carried over from another architecture, or an
+    incomplete install; the line lists the `sqlite-vec-linux-*` directories it did find), and
+    `sqlite-vec: no musl build for machine architecture '<arch>' (supported: x86_64, aarch64) - ...`
+    for an architecture the image is not built for. The line for the baked build being absent
+    (`musl build absent`), the one for a failed copy (`swap failed (cp)`) and the success line are
+    unchanged, so anything that greps them keeps working. Where the line shows up depends on the
+    caller: setup, reindex and migrate capture the output of the ensure in files under
+    `<qmd cache root>/tmp/` (`qmd-setup.err`, `reindex.err`, `embed-pass.err`, `qmd-migrate.err`; the
+    swap line is the first line of each) and log only the last 500 bytes of a failing step (setup's
+    go to the container log, the scheduled reindex's and the migrate it runs to
+    `scripts/heartbeat/logs/qmd-reindex.log`, and the reindex the file watcher triggers has no log,
+    because `scripts/qmd_watch.sh` discards its output), a tail that starts cutting into the swap
+    line from the left once qmd printed more than about 350 bytes after it (the `found:` list
+    survives up to about 430 bytes, the whole line is gone from about 500); the qmd MCP server does
+    not capture it (it goes to the server's stderr) and the status poll discards it. Reading the
+    file with `head -n 1` is the reliable way, and `docs/vault.md` has the diagnosis.
+  - **A test seam, not an operator knob.** `QMD_MACHINE_ARCH` overrides what `uname -m` says, even
+    when it is empty (the way `QMD_MUSL_LOADER` already works). The CI runs the host suite on ubuntu
+    amd64 and on macOS arm64, so no test can depend on the machine it runs on.
+  - **What does not change.** arm64 images (same package, same swap, same log line), glibc and local
+    mode, the pins (qmd 2.5.3, sqlite-vec 0.1.9), the Alpine base, the musl build itself and
+    `docker/Dockerfile`. The only edit under `docker/` is the header comment of
+    `docker/scripts/build-sqlite-vec.sh`, which named the arm64 package only; the container
+    privilege model is untouched. The docs that described the arm64-only path
+    (`docs/qmd-upgrade-checklist.md`, `docs/architecture.md`, `docs/vault.md`) say the swap is per
+    architecture now, and the checklist asks the next qmd bump to re-check the package naming.
+  - **Tests.** `tests/qmd-sqlite-vec.bats` goes from 7 tests to 21: 14 new, and the three that were
+    there for the swap now also assert its log lines. They cover the x64 layout of run 39069243972,
+    the two architecture spellings of each package, a prefix that holds only the other
+    architecture's package, an unsupported architecture, glibc (silent, and `uname` never asked),
+    idempotency, a failing copy (an unwritable package directory; that test is skipped when the
+    suite runs as root), the `uname -m` fallback without the seam, and one test that pins the
+    upgrade checklist item to both package names. Three more came out of the independent review:
+    stdout stays empty in every branch (the stdout of the qmd MCP server is its protocol channel), the
+    swap always hands control back to a caller running under `set -euo pipefail` with its variables
+    untouched (in each branch, a failing `uname` among them), and a package directory without its
+    `vec0.so` counts as missing, with an exact `found:` list. The review also tightened seven tests
+    (E1, E5, N1, N4, N5, N8, N11) and, in a second pass, E3 (the whole line, and an amd64 round with
+    the baked build absent), N4, N5, N8 and N14; a third pass made E3, N4, N5 and N8 compare the
+    whole log line, made E2 and E4 assert silence, started N1 from a read-only prebuilt, gave N5 eight
+    architecture spellings and N8 the retry that follows, and rewrote N13. The host suite grows by 14
+    tests. A catalog of 50 mutations of the swap code and of the checklist (56 variants), run in bash
+    5.3.15 and 3.2.57 on isolated copies, catches all of them; 30 of the 35 mutations the three review
+    passes added survived the oracle they were written against, which is what the three new tests and
+    the tightening are for. The catalog shows that each test can fail, not that each assertion can.
+  - **Checked in a real musl container (19-10-2026).** The real function, with no test seams and
+    under `set -euo pipefail`, in throwaway `alpine:3.24.1` containers with the published sqlite-vec
+    0.1.9 packages. On amd64 (emulated) the code of origin/main leaves the glibc `vec0.so` in place
+    without a word and the extension fails to load (`__memcpy_chk: symbol not found`); this code prints
+    one line, swaps it, and the extension loads (`v0.1.9`). With only the arm64 package on amd64 it logs
+    what it found and touches nothing. On arm64 (native) both versions behave the same.
+  - **Checked on arm64 in the real end-to-end test (22-10-2026).** `qmd real (016)` and `qmd real (041)`
+    of `tests/docker-e2e-qmd.bats` (the second one runs the whole embed: setup, vector extension,
+    reindex, semantic search and the MCP server) pass on an Apple Silicon Mac in 7 min 32 s, with the
+    eight phase marks in order. The `vector-extension` phase confirms that the package's `vec0.so` is
+    the musl build, so arm64 behaves as before the change.
+  - **Still open when this entry was written.** The amd64 CI runs with the nightly's embed phase
+    switched on again (this branch empties `QMD_EMBED_DEFECT`; the runs are recorded here when they
+    finish). Until then this entry does not claim that the embed works end to end on amd64.
+
 - **The nightly runs the real qmd embed, and says so when it does not —
   `041-nightly-qmd-embed`** (no VERSION change: CI and tests only, no runtime code; the precedent
   of 019, 025 and 039). Until now the nightly passed `qmd real (016)` without ever running its embed

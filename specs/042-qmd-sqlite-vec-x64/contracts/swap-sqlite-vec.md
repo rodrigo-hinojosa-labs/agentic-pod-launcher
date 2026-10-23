@@ -11,9 +11,9 @@ _qmd_swap_sqlite_vec PREFIJO
 ```
 
 - **Argumento**: la ruta del prefijo gestionado de qmd (el que contiene `node_modules/`).
-- **Estado de salida**: siempre 0, en todas las filas de la tabla de decisión. La función puede ejecutarse bajo `set -e`: `docker/scripts/start_services.sh` (línea 14) usa `set -euo pipefail`, mientras que `heartbeatctl`, `qmd-mcp`, los envoltorios locales y `scripts/qmd_watch.sh` usan `set -u` o `set -uo pipefail`. Por eso no puede abortar al llamador. Incluye el caso en que `uname -m` falla: la asignación lo tolera (`arch=$(uname -m 2>/dev/null || true)`) y la rama cae en la fila D2.
+- **Estado de salida**: siempre 0, en todas las filas de la tabla de decisión. La función puede ejecutarse bajo `set -e`: `docker/scripts/start_services.sh` (línea 14) usa `set -euo pipefail`, mientras que `heartbeatctl`, `qmd-mcp`, los envoltorios locales y `scripts/qmd_watch.sh` usan `set -u` o `set -uo pipefail`. Por eso no puede abortar al llamador. Incluye el caso en que `uname -m` falla: el ayudante `_qmd_machine_arch` lo tolera (`uname -m 2>/dev/null || true`), la asignación `arch="$(_qmd_machine_arch)"` recibe una cadena vacía y la rama cae en la fila D2 (N13 lo prueba en cada rama bajo `set -euo pipefail`, con un `uname` roto en la última).
 - **Salida estándar**: vacía.
-- **Salida de error**: cero o una línea de log (`_qmd_log` antepone `[qmd]` y un espacio). Nunca más de una línea por llamada. Qué ve el operador depende del llamador: `_qmd_ensure_prefix` llama a la función antes de cada `_qmd_run`, y setup y reindex capturan esa salida en sus archivos de registro y solo muestran la cola redactada de 500 bytes cuando la llamada falla.
+- **Salida de error**: cero o una línea de log (`_qmd_log` antepone `[qmd]` y un espacio). Nunca más de una línea por llamada. Qué ve el operador depende del llamador: `_qmd_ensure_prefix` llama a la función antes de cada `_qmd_run`, así que la línea es la PRIMERA de la salida de cada llamada; setup, reindex y migrate capturan esa salida en `<raíz de caché de qmd>/tmp/{qmd-setup,reindex,embed-pass,qmd-migrate}.err` y solo registran la cola redactada de sus ÚLTIMOS 500 bytes cuando la llamada falla (setup en el log del contenedor; el reindex programado, y el migrate que corre, en `scripts/heartbeat/logs/qmd-reindex.log`; el reindex que dispara el vigilante de archivos en ninguna parte, porque `qmd_watch.sh` descarta su salida), de modo que, cuando qmd escribió más de unos 350 bytes después de la línea, la cola empieza a cortarla por la izquierda (la lista `found:` sobrevive hasta unos 430 bytes y la línea entera desaparece desde unos 500; la línea L-PKG de 153 bytes); el servidor MCP (`qmd_mcp_exec`) no captura nada y la línea sale por la salida de error del servidor; el sondeo del estado (`_qmd_pending_count`) la descarta.
 - **Efectos en el disco**: a lo sumo una copia, sobre el `vec0.so` del paquete de la arquitectura de la máquina. Ningún otro archivo se crea, se modifica ni se borra.
 - **Compatibilidad**: bash 3.2 y 5.x; sin construcciones propias de bash 4 o superior; sin `local x=$(...)` (enmascara el estado).
 
@@ -41,7 +41,7 @@ El orden y las filas son los de [../data-model.md](../data-model.md) §5 (D1 a D
 
 1. **No es musl** (D1): no hace nada, no imprime, no consulta la arquitectura.
 2. **Arquitectura no soportada** (D2): línea L-ARCH; no toca nada. Es una rama defensiva: la imagen solo se construye en x86_64 y aarch64, así que en producción no se llega aquí; la cubre N5 para que, si alguna vez ocurre, no sea otro camino callado.
-3. **Falta el paquete de la arquitectura** (D3): no existe `node_modules/sqlite-vec-linux-<sufijo>/vec0.so` (el mismo criterio de hoy, `[ -e "$target" ]` en `qmd_index.sh:132`: se mira el archivo, no el directorio); línea L-PKG; no toca nada, tampoco un paquete ajeno. Un directorio del paquete sin su `vec0.so` también cae aquí y su nombre aparece en `found:`.
+3. **Falta el paquete de la arquitectura** (D3): no existe `node_modules/sqlite-vec-linux-<sufijo>/vec0.so` (el mismo criterio de hoy: `[ -e "$target" ]` en la línea 132 de `origin/main`, `[ ! -e "$target" ]` en la 159 del árbol de la rama; se mira el archivo, no el directorio); línea L-PKG; no toca nada, tampoco un paquete ajeno. Un directorio del paquete sin su `vec0.so` también cae aquí y su nombre aparece en `found:`.
 4. **Falta la build horneada** (D4): línea L-ABS (texto actual).
 5. **La build y el `vec0.so` del paquete son iguales** (D5): no hace nada, no imprime (`cmp -s`).
 6. **Copia la build sobre el `vec0.so` del paquete** (D6): línea L-OK si la copia funcionó (texto actual) o L-CP si falló (texto actual) (D7).
@@ -70,8 +70,8 @@ Las tres existentes **no cambian** (FR-002 exige la misma línea en arm64), y la
 - **I2**: a lo sumo un archivo escrito por llamada.
 - **I3**: dos llamadas seguidas con las mismas entradas: la segunda no escribe ni imprime nada si la primera tuvo éxito (FR-006).
 - **I4**: en glibc la función no escribe, no imprime y no bifurca `uname` (FR-003); N6 lo afirma con un `uname` falso que anota sus llamadas y M14 lo prueba.
-- **I5**: el estado de salida es 0 en todas las filas, también cuando `uname` falla (se comprueba a mano bajo `set -euo pipefail` en el punto de control de US2).
-- **I6**: la salida de error es una sola línea por llamada, como máximo (N4 y N5 afirman exactamente una y M15 lo prueba).
+- **I5**: el estado de salida es 0 en todas las filas y el llamador sigue con sus variables intactas, también cuando `uname` falla (N13 lo prueba en cada rama bajo `set -euo pipefail`, con un `uname` roto en la última; M18 y M39 a M43 y M46 lo cazan).
+- **I6**: la salida de error es una sola línea por llamada, como máximo (E1, E3, N4, N5, N8, N13 y N14 afirman exactamente una; M15, M15b, M24, M29, M31 y M39 lo prueban).
 
 ## 7. Lo que este contrato no cubre
 

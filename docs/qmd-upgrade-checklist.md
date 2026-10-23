@@ -29,10 +29,12 @@ As of v0.12.0:
   the trustedDependencies strategy no longer prevents a native `tree-sitter` build →
   BUG 4 would return (or require a redesign).
 - 017 pairs the qmd pin with **sqlite-vec 0.1.9**: qmd's transitive
-  `sqlite-vec-linux-arm64` prebuilt is glibc-only, so in docker mode the image
+  `sqlite-vec-linux-x64` and `sqlite-vec-linux-arm64` prebuilts (the CPU decides which
+  one gets installed) are glibc-only, so in docker mode the image
   compiles the pinned amalgamation for musl (`docker/scripts/build-sqlite-vec.sh`,
   `ARG SQLITE_VEC_VERSION=0.1.9` in `docker/Dockerfile`) and
-  `_qmd_swap_sqlite_vec` swaps it into the managed prefix at runtime. A qmd bump can
+  `_qmd_swap_sqlite_vec` swaps it into the managed prefix at runtime, onto the package
+  of the machine's architecture (042). A qmd bump can
   drag the transitive sqlite-vec version along, invalidating the baked build.
 - 018's multi-pass embed loop parses qmd's CLI output verbatim:
   `_qmd_pending_count` greps `Pending: N` from `qmd status`, and completion is
@@ -63,10 +65,15 @@ Facts below (versions, defaults) are as of v0.12.0.
       tarball pin in `docker/scripts/build-sqlite-vec.sh`, then re-verify the musl
       amalgamation compile still works (the `-Du_int8_t=uint8_t` BSD-typedef shim
       and the no-GLIBC-symbols guard in that script).
-- [ ] **017 swap path** (docker mode): `_qmd_swap_sqlite_vec`'s target
-      `node_modules/sqlite-vec-linux-arm64/vec0.so` still matches the target
-      version's package layout (`scripts/lib/qmd_index.sh`). Local mode (glibc) is
-      unaffected — the swap is a no-op there.
+- [ ] **017 swap path** (docker mode): `_qmd_swap_sqlite_vec`'s targets
+      `node_modules/sqlite-vec-linux-x64/vec0.so` (amd64) and
+      `node_modules/sqlite-vec-linux-arm64/vec0.so` (arm64) still match the target
+      version's package layout (`scripts/lib/qmd_index.sh`): sqlite-vec's
+      `getLoadablePath()` must still build the package name as
+      `sqlite-vec-${os}-${arch}` (`os` from `process.platform`, `arch` from
+      `process.arch`), and the swap must cover every Linux architecture the package
+      publishes (today `x64` and `arm64`; the map lives in `_qmd_swap_sqlite_vec`).
+      Local mode (glibc) is unaffected — the swap is a no-op there.
 - [ ] **018 output contract**: on the target version, `qmd status` still prints
       `Pending: N ...` and a fully-embedded `qmd embed` still prints
       "All content hashes already have embeddings". If either string changed,

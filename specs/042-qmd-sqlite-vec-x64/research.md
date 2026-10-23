@@ -83,12 +83,12 @@ Es el mecanismo del arreglo, medido de punta a punta sin qmd ni llama.cpp, en 58
 
 ### D5. Pruebas del host y mutaciones
 
-**Decisión**: ampliar `tests/qmd-sqlite-vec.bats` test-first (ROJO visto antes del arreglo) con 11 pruebas nuevas, y fortalecer tres existentes: la del paquete ausente (E5), para que afirme el rastro en el log, y las dos que guardan en arm64 las líneas de hoy (FR-002): la del reemplazo (E1, la línea L-OK) y la del artefacto ausente (E3, la línea L-ABS, porque la palabra `unavailable` que afirmaba la comparten ahora otras ramas). Cada prueba tiene su mutación prevista (M1 a M15 del catálogo de [contracts/host-oracle.md](contracts/host-oracle.md), con M9 y M13 en variantes); el catálogo se ejecuta contra la implementación real, como en 041, y una mutación que sobreviva endurece el oráculo antes de seguir.
+**Decisión**: ampliar `tests/qmd-sqlite-vec.bats` test-first (ROJO visto antes del arreglo) con 11 pruebas nuevas (la revisión independiente de T020 sumó tres más, N12 a N14), y fortalecer tres existentes: la del paquete ausente (E5), para que afirme el rastro en el log, y las dos que guardan en arm64 las líneas de hoy (FR-002): la del reemplazo (E1, la línea L-OK) y la del artefacto ausente (E3, la línea L-ABS, porque la palabra `unavailable` que afirmaba la comparten ahora otras ramas). Cada prueba tiene su mutación prevista (M1 a M15 del catálogo de [contracts/host-oracle.md](contracts/host-oracle.md), con M9 y M13 en variantes; la revisión independiente sumó M16 a M50); el catálogo se ejecuta contra la implementación real, como en 041, y una mutación que sobreviva endurece el oráculo antes de seguir.
 **Razón**: principio III. La clase de defecto de 041 ("una aserción que pasa en vacío") se previene midiendo que cada prueba cae con su mutación.
 
 ### D6. Versión y documentos
 
-**Decisión**: `VERSION` 0.28.0 a 0.29.0 (MINOR, la práctica para las features que tocan runtime) verificado a mano contra `origin/main` tras cualquier rebase; entrada de CHANGELOG; corregir `docs/qmd-upgrade-checklist.md` (el ítem "017 swap path" nombra los dos paquetes y la regla `sqlite-vec-${plataforma}-${arquitectura}`), `docs/architecture.md`, `docs/vault.md` y el comentario de `build-sqlite-vec.sh`; y las viñetas de CLAUDE.md que 041 dejó (el reemplazo ya conoce las dos arquitecturas; el nightly vuelve a ejecutar la fase).
+**Decisión**: `VERSION` 0.28.0 a 0.29.0 (MINOR, la práctica para las features que tocan runtime) verificado a mano contra `origin/main` tras cualquier rebase; entrada de CHANGELOG; corregir `docs/qmd-upgrade-checklist.md` (el ítem "017 swap path" nombra los dos paquetes y la regla `sqlite-vec-${os}-${arch}`), `docs/architecture.md`, `docs/vault.md` y el comentario de `build-sqlite-vec.sh`; y las viñetas de CLAUDE.md que 041 dejó (el reemplazo ya conoce las dos arquitecturas; el nightly vuelve a ejecutar la fase).
 **Razón**: principio VI (cambios de cara al usuario en CHANGELOG y VERSION) y compuerta de documentación de la constitución.
 
 ### D7. Capas de verificación
@@ -97,7 +97,7 @@ Es el mecanismo del arreglo, medido de punta a punta sin qmd ni llama.cpp, en 58
 | --- | --- | --- | --- | --- |
 | V1. Oráculo del host | La función, con prefijos falsos (ambas disposiciones, los casos de FR-004 y FR-005, la idempotencia) | host, bash 5.x y 3.2 | segundos | no |
 | V2. Humo local | La función REAL y el mecanismo, en un Alpine amd64 emulado (compila la build con el script de producción, deja un prefijo con el paquete x64 glibc publicado, corre `_qmd_swap_sqlite_vec` y carga la extensión con `sqlite3`) y, con lo mismo, una pata arm64 nativa que guarda la línea y el archivo de hoy (FR-002) | este Mac, contenedores desechables | unos 2 minutos | no (local, desechable) |
-| V3. DOCKER_E2E arm64 local | El embed completo en arm64 sin cambio de resultado (SC-002) | este Mac, con los modelos de 041 | unos 9 min | no (local) |
+| V3. DOCKER_E2E arm64 local | El embed completo en arm64 sin cambio de resultado (SC-002) | este Mac, con los modelos de 041 | unos 9 min con la imagen en la caché de capas, más el build de las capas que T015 invalida (no medido) | no (local) |
 | V4. CI amd64 con la fase activa | El embed completo en amd64, la duración y el margen (al menos 3 corridas) | GitHub Actions, `workflow_dispatch` en la rama | 20 a 30 min por corrida | push y dispatch con confirmación del operador |
 | V5. Rotura inducida | Que una imagen del test sin toolchain deje el job en rojo con la fase nombrada | GitHub Actions, rama de ensayo | una corrida | push, dispatch y borrado de la rama, con confirmación |
 | V6. Las tres noches | La fase activa en el nightly programado | GitHub Actions | tres noches | observación tras el merge |
@@ -126,6 +126,6 @@ Una prueba versionada con contenedor (un e2e de unos 60 s, que corra en la arqui
 
 1. **El embed completo en amd64 no está medido** (velocidad con las opciones de compilación de ARM, las cinco fases posteriores a `setup`, la duración): la primera corrida con el arreglo lo responde y D9 fija qué hacer si destapa otro defecto.
 2. **V2 prueba el mecanismo, no el embed**: un verde de V2 no sustituye a V4.
-3. **Rebase pendiente**: #108 ya está en `main` (squash `0fc08a8`, 19-10-2026); antes de V3, V4 y del vaciado del interruptor hay que rebasar esta rama sobre `origin/main` (conflicto previsto: `.specify/feature.json`).
+3. **Rebase hecho (T003)**: #108 está en `main` (squash `0fc08a8`, 19-10-2026) y esta rama parte de ese commit (el único conflicto fue `.specify/feature.json`); ya no bloquea V3, V4 ni el vaciado del interruptor.
 4. **Un `QMD_MACHINE_ARCH` olvidado** en el entorno de un operador torcería la elección; la variable es un seam de pruebas, no se documenta como perilla y no se lee en ningún otro lugar.
 5. **Residuo local de la Fase 0**: la variante `linux/amd64` de `alpine:3.24.1` (unos 4 MB) quedó en el Docker de este Mac; los contenedores fueron desechables (`--rm`).

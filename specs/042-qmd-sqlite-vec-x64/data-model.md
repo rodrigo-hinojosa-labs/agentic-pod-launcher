@@ -24,7 +24,7 @@ Un directorio bajo `<prefijo>/node_modules/` que el gestor de paquetes instala s
 | --- | --- |
 | Nombre | `sqlite-vec-linux-x64` o `sqlite-vec-linux-arm64` (las dos únicas variantes de Linux que `sqlite-vec` 0.1.9 publica) |
 | Contenido relevante | `vec0.so`, un binario **glibc** (159.816 bytes en x64, 156.520 en arm64) |
-| Quién lo elige | el cargador de `sqlite-vec` (`sqlite-vec-${plataforma}-${arquitectura}`, armado con `process.platform` y `process.arch`), o sea, el mismo nombre que el sufijo de arriba |
+| Quién lo elige | el cargador de `sqlite-vec` (`sqlite-vec-${os}-${arch}`, con `os` tomado de `process.platform` (`windows` en lugar de `win32`) y `arch` de `process.arch`), o sea, el mismo nombre que el sufijo de arriba |
 | Cuántos hay | normalmente uno; un workspace llevado entre arquitecturas puede tener dos, o solo el ajeno |
 
 ## 3. Build musl horneada
@@ -53,7 +53,7 @@ Evaluada en este orden; la primera fila que aplica decide. En todas las filas el
 | D4 | musl | soportada | presente | ausente | no toca nada | L-ABS: "build ausente" (texto actual, sin cambio) |
 | D5 | musl | soportada | presente | presente e igual a `vec0.so` del paquete | no hace nada (idempotente) | ninguna |
 | D6 | musl | soportada | presente | presente y distinta | copia la build sobre `vec0.so` del paquete y solo de ese | L-OK: "reemplazado" (texto actual, sin cambio) |
-| D7 | musl | soportada | presente | presente y distinta, pero la copia falla | deja el `vec0.so` como estaba | L-CP: "copia fallida" (texto actual, sin cambio) |
+| D7 | musl | soportada | presente | presente y distinta, pero la copia falla | si la copia falla al abrir (permisos), deja el `vec0.so` como estaba; si falla a mitad de la escritura (disco lleno), puede quedar truncado hasta que la preparación siguiente lo reintente (`cp -f` reescribe en el sitio, como antes de 042) | L-CP: "copia fallida" (texto actual, sin cambio) |
 
 Hoy (antes del arreglo) las filas D2 y D3 no existen: el destino está fijo en el paquete arm64 y, si ese archivo falta, la función sale sin decir nada; y en una máquina x86_64 con solo el paquete x64 ninguna de las filas D4 a D7 se alcanza, porque la salida callada las precede.
 
@@ -66,7 +66,7 @@ glibc (recién instalado) --D4--> glibc            (imagen sin toolchain: el ín
 glibc (recién instalado) --D3--> (el paquete no existe)  (se informa; no hay nada que transicionar)
 ```
 
-Una reinstalación del prefijo (cambio del manifiesto) vuelve a dejar el paquete en glibc; `_qmd_ensure_prefix` llama al reemplazo en su último paso (`qmd_index.sh:227`), dentro de esa misma preparación, así que el paquete vuelve a musl antes de que corra qmd. Solo si la instalación falla sin dejar el binario (`return 1`, línea 221) el reemplazo espera a la preparación siguiente.
+Una reinstalación del prefijo (cambio del manifiesto) vuelve a dejar el paquete en glibc; `_qmd_ensure_prefix` llama al reemplazo en su último paso (la llamada `_qmd_swap_sqlite_vec "$prefix"` justo antes del `return 0` final), dentro de esa misma preparación, así que el paquete vuelve a musl antes de que corra qmd. Solo si la instalación falla sin dejar el binario (el `return 1` tras el mensaje `install: bun install failed`) el reemplazo espera a la preparación siguiente.
 
 ## 7. Interruptor de defecto abierto (de 041, sin cambios de formato)
 
