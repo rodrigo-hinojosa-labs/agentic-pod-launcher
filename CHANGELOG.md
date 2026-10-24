@@ -177,9 +177,18 @@
     reindex, semantic search and the MCP server) pass on an Apple Silicon Mac in 7 min 32 s, with the
     eight phase marks in order. The `vector-extension` phase confirms that the package's `vec0.so` is
     the musl build, so arm64 behaves as before the change.
-  - **Still open when this entry was written.** The amd64 CI runs with the nightly's embed phase
-    switched on again (this branch empties `QMD_EMBED_DEFECT`; the runs are recorded here when they
-    finish). Until then this entry does not claim that the embed works end to end on amd64.
+  - **Checked on amd64 in CI (24-10-2026).** Three manual runs of the nightly workflow on this branch,
+    with the embed phase switched on again (this change empties `QMD_EMBED_DEFECT`): `qmd real (041)`
+    passed in all three, with its eight phase marks, on `ubuntu-latest` amd64, which is the first time
+    the embed ran end to end there. The job lasted 17 min 40 s, 20 min 51 s and 20 min 44 s, so the
+    margin against the 30-minute cap is at least 9 min 9 s and the cap stays as it is (the `setup`
+    phase, which compiles llama.cpp, took 283 to 403 s, and the peak memory was 3.2 GiB). Two of the
+    runs were fully green (49 of 49 tests); the first had one red in an unrelated test, `qmd e2e (037)`,
+    a start-up race in its retry loop that is tracked in #109 and did not repeat. A fourth run on a
+    throwaway branch, with the test's image built without the native toolchain, turned red as intended:
+    `not ok qmd real (041)` after 33 s, last phase `setup`, and the failure state names the reason (the
+    llama.cpp build cannot run) and shows the glibc `vec0.so` left in place. From the merge on, the
+    nightly runs the phase.
 
 - **The nightly runs the real qmd embed, and says so when it does not —
   `041-nightly-qmd-embed`** (no VERSION change: CI and tests only, no runtime code; the precedent
