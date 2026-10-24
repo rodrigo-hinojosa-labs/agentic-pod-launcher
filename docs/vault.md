@@ -534,12 +534,21 @@ Reference detail: [`docs/heartbeatctl.md`](heartbeatctl.md#vault-rag).
 
 ### Vector search on Alpine musl (feature 017, docker mode only)
 
-qmd's transitive `sqlite-vec` prebuilt is glibc-only and cannot `dlopen` under musl. In docker
+qmd's transitive `sqlite-vec` prebuilts (`sqlite-vec-linux-x64` and `sqlite-vec-linux-arm64`, one
+per architecture) are glibc-only and cannot `dlopen` under musl. In docker
 mode the image compiles the pinned sqlite-vec amalgamation for musl at build time (gated by the
-`QMD_NATIVE_TOOLCHAIN=1` build arg) and `_qmd_swap_sqlite_vec` swaps it into the managed prefix
-at runtime. If that artifact is missing (e.g. an image built with `QMD_NATIVE_TOOLCHAIN=0`), the
-log says `vector embed unavailable, lexical index intact` — BM25 still works, vectors don't.
-Local mode runs on glibc: the stock prebuilt loads and the swap is a no-op.
+`QMD_NATIVE_TOOLCHAIN=1` build arg) and `_qmd_swap_sqlite_vec` swaps it, at runtime, into the
+managed prefix's package for the machine's architecture. When it cannot, it writes one `sqlite-vec:`
+line that says why, and vector embed stays unavailable (the lexical index is not touched, and BM25
+keeps working as long as qmd itself starts; step 3 of the diagnostics below covers the carried-prefix
+case, where it does not): `musl build absent` means the baked artifact is missing (e.g. an image
+built with `QMD_NATIVE_TOOLCHAIN=0`); `no sqlite-vec-linux-<x64|arm64> package ... (found: ...)` means
+the prefix has no `vec0.so` for this architecture; `no musl build for machine architecture '<arch>'`
+means an architecture the image is not built for; `swap failed (cp)` means the copy onto the
+package's `vec0.so` failed. The first three end in `vector embed unavailable, lexical index
+intact`, the failed copy in `vector embed may be unavailable`. Local mode runs on glibc: the stock
+prebuilt loads and the swap is a no-op, as long as the host has no `/lib/ld-musl-*.so.1` (that file
+is how the library recognizes musl).
 
 ### Version pin and upgrades
 
@@ -694,9 +703,43 @@ Local mode has no symlink by design — the vault is at its real workspace path.
 2. Confirm the reader and the writer share storage: in local mode both the reindex wrapper and
    `scripts/local/agent-qmd-mcp.sh` must export the same `XDG_CACHE_HOME` / `QMD_CONFIG_DIR` /
    `QMD_CACHE_HOME`. Re-render them with `./setup.sh --regenerate` if in doubt.
-3. Docker mode: `vector embed unavailable, lexical index intact` in the log means the musl
-   sqlite-vec artifact is missing — rebuild the image with `QMD_NATIVE_TOOLCHAIN=1` (the
-   default).
+3. Docker mode: a `sqlite-vec:` line names why the vector extension was not swapped.
+   - `musl build absent`: the baked musl artifact is missing; rebuild the image with
+     `QMD_NATIVE_TOOLCHAIN=1` (the default).
+   - `no sqlite-vec-linux-<x64|arm64> package`: the managed prefix has no `vec0.so` for this
+     machine's architecture, and `found:` lists the `sqlite-vec-linux-*` directories it does have.
+     A directory of another architecture means the prefix was installed elsewhere (a carried
+     workspace); its native modules (`better-sqlite3`, `node-llama-cpp`) are built for that other
+     architecture too, so expect qmd itself to fail there, not only the vectors (the native modules
+     of a real prefix are ELF files for its own architecture; that qmd then fails on the other one
+     is inferred, not run). The name of the very package the line says is missing means that
+     directory has no `vec0.so` (an interrupted install). The remedy is the same: the prefix is a
+     cache, so delete `<qmd cache root>/pkg`; the next call that prepares it reinstalls it, native
+     build included (minutes; the install budget is `QMD_INSTALL_TIMEOUT`, 3600 s by default).
+     A restart does not prepare it: setup returns at once when its sentinel and index exist, and a
+     reindex skips it while the vault is unchanged and fully embedded. The qmd MCP server prepares
+     it every time it starts, with no lock and inside Claude Code's MCP start window
+     (`MCP_TIMEOUT`, 120000 ms by default), so after the deletion the first start of the agent is
+     the one that reinstalls, and a reinstall of minutes can exceed that window (inferred, not
+     run): expect the qmd MCP server to be reported as failed in that first session. Stop the
+     agent before deleting the directory (a running server or reindex has files open inside it),
+     and tell a finished install from a cut one by `<qmd cache root>/pkg/.installed-hash` (written
+     only after `bun install` succeeds) and an executable `<qmd cache root>/pkg/node_modules/.bin/qmd`:
+     while either is missing, the next call that prepares the prefix installs again.
+   - `no musl build for machine architecture`: the image is only built for x86_64 and aarch64.
+   - `swap failed (cp)`: the copy onto the package's `vec0.so` failed (permissions on
+     `<qmd cache root>/pkg`, or a full disk); fix that and the next call retries.
+
+   Where to read the line: the swap runs before qmd in every call, so it is the FIRST line of the
+   output that setup, reindex and migrate capture (`<qmd cache root>/tmp/qmd-setup.err`,
+   `reindex.err`, `embed-pass.err` and `qmd-migrate.err`, each overwritten by the next call). Only
+   the LAST 500 bytes of a failing step reach a log, and which log depends on the caller: setup's
+   go to the container log, the scheduled reindex's (and the migrate it runs) to
+   `scripts/heartbeat/logs/qmd-reindex.log`, and the reindex the file watcher triggers has none,
+   because `scripts/qmd_watch.sh` discards its output. Once qmd printed more than about 350 bytes
+   after that first line, the tail starts cutting into it from the left (the `found:` list
+   survives up to about 430 bytes, the whole line is gone from about 500), so read the `.err` file
+   with `head -n 1`. The qmd MCP server does not capture it: the line goes to the server's stderr.
 
 Never "fix" this by running `bunx @tobilu/qmd ...` by hand: it builds a *different* install than
 the managed prefix and re-triggers the tree-sitter build that BUG 4 was about.
