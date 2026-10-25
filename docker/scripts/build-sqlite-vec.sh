@@ -2,9 +2,11 @@
 # 017: compile the sqlite-vec loadable extension (vec0) for musl and bake it into
 # the image at /opt/agent-admin/sqlite-vec/vec0.so.
 #
-# The npm prebuilt (node_modules/sqlite-vec-linux-arm64/vec0.so) is a GLIBC binary
-# (needs ld-linux-aarch64.so.1 + fortified __memcpy_chk/__fread_chk@GLIBC_2.17) and
-# CANNOT dlopen under musl → `qmd embed`/`vsearch` fail. sqlite-vec is a single-file
+# The npm prebuilts (node_modules/sqlite-vec-linux-x64/vec0.so and
+# node_modules/sqlite-vec-linux-arm64/vec0.so) are GLIBC binaries (they need fortified
+# __memcpy_chk/__fread_chk symbols; on arm64 also ld-linux-aarch64.so.1 + GLIBC_2.17,
+# and on x64 the load fails with `__memcpy_chk: symbol not found`) and CANNOT dlopen
+# under musl → `qmd embed`/`vsearch` fail. sqlite-vec is a single-file
 # C amalgamation; compiling it for musl is exactly what upstream does to produce its
 # prebuilts, just retargeted. qmd_index.sh::_qmd_swap_sqlite_vec swaps this build
 # into the managed prefix at runtime.

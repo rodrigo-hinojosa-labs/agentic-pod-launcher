@@ -103,12 +103,14 @@ QMD_BIGSTACK_SO="${QMD_BIGSTACK_SO:-/opt/agent-admin/bigstack.so}"
 _qmd_prefix() { printf '%s\n' "$(qmd_cache_root)/pkg"; }
 
 # 017: the baked musl-compiled sqlite-vec extension (docker image only;
-# overridable for tests). sqlite-vec ships a GLIBC prebuilt
-# (node_modules/sqlite-vec-linux-arm64/vec0.so) that CANNOT dlopen under musl —
-# it needs ld-linux-aarch64.so.1 and fortified GLIBC_2.17 symbols (__memcpy_chk /
-# __fread_chk). The Dockerfile compiles a musl vec0.so at build time and bakes it
-# here; the swap below replaces the glibc prebuilt in the prefix. On glibc (local
-# mode) the artifact is absent and the prebuilt loads fine → no-op.
+# overridable for tests). sqlite-vec ships a GLIBC prebuilt per architecture
+# (node_modules/sqlite-vec-linux-x64/vec0.so and .../sqlite-vec-linux-arm64/vec0.so)
+# that CANNOT dlopen under musl: it needs the glibc loader (ld-linux-aarch64.so.1
+# on arm64) and fortified GLIBC symbols (__memcpy_chk / __fread_chk). The Dockerfile
+# compiles a musl vec0.so at build time, natively for the architecture of the image,
+# and bakes it here; the swap below replaces the glibc prebuilt of THAT architecture
+# in the prefix (042). On glibc (local mode) the artifact is absent and the prebuilt
+# loads fine → no-op.
 QMD_VEC0_MUSL_SO="${QMD_VEC0_MUSL_SO:-/opt/agent-admin/sqlite-vec/vec0.so}"
 
 # 0 iff the running libc is musl. Overridable for host tests via QMD_MUSL_LOADER
@@ -119,17 +121,49 @@ _qmd_on_musl() {
   ls /lib/ld-musl-*.so.1 >/dev/null 2>&1
 }
 
-# _qmd_swap_sqlite_vec PREFIX — on musl, replace the glibc sqlite-vec prebuilt in
-# the managed prefix with the baked musl build so `qmd embed`/`vsearch` can load
-# the vec0 extension. Gated by (a) musl libc and (b) the baked artifact existing;
-# on glibc the artifact is absent → no-op. Idempotent (cmp-skip). Fail-silent: on
-# musl with the artifact absent (e.g. QMD_NATIVE_TOOLCHAIN=0) log + continue — the
-# lexical index still works, only vector embed is unavailable (Principle IV).
+# 042: the machine architecture exactly as `uname -m` prints it (x86_64 and aarch64
+# on Linux, arm64 on macOS). Overridable for host tests via QMD_MACHINE_ARCH, which
+# wins even when it is empty, like QMD_MUSL_LOADER: the CI runs the oracle on ubuntu
+# amd64 and on macOS arm64, so a test cannot depend on what the host says. A test
+# seam, not an operator knob. A failing uname prints nothing (an unsupported
+# architecture) instead of aborting a caller that runs under `set -e`.
+_qmd_machine_arch() {
+  if [ -n "${QMD_MACHINE_ARCH+x}" ]; then printf '%s\n' "$QMD_MACHINE_ARCH"; return 0; fi
+  uname -m 2>/dev/null || true
+}
+
+# _qmd_swap_sqlite_vec PREFIX — on musl, replace the glibc sqlite-vec prebuilt of the
+# machine's architecture (x64 or arm64) in the managed prefix with the baked musl
+# build so `qmd embed`/`vsearch` can load the vec0 extension. Gated by (a) musl libc
+# and (b) the baked artifact existing; on glibc the artifact is absent → no-op (and
+# the architecture is never asked). Idempotent (cmp-skip). Always returns 0, writes at
+# most one file and never touches a package of another architecture. Fail-silent but
+# no longer mute (042, issue #107): when it cannot replace anything it says why, one
+# line per call — an architecture the image is not built for, no package of this
+# architecture in the prefix (listing the sqlite-vec-linux-* directories that are
+# there), the baked artifact absent (e.g. QMD_NATIVE_TOOLCHAIN=0) or a failed copy.
+# The lexical index still works, only vector embed is unavailable (Principle IV).
+# Contract: specs/042-qmd-sqlite-vec-x64/contracts/swap-sqlite-vec.md.
 _qmd_swap_sqlite_vec() {
-  local prefix="$1"
-  local target="$prefix/node_modules/sqlite-vec-linux-arm64/vec0.so"
-  _qmd_on_musl || return 0                 # glibc: prebuilt already loads
-  [ -e "$target" ] || return 0             # sqlite-vec package not present
+  local prefix="$1" arch suffix target dir found
+  _qmd_on_musl || return 0                 # glibc: prebuilt already loads, uname is not asked
+  arch="$(_qmd_machine_arch)"
+  case "$arch" in
+    x86_64|amd64)  suffix="x64" ;;
+    aarch64|arm64) suffix="arm64" ;;
+    *)             # defensive: the image is only built for x86_64 and aarch64
+      _qmd_log "sqlite-vec: no musl build for machine architecture '$arch' (supported: x86_64, aarch64) - vector embed unavailable, lexical index intact"
+      return 0 ;;
+  esac
+  target="$prefix/node_modules/sqlite-vec-linux-$suffix/vec0.so"
+  if [ ! -e "$target" ]; then              # sqlite-vec package of this architecture not present
+    found=""
+    for dir in "$prefix"/node_modules/sqlite-vec-linux-*; do
+      if [ -d "$dir" ]; then found="${found:+$found }${dir##*/}"; fi
+    done
+    _qmd_log "sqlite-vec: no sqlite-vec-linux-$suffix package in the managed prefix (found: ${found:-none}) - vector embed unavailable, lexical index intact"
+    return 0
+  fi
   if [ ! -f "$QMD_VEC0_MUSL_SO" ]; then
     _qmd_log "sqlite-vec: musl build absent ($QMD_VEC0_MUSL_SO) — vector embed unavailable, lexical index intact"
     return 0
