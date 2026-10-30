@@ -307,9 +307,12 @@ arnés y no por el producto**: `not ok 16 qmd real (041)` a los 0,3 s de empezar
 test perdió el `flock -n` de `.reindex.lock` contra otro proceso (`already running`, rc 0 por diseño) y el test supone el lock libre y no reintenta;
 el dueño del lock no está identificado; seguimiento en #112, que no reabre #107 ni mueve el interruptor. Como las noches lentas dejaron solo de 36 a
 50 s sobre el piso de 5 min, el operador decidió (29-10-2026) subir `timeout-minutes` de 30 a 45 en un PR aparte (#113). La T040 de 041 se registró en
-el mismo PR de documentos que estas noches. **Pendiente:** el merge de #113 y del PR de documentos (del operador), la feature que endurece el test
-contra la carrera de #112 y el bucle de #109, y la limpieza de T036 (imágenes de prueba, rama y worktree, con confirmación). **No mezclar** con la
-cobertura arm64 del nightly (feature aparte).
+el mismo PR de documentos que estas noches. **Cierre (29-10-2026):** el operador mergeó a las 22:54 (-03) #113 (el tope a 45, squash `0017765`) y #114 (los
+documentos, `cd8b74f`); `main` verificada: `timeout-minutes: 45` y `QMD_EMBED_DEFECT: ''` en el workflow, `VERSION` 0.29.0. T036 se hizo con
+autorización del operador: se borraron las ramas locales de 042, #113 y #114 tras comprobar que `main` ya traía todo lo que cada una cambiaba, y se
+quitaron las etiquetas de imagen `agent-admin:qmd-real` y `agent-admin:qmd-embed` y la variante `linux/amd64` de `alpine:3.24.1`; el caché de build
+y los modelos de 1,6 GB no se tocaron. **Pendiente:** la feature 043, que endurece el test contra la carrera de #112 y el bucle de #109, y el retiro
+del worktree de 042 cuando este cierre esté mergeado. **No mezclar** con la cobertura arm64 del nightly (feature aparte).
 
 **041-nightly-qmd-embed SPEC + CLARIFY + PLAN + TASKS + ANALYZE + IMPLEMENT LOCAL + EVIDENCIA REAL (2026-10-14/17; rama `041-nightly-qmd-embed` en el worktree
 `.claude/worktrees/041-nightly-qmd-embed`, desde main=`13cafc3`; CI y tests, sin bump de VERSION previsto; empujada el
