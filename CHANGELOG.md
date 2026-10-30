@@ -97,6 +97,20 @@
     correctness bug. Tracked as an optional follow-up (`--exclude`-ing
     `.graph/` from the inotify watch) rather than blocking this release.
 
+### Changed
+- **The nightly's job cap goes from 30 to 45 minutes — follow-up of `042-qmd-sqlite-vec-x64`** (no VERSION
+  change: CI only, the precedent of 019, 025, 039 and 041). `timeout-minutes` of the `e2e` job in
+  `.github/workflows/docker-e2e.yml` is now 45. With the embed phase running again, four scheduled nights
+  that passed (25 to 28-10-2026) lasted 24 min 10 s, 20 min 42 s, 24 min 24 s and 23 min 6 s, against the
+  17 to 21 minutes of the three manual runs that sized the cap in 042. The runners the schedule lands on
+  vary in speed by a factor of about 1.6 (the native build of `qmd real (016)`, a proxy for it, took 188 to
+  298 s), and the two slowest nights left 5 min 36 s and 5 min 50 s of margin against the 30-minute cap,
+  36 to 50 seconds above the floor that 042 set itself (a margin under 5 minutes raises the cap first). The
+  cap only bounds a hung job; a normal night takes the same time. The 042 entry below says the cap stays
+  at 30, which was true when it was written. A fifth night, 29-10, was red for an unrelated reason: the
+  reindex phase of `qmd real (041)` lost a start-up race for the reindex lock (#112, a harness defect,
+  not touched here).
+
 ### Fixed
 - **The sqlite-vec musl swap follows the machine's architecture, and says why when it cannot replace
   anything — `042-qmd-sqlite-vec-x64`** (VERSION 0.28.0 → 0.29.0; issue #107). qmd's vector search
