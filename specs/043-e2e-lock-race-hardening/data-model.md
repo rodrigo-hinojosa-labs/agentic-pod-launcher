@@ -84,13 +84,14 @@ Invariantes: solo `already running` se reintenta; la sonda nunca cambia el retor
 
 ## 3. Tabla de decisión del efecto (`qmd_e2e_reindex_effect`)
 
-El ayudante pide, dentro del contenedor y con `bash -lc`, una sola línea con el contenido del estado y el `vault_hash` actual del vault que resuelve el producto (`qmd_vault_dir /workspace/agent.yml`, el mismo directorio que hashea `_qmd_reindex_locked`, `qmd_index.sh:684`): `STATE absent` si `qmd-index.json` no existe, o `STATE present ESTADO PENDING HASH_ESTADO HASH_VAULT`, con campos sin espacios y `-` para un campo ausente o nulo. Un shell de login puede anteponer ruido, así que el host toma la última línea que empieza con `STATE` seguido de un espacio. El veredicto se decide en el host y en este orden: archivo ausente, estado, `pending` y hash:
+El ayudante pide, dentro del contenedor y con `bash -lc`, una sola línea con el contenido del estado y el `vault_hash` actual del vault que resuelve el producto (`qmd_vault_dir /workspace/agent.yml`, el mismo directorio que hashea `_qmd_reindex_locked`, `qmd_index.sh:684`): `STATE absent` si `qmd-index.json` no existe, o `STATE present ESTADO PENDING HASH_ESTADO HASH_VAULT`, con campos sin espacios y `-` para un campo ausente o nulo. Un shell de login puede anteponer ruido, así que el host toma la última línea que empieza con `STATE` seguido de un espacio. Las dos rutas que lee el script son las de la imagen (el archivo de estado por defecto de `qmd_state_file` y la librería bajo `/opt/agent-admin/scripts/lib`), y cada una cede ante una variable (`QMD_INDEX_STATE_FILE`, la costura del propio producto, y `QMD_E2E_LIB_DIR`) que en el contenedor no está definida: X6 las define para correr el mismo script en el host (revisión T033, H3). El veredicto se decide en el host y en este orden: archivo ausente, estado, `pending`, hash ilegible y hash:
 
 | Archivo de estado | `last_status` | `pending` | `hash` frente al `vault_hash` actual | Veredicto |
 | --- | --- | --- | --- | --- |
 | ausente | | | | falla: `qmd-index.json is absent` |
 | presente | `indexed` | 0 | igual | pasa |
 | presente | `skipped` | 0 | igual | pasa (otro reindex legítimo hizo el trabajo) |
+| presente | `indexed` o `skipped` | 0 | uno de los dos es `-` (no se pudo leer; por ejemplo, la librería no cargó y `vault_hash` no existe) | falla: `the hash could not be read` y nombra los dos campos; dos `-` no cuentan como iguales (revisión T033, H2) |
 | presente | `indexed` o `skipped` | 0 | distinto | falla: el índice no cubre el vault de ahora (nombra los dos hashes) |
 | presente | `indexed` o `skipped` | distinto de 0 o ausente | cualquiera | falla: `pending` |
 | presente | `error`, `partial` o `stalled` | cualquiera | cualquiera | falla: nombra el estado |
@@ -104,13 +105,13 @@ Todos salen por fd 3 como comentarios TAP, una línea por renglón y con el pref
 | --- | --- | --- |
 | R-BUSY | primera contención de una espera | `reindex lock busy (SITIO): the first attempt lost the lock; owners:` seguido de las líneas de la sonda |
 | R-EXPIRED | plazo vencido (retorno 1) | `reindex (SITIO): the reindex lock stayed busy for N s (M attempts) and the reindex never ran`, `last output of qmd-reindex:` con la salida del último intento y `lock owners at the end of the wait:` con la sonda |
-| R-EFFECT | efecto no cumplido | `reindex effect (SITIO):` seguido de la condición de la tabla 3; de la condición solo es CANON `qmd-index.json is absent`, y el oráculo afirma que el texto nombra el dato (el estado, `pending` o los dos hashes) |
+| R-EFFECT | efecto no cumplido | `reindex effect (SITIO):` seguido de la condición de la tabla 3; de la condición son CANON `qmd-index.json is absent` y `the hash could not be read`, y el oráculo afirma que el texto nombra el dato (el estado, `pending` o los dos hashes) |
 
 Las líneas de la sonda (`qmd_e2e_lock_owners`):
 
 | Caso | Línea |
 | --- | --- |
-| un retenedor | `pid N fd K cmd=[COMANDO]` (el `cmdline` con los NUL cambiados por espacios) |
+| un retenedor | `pid N fd K cmd=[COMANDO]` (el `cmdline` con los NUL y los saltos de línea cambiados por espacios, cortado a 120 caracteres: una línea por retenedor) |
 | ninguno | `none found` |
 | el archivo del lock no existe | `lock file absent (RUTA)` |
 | no hay `/proc` (macOS) | `no /proc here` |

@@ -98,6 +98,36 @@
     `.graph/` from the inotify watch) rather than blocking this release.
 
 ### Changed
+- **The manual reindex of the qmd e2e tests waits for the reindex lock instead of assuming it is
+  free — `043-e2e-lock-race-hardening`** (no VERSION change: tests only, the precedent of 019, 025,
+  039, 041 and the entry below; issues #112 and #109). The product takes `.reindex.lock` with
+  `flock -n`, and a run that loses it prints `already running` and exits 0 on purpose. The reindex
+  phase of `qmd real (041)` assumed the lock was free once the setup was done and went red that way
+  on the night of 29-10-2026 (run 40865079036, #112); the retry loop of test 13 of 037 aborted on its
+  first round when `engine-calls.log` did not exist yet (#109); and phase 3 of test 12 and the second
+  tick of test 13 made the same assumption. The four call sites now go through one helper,
+  `tests/helper-qmd-e2e.bash`: it runs the command of the 041 phase (`timeout -k 10 600 heartbeatctl
+  qmd-reindex`, its output in a file), which the call sites of tests 12 and 13 now share instead of
+  their bare call (the `timeout` of BusyBox 1.36.1, the `alpine:3.20` base of those two tests,
+  accepts `-k`: measured), retries only while the output says `already running`, every 2 s up to
+  120 s (`QMD_E2E_REINDEX_LOCK_WAIT_S` overrides the deadline), and fails naming the lock when the
+  deadline runs out. A lost lock exits 0, so the sites require the helper's return and not
+  the exit status alone. The 041 phase asserts the effect of the reindex on the index state (the
+  hash of the vault, `pending` 0, and `indexed` or `skipped`, the second when another legitimate
+  reindex did the work first) instead of the state of its own run. The first contention of each wait
+  writes who holds the lock (pid, descriptor and command, read from `/proc/*/fd` as `agent`, without
+  taking it) into the TAP stream, and the failure state of 041 gains the same probe and the first
+  three lines of `qmd-setup.err`; test 13 dumps the logs of its container when it fails anywhere.
+  Unchanged: the product and its `flock -n`, `docker/`, `scripts/`, `VERSION` 0.29.0 and the 49 e2e
+  tests of the nightly (`total=49`); with a free lock each call site still makes one attempt with no
+  wait. The host oracle is `tests/qmd-e2e-lock.bats` (26 tests: the helper driven by a fake exec and
+  a fake clock, the read of the effect that runs in the container run for real against a temporary
+  state file and vault, and the bodies of the call sites read from the file), with a catalog of 89
+  mutations for bash 5.x and 3.2, every one caught in both, so that each assertion on the bodies of
+  the call sites has one that turns it red, and two more for Linux
+  (`specs/043-e2e-lock-race-hardening/contracts/host-oracle.md`); the evidence with the lock held on
+  purpose is recorded in `specs/043-e2e-lock-race-hardening/tasks.md`. Worst case: 120 s of wait plus a reindex bounded at
+  600 s, which fits the 45-minute cap.
 - **The nightly's job cap goes from 30 to 45 minutes — follow-up of `042-qmd-sqlite-vec-x64`** (no VERSION
   change: CI only, the precedent of 019, 025, 039 and 041). `timeout-minutes` of the `e2e` job in
   `.github/workflows/docker-e2e.yml` is now 45. With the embed phase running again, four scheduled nights

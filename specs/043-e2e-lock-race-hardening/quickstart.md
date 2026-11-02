@@ -35,7 +35,7 @@ Esperado: la línea base medida en la etapa 0 más 26 pruebas por bash (1868 + 2
 
 ## V3. El catálogo de mutaciones (SC-004)
 
-Las 39 mutaciones de `contracts/host-oracle.md` (sección 5: M1 a M34 y M37 a M41) se aplican, una a una, sobre una copia aislada de los archivos que lee el oráculo, como usuario no root, con un corredor del scratchpad (no versionado). Esperado: las 39 caen en bash 5.x y en 3.2 con las pruebas previstas, sin sobrevivientes y sin mutaciones rotas (el texto a mutar aparece exactamente una vez). M35 y M36, para O1 y O2, solo pueden caer en Linux y corren en la pata Linux (`ubuntu:24.04`, bash 5.2).
+Las 89 mutaciones de `contracts/host-oracle.md` (sección 5: M1 a M34 y M37 a M91; el diseño traía 39, T032 sumó una por cada aserción de B1 a B6 que ninguna ponía en rojo como primera falla y la revisión de T033 sumó once) se aplican, una a una, sobre una copia aislada de los archivos que lee el oráculo (siete desde T033, porque X6 carga `scripts/lib/qmd_index.sh` y con él `backup_vault.sh` y `rag_obs.sh`), como usuario no root, con un corredor del scratchpad (no versionado). Esperado: las 89 caen en bash 5.x y en 3.2 con las pruebas previstas y por el comando previsto, sin sobrevivientes y sin mutaciones rotas (el texto a mutar aparece exactamente una vez). M35 y M36, para O1 y O2, solo pueden caer en Linux y corren en la pata Linux (`ubuntu:24.04`, bash 5.2).
 
 ## V4. La inyección de falla local (SC-001, SC-002, SC-008)
 

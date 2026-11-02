@@ -34,6 +34,8 @@ timeout -k 10 600 /usr/local/bin/heartbeatctl qmd-reindex > /tmp/qmd-reindex.out
 
 El archivo del contenedor se reescribe en cada intento y su contenido se reimprime, de modo que `$output` es siempre el del intento que acaba de correr. En busybox 1.37 el estado es 143 tras TERM y 137 tras KILL, nunca 124 (medido en 041); los tres se tratan como tope excedido.
 
+Para las pruebas 12 y 13 la orden es nueva: en `cd8b74f` llamaban a `heartbeatctl qmd-reindex` pelado, sin tope ni archivo. Las dos se construyen sobre `alpine:3.20` (BusyBox 1.36.1), y en esa versión `timeout` acepta `-k` (medido el 01-11-2026 en la revisión T033, hallazgo H1: el texto de uso trae `[-k KILL_SECS]` y `timeout -k 1 2 true` sale con 0). Los códigos 143 y 137 de esa versión no se midieron, y no hace falta: el motor falso de esas pruebas no se cuelga.
+
 ## 3. Reglas de decisión tras cada intento
 
 | Resultado del intento | Acción | Retorno |
@@ -68,7 +70,7 @@ El peor caso de la fase 041 es el plazo más un reindex acotado a 600 s; con el 
 | Sitio | Secuencia |
 | --- | --- |
 | Fase `reindex` de 041 | escribe `gatos.md` (sin cambio); `qmd_e2e_reindex_wait inc "reindex phase" \|\| rc=$?` con `rc` en 0; con 3 imprime el reporte de plazo vencido de 041 (`reindex: qmd-reindex did not finish in 600s ...`, con `REINDEX_STATUS`, `SECONDS - t0`, la espera por el lock en `REINDEX_WAITED_S` y el final de `REINDEX_OUTPUT`) y falla; con 1 falla (el reporte ya salió); con 0 exige `REINDEX_STATUS` igual a 0 y evalúa `qmd_e2e_reindex_effect inc "reindex phase"` en la condición de un `if` que termina en `false`; la afirmación de `pending` en 0 se conserva |
-| Prueba 13, bucle | cada vuelta del bucle de 45 s llama al ayudante con el retorno en `rc1` (en 0 al empezar la vuelta), termina en `false` con 1 o 3 y lee `engine-calls.log` con la lectura protegida por un `\|\| true`; el volcado de logs del contenedor ante cualquier falla de la prueba lo hace un bloque de `teardown`, que reemplaza al de `:500-503` |
+| Prueba 13, bucle | cada vuelta del bucle de 45 s llama al ayudante con el retorno en `rc1` (en 0 al empezar la vuelta), termina en `false` con 1 o 3, termina también en `false` si `REINDEX_STATUS` no es 0, después de escribir con `_qmd_e2e_note` el estado y la salida del intento (el reindex del producto sale siempre con 0, así que otro estado es del exec, del tope o del shell; revisión T033, H7), y lee `engine-calls.log` con la lectura protegida por un `\|\| true`; el volcado de logs del contenedor ante cualquier falla de la prueba lo hace un bloque de `teardown`, que reemplaza al de `:500-503` |
 | Prueba 13, segundo tick | `local rc2=0`; `qmd_e2e_reindex_wait in_container "test 13 tick 2" \|\| rc2=$?`; exige `[ "$rc2" -eq 0 ]` y `REINDEX_STATUS` 0 antes de comparar el conteo de `collection` (el estado solo no prueba que el tick corrió) |
 | Fase 3 de la prueba 12 | escribe la nota de cron (sin cambio); `local rc3=0`; `qmd_e2e_reindex_wait in_container "test 12 phase 3" \|\| rc3=$?`; exige `[ "$rc3" -eq 0 ]` y `REINDEX_STATUS` 0; conserva sus afirmaciones de `last_status` (`indexed` o `skipped`) y de `runs` |
 

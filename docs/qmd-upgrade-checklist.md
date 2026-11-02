@@ -137,7 +137,11 @@ Facts below (versions, defaults) are as of v0.12.0.
       log (free disk, the verdict of the container itself, the architecture, what `vec0-libc.sh`
       says about the vector extension, and the state and output files of the reindex and of the
       semantic search): read it before suspecting qmd. A reindex or a semantic search that does
-      not finish fails as its own phase, after 600 s or 300 s.
+      not finish fails as its own phase, after 600 s or 300 s. Since 043 the block also shows the
+      first three lines of `qmd-setup.err` and, under a heading of its own, who has `.reindex.lock`
+      open (pid, descriptor and command); and the reindex phase waits up to
+      `QMD_E2E_REINDEX_LOCK_WAIT_S` seconds (120 by default) for a lock held by another run, which
+      it notes in the TAP stream as `reindex lock busy (...)` together with the owner.
       Confirmatory hardware gate on Alpine musl aarch64 re-run.
 - [ ] Post-upgrade (both modes): run a full reindex against a real vault and confirm
       the state file `<workspace>/scripts/heartbeat/qmd-index.json` reaches

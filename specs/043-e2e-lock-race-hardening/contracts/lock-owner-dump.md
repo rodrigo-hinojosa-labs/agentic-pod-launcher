@@ -11,7 +11,7 @@ Qué hace el script, en orden:
 1. El archivo del lock es `${QMD_CACHE_HOME:-$HOME/.cache/qmd}/.reindex.lock`.
 2. Si `/proc` no es un directorio, imprime `no /proc here` y termina.
 3. Si el archivo no existe, imprime `lock file absent (RUTA)` y termina.
-4. Recorre `/proc/<pid>/fd/*`; por cada descriptor cuyo `readlink` es la ruta del lock, imprime `pid N fd K cmd=[CMDLINE]`, con el `cmdline` del proceso (los NUL cambiados por espacios) acortado a 120 caracteres. Los procesos que no puede leer (los de root dan `Permission denied` como usuario `agent`, medido) se saltan en silencio.
+4. Recorre `/proc/<pid>/fd/*`; por cada descriptor cuyo `readlink` es la ruta del lock, imprime `pid N fd K cmd=[CMDLINE]`, con el `cmdline` del proceso (los NUL y los saltos de línea cambiados por espacios) acortado a 120 caracteres. Los saltos de línea se agregaron el 01-11-2026: en la primera corrida de inyección de T035 con el cuerpo nuevo, el `sh -c` del retenedor llevaba un script de varias líneas, y como `cut` corta por línea, el reporte imprimió el script entero (20 renglones). Ahora O1 lo fija con un retenedor cuya línea de comando trae un salto, y M92 lo pone a prueba en la pata Linux. Los procesos que no puede leer se saltan en silencio: los de root, que dan `Permission denied` como usuario `agent` (medido), y uno que termina entre el hallazgo de su descriptor y la lectura de su `cmdline` (la revisión de T033, H6).
 5. Si no encontró ninguno, imprime `none found`.
 6. Como mucho 10 líneas, y estado de salida 0 siempre.
 
@@ -19,7 +19,7 @@ Lo que **no** hace: no toma el lock, no prueba con `flock -n` (tomarlo un instan
 
 | Caso | Línea de salida |
 | --- | --- |
-| uno o más retenedores | `pid N fd K cmd=[COMANDO]`, una por descriptor |
+| uno o más retenedores | `pid N fd K cmd=[COMANDO]`, una línea por descriptor, aunque el comando traiga saltos de línea |
 | ninguno | `none found` |
 | el archivo del lock no existe | `lock file absent (RUTA)` |
 | no hay `/proc` (macOS) | `no /proc here` |
