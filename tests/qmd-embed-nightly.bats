@@ -865,7 +865,8 @@ _vec_prefix() {
   names=$(awk '$1 == "_embed_phase" {printf "%s ", $2}' "$code")
   [ "$names" = "models-seed boot setup vector-extension reindex semantic-search mcp models-untouched " ]
   phases=(models-seed boot setup vector-extension reindex semantic-search mcp models-untouched)
-  anchors=('seed-marker' 'docker compose up -d' '.qmd-setup-ok' 'vec0-libc.sh' 'heartbeatctl qmd-reindex' 'vsearch' 'qmd-mcp' '-newer')
+  # 043: the reindex phase runs its reindex through the shared helper (tests/helper-qmd-e2e.bash)
+  anchors=('seed-marker' 'docker compose up -d' '.qmd-setup-ok' 'vec0-libc.sh' 'qmd_e2e_reindex_wait' 'vsearch' 'qmd-mcp' '-newer')
   total=$(wc -l < "$code" | tr -d ' ')
   while [ "$i" -lt 8 ]; do
     start=$(awk -v p="${phases[$i]}" '$1 == "_embed_phase" && $2 == p {print NR; exit}' "$code")
@@ -899,12 +900,15 @@ _vec_prefix() {
         _has "$seg" '[ "${output%% *}" = "MUSL" ]' ;;
       reindex)
         _has "$seg" '/.vault/wiki/concepts/gatos.md'
-        _has "$seg" "grep -qE 'ok|indexed'"
+        # 043: the phase asserts the effect of the reindex, not the state of its own run: a
+        # legitimate reindex that held the lock may have done the work and left `skipped`
+        _has "$seg" 'qmd_e2e_reindex_effect'
+        _lacks "$seg" "grep -qE 'ok|indexed'"
         _has "$seg" '[ "$output" = "0" ]'
-        # bounded inside the container: a hang ends THIS phase, not the whole job at its cap
-        _has "$seg" 'timeout -k 10 600'
+        # the cap (timeout -k 10 600) lives in the command of the helper since 043, which L1 of
+        # tests/qmd-e2e-lock.bats compares whole; the phase keeps the report of an attempt that
+        # hit it, and how long it ran: a 137 long before the limit is a kill from outside
         _has "$seg" 'qmd-reindex did not finish'
-        # and how long it ran: a 137 long before the limit is a kill from outside, not a hang
         _has "$seg" 'SECONDS - t0' ;;
       semantic-search)
         _has "$seg" "grep -qi 'gato'"

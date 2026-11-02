@@ -42,10 +42,13 @@
 #                      SUCCEEDS only if vec0 loaded (017), and a semantic vsearch returns
 #                      the right doc (SC-001). Closed gate = a skip with a reason.
 # Mirrors tests/docker-e2e-vault.bats (claude stub, compose-run gotchas).
+# 043: every manual reindex goes through qmd_e2e_reindex_wait (tests/helper-qmd-e2e.bash), which
+# waits for .reindex.lock instead of assuming it is free (#112, #109).
 #
 # Skipped by default (slow + requires Docker). Enable with DOCKER_E2E=1.
 
 load helper
+load helper-qmd-e2e
 
 setup() {
   if [ "${DOCKER_E2E:-0}" != "1" ]; then skip "set DOCKER_E2E=1 to run"; fi
@@ -60,6 +63,10 @@ setup() {
 # CPU, the vector extension the install laid down, the memory counters of its cgroup and the state
 # and output files of the reindex and of the semantic search (the cause of a failure that is not a
 # timeout lives there, and the workspace is gone when the job ends).
+# 043 (FR-009): also the first three lines of qmd-setup.err (the line of the sqlite-vec swap of 042
+# is the first one there, and the 500-byte tail that reaches the log pushes it out) and, in a
+# block of its own, who has .reindex.lock open (pid, fd and command, through the probe of
+# tests/helper-qmd-e2e.bash, as agent), so that a red the lock caused names its owner.
 # "qmd-embed" is the compose service of the 041 workspace (NAME in the test).
 _embed_failure_state() {
   local d="$TMP_TEST_DIR/agent-qmd-embed" ids
@@ -69,7 +76,9 @@ _embed_failure_state() {
   if [ -n "$ids" ]; then
     docker inspect --format '{{.Name}} oom={{.State.OOMKilled}} exit={{.State.ExitCode}} restarts={{.RestartCount}}' $ids 2>&1 | sed 's/^/# /' >&3 || true
   fi
-  (cd "$d" && docker compose exec -T -u agent qmd-embed sh -c 'uname -m; sh /workspace/.e2e/vec0-libc.sh "$HOME/.cache/qmd/pkg"; ls -la "$HOME"/.cache/qmd/pkg/node_modules/sqlite-vec-linux-* 2>&1; cat /sys/fs/cgroup/memory.events /sys/fs/cgroup/memory.peak 2>&1; echo "--- qmd-index.json"; cat /workspace/scripts/heartbeat/qmd-index.json 2>&1; echo "--- qmd-reindex.out (tail)"; tail -n 40 /tmp/qmd-reindex.out 2>&1; echo "--- vsearch.out (tail)"; tail -n 40 "$HOME/.cache/qmd/tmp/vsearch.out" 2>&1' 2>&1) | sed 's/^/# /' >&3 || true
+  (cd "$d" && docker compose exec -T -u agent qmd-embed sh -c 'uname -m; sh /workspace/.e2e/vec0-libc.sh "$HOME/.cache/qmd/pkg"; ls -la "$HOME"/.cache/qmd/pkg/node_modules/sqlite-vec-linux-* 2>&1; cat /sys/fs/cgroup/memory.events /sys/fs/cgroup/memory.peak 2>&1; echo "--- qmd-index.json"; cat /workspace/scripts/heartbeat/qmd-index.json 2>&1; echo "--- qmd-reindex.out (tail)"; tail -n 40 /tmp/qmd-reindex.out 2>&1; echo "--- vsearch.out (tail)"; tail -n 40 "$HOME/.cache/qmd/tmp/vsearch.out" 2>&1; echo "--- qmd-setup.err (first 3 lines)"; head -n 3 "$HOME/.cache/qmd/tmp/qmd-setup.err" 2>&1' 2>&1) | sed 's/^/# /' >&3 || true
+  echo "# --- reindex lock owners (who has .reindex.lock open: pid, fd and command) ---" >&3
+  (cd "$d" && docker compose exec -T -u agent qmd-embed sh -c "$QMD_E2E_LOCK_OWNERS_SH" 2>&1) | sed 's/^/# /' >&3 || true
 }
 
 teardown() {
@@ -81,6 +90,12 @@ teardown() {
     echo "# --- container logs of the failed embed test (last 150 lines) ---" >&3
     (cd "$TMP_TEST_DIR/agent-qmd-embed" && docker compose logs --tail=150 --no-color 2>&1) | sed 's/^/# /' >&3 || true
     _embed_failure_state
+  fi
+  # 043 (FR-006, #109): the migration test of 037 dumps the logs of its container when it fails,
+  # wherever it failed (the dump it had inside its body ran only when its loop found no migration).
+  if [ -z "${BATS_TEST_COMPLETED:-}" ] && [ -f "$TMP_TEST_DIR/agent-qmd-migrate-e2e/docker-compose.yml" ]; then
+    echo "# --- container logs of the failed migration test (last 100 lines) ---" >&3
+    (cd "$TMP_TEST_DIR/agent-qmd-migrate-e2e" && docker compose logs --tail=100 --no-color 2>&1) | sed 's/^/# /' >&3 || true
   fi
   # Sweep every per-test workspace under $TMP_TEST_DIR, not just $DEST: the
   # 037 tests use their OWN isolated D2/D3 dirs (distinct compose project
@@ -262,10 +277,15 @@ PY
   [[ "$output" == *"/usr/local/bin/bun"* ]]
 
   # ── Phase 3: cron-path reindex is deterministic (no inotify dependency) ──────
-  # Change the vault, run the EXACT command the cron line runs, assert state.
+  # Change the vault, run the EXACT command the cron line runs, assert state. 043: through
+  # qmd_e2e_reindex_wait, which waits for a lock held by another run (the */5 cron, the
+  # watcher) instead of assuming it is free: a first reindex that lost it would leave no
+  # qmd-index.json to assert on (the setup does not write it).
   in_container sh -c 'echo "# cron note" > /home/agent/.vault/cron-note.md'
-  run in_container /usr/local/bin/heartbeatctl qmd-reindex
-  [ "$status" -eq 0 ]
+  local rc3=0
+  qmd_e2e_reindex_wait in_container "test 12 phase 3" || rc3=$?
+  [ "$rc3" -eq 0 ]
+  [ "$REINDEX_STATUS" -eq 0 ]
   # last_status is "indexed" (hash changed) or "skipped" (on Linux the watcher
   # may have already reindexed this write) — both prove the cron path ran and
   # wrote a consistent state file. grep (not [[ ]]) so a miss fails the test.
@@ -395,8 +415,9 @@ PY
 # qmd_setup_if_needed skips entirely (its `[ ! -f index.sqlite ]` guard is
 # false) and the ONLY path that can migrate is _qmd_reindex_locked's own
 # pending-state check (T015) -- proving the real boot plumbing, not a stub
-# shortcut. `heartbeatctl qmd-reindex` is invoked directly (deterministic)
-# rather than waiting for the */5 cron backstop.
+# shortcut. The manual reindex is invoked through qmd_e2e_reindex_wait (043:
+# deterministic, and it waits for a lock held by another run) rather than
+# waiting for the */5 cron backstop.
 @test "qmd e2e (037): a legacy vault-root collection migrates to wiki/-only on the first reindex tick" {
   local D2="$TMP_TEST_DIR/agent-qmd-migrate-e2e" N2="qmd-migrate-e2e"
   mkdir -p "$D2"
@@ -484,23 +505,31 @@ PY
   [[ "$output" == *"SKIPPED"* ]]
 
   # qmd_setup_if_needed and qmd_reindex share the SAME .reindex.lock
-  # (non-blocking flock -n): the backgrounded boot-time setup check briefly
-  # holds it just to confirm index.sqlite already exists and no-op. If this
-  # manual reindex races that brief hold, it loses the lock, fail-silently
-  # "skips" (exit 91 internally, wrapped to return 0), and no migration
-  # happens THIS tick -- exit 0 alone does not prove the work ran. Retry
-  # until the engine log actually shows a migration call.
-  local retry_deadline=$(( $(date +%s) + 45 )) calls=""
+  # (non-blocking flock -n). 043: a manual reindex that loses it does nothing
+  # and exits 0 (`already running`), so each tick goes through
+  # qmd_e2e_reindex_wait (tests/helper-qmd-e2e.bash), which waits for the
+  # holder and retries that skip only; the loop below stays only for the
+  # engine log and the migration call to show up, and its read of the log
+  # tolerates a log that does not exist yet (#109: a bare `cat` there aborted
+  # the test on its first round). The product's reindex always exits 0, so a
+  # tick that ran but exited otherwise (the exec, the cap, the shell) ends the
+  # loop with its output instead of retrying in silence. If the test fails
+  # anywhere, teardown dumps the logs of its container.
+  local retry_deadline=$(( $(date +%s) + 45 )) calls="" rc1=0
   while [ "$(date +%s)" -lt "$retry_deadline" ]; do
-    in_container /usr/local/bin/heartbeatctl qmd-reindex >/dev/null 2>&1
-    calls=$(in_container sh -c 'cat "$HOME/.cache/qmd/engine-calls.log" 2>/dev/null')
+    rc1=0
+    qmd_e2e_reindex_wait in_container "test 13 tick 1" || rc1=$?
+    if [ "$rc1" -ne 0 ]; then
+      false
+    fi
+    if [ "$REINDEX_STATUS" -ne 0 ]; then
+      _qmd_e2e_note "test 13 tick 1: qmd-reindex exited $REINDEX_STATUS; its output:" "$REINDEX_OUTPUT"
+      false
+    fi
+    calls=$(in_container sh -c 'cat "$HOME/.cache/qmd/engine-calls.log" 2>/dev/null' || true)
     echo "$calls" | grep -q '^collection remove' && break
     sleep 2
   done
-  if ! echo "$calls" | grep -q '^collection remove'; then
-    echo "--- container logs ---" >&2
-    (cd "$D2" && docker compose logs --tail=100 2>&1) >&2 || true
-  fi
   # order: remove -> add (wiki/-only mask) -> update -> cleanup (sentinel
   # write happens between add/update and cleanup, in-process — not an engine
   # call, so it can't appear in this log; checked separately below).
@@ -519,10 +548,13 @@ PY
   run in_container sh -c 'jq -r .migration /workspace/scripts/heartbeat/qmd-index.json'
   [ "$output" = "done" ]
 
-  # a second tick must NOT migrate again (idempotent) — no new remove/add.
-  local calls_before; calls_before=$(echo "$calls" | grep -c '^collection')
-  run in_container /usr/local/bin/heartbeatctl qmd-reindex
-  [ "$status" -eq 0 ]
+  # a second tick must NOT migrate again (idempotent) -- no new remove/add.
+  # 043 (FR-007): the tick must have run for that to mean anything, and a tick
+  # that lost the lock exits 0 too: only the return of the helper proves it ran.
+  local calls_before rc2=0; calls_before=$(echo "$calls" | grep -c '^collection')
+  qmd_e2e_reindex_wait in_container "test 13 tick 2" || rc2=$?
+  [ "$rc2" -eq 0 ]
+  [ "$REINDEX_STATUS" -eq 0 ]
   run in_container sh -c 'grep -c "^collection" "$HOME/.cache/qmd/engine-calls.log"'
   [ "$output" = "$calls_before" ]
 }
@@ -859,27 +891,33 @@ _embed_tail() { printf '%s\n' "$1" | tail -n "${2:-12}"; }
   [ "${output%% *}" = "MUSL" ]
 
   _embed_phase reindex
-  # 017 (SC-001): a SEMANTIC query returns the right doc — vec0 stores/retrieves
-  # vectors and the query embeds too. Add a distinct doc UNDER wiki/ (the only part of the
-  # vault the collection covers), reindex (the lock is free now setup is done), and assert
-  # last_status=indexed (only reachable if vec0 LOADED — a glibc prebuilt → "sqlite-vec
-  # unavailable" → embed error).
+  # 017 (SC-001): a SEMANTIC query returns the right doc: vec0 stores and retrieves vectors and
+  # the query embeds too. Add a distinct doc UNDER wiki/ (the only part of the vault the
+  # collection covers), reindex, and assert the effect (only reachable if vec0 LOADED: a glibc
+  # prebuilt makes the embed fail with "sqlite-vec unavailable"). 043: the lock is NOT
+  # necessarily free once the setup is done (the watcher or a descendant of the setup that kept
+  # its descriptor 9 may hold it, the cron of this workspace being pinned to 31 February; the
+  # night of 29-10-2026 lost it, #112), so the
+  # reindex goes through qmd_e2e_reindex_wait, which waits for the holder and retries
+  # `already running` only (tests/helper-qmd-e2e.bash, where the measured cap of each attempt
+  # lives), and the phase asserts the effect, not the state of its own run: a reindex that ran
+  # first leaves `skipped` with the page already indexed.
   inc sh -c 'printf -- "---\ntitle: gatos\n---\nEl gato duerme sobre el teclado del computador.\n" > /home/agent/.vault/wiki/concepts/gatos.md'
-  # Bounded inside the container, with its output in a file: a reindex that hangs must end THIS
-  # phase with its name (a job cancelled by its cap names nothing and loses the rest of the
-  # suite), and a child that outlives the timeout cannot hold the pipe of docker exec open.
-  # Measured on busybox 1.37 (Alpine 3.24): a plain timeout sends TERM only, so a child that
-  # ignores it blocks the timeout as long as the child lives, and -k 10 adds the KILL; the exit
-  # status is 143 after TERM and 137 after KILL (GNU timeout would say 124).
-  local t0=$SECONDS
-  run inc sh -c 'timeout -k 10 600 /usr/local/bin/heartbeatctl qmd-reindex > /tmp/qmd-reindex.out 2>&1; rc=$?; cat /tmp/qmd-reindex.out; exit $rc'
-  if [ "$status" -eq 124 ] || [ "$status" -eq 137 ] || [ "$status" -eq 143 ]; then
-    _embed_note "reindex: qmd-reindex did not finish in 600s (rc $status after $((SECONDS - t0))s; a 137 long before the limit is a kill from outside, see oom= in the failure state). Last lines of its output:"$'\n'"$(_embed_tail "$output" 12)"
+  local t0=$SECONDS rc=0
+  qmd_e2e_reindex_wait inc "reindex phase" || rc=$?
+  if [ "$rc" -eq 3 ]; then
+    _embed_note "reindex: qmd-reindex did not finish in 600s (rc $REINDEX_STATUS after $((SECONDS - t0))s, ${REINDEX_WAITED_S}s of them waiting for the lock; a 137 long before the limit is a kill from outside, see oom= in the failure state). Last lines of its output:"$'\n'"$(_embed_tail "$REINDEX_OUTPUT" 12)"
     false
   fi
-  [ "$status" -eq 0 ]
-  run inc sh -c 'jq -r .last_status /workspace/scripts/heartbeat/qmd-index.json'
-  echo "$output" | grep -qE 'ok|indexed'
+  if [ "$rc" -ne 0 ]; then
+    # R-EXPIRED is already out: the lock stayed busy until the deadline
+    false
+  fi
+  [ "$REINDEX_STATUS" -eq 0 ]
+  if ! qmd_e2e_reindex_effect inc "reindex phase"; then
+    # R-EFFECT is already out
+    false
+  fi
   # 018: a small e2e vault embeds within a single pass, so the completion
   # loop drives pending to 0 in this run (not the multi-pass scenario a
   # multi-thousand-chunk vault needs — that is the ferrari hardware gate).
