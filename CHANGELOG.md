@@ -124,10 +124,17 @@
   a fake clock, the read of the effect that runs in the container run for real against a temporary
   state file and vault, and the bodies of the call sites read from the file), with a catalog of 89
   mutations for bash 5.x and 3.2, every one caught in both, so that each assertion on the bodies of
-  the call sites has one that turns it red, and two more for Linux
-  (`specs/043-e2e-lock-race-hardening/contracts/host-oracle.md`); the evidence with the lock held on
-  purpose is recorded in `specs/043-e2e-lock-race-hardening/tasks.md`. Worst case: 120 s of wait plus a reindex bounded at
-  600 s, which fits the 45-minute cap.
+  the call sites has one that turns it red, and three more for Linux
+  (`specs/043-e2e-lock-race-hardening/contracts/host-oracle.md`). Worst case: 120 s of wait plus a
+  reindex bounded at 600 s, which fits the 45-minute cap. The evidence is recorded in
+  `specs/043-e2e-lock-race-hardening/tasks.md`: with the lock held on purpose, the current bodies went
+  red with the signatures of #109 and #112 and the new ones green; the full DOCKER_E2E passed locally
+  on arm64, and so did one manual run of the nightly workflow on amd64 (run 41366019180: 49 of 49 in
+  a 24 min 28 s job, test 16 without its setup in 21.8 s), in which the first attempt of the 041
+  reindex phase lost the lock and the retry absorbed it. The holders the reports named (test 13,
+  locally and in CI) are the watchdog children of BusyBox `timeout`, which the product puts around
+  every qmd call and which keep descriptor 9 for about a second after each locked section (measured;
+  #116, filed apart and not fixed here). The second boot race of test 13 is #117.
 - **The nightly's job cap goes from 30 to 45 minutes — follow-up of `042-qmd-sqlite-vec-x64`** (no VERSION
   change: CI only, the precedent of 019, 025, 039 and 041). `timeout-minutes` of the `e2e` job in
   `.github/workflows/docker-e2e.yml` is now 45. With the embed phase running again, four scheduled nights
