@@ -241,9 +241,10 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 - **A container is a usable Linux oracle, but only if it matches the runner.** Reproducing a CI-only failure locally works — the `E2BIG` above was reproduced RED/GREEN in Alpine in minutes — but the *full suite* under a naive `docker run` lies: as **root** every "unwritable directory" test fails (root ignores the mode bits), and Alpine's busybox/GNU mix fails more. Measured on the same tree: Alpine-as-root reported 20 reds, Debian-as-non-root reported 1, CI reported 2. A faithful replica is `debian:bookworm` + a non-root user + the deps the workflow installs (`age`, `gettext-base` for `envsubst`, `tmux`, `busybox`) + the pinned `yq` — and copy the repo in rather than bind-mounting it writable, or the host tree ends up owned by root. Inherited **signal dispositions** are part of "matches the runner" too: a plain `docker run` starts bats with SIGPIPE at its default, while the Actions runner hands it a process tree that *ignores* SIGPIPE (an ignored signal survives `exec`, and a bash script cannot reset it — `trap - PIPE` does nothing, measured on 3.2.57 and 5.3.15). `tests/ci-workflows.bats` O2 passed in an Ubuntu 24.04 container (14 of 14) and failed on the first CI run of PR #102 for exactly that reason: its fake `docker` is a bash script, whose `echo` then reports `write error: Broken pipe` and exits 0 instead of dying with 141, while the real Go `docker` dies of SIGPIPE whichever disposition it inherits (measured with `gh`: 141 either way). Reproduce that environment locally with `perl -e '$SIG{PIPE}="IGNORE"; exec @ARGV' bats …`; the harness now resets the signal with `perl` before launching the step.
 
 <!-- SPECKIT START -->
-**043-e2e-lock-race-hardening SPEC + CLARIFY + PLAN + TASKS + ANALYZE + IMPLEMENT + EVIDENCIA EN CI (2026-10-29/11-01; rama
+**043-e2e-lock-race-hardening SPEC + CLARIFY + PLAN + TASKS + ANALYZE + IMPLEMENT + EVIDENCIA EN CI + MERGE (2026-10-29/11-02; rama
 `043-e2e-lock-race-hardening` en el worktree `.claude/worktrees/043-e2e-lock-race-hardening`, desde `origin/main` = `cd8b74f`,
-empujada el 01-11-2026; solo pruebas, sin bump de VERSION 0.29.0).** Origen: la noche roja del 29-10-2026 (run 40865079036, #112: la fase `reindex`
+empujada el 01-11-2026 y mergeada por el operador ese día como el squash `ef2f4cf` del PR #118, que cerró #109 y #112; solo pruebas,
+sin bump de VERSION 0.29.0).** Origen: la noche roja del 29-10-2026 (run 40865079036, #112: la fase `reindex`
 de `qmd real (041)` perdió el `flock -n` de `.reindex.lock` contra otro proceso, y el test suponía el lock libre apenas
 terminaba el setup) y #109 (el bucle de reintento de la prueba 13 de 037 abortaba en su primera vuelta si `engine-calls.log`
 aún no existía). **Diseño:** un ayudante compartido, `tests/helper-qmd-e2e.bash`, que `tests/docker-e2e-qmd.bats` carga con
@@ -269,7 +270,7 @@ cuerpos de los sitios, leídos del archivo; y D1 y D2 como guardias. El catálog
 detiene en la primera aserción que falla y cada aserción de los cuerpos necesita la suya), más M35, M36 y M92 en una pata Linux
 (`ubuntu:24.04`, bash 5.2.21, bats 1.11.0, uid 1000). P1 de `tests/qmd-embed-nightly.bats` quedó enmendada: la fase
 `reindex` exige el ayudante y el efecto, y el tope lo guarda L1. Esperado del host: la línea base medida más 26, o sea
-1868 + 26 = **1894** por bash (T003 dio 1868 de 1868 en bash 5.3.15 y 3.2.57). **Estado (01-11-2026; detalle en el
+1868 + 26 = **1894** por bash (T003 dio 1868 de 1868 en bash 5.3.15 y 3.2.57). **Estado (02-11-2026; detalle en el
 Registro de tasks.md):**
 
 - hecho en local:
@@ -280,16 +281,15 @@ Registro de tasks.md):**
   - el DOCKER_E2E completo en arm64 (T037: 5 de 5 en 763 s);
   - el gate (T038): 1894 de 1894 en los dos bash, y los oráculos con SIGPIPE ignorada en bats 1.13.0 y 1.11.0;
 - hecho fuera del equipo:
-  - los commits `f1da9d8` (docs) y `a757fe7` (test), con la rama empujada;
+  - los commits `f1da9d8` (docs), `a757fe7` (test) y `d856d67` (docs), con la rama empujada;
   - una corrida manual del workflow (run 41366019180, amd64): 49 de 49 en un job de 24 min 28 s, con un margen de 20 min 32 s, y la 041 sin `setup` en 21,8 s, bajo el tope de 24 s de SC-003. En esa corrida, la fase `reindex` de la 041 perdió el lock en su primer intento, con el dueño ya fuera a los 0,5 s (la firma de #112), y el reintento del ayudante la absorbió;
+  - el PR #118, con su CI en verde (1894 de 1894 en ubuntu, bash 5.2.21, y en macOS, bash 3.2.57), y el merge del operador (01-11-2026 23:49 -03): `main` es la cabeza validada más #115, que entró 19 s antes y solo toca documentos, con `tests/` idéntico; la CI de `main` quedó en verde (1894 por brazo, con 49 y 57 saltadas: frente a `cd8b74f` solo suma O1 en macOS);
 - hallazgos de producto, fuera de alcance (FR-013):
   - #116: el vigilante del `timeout` de BusyBox retiene el lock cerca de 1 s después de cada sección; la evidencia de T035, T037 y T041 está en sus comentarios, junto con una corrección del propio issue;
   - #117: la segunda carrera de arranque de la prueba 13;
 - faltan:
-  - el PR, con `Closes #109` y `Closes #112`, y su CI;
-  - el merge, que es del operador;
-  - el registro de las diez noches, en un PR de documentos aparte;
-  - la limpieza.
+  - el registro de las diez noches posteriores al merge (T046), en un segundo PR de documentos;
+  - la limpieza de la rama y el worktree de 043 (T047).
 
 **042-qmd-sqlite-vec-x64 SPEC + CLARIFY + PLAN + TASKS + ANALYZE + IMPLEMENT + REVISIÓN INDEPENDIENTE + EVIDENCIA EN CI + MERGE + NOCTURNAS (2026-10-18/29; rama
 `042-qmd-sqlite-vec-x64` en el worktree `.claude/worktrees/042-qmd-sqlite-vec-x64`, desde main=`0fc08a8` v0.28.0→**0.29.0**; `7a68c4f` con
@@ -362,8 +362,9 @@ el mismo PR de documentos que estas noches. **Cierre (29-10-2026):** el operador
 documentos, `cd8b74f`); `main` verificada: `timeout-minutes: 45` y `QMD_EMBED_DEFECT: ''` en el workflow, `VERSION` 0.29.0. T036 se hizo con
 autorización del operador: se borraron las ramas locales de 042, #113 y #114 tras comprobar que `main` ya traía todo lo que cada una cambiaba, y se
 quitaron las etiquetas de imagen `agent-admin:qmd-real` y `agent-admin:qmd-embed` y la variante `linux/amd64` de `alpine:3.24.1`; el caché de build
-y los modelos de 1,6 GB no se tocaron. **Pendiente:** la feature 043, que endurece el test contra la carrera de #112 y el bucle de #109, y el retiro
-del worktree de 042 cuando este cierre esté mergeado. **No mezclar** con la cobertura arm64 del nightly (feature aparte).
+y los modelos de 1,6 GB no se tocaron. **Pendiente:** el retiro del worktree de 042, porque este cierre ya está mergeado (#115, 01-11-2026); la feature
+043, que endurece el test contra la carrera de #112 y el bucle de #109, se mergeó el mismo día (#118). **No mezclar** con la cobertura arm64 del
+nightly (feature aparte).
 
 **041-nightly-qmd-embed SPEC + CLARIFY + PLAN + TASKS + ANALYZE + IMPLEMENT LOCAL + EVIDENCIA REAL (2026-10-14/17; rama `041-nightly-qmd-embed` en el worktree
 `.claude/worktrees/041-nightly-qmd-embed`, desde main=`13cafc3`; CI y tests, sin bump de VERSION previsto; empujada el
