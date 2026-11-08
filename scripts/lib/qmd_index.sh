@@ -476,6 +476,8 @@ qmd_setup_if_needed() {
     (
       if ! flock -n 9; then _qmd_log "setup: already running — skip"; exit 91; fi
       _qmd_setup_locked "$agent_yml" "$cache_root" "$vault_dir" "$sentinel"
+      # 044 (#116): BusyBox timeout leaves a watchdog holding fd 9; flock(2) belongs to the open file description, so release it as the last step (not in a trap: a signal must leave it held while a child still runs).
+      flock -u 9 2>/dev/null || true
     ) 9>"$lock" || rc=$?
     [ "$rc" -eq 91 ] && return 0
     return 0
@@ -561,6 +563,8 @@ qmd_reindex() {
     (
       if ! flock -n 9; then _qmd_log "reindex: already running — skip"; exit 91; fi
       _qmd_reindex_locked "$agent_yml" "$vault_dir"
+      # 044 (#116): same as in qmd_setup_if_needed: release fd 9 as the last step so a BusyBox timeout watchdog cannot keep the lock after the section ends.
+      flock -u 9 2>/dev/null || true
     ) 9>"$lock" || rc=$?
     [ "$rc" -eq 91 ] && return 0
     return 0
