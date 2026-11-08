@@ -344,7 +344,7 @@ Foundational (fixtures y G2) -> US1 (P1) -> US2 (P1) -> Polish (documentos) -> U
     - `e2e summary:`, con `total=49 executed=49 skipped=0 failed=0` como esperado;
     - si apareció `reindex lock busy` en el segundo tick de la prueba 13, y quién tenía el lock.
   - **Ante un rojo**: se clasifica como del arnés, del producto o de infraestructura, con su fragmento de log, antes de seguir.
-- [ ] T031 [P] [US3] COMPUERTA (issue; sale del equipo): proponer al operador un issue propio para el hallazgo lateral de `research.md` D5. La migración manual corre sin el lock:
+- [X] T031 [P] [US3] COMPUERTA (issue; sale del equipo): proponer al operador un issue propio para el hallazgo lateral de `research.md` D5. La migración manual corre sin el lock:
   - en docker, `docker/scripts/heartbeatctl:1157-1194`;
   - en local, `scripts/agentctl:1703-1709` y `modules/local-qmd-reindex.sh.tpl:54-61`;
   - contra lo que dice el comentario de `scripts/lib/qmd_index.sh:336-340`.
@@ -607,5 +607,5 @@ Todo se mergea en un solo PR, y solo después de la evidencia: ninguna fase inte
   - **Contención del lock (SC-005, observación)**: el log no contiene `R-BUSY`, `reindex lock busy`, `already running`, `R-EXPIRED` ni un dueño `timeout 900 .../qmd`. En las corridas de 043 y en las nocturnas del 02 al 06-11 esa línea sí aparecía (de 5 a 7 dueños en el segundo tick de la prueba 13); aquí la prueba 13 corrió sin perder el lock. Es una corrida, así que sigue siendo una observación y no una demostración; las nocturnas siguientes al merge (T035) dirán si se sostiene.
   - **No medido**: el tiempo de la fase `setup` de la 041 y su comparación con el tope de SC-003 de 043 no salen en el log de una corrida verde.
 - **Cifras en los documentos (T032, 08-11-2026, con la autorización del operador)**: `origin/main` sigue en `8cb45e4` (la base de la rama; no hizo falta rebasar) y `VERSION` vale 0.30.0 frente a 0.29.0 de `origin/main`. Las cifras de T026, T027 y T030 entraron en la viñeta de `CHANGELOG.md` y en el bloque de 044 de `CLAUDE.md`. Byte audit de las 1977 líneas agregadas frente a `origin/main`: 0 marcas combinantes, caracteres de control ni símbolos raros. `tests/qmd-lock-release.bats` y `tests/version-stamp.bats`: 16 de 16 en bash 5.3.15 y en 3.2.57. El commit `docs:` de este paso lleva estas ediciones y el Registro de T028 a T032; se empuja por el camino de T029.
-- **Issue lateral (T031)**: Pendiente.
+- **Issue lateral (T031, 08-11-2026, con la autorización del operador)**: abierto el issue #120 (`qmd-migrate manual corre qmd_migrate_collection sin tomar .reindex.lock`), con las cuatro ubicaciones de código de `research.md` D5, la consecuencia marcada como lectura de código sin medir, la aclaración de que no es #116 ni lo toca 044, y una propuesta no validada. Sin arreglo en esta feature (Out of Scope).
 - **PR, merge y noches (T033 a T035)**: Pendiente.
