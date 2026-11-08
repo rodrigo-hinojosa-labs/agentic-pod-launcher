@@ -269,8 +269,11 @@ y verde en el host, en los dos bash, con su ROJO visto antes; la pata Linux (uti
 catálogo de mutaciones (M0 a M12) están hechos, sin sobrevivientes, la revisión independiente se atendió y la
 confirmación con el `timeout` real de BusyBox está registrada (huella del código `5a96c4b43ab12e52`). El DOCKER_E2E
 local en arm64 dio 5 de 5 en 13 min 4 s (T026) y el gate dio 1904 de 1904 en bash 5.3.15 y en 3.2.57, con stderr
-vacío y las mismas saltadas que la línea base (T027), todo sobre la misma huella. Falta lo que sale del equipo
-(commit, push, corrida de CI, PR), con COMPUERTA; el arreglo y su oráculo no están commiteados todavía. No proponer el merge antes de la décima noche de T046 de 043 (hacia el 11-11-2026). Artefactos:
+vacío y las mismas saltadas que la línea base (T027), todo sobre la misma huella. La rama se empujó el 08-11-2026
+(`d49d8ea`, con `a8675be` de documentos antes) y una corrida manual del workflow `docker-e2e` (run 42508121834,
+amd64) dio 49 de 49 en un job de 19 min 12 s, con un margen de 25 min 48 s sobre el tope de 45 y la 041 ejecutada;
+la sonda de 043 no reportó contención del lock en la prueba 13 (una corrida: observación, no demostración). Falta
+el issue lateral (T031), el PR y el merge, con COMPUERTA, y no antes de la décima noche de T046 de 043. No proponer el merge antes de la décima noche de T046 de 043 (hacia el 11-11-2026). Artefactos:
 `specs/044-qmd-lock-fd-leak/{spec,plan,research,data-model,quickstart,tasks}.md` +
 `contracts/{lock-release,host-oracle,evidence-protocol}.md`. **Hallazgo lateral, fuera de alcance:** la migración
 manual (`heartbeatctl qmd-migrate`) llama a `qmd_migrate_collection` SIN el lock, aunque el comentario de la

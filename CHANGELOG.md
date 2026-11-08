@@ -182,7 +182,11 @@
     setup, reindex and reindex-with-migration go from 10, about a second, to 0, three repetitions per
     cell; GNU `timeout` never had the defect. A hung call is still cut by `QMD_CMD_TIMEOUT` with the same
     exit code before and after (143 on BusyBox, 124 on GNU), and a SIGTERM to the section subshell still
-    leaves the lock held while the engine lives. The DOCKER_E2E and CI figures are recorded in
+    leaves the lock held while the engine lives. The host suite gives 1904 of 1904 in bash 5.3.15 and in
+    3.2.57 (the 1894 of the baseline plus the ten new tests). The local DOCKER_E2E of qmd on arm64 gives 5
+    of 5 in 13 min 4 s, and a manual run of the docker-e2e workflow on the branch (amd64, run 42508121834)
+    gives 49 of 49 in a 19 min 12 s job, with `qmd real (041)` executed and no lock contention reported by
+    the 043 probe in test 13 (one run: an observation, not a proof). The detail is in
     `specs/044-qmd-lock-fd-leak/tasks.md`.
   - **Fleet**: rebuild the image with the normal upgrade; nothing else to do.
 

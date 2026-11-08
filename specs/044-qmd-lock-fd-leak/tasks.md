@@ -324,7 +324,7 @@ Foundational (fixtures y G2) -> US1 (P1) -> US2 (P1) -> Polish (documentos) -> U
     - la comprobación estructural de T014, repetida sobre el árbol congelado.
   - **Que no quede nada**: tras las corridas, ningún `sleep` de vigilante falso vivo.
   - Registrar.
-- [ ] T028 [US3] COMPUERTA (commits locales): dos commits sobre la rama, en español, ASCII, en imperativo, sin atribución y con la identidad por variables de entorno:
+- [X] T028 [US3] COMPUERTA (commits locales): dos commits sobre la rama, en español, ASCII, en imperativo, sin atribución y con la identidad por variables de entorno:
   - **El commit 1, `docs:`**: `CLAUDE.md`, la documentación de T021 si cambió y lo que cambió en `specs/044-qmd-lock-fd-leak/` desde T002, entre ello las marcas y el Registro de este archivo.
   - **El commit 2, `fix:`**: `scripts/lib/qmd_index.sh`, `tests/qmd-lock-release.bats`, `tests/fixtures/qmd-lock/timeout`, `tests/fixtures/qmd-lock/flock`, `CHANGELOG.md` y `VERSION`, juntos porque el oráculo y el arreglo se prueban entre sí.
   - **Los modos** (`git ls-files -s`): las dos fixtures en 100755, y el resto de los archivos existentes con su modo de siempre.
@@ -332,10 +332,10 @@ Foundational (fixtures y G2) -> US1 (P1) -> US2 (P1) -> Polish (documentos) -> U
     - el commit 1 con `tests/qmd-index.bats` en verde;
     - el commit 2 con `tests/qmd-lock-release.bats` en 10 de 10 y `tests/version-stamp.bats` en verde.
   - Sin push.
-- [ ] T029 [US3] COMPUERTA (push): empujar `044-qmd-lock-fd-leak` por HTTPS con el helper de `gh` y sin force, con `git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push https://github.com/rodrigo-hinojosa-labs/agentic-pod-launcher.git 044-qmd-lock-fd-leak`.
+- [X] T029 [US3] COMPUERTA (push): empujar `044-qmd-lock-fd-leak` por HTTPS con el helper de `gh` y sin force, con `git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push https://github.com/rodrigo-hinojosa-labs/agentic-pod-launcher.git 044-qmd-lock-fd-leak`.
   - Verificar con `git ls-remote`, por el mismo camino, que la cabeza remota es la local.
   - El push de una rama sin PR no dispara `test.yml` ni `shellcheck.yml`.
-- [ ] T030 [US3] COMPUERTA (dispatch, FR-009): `gh workflow run docker-e2e.yml --ref 044-qmd-lock-fd-leak`. Seguir la corrida con un monitor del scratchpad y, al terminar, descargar el log.
+- [X] T030 [US3] COMPUERTA (dispatch, FR-009): `gh workflow run docker-e2e.yml --ref 044-qmd-lock-fd-leak`. Seguir la corrida con un monitor del scratchpad y, al terminar, descargar el log.
   - **Antes de buscar nada en el log**, comprobar que trae `e2e summary:` y `GNU bash, version` (`gh run view <id> --log`; con `gh api .../jobs/<id>/logs` hace falta `--allow-escape-sequences`).
   - **Lo que se registra**:
     - el identificador, la rama y el commit;
@@ -355,7 +355,7 @@ Foundational (fixtures y G2) -> US1 (P1) -> US2 (P1) -> Polish (documentos) -> U
 
 ## Phase 7: Cierre
 
-- [ ] T032 COMPUERTA (commit y push): rebasar sobre `origin/main` si se movió. Después, verificar `VERSION` a mano contra `origin/main`: git no avisa cuando dos ramas escriben el mismo número.
+- [X] T032 COMPUERTA (commit y push): rebasar sobre `origin/main` si se movió. Después, verificar `VERSION` a mano contra `origin/main`: git no avisa cuando dos ramas escriben el mismo número.
   - **El ajuste**: las cifras reales de T025, T026 y T030 entran en `CHANGELOG.md`, `CLAUDE.md` y el Registro.
   - **Las verificaciones**: un byte audit de los archivos tocados, `tests/qmd-lock-release.bats` y `tests/version-stamp.bats` en los dos bash, y un commit `docs:` empujado por el camino de T029.
 - [ ] T033 COMPUERTA (PR): abrir el PR contra `main` con la tabla de evidencia de T013, T022, T023, T025, T026, T027 y T030, y `Closes #116` solo si están registradas T013, T025 y T030; si falta una, se omite.
@@ -591,6 +591,21 @@ Todo se mergea en un solo PR, y solo después de la evidencia: ninguna fase inte
   - **Comprobación estructural de T014** (`diff_scope.py`) repetida sobre el árbol congelado: 4 líneas agregadas y 0 quitadas (479, 480, 566 y 567, dentro de `qmd_setup_if_needed` y `qmd_reindex`), `_qmd_run` y `_qmd_ensure_prefix` idénticas a `origin/main`.
   - **Alcance** (`git diff --stat origin/main`, 16 archivos): `CHANGELOG.md`, `CLAUDE.md`, `README.md`, `VERSION`, `scripts/lib/qmd_index.sh` y `specs/044-qmd-lock-fd-leak/`, más `.specify/feature.json`, que escribió `/speckit-specify` (apunta al directorio de la feature; no estaba en la lista de T027 y se declara aquí). `tests/qmd-lock-release.bats` y `tests/fixtures/qmd-lock/` no salen en la estadística porque aún no están en git. Nada bajo `docker/` ni otro archivo de `scripts/`.
   - **Que no quede nada**: ningún `sleep` vivo tras las corridas.
-- **Commits, push y CI (T028 a T030)**: Pendiente.
+- **Commits locales (T028, 08-11-2026, con la autorización del operador)**: dos commits sobre `ac44dd1`, en español, ASCII, sin atribución y con la identidad por variables de entorno (`<scratchpad>/044/commit1.sh` y `commit2.sh`).
+  - **`a8675be` `docs:`**: `CLAUDE.md`, `README.md` y `specs/044-qmd-lock-fd-leak/` (5 archivos, 163 inserciones y 40 borrados). Comprobado en un worktree desechable: `tests/qmd-index.bats` 16 de 16 (1 saltada, la de siempre), rc 0, stderr vacío.
+  - **`d49d8ea` `fix:`**: `scripts/lib/qmd_index.sh` (+4), `tests/qmd-lock-release.bats` (357 líneas), `tests/fixtures/qmd-lock/{timeout,flock}`, `CHANGELOG.md` y `VERSION` (6 archivos). Comprobado en otro worktree desechable: `tests/qmd-lock-release.bats` 10 de 10 y `tests/version-stamp.bats` 6 de 6, rc 0, stderr vacío.
+  - **Los modos** (`git ls-files -s`): las dos fixtures en 100755; `VERSION`, `qmd_index.sh` y `qmd-lock-release.bats` en 100644.
+  - **La huella** del commit 2, calculada en su worktree, es idéntica a la de T025, T026 y T027. Los dos worktrees desechables se quitaron (`git worktree list` ya no los muestra) y el árbol quedó limpio tras los commits.
+  - Este registro y la marca de T028 quedan sin commitear: entran en el commit de documentos que traiga las cifras de T029 y T030 (T032).
+- **Push (T029, 08-11-2026, con la autorización del operador)**: `044-qmd-lock-fd-leak` empujada por HTTPS con el helper de `gh`, sin force, como rama nueva. `git ls-remote` por el mismo camino da `d49d8ea875aba66e6cc81411cb914354004dd590`, igual a `HEAD` local. Sin PR todavía, así que no se disparó `test.yml` ni `shellcheck.yml`.
+- **Corrida de CI (T030, 08-11-2026, con la autorización del operador)**: `gh workflow run docker-e2e.yml --ref 044-qmd-lock-fd-leak`, seguida con `<scratchpad>/044/t030_watch.sh` (log en `t030.log`, análisis en `t030_analyze.py`).
+  - **Identificación**: run `42508121834`, rama `044-qmd-lock-fd-leak`, commit `d49d8ea875aba66e6cc81411cb914354004dd590` (el del push de T029), runner amd64, conclusión `success`.
+  - **El log es válido**: trae `GNU bash, version` y `e2e summary:`.
+  - **`e2e summary: total=49 executed=49 skipped=0 failed=0`**; las 49 pruebas en `ok`.
+  - **La prueba 16 (`qmd real (041)`)**: `ok`, ejecutada y no saltada, con sus ocho marcas en orden (`models-seed`, `boot`, `setup`, `vector-extension`, `reindex`, `semantic-search`, `mcp`, `models-untouched`). El paso `Fetch the qmd models` bajó los dos modelos (1.616.029.856 bytes) en 35 s.
+  - **Duración del job** (API de jobs): `started_at` 18:04:33Z y `completed_at` 18:23:45Z, o sea **19 min 12 s**, con un margen de **25 min 48 s** frente al tope de 45 minutos. El paso `Run docker-e2e suite` duró de 18:05:12Z a 18:23:43Z (18 min 31 s).
+  - **Contención del lock (SC-005, observación)**: el log no contiene `R-BUSY`, `reindex lock busy`, `already running`, `R-EXPIRED` ni un dueño `timeout 900 .../qmd`. En las corridas de 043 y en las nocturnas del 02 al 06-11 esa línea sí aparecía (de 5 a 7 dueños en el segundo tick de la prueba 13); aquí la prueba 13 corrió sin perder el lock. Es una corrida, así que sigue siendo una observación y no una demostración; las nocturnas siguientes al merge (T035) dirán si se sostiene.
+  - **No medido**: el tiempo de la fase `setup` de la 041 y su comparación con el tope de SC-003 de 043 no salen en el log de una corrida verde.
+- **Cifras en los documentos (T032, 08-11-2026, con la autorización del operador)**: `origin/main` sigue en `8cb45e4` (la base de la rama; no hizo falta rebasar) y `VERSION` vale 0.30.0 frente a 0.29.0 de `origin/main`. Las cifras de T026, T027 y T030 entraron en la viñeta de `CHANGELOG.md` y en el bloque de 044 de `CLAUDE.md`. Byte audit de las 1977 líneas agregadas frente a `origin/main`: 0 marcas combinantes, caracteres de control ni símbolos raros. `tests/qmd-lock-release.bats` y `tests/version-stamp.bats`: 16 de 16 en bash 5.3.15 y en 3.2.57. El commit `docs:` de este paso lleva estas ediciones y el Registro de T028 a T032; se empuja por el camino de T029.
 - **Issue lateral (T031)**: Pendiente.
 - **PR, merge y noches (T033 a T035)**: Pendiente.
