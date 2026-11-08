@@ -57,6 +57,9 @@ Cada mutación se aplica a una copia aislada del árbol y se corre en bash 3.2.5
 | M7 | Agregar el `flock -u 9` también en la rama del perdedor, antes del `exit 91` | G1 |
 | M8 | Que el `timeout` falso no deje vigilante (romper la fixture) | G2 |
 | M9 | Quitar el `exit 91` de la rama del perdedor: escribe `already running — skip` y sigue a la sección sin el lock | L5 |
+| M10 | Un comando después del `flock -u 9` del setup (ya no es el último del subshell) | G1 |
+| M11 | Un `trap` en medio de una línea, tras la llamada de la sección del setup | G1 |
+| M12 | Que el `timeout` falso ignore `FAKE_TIMEOUT_LINGER=0` (deje siempre un vigilante) | G2, L8 |
 
 Algunas mutaciones no cambian nada que el oráculo pueda observar, y por eso las caza G1, que exige la línea exacta, su lugar y la ausencia de `trap`:
 
@@ -65,6 +68,9 @@ Algunas mutaciones no cambian nada que el oráculo pueda observar, y por eso las
 - **M5**: su diferencia con el diseño final es la de una señal al subshell (M8). Esa diferencia se mide con el BusyBox real en la etapa 6 de `evidence-protocol.md`, no en el host.
 
 Historia del catálogo:
+
+- La revisión independiente (T024, 08-11-2026) no encontró defectos de producto. Se atendió así: **G1** exige además que el `flock -u 9` sea de verdad el último comando (la línea siguiente es la que cierra el subshell) y busca `trap` como palabra en cualquier posición del código, no solo al inicio de línea (M10 y M11). **L8** es una guardia de equivalencia, no un detector del arreglo: el vigilante no cambia nada fuera del lock, así que solo las mutaciones del arnés la ponen en rojo (M8 y M12). Ahora afirma que el `timeout` falso se usó en cada corrida (0 vigilantes sin él, 2 con él en la rama de éxito, 1 en la de error) y compara también la rama de error (`update` falla una vez, `last_status=error`). Los sondeos negativos (G2, L5) exigen el código 1, el de conflicto de los dos `flock`, para no pasar por un `flock` ausente o un archivo que no abre. El `teardown` solo mata un PID que siga siendo un `sleep`.
+- G1 se endureció al correr el catálogo (08-11-2026): M7 sobrevivió a la primera versión porque el `flock -u 9` del perdedor iba en la misma línea que el `if`, fuera del conteo de línea exacta. G1 cuenta ahora también cualquier línea de código, sin comentarios, que contenga `flock -u` en cada una de las dos funciones y exige exactamente 1. Con eso M7 cae en G1.
 
 - M9 se corrigió al generar las tareas (07-11-2026): la primera redacción, `exit 0` en la rama del perdedor, era equivalente, porque la función devuelve 0 con 91 y con 0.
 - El catálogo del plan tomaba el `trap` como arreglo, y su M5 era un `trap ... RETURN`. El análisis del 07-11-2026 lo rehízo para el `flock -u 9` final y agregó el control M0.
