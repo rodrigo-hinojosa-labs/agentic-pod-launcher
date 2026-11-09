@@ -1,0 +1,25 @@
+#!/usr/bin/env perl
+# Fake flock(1) for a host without util-linux (macOS), used by tests/qmd-lock-release.bats (044).
+# It is only put on the test PATH when the host has no flock of its own. It makes the same flock(2)
+# call on the same open file description as util-linux does:
+#   flock [-n] [-x] FD        lock an inherited descriptor (the lock stays with its open file description)
+#   flock -u FD               unlock it
+#   flock [-n] FILE CMD...    open FILE, lock it, run CMD while holding it (the probe form)
+# Exit codes: 1 when the lock is not obtained or FILE cannot be opened (the same code util-linux
+# uses for a conflict), 64 for invalid usage, 127 when CMD cannot be run, else CMD's own code.
+use strict;
+use Fcntl qw(:flock);
+my ($nb, $un) = (0, 0);
+while (@ARGV && $ARGV[0] =~ /^-/) {
+    my $o = shift @ARGV;
+    if ($o eq '-n') { $nb = 1 } elsif ($o eq '-u') { $un = 1 } elsif ($o eq '-x') { } else { exit 64 }
+}
+my $t = shift @ARGV;
+defined $t or exit 64;
+my $fh;
+if ($t =~ /^\d+$/) { open($fh, '>&=', $t) or exit 1 }
+else { open($fh, '>>', $t) or exit 1 }
+if ($un) { flock($fh, LOCK_UN) or exit 1; exit 0 }
+flock($fh, LOCK_EX | ($nb ? LOCK_NB : 0)) or exit 1;
+if (@ARGV) { my $rc = system(@ARGV); exit($rc == -1 ? 127 : $rc >> 8) }
+exit 0;

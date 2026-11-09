@@ -149,6 +149,47 @@
   not touched here).
 
 ### Fixed
+- **qmd's locked sections release `.reindex.lock` as soon as they end — `044-qmd-lock-fd-leak`**
+  (VERSION 0.29.0 → 0.30.0; issue #116). `qmd_setup_if_needed` and `qmd_reindex`
+  (`scripts/lib/qmd_index.sh`) run their work inside a subshell that holds `.reindex.lock` on file
+  descriptor 9, and every qmd call inside them is wrapped in `timeout` (the `bun install` of
+  `_qmd_ensure_prefix` too). BusyBox's `timeout` (1.36.1 and 1.37.0, the one in the Alpine image) leaves
+  a watchdog child that inherits that descriptor and lives about a second after the command ends. A
+  `flock(2)` lock belongs to the open file description, not to the process that took it, so the lock
+  stayed taken for 0.9 to 1 s (about ten 100 ms probes) after each section ended. A manual reindex, a
+  scheduled one or the file watcher's that arrived in that second lost the lock and skipped with exit 0,
+  as designed, so a vault edit could stay unindexed until the next cron tick. The five scheduled nights
+  of 02 to 06-11-2026 each lost the first attempt of the second tick of test 13 of
+  `tests/docker-e2e-qmd.bats` to those watchdogs (the 043 helper absorbs it in the tests; the product
+  has no helper).
+
+  - **The fix is one line per section**: `flock -u 9 2>/dev/null || true` as the LAST command of the
+    section subshell, right after the section function returns. It covers every descendant that exists when the
+    section ends (qmd, `bun install`, whatever a later change adds) because it releases the description
+    itself, with no list of processes to keep. The lock now protects the section, not an orphan the
+    section might leave behind. It is not a `trap ... EXIT`: a trap also fires on a SIGTERM to the subshell and
+    would release the lock while a qmd child that ignored the signal still ran, which today keeps the
+    lock; the discarded design was measured and is recorded in `specs/044-qmd-lock-fd-leak/research.md`.
+  - **What does not change**: `flock -n` and the loser skipping with exit 0, the 900 s and 3600 s caps,
+    every exit and return code, the redacted log, the local-mode `timeout` of GNU coreutils (no watchdog,
+    so no defect there), the degraded run without `flock`, `docker/` and the 043 test helper.
+  - **Verification**: `tests/qmd-lock-release.bats` has 10 tests, built on a fake `timeout` shaped like
+    BusyBox's. Six of them fail against the previous code on the lock-held signature and pass with the
+    fix, in bash 3.2 and 5.x and on Linux with util-linux `flock`; the other four pin what must not
+    change and pass on both. A catalog of mutations pins each placement and form of the fix (L8 is an
+    equivalence guard that only the harness mutations turn red). With the real BusyBox `timeout` (1.36.1
+    and 1.37.0, disposable containers, the library's real sections and a fake engine) the probes after
+    setup, reindex and reindex-with-migration go from 10, about a second, to 0, three repetitions per
+    cell; GNU `timeout` never had the defect. A hung call is still cut by `QMD_CMD_TIMEOUT` with the same
+    exit code before and after (143 on BusyBox, 124 on GNU), and a SIGTERM to the section subshell still
+    leaves the lock held while the engine lives. The host suite gives 1904 of 1904 in bash 5.3.15 and in
+    3.2.57 (the 1894 of the baseline plus the ten new tests). The local DOCKER_E2E of qmd on arm64 gives 5
+    of 5 in 13 min 4 s, and a manual run of the docker-e2e workflow on the branch (amd64, run 42508121834)
+    gives 49 of 49 in a 19 min 12 s job, with `qmd real (041)` executed and no lock contention reported by
+    the 043 probe in test 13 (one run: an observation, not a proof). The detail is in
+    `specs/044-qmd-lock-fd-leak/tasks.md`.
+  - **Fleet**: rebuild the image with the normal upgrade; nothing else to do.
+
 - **The sqlite-vec musl swap follows the machine's architecture, and says why when it cannot replace
   anything — `042-qmd-sqlite-vec-x64`** (VERSION 0.28.0 → 0.29.0; issue #107). qmd's vector search
   (`qmd embed`, `qmd vsearch`) needs the `vec0` extension of sqlite-vec. The glibc prebuilt that
