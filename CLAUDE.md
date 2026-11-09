@@ -241,10 +241,10 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 - **A container is a usable Linux oracle, but only if it matches the runner.** Reproducing a CI-only failure locally works — the `E2BIG` above was reproduced RED/GREEN in Alpine in minutes — but the *full suite* under a naive `docker run` lies: as **root** every "unwritable directory" test fails (root ignores the mode bits), and Alpine's busybox/GNU mix fails more. Measured on the same tree: Alpine-as-root reported 20 reds, Debian-as-non-root reported 1, CI reported 2. A faithful replica is `debian:bookworm` + a non-root user + the deps the workflow installs (`age`, `gettext-base` for `envsubst`, `tmux`, `busybox`) + the pinned `yq` — and copy the repo in rather than bind-mounting it writable, or the host tree ends up owned by root. Inherited **signal dispositions** are part of "matches the runner" too: a plain `docker run` starts bats with SIGPIPE at its default, while the Actions runner hands it a process tree that *ignores* SIGPIPE (an ignored signal survives `exec`, and a bash script cannot reset it — `trap - PIPE` does nothing, measured on 3.2.57 and 5.3.15). `tests/ci-workflows.bats` O2 passed in an Ubuntu 24.04 container (14 of 14) and failed on the first CI run of PR #102 for exactly that reason: its fake `docker` is a bash script, whose `echo` then reports `write error: Broken pipe` and exits 0 instead of dying with 141, while the real Go `docker` dies of SIGPIPE whichever disposition it inherits (measured with `gh`: 141 either way). Reproduce that environment locally with `perl -e '$SIG{PIPE}="IGNORE"; exec @ARGV' bats …`; the harness now resets the signal with `perl` before launching the step.
 
 <!-- SPECKIT START -->
-**044-qmd-lock-fd-leak SPEC + CLARIFY + PLAN + TASKS + ANALYZE + IMPLEMENT EN CURSO (2026-11-06/08; rama
+**044-qmd-lock-fd-leak SPEC + CLARIFY + PLAN + TASKS + ANALYZE + IMPLEMENT + EVIDENCIA EN CI + MERGE (2026-11-06/09; rama
 `044-qmd-lock-fd-leak` en el worktree `.claude/worktrees/044-qmd-lock-fd-leak`, desde `origin/main` = `8cb45e4`
 (VERSION 0.29.0 -> **0.30.0** por defecto declarado, MINOR como 042; arreglo de producto en
-`scripts/lib/qmd_index.sh`, solo esa librería; NO mergeada, sin push).** Origen: el hallazgo de producto #116 de
+`scripts/lib/qmd_index.sh`, solo esa librería; empujada el 08-11-2026 y mergeada por el operador el 09-11-2026 como el squash `e0d8827` del PR #121, que cerró #116).** Origen: el hallazgo de producto #116 de
 043. El `timeout` de BusyBox (1.36.1 y 1.37.0) deja un vigilante que hereda el descriptor 9 (`.reindex.lock`) y
 vive de 0,9 a 1 s después de cada llamada; como un lock de `flock(2)` pertenece a la descripción de archivo
 abierta, `qmd_setup_if_needed` y `qmd_reindex` dejaban el lock tomado ese segundo tras terminar, y un reindex
@@ -272,8 +272,11 @@ local en arm64 dio 5 de 5 en 13 min 4 s (T026) y el gate dio 1904 de 1904 en bas
 vacío y las mismas saltadas que la línea base (T027), todo sobre la misma huella. La rama se empujó el 08-11-2026
 (`d49d8ea`, con `a8675be` de documentos antes) y una corrida manual del workflow `docker-e2e` (run 42508121834,
 amd64) dio 49 de 49 en un job de 19 min 12 s, con un margen de 25 min 48 s sobre el tope de 45 y la 041 ejecutada;
-la sonda de 043 no reportó contención del lock en la prueba 13 (una corrida: observación, no demostración). Falta
-el issue lateral (T031), el PR y el merge, con COMPUERTA, y no antes de la décima noche de T046 de 043. No proponer el merge antes de la décima noche de T046 de 043 (hacia el 11-11-2026). Artefactos:
+la sonda de 043 no reportó contención del lock en la prueba 13 (una corrida: observación, no demostración). El issue
+lateral (#120) se abrió el 08-11-2026 y el PR #121, con sus tres checks en verde (1904 líneas `ok` y 0 `not ok` en ubuntu con bash 5.3.9 y en macOS con bash 3.2.57),
+lo mergeó el operador el 09-11-2026 a las 01:15 (-03), antes de la décima noche de T046 de 043 que se había fijado como mínimo. `main` verificada:
+árbol igual al de la cabeza validada `0518004`, VERSION 0.30.0, `flock -u 9` en `:480` y `:567` y ningún `trap` en las secciones. Faltan T035 (las cinco
+primeras nocturnas posteriores al merge, en un PR de documentos aparte) y T036 (limpieza), con COMPUERTA. Artefactos:
 `specs/044-qmd-lock-fd-leak/{spec,plan,research,data-model,quickstart,tasks}.md` +
 `contracts/{lock-release,host-oracle,evidence-protocol}.md`. **Hallazgo lateral, fuera de alcance:** la migración
 manual (`heartbeatctl qmd-migrate`) llama a `qmd_migrate_collection` SIN el lock, aunque el comentario de la
