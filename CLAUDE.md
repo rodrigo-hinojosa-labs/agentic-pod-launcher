@@ -275,8 +275,10 @@ amd64) dio 49 de 49 en un job de 19 min 12 s, con un margen de 25 min 48 s sobre
 la sonda de 043 no reportó contención del lock en la prueba 13 (una corrida: observación, no demostración). El issue
 lateral (#120) se abrió el 08-11-2026 y el PR #121, con sus tres checks en verde (1904 líneas `ok` y 0 `not ok` en ubuntu con bash 5.3.9 y en macOS con bash 3.2.57),
 lo mergeó el operador el 09-11-2026 a las 01:15 (-03), antes de la décima noche de T046 de 043 que se había fijado como mínimo. `main` verificada:
-árbol igual al de la cabeza validada `0518004`, VERSION 0.30.0, `flock -u 9` en `:480` y `:567` y ningún `trap` en las secciones. Faltan T035 (las cinco
-primeras nocturnas posteriores al merge, en un PR de documentos aparte) y T036 (limpieza), con COMPUERTA. Artefactos:
+árbol igual al de la cabeza validada `0518004`, VERSION 0.30.0, `flock -u 9` en `:480` y `:567` y ningún `trap` en las secciones. T035 se cerró con dos
+observaciones en lugar de las cinco nocturnas, por decisión del operador (nocturna del 09-11, run 42628034519, y corrida manual sobre `8ec5c8e`, run 42655779193: 49 de 49
+y 0 dueños `timeout 900` en las dos, frente a 5 a 7 en las cinco noches previas); las nocturnas del 10 al 13-11 quedan como seguimiento opcional. T036 se hizo salvo el retiro del
+worktree y de las ramas locales, que es del operador. Artefactos:
 `specs/044-qmd-lock-fd-leak/{spec,plan,research,data-model,quickstart,tasks}.md` +
 `contracts/{lock-release,host-oracle,evidence-protocol}.md`. **Hallazgo lateral, fuera de alcance:** la migración
 manual (`heartbeatctl qmd-migrate`) llama a `qmd_migrate_collection` SIN el lock, aunque el comentario de la
