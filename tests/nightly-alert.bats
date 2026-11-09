@@ -1416,7 +1416,7 @@ _reset_state() {
   # the ids the notice reports as "the step that failed", in the order of the job
   # (the trial step `simulate`, when present, sits between run_suite and collect:
   # N29 owns its position)
-  [ "$(yq '.jobs.e2e.steps | map(.id) | map(select(. != "simulate")) | join(",")' "$f")" = "checkout,install_yq,install_bats,verify_deps,run_suite,collect" ]
+  [ "$(yq '.jobs.e2e.steps | map(.id) | map(select(. != "simulate")) | join(",")' "$f")" = "checkout,install_yq,install_bats,verify_deps,fetch_models,run_suite,collect" ]
 }
 
 @test "N31 AW-9: el workflow referencia el script y el script existe, es ejecutable y empieza con el shebang" {
@@ -1949,11 +1949,11 @@ _reset_state() {
 @test "N29 AW-7: la suite se salta en ensayo, el paso simulate la reemplaza y el tope del job baja a 1 minuto solo en el ensayo timeout" {
   local f="$ALERT_WORKFLOW" step
   step='.jobs.e2e.steps[]'
-  [ "$(yq "$step | select(.id == \"run_suite\") | .if" "$f")" = '${{ !inputs.alert_trial }}' ]
+  [ "$(yq "$step | select(.id == \"run_suite\") | .if" "$f")" = '${{ !inputs.alert_trial && !cancelled() && steps.verify_deps.outcome == '"'"'success'"'"' }}' ]
   [ "$(yq "$step | select(.id == \"simulate\") | .if" "$f")" = '${{ inputs.alert_trial }}' ]
   [ "$(yq "$step | select(.id == \"simulate\") | .env.TRIAL_OUTCOME" "$f")" = '${{ inputs.trial_outcome }}' ]
   [ "$(yq "$step | select(.id == \"simulate\") | .run" "$f")" = '.github/scripts/nightly-alert.sh simulate "$TRIAL_OUTCOME"' ]
-  [ "$(yq '.jobs.e2e["timeout-minutes"]' "$f")" = "\${{ (inputs.alert_trial && inputs.trial_outcome == 'timeout') && 1 || 30 }}" ]
+  [ "$(yq '.jobs.e2e["timeout-minutes"]' "$f")" = "\${{ (inputs.alert_trial && inputs.trial_outcome == 'timeout') && 1 || 45 }}" ]
   # the trial step sits between the suite and collect
   [ "$(yq '.jobs.e2e.steps | map(.id) | .[-3:] | join(",")' "$f")" = "run_suite,simulate,collect" ]
 }

@@ -656,7 +656,9 @@ _fake_seams() { FSEAMS=("QMD_MODELS_BASE_URL=http://127.0.0.1:9" "QMD_MODELS_TAB
   [ "$(_step_get "$WF_FILE" e2e "$name" .id)" = "fetch_models" ]
   [ "$(_step_get "$WF_FILE" e2e "$name" .run)" = ".github/scripts/fetch-qmd-models.sh" ]
   [ "$(_step_get "$WF_FILE" e2e "$name" 'has("continue-on-error")')" = "false" ]
-  [ "$(_step_get "$WF_FILE" e2e "$name" .if)" = "null" ]
+  # 040: the trial of the notice stands in for the suite and does not fetch the models;
+  # a scheduled or normal manual run has no such input, so the step always runs there
+  [ "$(_step_get "$WF_FILE" e2e "$name" .if)" = "\${{ !inputs.alert_trial }}" ]
   names=$(yq '.jobs.e2e.steps[].name' "$WF_FILE")
   while IFS= read -r line; do
     case "$line" in
@@ -688,7 +690,7 @@ _fake_seams() { FSEAMS=("QMD_MODELS_BASE_URL=http://127.0.0.1:9" "QMD_MODELS_TAB
 }
 
 @test "W5: the suite runs when only the fetch failed (its if is the one agreed) and cannot hide a failure" {
-  local want="\${{ !cancelled() && steps.verify_deps.outcome == 'success' }}"
+  local want="\${{ !inputs.alert_trial && !cancelled() && steps.verify_deps.outcome == 'success' }}"
   [ "$(_step_get "$WF_FILE" e2e "Run docker-e2e suite" .if)" = "$want" ]
   [ "$(_step_get "$WF_FILE" e2e "Run docker-e2e suite" 'has("continue-on-error")')" = "false" ]
 }
