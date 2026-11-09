@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# Fake curl for tests/qmd-embed-nightly.bats (041-nightly-qmd-embed; contract:
+# specs/041-nightly-qmd-embed/contracts/host-oracle.md section 2).
+#
+# It stands in for the real curl in front of PATH, so the fetch script can be driven
+# through every outcome of a download without a network. ASCII only, bash 3.2 safe.
+#
+# Environment:
+#   FAKE_CURL_PLAN  path of the plan file. One rule per line:
+#                     <url-substring>|<call>|<action>
+#                   <call> is the 1-based call number for that exact URL, or * for
+#                   any call. The first rule that matches (in file order) wins.
+#   FAKE_CURL_LOG   path of the call log: one line per argument of every call, then a
+#                   line with three dashes. Per-URL call counts live next to it, in
+#                   "<log>.calls".
+#
+# Actions:
+#   ok:<file>      copy <file> to --output, print 200, exit 0
+#   fail:<rc>      exit with <rc>; like curl --fail --write-out it prints 404 for rc 22 (an
+#                  HTTP error) and 000 for any other rc (no HTTP answer at all)
+#   pfail:<rc>     like fail, but a few bytes are already in --output: a transfer that broke
+#                  half way leaves a partial file behind, and the script must clean it up
+#   grow:<file>    like ok, plus one extra byte: the size no longer matches (too long)
+#   shrink:<file>  like ok, minus the last byte: the size no longer matches (too short)
+#   flip:<file>    like ok, but the first byte is replaced: same size, other sha256
+#   hang:<s>       write a partial --output, sleep min(<s>, --max-time) with the REAL sleep
+#                  and exit 28 (timeout)
+# No rule matches: exit 7 (could not connect).
+set -u
+
+log="${FAKE_CURL_LOG:-}"
+if [ -n "$log" ]; then
+  for a in "$@"; do
+    printf '%s\n' "$a" >> "$log"
+  done
+  printf -- '---\n' >> "$log"
+fi
+
+out=""
+maxtime=""
+url=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --output|-o) out="${2:-}"; shift 2 ;;
+    --max-time|-m) maxtime="${2:-}"; shift 2 ;;
+    --write-out|-w|--speed-limit|--speed-time|--proto|--proto-redir) shift 2 ;;
+    http://*|https://*) url="$1"; shift ;;
+    *) shift ;;
+  esac
+done
+
+state="${log:-${TMPDIR:-/tmp}/fake-curl.log}.calls"
+printf '%s\n' "$url" >> "$state"
+n=$(grep -c -x -F -- "$url" "$state")
+
+action=""
+if [ -n "${FAKE_CURL_PLAN:-}" ] && [ -f "$FAKE_CURL_PLAN" ]; then
+  while IFS='|' read -r sub call act; do
+    case "$sub" in ''|'#'*) continue ;; esac
+    case "$url" in *"$sub"*) ;; *) continue ;; esac
+    if [ "$call" = "*" ] || [ "$call" = "$n" ]; then
+      action="$act"
+      break
+    fi
+  done < "$FAKE_CURL_PLAN"
+fi
+
+case "$action" in
+  ok:*)
+    cp -- "${action#ok:}" "$out" || exit 23
+    printf '200'
+    exit 0
+    ;;
+  grow:*)
+    cp -- "${action#grow:}" "$out" || exit 23
+    printf 'x' >> "$out"
+    printf '200'
+    exit 0
+    ;;
+  shrink:*)
+    src="${action#shrink:}"
+    size=$(wc -c < "$src")
+    head -c "$((size - 1))" "$src" > "$out" || exit 23
+    printf '200'
+    exit 0
+    ;;
+  flip:*)
+    cp -- "${action#flip:}" "$out" || exit 23
+    first=$(dd if="$out" bs=1 count=1 2>/dev/null | od -An -tu1)
+    if [ "$((first + 0))" -eq 88 ]; then repl=Y; else repl=X; fi
+    printf '%s' "$repl" | dd of="$out" bs=1 count=1 conv=notrunc 2>/dev/null
+    printf '200'
+    exit 0
+    ;;
+  fail:*|pfail:*)
+    rc="${action#*:}"
+    case "$action" in pfail:*) printf 'partial' > "$out" ;; esac
+    if [ "$rc" = "22" ]; then printf '404'; else printf '000'; fi
+    exit "$rc"
+    ;;
+  hang:*)
+    secs="${action#hang:}"
+    if [ -n "$maxtime" ] && [ "$maxtime" -lt "$secs" ] 2>/dev/null; then secs="$maxtime"; fi
+    printf 'partial' > "$out"
+    /bin/sleep "$secs"
+    printf '000'
+    exit 28
+    ;;
+  *)
+    exit 7
+    ;;
+esac

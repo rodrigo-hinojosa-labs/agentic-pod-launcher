@@ -42,7 +42,7 @@ docker compose build && ./scripts/agentctl up   # agentctl up == docker compose 
 ./setup.sh --uninstall --nuke --yes      # delete the workspace entirely
 ```
 
-Test deps on the host: `bats-core`, `yq` v4+, `jq`, `git`, `tmux`. Tests source `scripts/lib/*.sh` directly via `tests/helper.bash::load_lib`; `heartbeatctl.bats` overrides `HEARTBEATCTL_WORKSPACE` / `HEARTBEATCTL_CRONTAB_FILE` / `HEARTBEATCTL_LIB_DIR` to run the image-baked CLI against a tmpdir without Docker.
+Test deps on the host: `bats-core`, `yq` v4+, `jq`, `git`, `tmux` (and `perl`, which `tests/qmd-lock-release.bats` uses as a stand-in `flock` only where the host has none, as on macOS). Tests source `scripts/lib/*.sh` directly via `tests/helper.bash::load_lib`; `heartbeatctl.bats` overrides `HEARTBEATCTL_WORKSPACE` / `HEARTBEATCTL_CRONTAB_FILE` / `HEARTBEATCTL_LIB_DIR` to run the image-baked CLI against a tmpdir without Docker.
 
 ## Architecture worth knowing before editing
 
@@ -230,7 +230,12 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
   - `docker/scripts/start_services.sh:1021` — survives on log-window size: cliff measured at ~64 KiB, largest real 50-line window 15,684 B. Re-measure if pane width or line shapes change.
   - `setup.sh:1544` — survives because `gh` prints ~206 B. Past 64 KiB it would `exit 1` on the benign "fork already exists" path.
   - `scripts/lib/qmd_index.sh:498` — survives because the matched string is the last thing qmd writes. With 20 bytes after the match it already fires 10.7%.
-- **A workflow `run:` is shell too: `producer | head` under `pipefail` blinded the nightly.** The `docker-e2e` job died in 4-11 s in its `Verify deps + docker` step (`docker info | head -10` with `set -euo pipefail`): `head` closes after ten lines, `docker info` keeps writing, takes SIGPIPE and `pipefail` hands the step a **141** *before the suite starts*, so the nightly ran no e2e in any run measured (039; eight nights in a row were measured before the fix). The log shows exactly the first ten lines and then the 141: the CLI prints its client section first and the server section later, so on a runner it is not the coin flip the `grep -q` race above is (against a fast local Docker Desktop daemon it fired 1 time in 5). Three facts to keep: the Actions default shell is `bash -e {0}` **without** `pipefail`, which only exists where the script says `set -o pipefail` (10 of the 14 `run:` steps do); a step with no pipe cannot have the problem, so capture instead of cutting (`first_line() { local v; v=$("$@"); printf '%s\n' "${v%%$'\n'*}"; }`) or ask the tool for the fields you want (`docker info --format …`); and `tests/ci-workflows.bats` now runs the REAL step text under `bash -e` against a fake `docker` shaped like the failing one, and sweeps every workflow for `head`, `grep -q`/`-m`, `sed Nq` and `awk` with `exit` consumers, with no exceptions. A green nightly also proves less than it looks: `bats` exits 0 when every test is skipped (the suite step now turns "nothing executed" into a red run), and `qmd real (016)` still passes without exercising its embed unless `QMD_EMBED_E2E=1`.
+- **A workflow `run:` is shell too: `producer | head` under `pipefail` blinded the nightly.** The `docker-e2e` job died in 4-11 s in its `Verify deps + docker` step (`docker info | head -10` with `set -euo pipefail`): `head` closes after ten lines, `docker info` keeps writing, takes SIGPIPE and `pipefail` hands the step a **141** *before the suite starts*, so the nightly ran no e2e in any run measured (039; eight nights in a row were measured before the fix). The log shows exactly the first ten lines and then the 141: the CLI prints its client section first and the server section later, so on a runner it is not the coin flip the `grep -q` race above is (against a fast local Docker Desktop daemon it fired 1 time in 5). Three facts to keep: the Actions default shell is `bash -e {0}` **without** `pipefail`, which only exists where the script says `set -o pipefail` (10 of the 14 `run:` steps do); a step with no pipe cannot have the problem, so capture instead of cutting (`first_line() { local v; v=$("$@"); printf '%s\n' "${v%%$'\n'*}"; }`) or ask the tool for the fields you want (`docker info --format …`); and `tests/ci-workflows.bats` now runs the REAL step text under `bash -e` against a fake `docker` shaped like the failing one, and sweeps every workflow for `head`, `grep -q`/`-m`, `sed Nq` and `awk` with `exit` consumers, with no exceptions. A green nightly also proves less than it looks: `bats` exits 0 when every test is skipped (the suite step now turns "nothing executed" into a red run). Since 041 the embed phase of the real qmd is a test of its own, `qmd real (041)`: the nightly runs it on **amd64** or shows it as a skip that carries the reason (a recorded open defect, named by `QMD_EMBED_DEFECT` in the `fetch_models` step), and the deployed agents run **aarch64**, so a green nightly does not replace the hardware gate.
+- **qmd refuses to embed when `CI` has a value, and `vsearch` always loads a second model.** qmd 2.5.3 turns embed, query expansion and rerank off when `process.env.CI` is set (`llm.js:384`, "LLM operations are disabled in CI"); GitHub Actions defines it on the runner, compose does not pass it into the container, and the `boot` phase of `qmd real (041)` checks it is empty there. `vsearch` calls `expandQuery` with no condition (`store.js:3783`), which loads `qmd-query-expansion-1.7B-q4_k_m.gguf` (1.28 GB) besides the 333 MB embeddings model, so a test that runs `vsearch` downloads about 1.6 GB unless both files sit in `~/.cache/qmd/models` under the names node-llama-cpp looks for (`hf_<user>_<file>`; the repo name must end in `-gguf`, any case, and the file must start with the rest of it: `parseModelUri.js`, `doesFilenameMatchExactModelName`). That is what `.github/scripts/fetch-qmd-models.sh` provides and the last phase of the test verifies (qmd must not have downloaded or rewritten anything).
+- **qmd's collection covers `wiki/**/*.md` only since 037, and the skeleton ships `wiki/` empty.** A test (or an operator) that wants qmd to index a page must put it under `wiki/`: a page at the vault root, where the 017/018 tests wrote theirs, is not in the collection, so `update` finds nothing, `embed` has nothing to embed and `vsearch` cannot return it. The Tier 2 of `qmd real (016)` carried that mistake from 037 until the independent review of 041 caught it, because nothing had run it in between. Pre-seed the vault BEFORE the first boot (`vault_seed_if_empty` leaves a vault that has content alone) if the first-boot setup is supposed to embed something.
+- **`_qmd_swap_sqlite_vec` picks the sqlite-vec package by the machine's architecture, and says why when it cannot replace anything (042, #107).** Until 042 it targeted `node_modules/sqlite-vec-linux-arm64/vec0.so` only and returned silently when that file did not exist, so with the x64 package that `bun install` lays down on an amd64 host it did nothing and logged nothing; measured on 17-10-2026 (E1 of 041, run 39069243972), the `vec0.so` of the x64 package is glibc inside the musl container and `setup` died with `sqlite-vec extension is unavailable`. Now `uname -m` `x86_64`/`amd64` maps to `x64` and `aarch64`/`arm64` to `arm64` (`_qmd_machine_arch` plus the `case` in the function, `scripts/lib/qmd_index.sh`); only the package of that architecture is touched; and a swap that cannot happen writes ONE line and returns 0: `no sqlite-vec-linux-<x64|arm64> package in the managed prefix (found: ...)`, `no musl build for machine architecture '<arch>'` or the two that already existed (`musl build absent`, `swap failed (cp)`). `uname` is asked only after the musl gate, so on glibc (local mode) it is never called. `QMD_MACHINE_ARCH` is a test seam that wins even when empty, like `QMD_MUSL_LOADER`: `tests/qmd-sqlite-vec.bats` (21 tests) runs on ubuntu amd64 and on macOS arm64 in CI and must not depend on what the host says, so keep every test that builds a prefix hermetic: on the seam, or, when it must exercise the production `uname -m` path (N6, N9, N10, N13), on `_fake_uname` / `_failing_uname`, never on the host's real `uname`. The swap runs before qmd in every call, so its line is the FIRST line of the output that setup, reindex and migrate capture (`<qmd cache root>/tmp/{qmd-setup,reindex,embed-pass,qmd-migrate}.err`); only the LAST 500 bytes of a failing step reach a log (`_qmd_tail_redacted`), and which log depends on the caller (setup's to the container log, the scheduled reindex's and the migrate it runs to `scripts/heartbeat/logs/qmd-reindex.log`, the file watcher's reindex to none because `scripts/qmd_watch.sh` discards its output); that tail starts cutting into the line from the left once qmd printed more than about 350 bytes after it (gone from about 500), the qmd MCP server start does not capture it (server stderr), and a successful swap shows in no log; the proof that it happened is the `vector-extension` phase of `qmd real (041)`, where `tests/fixtures/qmd-e2e/vec0-libc.sh` (it does not depend on the architecture and fails on an absent file instead of printing MUSL) must say MUSL. If sqlite-vec ever publishes a package for a third Linux architecture, add it to the `case` (the baked build is compiled natively for whatever architecture the image is built on), or `no musl build for machine architecture` is what the operator will read. A workspace carried between architectures keeps a prefix with the other architecture's package, and its native modules are for that architecture too, so qmd itself will not start there (inferred, not run): the line names the package (`found:`) and the remedy is to delete `<qmd cache root>/pkg` (the prefix is a cache; a restart does not prepare it, so the first qmd MCP server start is what reinstalls it, inside `MCP_TIMEOUT`, and that first session is inferred to fail; `docs/vault.md` has the diagnosis and the cost). A package directory without its `vec0.so` also lands in the missing-package line, by design: the check looks at the file.
+- **busybox `timeout`, bash's own messages and a negative substring offset: three things 041 measured on the way.** In Alpine (busybox 1.37) `timeout N cmd` sends TERM only, so a child that ignores TERM blocks the timeout for as long as it lives; `-k 10` adds the KILL; the exit status is 143 after TERM and 137 after KILL, never GNU's 124. A bound inside a container is therefore `timeout -k 10 N`, with the output in a file (an orphan holds the pipe of `docker exec` open), and the test accepts 124, 137 and 143. Separately, bash translates its OWN messages (a failed redirection says `línea`) into the language of the macOS user even from `env -i`, because gettext asks the system for its preferred language when `LANG` and `LC_*` are absent: a test that asserts printable ASCII on a script's output passes on an English runner and fails on a Spanish Mac unless the script pins `LC_ALL=C`, which `fetch-qmd-models.sh` now does. And `${x: -N}` is an EMPTY string, not the whole value, when `x` is shorter than N (bash 3.2 and 5.x, measured): the tail of an output that may be short is taken with `tail -n`, as `_embed_tail` does in `tests/docker-e2e-qmd.bats`, not with a negative offset.
+- **A manual `heartbeatctl qmd-reindex` in an e2e test can lose `.reindex.lock` and still exit 0 (043, #112, #109).** The product takes the lock with `flock -n`, and a run that loses it prints `[qmd] reindex: already running — skip` and returns 0 on purpose, so only the text says nothing ran. Never call it bare from a test: go through `qmd_e2e_reindex_wait` (`tests/helper-qmd-e2e.bash`), which retries that skip only, every 2 s up to `QMD_E2E_REINDEX_LOCK_WAIT_S` (120), returns 0, 1 or 3 (ran, lock still busy at the deadline, cap of 600 s hit) and names the owner of the lock at the first contention (`/proc/*/fd`, as `agent`, without taking it). Require its return AND `REINDEX_STATUS`: a return of 0 only says the last attempt did not lose the lock (it ran, or failed for another reason), and a lost lock exits 0 too. Then assert the effect (`qmd_e2e_reindex_effect`: the vault hash, `pending` 0, `indexed` or `skipped`, since another legitimate reindex may do the work first) rather than the state of your own run. B5 of `tests/qmd-e2e-lock.bats` fails on any bare call left in `tests/docker-e2e-qmd.bats`. The holder the reports name is MEASURED (#116): BusyBox `timeout` (1.37.0 and 1.36.1) leaves a watchdog child that inherits descriptor 9, and the product wraps every qmd call in `timeout 900` (`scripts/lib/qmd_index.sh:272`) inside the sections that hold the lock, so the lock stayed taken for 0.9 to 1 s after each section ended. Since 044 each of the two sections (`qmd_setup_if_needed`, `qmd_reindex`) ends with `flock -u 9 2>/dev/null || true`, so those watchdogs no longer hold the lock (measured with the real BusyBox `timeout`, 10 probes before and 0 after, in `specs/044-qmd-lock-fd-leak/tasks.md`); what follows was measured before that fix and stays as the record of it. Test 13's second tick names six or seven of those watchdogs, in CI and locally with no injection. In the real runner (run 41366019180), the first attempt of the 041 reindex phase lost the lock and its owner was already gone when the probe ran 0.5 s later, the signature of the red night of #112; a watchdog fits, but that is inferred. Other holders, by reading the code: the watcher (ONE debounced reindex 15 s after the last vault event, output discarded, no retry), the `*/5` cron of the stubbed-engine workspaces, and the boot-time setup itself, which does NOT skip an index that has no `.qmd-setup-ok`: it refreshes it under the same lock. That is the second race of test 13, a test defect left out of 043 (#117).
 - **A bats assertion that is not the test's last statement can be dead, and which forms are dead depends on the bash.** Measured with bats 1.13.0 (039, 08-10-2026), each form mid-body followed by `true`: a plain command (`grep -q`) and `[ … ]` fail the test in both bash 3.2.57 and 5.3.15; `! cmd` is dead in both; **`[[ … ]]` is dead only in 3.2** and fails the test in 5.x. So the macOS CI arm (3.2) and the local `PATH=/bin:$PATH bats` gate cannot see a false intermediate `[[ ]]`, while the ubuntu arm (5.x) can. Write the assertion as `[ … ]` or `grep -q`, leave a `[[ ]]` as the last line of the test, and express a negative as `if cmd; then false; fi`. Earlier notes that called `[[ ]]` dead (measured under 3.2) or never dead (measured under 5.3) were each right in their own bash. How many intermediate `[[ ]]` the suite holds, and whether any of them hides a defect, is not measured.
 - **A big payload must never reach a test's child process through `argv` or the environment.** Linux caps each *individual* `argv`/`envp` string at `MAX_ARG_STRLEN` — 32 pages, **128 KiB** — and returns `E2BIG` ("Argument list too long"); macOS enforces only a 1 MiB *total* with no per-string limit. So `PAD="$big" bash probe.sh` is green on every local run and red on the ubuntu CI arm, which is precisely how `tests/sigpipe-boot-paths.bats` shipped broken in 0.26.0 while measuring 1502/0 twice on this Mac. Write the payload to a file and let the child read it (`journal="$(cat "$padfile")"` — command substitution happens in-process, with no exec involved). The same trap applies to `run bash -c "…" _ "$output"` when `$output` is large. **The dual-arm matrix is the only thing that sees this** — feature 025 built it for the bash-3.2-vs-5.x split, and it turns out to catch the kernel-limit split too, so a local double-green is not a gate. `tests/` is excluded from the shellcheck job, so no static check will ever flag it either.
 - **A container is a usable Linux oracle, but only if it matches the runner.** Reproducing a CI-only failure locally works — the `E2BIG` above was reproduced RED/GREEN in Alpine in minutes — but the *full suite* under a naive `docker run` lies: as **root** every "unwritable directory" test fails (root ignores the mode bits), and Alpine's busybox/GNU mix fails more. Measured on the same tree: Alpine-as-root reported 20 reds, Debian-as-non-root reported 1, CI reported 2. A faithful replica is `debian:bookworm` + a non-root user + the deps the workflow installs (`age`, `gettext-base` for `envsubst`, `tmux`, `busybox`) + the pinned `yq` — and copy the repo in rather than bind-mounting it writable, or the host tree ends up owned by root. Inherited **signal dispositions** are part of "matches the runner" too: a plain `docker run` starts bats with SIGPIPE at its default, while the Actions runner hands it a process tree that *ignores* SIGPIPE (an ignored signal survives `exec`, and a bash script cannot reset it — `trap - PIPE` does nothing, measured on 3.2.57 and 5.3.15). `tests/ci-workflows.bats` O2 passed in an Ubuntu 24.04 container (14 of 14) and failed on the first CI run of PR #102 for exactly that reason: its fake `docker` is a bash script, whose `echo` then reports `write error: Broken pipe` and exits 0 instead of dying with 141, while the real Go `docker` dies of SIGPIPE whichever disposition it inherits (measured with `gh`: 141 either way). Reproduce that environment locally with `perl -e '$SIG{PIPE}="IGNORE"; exec @ARGV' bats …`; the harness now resets the signal with `perl` before launching the step.
@@ -243,6 +248,262 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 - **A child that stalls is a failure too.** A `gh` that accepts the call and never answers left a red night with neither issue nor message, because the push was sequenced after every `gh` call and the step has its own 3-minute limit. Every external call on a notifier path needs its own limit (portable: poll `kill -0` with `sleep 0.05`, since macOS has no `timeout`) and a total budget, with a fake that hangs to prove it.
 
 <!-- SPECKIT START -->
+**044-qmd-lock-fd-leak SPEC + CLARIFY + PLAN + TASKS + ANALYZE + IMPLEMENT + EVIDENCIA EN CI + MERGE (2026-11-06/09; rama
+`044-qmd-lock-fd-leak` en el worktree `.claude/worktrees/044-qmd-lock-fd-leak`, desde `origin/main` = `8cb45e4`
+(VERSION 0.29.0 -> **0.30.0** por defecto declarado, MINOR como 042; arreglo de producto en
+`scripts/lib/qmd_index.sh`, solo esa librería; empujada el 08-11-2026 y mergeada por el operador el 09-11-2026 como el squash `e0d8827` del PR #121, que cerró #116).** Origen: el hallazgo de producto #116 de
+043. El `timeout` de BusyBox (1.36.1 y 1.37.0) deja un vigilante que hereda el descriptor 9 (`.reindex.lock`) y
+vive de 0,9 a 1 s después de cada llamada; como un lock de `flock(2)` pertenece a la descripción de archivo
+abierta, `qmd_setup_if_needed` y `qmd_reindex` dejaban el lock tomado ese segundo tras terminar, y un reindex
+que llegaba entonces se saltaba con rc 0 a propósito (cinco nocturnas del 02 al 06-11-2026). **Diseño (plan del
+06-11, rehecho en el analyze del 07-11):** un `flock -u 9 2>/dev/null || true` como ÚLTIMO comando del subshell de
+cada sección, justo tras la función de la sección y antes de `) 9>"$lock" || rc=$?`; cubre a todo descendiente
+(qmd, `bun install`, lo que venga) porque suelta la descripción misma, sin inventario; el lock protege la sección, no a un huérfano que esta deje atrás. **Descartado:** un
+`trap ... EXIT` (medido: se dispara ante un SIGTERM al subshell y suelta el lock con un qmd hijo vivo, que hoy lo
+retiene) y `closefd` (`9>&-` solo en `_qmd_run`, que exige enumerar procesos). **Decisiones del operador
+(06 y 07-11-2026, todas la opción recomendada):** el alcance es todo lo que corre bajo el lock; la evidencia de
+cierre incluye una corrida manual de CI antes del PR; la forma del arreglo es el `flock -u 9` final. **Medido en la
+Fase 0:** con las secciones reales y un motor falso, 10 sondeos de 100 ms con el lock tomado tras el setup, el
+reindex y el reindex con la migración en BusyBox 1.37.0 y 1.36.1 y 0 con el arreglo final (T025, 08-11-2026: BusyBox 1.37.0 y 1.36.1, 3 repeticiones por celda); `ubuntu:24.04` (GNU) 0
+sondeos sin arreglo, así que el modo local no tenía el defecto; el vigilante de BusyBox mueve 0, 1 y 2 a
+`/dev/null`, así que un `$(...)` no lo espera (el supuesto de ~1 s extra por sustitución quedó refutado).
+**Oráculo:** `tests/qmd-lock-release.bats` con 10 pruebas (L1 a L8, G1 guardia estructural de la línea exacta, su
+lugar y la ausencia de `trap`, G2 autotest del arnés), con `tests/fixtures/qmd-lock/timeout` (un `timeout` falso con
+la forma de BusyBox) y `tests/fixtures/qmd-lock/flock` (perl, solo donde el host no tiene `flock`); control M0 más
+12 mutaciones (M1 a M12, todas cazadas); esperado del host = línea base medida + 10 = 1904. **Estado (08-11-2026):** spec, clarify, plan, tasks y
+analyze hechos y commiteados en local (`ac44dd1`); el arreglo está aplicado (4 líneas en `scripts/lib/qmd_index.sh`)
+y verde en el host, en los dos bash, con su ROJO visto antes; la pata Linux (util-linux `flock`, bats 1.11.0) y el
+catálogo de mutaciones (M0 a M12) están hechos, sin sobrevivientes, la revisión independiente se atendió y la
+confirmación con el `timeout` real de BusyBox está registrada (huella del código `5a96c4b43ab12e52`). El DOCKER_E2E
+local en arm64 dio 5 de 5 en 13 min 4 s (T026) y el gate dio 1904 de 1904 en bash 5.3.15 y en 3.2.57, con stderr
+vacío y las mismas saltadas que la línea base (T027), todo sobre la misma huella. La rama se empujó el 08-11-2026
+(`d49d8ea`, con `a8675be` de documentos antes) y una corrida manual del workflow `docker-e2e` (run 42508121834,
+amd64) dio 49 de 49 en un job de 19 min 12 s, con un margen de 25 min 48 s sobre el tope de 45 y la 041 ejecutada;
+la sonda de 043 no reportó contención del lock en la prueba 13 (una corrida: observación, no demostración). El issue
+lateral (#120) se abrió el 08-11-2026 y el PR #121, con sus tres checks en verde (1904 líneas `ok` y 0 `not ok` en ubuntu con bash 5.3.9 y en macOS con bash 3.2.57),
+lo mergeó el operador el 09-11-2026 a las 01:15 (-03), antes de la décima noche de T046 de 043 que se había fijado como mínimo. `main` verificada:
+árbol igual al de la cabeza validada `0518004`, VERSION 0.30.0, `flock -u 9` en `:480` y `:567` y ningún `trap` en las secciones. T035 se cerró con dos
+observaciones en lugar de las cinco nocturnas, por decisión del operador (nocturna del 09-11, run 42628034519, y corrida manual sobre `8ec5c8e`, run 42655779193: 49 de 49
+y 0 dueños `timeout 900` en las dos, frente a 5 a 7 en las cinco noches previas); las nocturnas del 10 al 13-11 quedan como seguimiento opcional. T036 se hizo salvo el retiro del
+worktree y de las ramas locales, que es del operador. Artefactos:
+`specs/044-qmd-lock-fd-leak/{spec,plan,research,data-model,quickstart,tasks}.md` +
+`contracts/{lock-release,host-oracle,evidence-protocol}.md`. **Hallazgo lateral, fuera de alcance:** la migración
+manual (`heartbeatctl qmd-migrate`) llama a `qmd_migrate_collection` SIN el lock, aunque el comentario de la
+función dice que corre bajo él; un issue propio, con COMPUERTA.
+
+**043-e2e-lock-race-hardening SPEC + CLARIFY + PLAN + TASKS + ANALYZE + IMPLEMENT + EVIDENCIA EN CI + MERGE (2026-10-29/11-02; rama
+`043-e2e-lock-race-hardening` en el worktree `.claude/worktrees/043-e2e-lock-race-hardening`, desde `origin/main` = `cd8b74f`,
+empujada el 01-11-2026 y mergeada por el operador ese día como el squash `ef2f4cf` del PR #118, que cerró #109 y #112; solo pruebas,
+sin bump de VERSION 0.29.0).** Origen: la noche roja del 29-10-2026 (run 40865079036, #112: la fase `reindex`
+de `qmd real (041)` perdió el `flock -n` de `.reindex.lock` contra otro proceso, y el test suponía el lock libre apenas
+terminaba el setup) y #109 (el bucle de reintento de la prueba 13 de 037 abortaba en su primera vuelta si `engine-calls.log`
+aún no existía). **Diseño:** un ayudante compartido, `tests/helper-qmd-e2e.bash`, que `tests/docker-e2e-qmd.bats` carga con
+`load helper-qmd-e2e`. `qmd_e2e_reindex_wait EXEC_FN SITIO` lanza la misma orden de 041 (`timeout -k 10 600 heartbeatctl
+qmd-reindex`, con la salida reescrita en `/tmp/qmd-reindex.out`) y reintenta SOLO si la salida dice `already running`: un
+intento que pierde el lock sale con 0, así que solo el retorno del ayudante prueba que corrió. Reintenta cada 2 s hasta 120 s
+(`QMD_E2E_REINDEX_LOCK_WAIT_S`, normalizado como `QMD_E2E_SETUP_DEADLINE_S`) y retorna 0 si corrió, 1 si el plazo venció
+(con R-EXPIRED en el TAP) o 3 si un intento tocó el tope de 600 s. `qmd_e2e_reindex_effect` (solo en la fase 041) afirma el
+efecto: el `hash` del estado igual al `vault_hash` actual del vault que resuelve el producto, `pending` en 0 e `indexed` o
+`skipped`. La sonda del dueño (`/proc/*/fd` con `readlink`, como `agent`, sin tomar el lock) sale en la primera contención
+(R-BUSY en el TAP: una corrida verde con contención deja escrito quién la causó), al vencer el plazo y en
+`_embed_failure_state`, que gana además `head -n 3` de `qmd-setup.err`. Los cuatro sitios usan el ayudante: la fase
+`reindex` de 041, el bucle y el segundo tick de la prueba 13 y la fase 3 de la prueba 12. `teardown` vuelca los logs de la
+prueba 13 ante cualquier falla. **Decisiones del operador:** cubrir todos los sitios que suponen el lock libre y hacer una
+corrida manual de CI antes del PR (clarify); usar un ayudante con pruebas de comportamiento en el host y dejar la inyección de
+falla como evidencia local no versionada (plan). En el analyze (31-10-2026: 19 hallazgos, 0 CRITICAL y 2 ALTA, todos
+remediados) eligió demostrar SC-008 con un vencimiento forzado en la 041, no buscar `skipped` en contenedor (lo prueba X2) y
+declarar aparte la segunda carrera de arranque de la prueba 13 (`:483-484`: el setup de arranque NO se salta un índice sin
+`.qmd-setup-ok`, lo refresca bajo el lock), con un issue propio. **Oráculo:** `tests/qmd-e2e-lock.bats`, con 26 pruebas: L1
+a L10 para la espera, con un exec falso y un reloj falso; X1 a X6 para el efecto; O1 y O2 para la sonda; B1 a B6 para los
+cuerpos de los sitios, leídos del archivo; y D1 y D2 como guardias. El catálogo tiene **89 mutaciones** en los dos bash
+(M1 a M34 y M37 a M91; las de M42 en adelante salieron de la implementación y de la revisión independiente, porque bats se
+detiene en la primera aserción que falla y cada aserción de los cuerpos necesita la suya), más M35, M36 y M92 en una pata Linux
+(`ubuntu:24.04`, bash 5.2.21, bats 1.11.0, uid 1000). P1 de `tests/qmd-embed-nightly.bats` quedó enmendada: la fase
+`reindex` exige el ayudante y el efecto, y el tope lo guarda L1. Esperado del host: la línea base medida más 26, o sea
+1868 + 26 = **1894** por bash (T003 dio 1868 de 1868 en bash 5.3.15 y 3.2.57). **Estado (02-11-2026; detalle en el
+Registro de tasks.md):**
+
+- hecho en local:
+  - los artefactos (`cdd005e`) y US1 a US3, con su ROJO y su VERDE en los dos bash;
+  - la pata Linux y 89 de 89 mutaciones;
+  - la revisión independiente (T033: 1 ALTA refutada midiendo y 7 BAJA corregidas test-first);
+  - la inyección con el lock retenido a propósito (T035 y T036): los cuerpos actuales caen con las firmas de #109 y #112, los nuevos pasan, y el vencimiento forzado cubre SC-008;
+  - el DOCKER_E2E completo en arm64 (T037: 5 de 5 en 763 s);
+  - el gate (T038): 1894 de 1894 en los dos bash, y los oráculos con SIGPIPE ignorada en bats 1.13.0 y 1.11.0;
+- hecho fuera del equipo:
+  - los commits `f1da9d8` (docs), `a757fe7` (test) y `d856d67` (docs), con la rama empujada;
+  - una corrida manual del workflow (run 41366019180, amd64): 49 de 49 en un job de 24 min 28 s, con un margen de 20 min 32 s, y la 041 sin `setup` en 21,8 s, bajo el tope de 24 s de SC-003. En esa corrida, la fase `reindex` de la 041 perdió el lock en su primer intento, con el dueño ya fuera a los 0,5 s (la firma de #112), y el reintento del ayudante la absorbió;
+  - el PR #118, con su CI en verde (1894 de 1894 en ubuntu, bash 5.2.21, y en macOS, bash 3.2.57), y el merge del operador (01-11-2026 23:49 -03): `main` es la cabeza validada más #115, que entró 19 s antes y solo toca documentos, con `tests/` idéntico; la CI de `main` quedó en verde (1894 por brazo, con 49 y 57 saltadas: frente a `cd8b74f` solo suma O1 en macOS);
+- hallazgos de producto, fuera de alcance (FR-013):
+  - #116: el vigilante del `timeout` de BusyBox retiene el lock cerca de 1 s después de cada sección; la evidencia de T035, T037 y T041 está en sus comentarios, junto con una corrección del propio issue;
+  - #117: la segunda carrera de arranque de la prueba 13;
+- faltan:
+  - el registro de las diez noches posteriores al merge (T046), en un segundo PR de documentos;
+  - la limpieza de la rama y el worktree de 043 (T047).
+
+**042-qmd-sqlite-vec-x64 SPEC + CLARIFY + PLAN + TASKS + ANALYZE + IMPLEMENT + REVISIÓN INDEPENDIENTE + EVIDENCIA EN CI + MERGE + NOCTURNAS (2026-10-18/29; rama
+`042-qmd-sqlite-vec-x64` en el worktree `.claude/worktrees/042-qmd-sqlite-vec-x64`, desde main=`0fc08a8` v0.28.0→**0.29.0**; `7a68c4f` con
+los artefactos de spec-kit, tres commits de implementación (documentación, arreglo con sus pruebas e interruptor vacío) y uno de registro de la evidencia (T032); empujada el 23-10-2026 y mergeada por el operador el 25-10-2026 como el squash `157941b` del PR #110, que cerró #107).** Origen: el issue #107, medido en E1 de
+041 (run 39069243972, amd64, 17-10-2026): `_qmd_swap_sqlite_vec` solo conocía `sqlite-vec-linux-arm64`, así que en amd64 no reemplazaba nada ni
+lo decía, y el embed moría con `sqlite-vec extension is unavailable`. **Diseño (un cambio chico y local):** el reemplazo elige el paquete por la
+arquitectura (`uname -m`: x86_64 y amd64 a `x64`, aarch64 y arm64 a `arm64`), consulta `uname` solo después de la guarda de musl, y cuando no hay
+nada que reemplazar deja UNA línea (L-PKG, con la lista de los `sqlite-vec-linux-*` que sí hay, o L-ARCH) y sale con 0; el seam
+`QMD_MACHINE_ARCH` (gana aun vacío, como `QMD_MUSL_LOADER`) mantiene el oráculo del host hermético en el ubuntu amd64 y el macOS arm64 de la CI.
+Bajo `docker/` solo cambia un comentario (Principio II intacto). **Decisión del operador:** la cobertura permanente de arm64 en el nightly se
+difiere a una feature aparte (042 deja el nightly en amd64 y verifica arm64 con el DOCKER_E2E local). **Default declarado, sin preguntar:** el
+bump es MINOR (práctica de 017, 018, 023, 024 y 026). **Artefactos:** `specs/042-qmd-sqlite-vec-x64/{spec,plan,research,data-model,quickstart,tasks}.md` +
+`contracts/{swap-sqlite-vec,host-oracle,nightly-reactivation}.md`; tres historias (US1 el reemplazo funciona en amd64, US2 un reemplazo imposible
+deja rastro, US3 el nightly vuelve a ejercitar el embed), FR-001 a FR-014, SC-001 a SC-007 y 36 tareas test-first; el `/speckit-analyze` dio 16
+hallazgos y una verificación posterior al merge de #108, con un workflow de agentes (59 agentes), llevó otras 83 ediciones a los documentos, todas
+remediadas. **Implementación local (19-10-2026):** `tests/qmd-sqlite-vec.bats` pasa de 7 a **21 pruebas** (14 nuevas: N1 a N11 del diseño y N12 a
+N14 de la revisión; E1, E3 y E5 reforzadas por el diseño, y la revisión endureció además E1, E2, E4, N1, N4, N5, N8, N11 y N14, volvió a reforzar E3 y
+E5 y reescribió N13), y las 21 pasan en bash 5.3.15 y 3.2.57. ROJO: el oráculo final contra el código y la checklist de `origin/main` da 14 en rojo en los dos bash (la
+vuelta amd64 de E3, E5, N1 a N5, N7 a N9, N11 y N12 a N14) y 7 en verde desde el principio (E1, E2, E4, G1, G2, y N6 y N10, que nacen verdes a
+propósito y que prueban las mutaciones M6, M14 y M9a); con el oráculo de 18 pruebas del diseño eran 10. Línea base del host, medida en una copia
+aislada de `0fc08a8`: **1854 ok / 0 not ok en ambos bash** (55 saltadas en 5.x y 56 en 3.2: la diferencia es el test de `read -t` de qmd_watch,
+que pide bash 4+); esperado final 1854 + 14 = **1868**. **Humo con la función real** (sin seams, bajo `set -euo pipefail`, en `alpine:3.24.1`
+`--rm` con los paquetes publicados de sqlite-vec 0.1.9): en amd64 emulado el código de `origin/main` no cambia nada ni dice nada y la extensión
+no carga (`__memcpy_chk: symbol not found`, paquete x64 de 159.816 bytes, el de E1), y el de la rama imprime una línea, reemplaza y la extensión
+carga (`v0.1.9`); con solo el paquete arm64 en amd64 deja L-PKG con `found: sqlite-vec-linux-arm64` y no toca nada; en arm64 nativo las dos
+versiones hacen lo mismo. **Revisión independiente (T020), tres pasadas** (workflows de lentes de solo lectura): la primera, cinco lentes (código,
+oráculo, documentos, alcance y adversario) con dos escépticos por hallazgo, dio 33 hallazgos (0 altas, 9 medias, 24 bajas); el código salió limpio
+(34 escenarios en dos bash, nada que corregir en `scripts/lib/qmd_index.sh`) y lo hallado era brecha del oráculo y precisión de documentos; los
+escépticos se detuvieron tras 16 veredictos (los 16 confirmaron, ninguno refutó) porque lo de fondo se reprodujo aparte con el corredor de
+mutaciones. La segunda, tres lentes (documentos, pruebas y especificaciones) sobre los arreglos de la primera, sin escépticos, dio 28 hallazgos
+(10 medias, 18 bajas, varios repetidos entre lentes): la primera ejecución falló en sus tres agentes por el límite de sesión de la cuenta y se
+relanzó con `resumeFromRunId`. La tercera, tres lentes estáticas (documentos, matriz de mutaciones y especificaciones, y pruebas; sin escépticos y
+sin ejecutar `bats`, `docker` ni `shellcheck`, porque el gate corría en la misma máquina), dio 23 hallazgos (5 medias, 18 bajas). Mutaciones: **56
+variantes (50 numeradas, M1 a M50) cazadas todas en los dos bash** sobre copias aisladas y como no root; de las 35 que sumó la revisión (M16 a
+M50), **30 sobrevivían al oráculo contra el que se escribieron** (11 de 14 al de 18 pruebas, 9 de 9 al de 21 de la primera pasada y 10 de 12 al de
+la segunda: la lista `found:` con coma, la falta del paquete decidida por el directorio, el `|| true` de `uname` y su queja filtrada, el log por
+la salida estándar, una segunda línea o una pieza menos en L-ABS, L-CP y las dos líneas nuevas, el guion ASCII en lugar de la raya larga de 017,
+un `exit` en lugar de `return` en una rama, un mapa de arquitectura por prefijo, la copia sin `-f` y las variables sin `local`, entre otras);
+con N12 (stdout vacío en toda rama), N13 (el llamador sigue con sus variables intactas en cada rama, con un `uname` roto incluido), N14 (un
+directorio sin `vec0.so` cuenta como paquete ausente, con `found:` exacto), la vuelta amd64 de E3 (imagen sin toolchain) y el endurecimiento de
+las demás (E3, N4, N5 y N8 comparan la línea entera; E2 y E4 afirman el silencio; N1 parte de un prebuilt de solo lectura; N5 prueba ocho
+nombres de arquitectura; N8 verifica el reintento) caen todas. El catálogo prueba que cada prueba puede fallar, no cada aserción por separado.
+Los documentos ganan lo que la revisión mostró: la línea del reemplazo es la PRIMERA de lo que capturan setup, reindex y migrate y solo los
+últimos 500 bytes de un paso que falla llegan a un log, que depende de quien llama (setup al del contenedor, el reindex programado a
+`scripts/heartbeat/logs/qmd-reindex.log`, el del vigilante de archivos a ninguno), así que la cola empieza a cortarla por la izquierda cuando qmd
+escribió más de unos 350 bytes después (archivos `.err`, `head -n 1`); un prefijo traído de otra arquitectura trae también módulos nativos de esa
+arquitectura (inferido) y el remedio de borrar `pkg` no se arregla con reiniciar: ni el setup ni un reindex con el vault sin cambios preparan el
+prefijo, así que el primer arranque del servidor MCP es el que reinstala, dentro de `MCP_TIMEOUT` (inferido que esa primera sesión falla); el
+titular del CHANGELOG ya no afirma el embed completo en amd64 hasta tener la evidencia de CI. **No aplicado, por decisión:** la prueba del
+cableado de producción (la sonda real de musl, la ruta horneada por defecto y la llamada de `_qmd_ensure_prefix`) queda fuera, porque es el
+cableado de 017, que 042 no cambia, y lo ejerce el DOCKER_E2E. **Gate completo (T023, 19-10-2026):** sobre el árbol final congelado, **1868 de 1868 en bash 5.3.15 (16 min 19 s) y en 3.2.57 (16 min 3 s)** con la salida de error vacía, el oráculo 21 de 21 con SIGPIPE ignorada en bats 1.13.0 y 1.11.0 y en los dos bash, `shellcheck` en 0, el alcance bajo `docker/` y `scripts/` limitado a `qmd_index.sh` y al comentario de `build-sqlite-vec.sh`, y la huella del subconjunto de código `d2e3711bed454f81`; el detalle está en las Notes de `tasks.md`. **DOCKER_E2E arm64 local (T022, 22-10-2026):** `qmd real (016)` y `qmd real (041)` en verde en 7 min 32 s, con las ocho marcas de fase en orden y un pico de memoria de 4,36 GiB (el primer intento, del 19-10, perdió su salida con el directorio temporal de la sesión y se repitió). **Hecho en local (22-10-2026):** T024, el interruptor `QMD_EMBED_DEFECT` queda vacío en la rama (los tres archivos de prueba que leen el workflow o la función, 36, 14 y 21 pruebas, siguen en verde en los dos bash), y T025, tres commits locales sin ninguno intermedio en rojo. **Evidencia en CI, amd64 (23 y 24-10-2026):** la rama se empujó (`ba7fe8f`)
+y tres corridas manuales del workflow con la fase activa dieron `ok qmd real (041)` con las ocho marcas en las tres, la primera vez que el embed
+corre de punta a punta en amd64; duraciones de 17 min 40 s, 20 min 51 s y 20 min 44 s, o sea un margen mínimo de 9 min 9 s: `timeout-minutes` se
+quedó en 30 en #110 y T029 no aplicó entonces (el 29-10 se decidió subirlo a 45, más abajo); la fase `setup` tardó entre 283 y 403 s y el pico de memoria fue de 3,2 GiB; dos corridas dieron 49 de 49 y la
+primera tuvo un rojo ajeno, `qmd e2e (037)` (carrera de arranque en su bucle de reintento, seguida en #109, que no se repitió). **Rotura inducida
+(T031):** una rama de ensayo (ya borrada) con la imagen del test construida sin toolchain dio rojo como se esperaba: `not ok qmd real (041)` a los
+33 s, última marca `setup`, y el estado al fallar nombra la compilación de llama.cpp y muestra el `vec0.so` glibc sin reemplazar; la línea `musl
+build absent` no apareció en el log del contenedor (la cola de 500 bytes la empuja fuera, se lee con `head -n 1` en `qmd-setup.err`).
+**Merge (T034) y nocturnas (T035):** el operador mergeó el PR #110 el 25-10-2026 a las 01:38 (-03) como el squash `157941b` (árbol idéntico al de la
+cabeza validada `c34bac3`, `VERSION` 0.29.0, `QMD_EMBED_DEFECT: ''` y #107 cerrado por el PR). De las cinco nocturnas siguientes sobre `157941b` (25 a
+29-10, la primera con la fase activa), **las del 25, 26, 27 y 28 pasan**: `ok 16 qmd real (041)` ejecutado con sus ocho marcas y `e2e summary:
+total=49 executed=49 skipped=0 failed=0`, con jobs de 24 min 10 s, 20 min 42 s, 24 min 24 s y 23 min 6 s y márgenes de 5 min 50 s, 9 min 18 s, 5 min
+36 s y 6 min 54 s contra el tope de 30 (los runners de la programación varían cerca de 1,6 veces: la compilación nativa de `qmd real (016)` tardó
+entre 188 y 298 s y la fase `setup` entre 363 y 509 s), así que **T035 queda cumplida con las tres primeras**. La del 29-10 cayó en rojo **por el
+arnés y no por el producto**: `not ok 16 qmd real (041)` a los 0,3 s de empezar la fase `reindex`, porque el `heartbeatctl qmd-reindex` manual del
+test perdió el `flock -n` de `.reindex.lock` contra otro proceso (`already running`, rc 0 por diseño) y el test supone el lock libre y no reintenta;
+el dueño del lock no está identificado; seguimiento en #112, que no reabre #107 ni mueve el interruptor. Como las noches lentas dejaron solo de 36 a
+50 s sobre el piso de 5 min, el operador decidió (29-10-2026) subir `timeout-minutes` de 30 a 45 en un PR aparte (#113). La T040 de 041 se registró en
+el mismo PR de documentos que estas noches. **Cierre (29-10-2026):** el operador mergeó a las 22:54 (-03) #113 (el tope a 45, squash `0017765`) y #114 (los
+documentos, `cd8b74f`); `main` verificada: `timeout-minutes: 45` y `QMD_EMBED_DEFECT: ''` en el workflow, `VERSION` 0.29.0. T036 se hizo con
+autorización del operador: se borraron las ramas locales de 042, #113 y #114 tras comprobar que `main` ya traía todo lo que cada una cambiaba, y se
+quitaron las etiquetas de imagen `agent-admin:qmd-real` y `agent-admin:qmd-embed` y la variante `linux/amd64` de `alpine:3.24.1`; el caché de build
+y los modelos de 1,6 GB no se tocaron. **Pendiente:** el retiro del worktree de 042, porque este cierre ya está mergeado (#115, 01-11-2026); la feature
+043, que endurece el test contra la carrera de #112 y el bucle de #109, se mergeó el mismo día (#118). **No mezclar** con la cobertura arm64 del
+nightly (feature aparte).
+
+**041-nightly-qmd-embed SPEC + CLARIFY + PLAN + TASKS + ANALYZE + IMPLEMENT LOCAL + EVIDENCIA REAL (2026-10-14/17; rama `041-nightly-qmd-embed` en el worktree
+`.claude/worktrees/041-nightly-qmd-embed`, desde main=`13cafc3`; CI y tests, sin bump de VERSION previsto; empujada el
+17-10-2026).** Origen: el nightly pasa `qmd real (016)` sin ejercer el embed (`QMD_EMBED_E2E` no está en el workflow y el
+test no lo avisa). **Hallazgos de la investigación, medidos o leídos del código publicado:** (1) `_qmd_swap_sqlite_vec`
+(`scripts/lib/qmd_index.sh:130,132`) solo conoce `sqlite-vec-linux-arm64`, y con la disposición x64 no hace nada ni avisa
+(sonda con la función real contra un prefijo falso). **E1 lo confirmó en el runner amd64 (17-10-2026): el embed falla por
+producto, con seguimiento en el issue #107** (el paquete x64 de `sqlite-vec` trae la extensión glibc y npm no lo distingue por
+`libc`); además, la aserción de la línea 690 del test pasaba en vacío sobre un archivo ausente. (2) `qmd vsearch` expande la consulta sin condición y carga el modelo de expansión de 1,28 GB
+(qmd 2.5.3, `store.js:3783` y `llm.js:1062`). (3) Un modelo precargado con el nombre que espera node-llama-cpp
+(`hf_<usuario>_<archivo>`) se usa sin red (`resolveModelFile`, 3.18.1). (4) qmd apaga embed, expansión y rerank si `CI` tiene
+valor (`llm.js:384`); compose no la pasa al contenedor. (5) llama.cpp se compila en el postinstall de node-llama-cpp, durante el
+`bun install` de la fase A. **Cinco decisiones del operador, todas la opción recomendada:** defecto de producto en amd64 →
+apagar el embed con un salto que nombra el defecto; descarga fallida → reintentos acotados y rojo en `fetch_models`; modelos
+descargados en cada corrida, sin cache, y medidos; tope de 30 min: medir primero, margen mínimo de 5 min; precargar los dos
+modelos (unos 1,6 GB). **Diseño:** paso `fetch_models` → `.github/scripts/fetch-qmd-models.sh` (tabla única con tamaño y
+sha256, presupuesto de 480 s, salidas por `$GITHUB_ENV`), suite con `if: !cancelled() && verify_deps` y `QMD_EMBED_E2E: '1'`
+(el `run:` de los pasos de 039 no cambia; se vigila por sha256); el embed sale de `qmd real (016)` a `qmd real (041)`, con ocho
+fases marcadas, salida anticipada del setup y `vec0-libc.sh` independiente de la arquitectura; oráculo del host
+`tests/qmd-embed-nightly.bats` (36 tests) y 101 mutaciones. Al rebasar sobre 040 se enmiendan `tests/nightly-alert.bats:1419`
+y `:1952` (declarado en `contracts/workflow-delta.md`). El script de setup de `/speckit-plan` 1.1.2 no tocó este archivo (sha256
+idéntico antes y después). Artefactos: `specs/041-nightly-qmd-embed/{spec,plan,research,data-model,quickstart}.md` +
+`contracts/{fetch-models-script,workflow-delta,embed-test,host-oracle}.md`. **TASKS (15-10-2026): 40 tareas test-first** en
+`specs/041-nightly-qmd-embed/tasks.md`, en orden de dependencia (US2 MVP → US3 → US1 → US4 → Polish → US5 evidencia → Cierre);
+el esperado de la suite completa es la línea base más 37 (los 36 del oráculo y el e2e 041, que en el host sale saltado).
+**ANALYZE (16-10-2026): 28 hallazgos (0 CRITICAL, 2 HIGH, 10 MEDIUM y 16 LOW), todos remediados con la aprobación del
+operador.** Los dos HIGH: (1) ningún test del host ataba el cuerpo del test 041 a sus comprobaciones, así que volver a la
+aserción vacía de la línea 690 o poner una marca después de su comando dejaba los 35 en verde; P1 ahora exige el ancla de cada
+fase entre su marca y la siguiente, y la ausencia de `sqlite-vec-linux-arm64`; (2) con el resultado previsto de E1 (rojo en
+`setup` en amd64), las fases posteriores del test nuevo se habrían mergeado sin correr nunca: el DOCKER_E2E local en arm64
+(T026) es obligatorio antes del PR si E1 no llega a `models-untouched`. Otras correcciones: ningún paso del nightly puede
+llevar `continue-on-error` (W1 y W5); un `sleep` falso permite afirmar las esperas por defecto; el `agent.yml` del e2e toma
+la versión de qmd de `qmd_pkg` en vez del literal; y la checklist de upgrade gana la receta nueva del DOCKER_E2E. Tres
+decisiones del operador (spec, Clarifications del 16-10-2026): si el margen queda bajo 5 min, se sube el tope primero
+(compartir el prefijo compilado queda como mejora posterior); un modelo con el tamaño esperado y otra suma no se reintenta
+y sale con su propio motivo (`drift`); y la corrida local obligatoria. En ese momento seguían 40 tareas y 35 tests (hoy son 36); las mutaciones
+pasaron de 27 a 47 (hoy son 101). **IMPLEMENTADO EN LOCAL (16-10-2026, test-first, T001 a T025 hechas; sin commit, sin push, sin Docker):** línea
+base de T001 **1817 ok / 0 not ok en bash 5.3.15 y 3.2.57** (copia aislada de `main@13cafc3`). Nuevos:
+`.github/scripts/fetch-qmd-models.sh` (tabla única de los dos modelos con tamaño y sha256, tres intentos con esperas `10 30`,
+presupuesto de 480 s, salidas por `$GITHUB_ENV`, interruptor `QMD_EMBED_DEFECT` y motivo propio `drift`),
+`tests/fixtures/qmd-e2e/{fake-curl,vec0-libc.sh}` y `tests/qmd-embed-nightly.bats` (36 tests: W, F, V, K, G, P). Cambiados:
+`.github/workflows/docker-e2e.yml` (`id: verify_deps`, el paso `fetch_models`, `if: !cancelled() && verify_deps` en la suite y
+`QMD_EMBED_E2E: '1'`; los dos `run:` que congeló 039 quedan intactos), `tests/docker-e2e-qmd.bats` (el embed sale de
+`qmd real (016)` a `qmd real (041)`, con ocho fases marcadas; el e2e pasa de 48 a 49 tests en 13 archivos, y el «48 e2e» del
+bloque de 039 de más abajo es historia) y `docs/qmd-upgrade-checklist.md`. **Primera revisión independiente (`code-reviewer`,
+solo lectura): 3 ALTA, 6 MEDIA y 11 BAJA, todas atendidas salvo L3, L9 y L10, que quedan declaradas como residuo.** La más
+cara fue C1: desde 037 la colección de qmd cubre solo `wiki/**/*.md` y el esqueleto trae `wiki/` vacío, así que el documento
+del Tier 2 viejo, escrito en la raíz del vault, no entraba en la colección; con un producto sano el `vsearch` no podía
+encontrarlo y nadie había ejecutado ese tramo desde 037. Se corrigió sembrando el vault antes del primer arranque y moviendo la
+página bajo `wiki/concepts/`; falta verlo con una corrida real (T026 o E1). **Segunda revisión (workflow `wf_96bc6ba6-92f`,
+cinco lentes de solo lectura y dos escépticos por hallazgo, 49 agentes): 22 hallazgos, ninguno ALTA.** Arreglados con su ROJO
+visto antes: `vsearch` y el reindex no tenían tope propio, y un cuelgue cancelaba el job a los 30 min sin fase y sin
+`e2e summary:` (ahora `timeout -k 10 600` y `-k 10 300` dentro del contenedor; medido en busybox 1.37: rc 143 tras TERM y 137
+tras KILL, no 124, y un hijo que ignora TERM bloquea un `timeout` a secas); el rojo más probable de E1 (el paquete x64 es
+glibc) no dejaba la prueba de la extensión (el `teardown` ahora deja el disco, el veredicto del contenedor y el estado de
+`sqlite-vec-linux-*`); el cron `*/5` podía tomar el lock entre el setup y el reindex manual (ahora se programa el 31 de
+febrero); y cinco defectos menores del script y del test. Aceptados con su razón: el margen de los 30 min (lo mide E1; research
+D18 propone al operador correrlo desde una rama de ensayo con 45), los saltos del setup sin reintento, el sembrado con enlace
+duro y un modelo reemplazado con otro tamaño. **Tercera revisión** (workflow `wf_5d3c4ca1-dc7`, tres lentes de solo lectura
+sobre lo que cambió la segunda y un escéptico por hallazgo): 11 hallazgos, 1 MEDIA y 10 BAJAS. Arreglados con su ROJO visto antes:
+el estado al fallar no traía el estado ni la salida del reindex y de la búsqueda (donde queda la causa de una falla que no es un
+plazo); el informe de un plazo vencido no decía cuánto corrió el comando ni mostraba el final de su salida; la rama del defecto
+abierto terminaba en verde con un `GITHUB_ENV` que no se puede escribir; y la checklist citaba un encabezado que el test no
+imprime con ese cierre. El resto fue deriva documental. Aceptado: un primer modelo lento que consume todo el presupuesto deja
+al segundo con el motivo `budget (<N>s)` a secas. Mutaciones: **101 de 101 cazadas en bash 5.x y 3.2** (M1 a M47 del diseño, M48 a
+M73 de la primera revisión, M74 a M94 de la segunda y M95 a M101 de la tercera; 22 de las 26 de la primera revisión no cayeron
+con el oráculo original, y M79, M83 y M94 sobrevivieron a la primera versión de los tests nuevos hasta endurecerlos). Un ensayo en seco con un `docker` falso
+(herramienta del scratchpad, no versionada) corre el cuerpo real del test 041 y deja las ocho marcas en orden en ambos bash, y
+en los fallos deja el estado al fallar. Gate completo sobre el árbol de la primera revisión: **1853 ok / 0 not ok en bash
+5.3.15 y 3.2.57**; el gate final se repite sobre el árbol final con el esperado **1854 = 1817 + 37** (los 36 del oráculo y el
+e2e 041, que en el host sale saltado). **Evidencia real (17-10-2026).** T026 (DOCKER_E2E local, Mac arm64): verde a la
+primera, con las ocho marcas en orden, 8 min 42 s y 4,3 GiB de pico de memoria; los dos modelos bajaron en 191 s con tamaño y
+sha256 verificados. **E1** (run 39069243972, runner amd64, rama de ensayo con tope de 45 min): 48 de 49 e2e en verde y
+`qmd real (041)` en rojo en la fase `setup` a los 369 s, porque la extensión del paquete `sqlite-vec-linux-x64` es glibc dentro del
+contenedor musl y `_qmd_swap_sqlite_vec` solo conoce la ruta arm64; el estado al fallar descartó OOM, disco, red y arnés. Los
+modelos tardaron 40 s en el runner. **Decisión de FR-014 (operador, 14-10-2026): la fase queda apagada con
+`QMD_EMBED_DEFECT: '#107 …'`**; el issue #107 lleva las cinco obligaciones de cierre (vaciar el interruptor, correr con la fase
+activa, medir el margen, repetir la rotura inducida y registrar los resultados). **E2** (run 39081039747, defecto puesto): verde
+en 11 min 52 s, con el salto nombrando #107 en la anotación, el TAP y el resumen. **E3** (run 39086250738, un `file` que no existe
+en el origen): `fetch_models` en rojo tras 3 intentos (`curl exit 22 (http 404)`), la suite corrió, el test 041 salió saltado con
+el motivo y el job quedó en rojo; el runner aplica lo que un paso escribe en `$GITHUB_ENV` aunque termine con 1. E4 y T031 no
+aplicaron. **FR-013 queda diferida para la fase activa:** el job rojo de E1 duró 21 min 19 s y se detuvo antes de `reindex`, y
+los mismos 48 e2e tardaron 11 min 45 s en E2 y 15 min 8 s en E3 (+29 %), así que esa duración no está medida y hará falta más de
+una corrida; con la fase apagada el margen es de 14 a 18 min. Mientras #107 siga abierto el nightly no ejercita el embed: la
+evidencia en arm64 es la corrida manual de T026 y la compuerta de hardware. **MERGEADA por el operador (PR #108, squash
+`0fc08a8`, 19-10-2026; la CI del PR quedó en verde: 1854 ok / 0 not ok en ubuntu con bash 5.2.21 y en macOS con bash 3.2.57, y
+shellcheck).** **Hecho después:** T040, con las seis nocturnas del 19 al 24-10-2026 (todas con el salto de #107 y de 14 min 18 s a 18 min 28 s de
+margen; una roja por el test 17, ajeno a la fase), anotadas en el PR de documentos del 29-10-2026; el arreglo del producto lo hizo 042 (el bloque de arriba).
+
 **040-nightly-red-alert SPEC + CLARIFY + PLAN (2026-10-12; rama `040-nightly-red-alert` desde main=`13cafc3` v0.28.0; feature de CI y tests,
 sin bump de VERSION previsto, precedente 019, 025 y 039; primera feature con spec-kit 1.1.2).** Origen: tras 039 el nightly `docker-e2e`
 ejecuta la suite y su color significa algo, pero un rojo solo se ve entrando a Actions. **MEDIDO el 12-10-2026 por paginación: 158 corridas
@@ -346,8 +607,7 @@ PR #102 dejó en rojo O2, el autotest del propio arnés: el runner entrega a bat
 escrito en bash no puede morir de ella (su `echo` informa `write error: Broken pipe` y el script sale 0) y el contenedor de paridad no lo
 reprodujo. Se reprodujo en local con `perl -e '$SIG{PIPE}="IGNORE"; exec @ARGV' bats …` (cae solo O2, en ambos bash), y el arnés ahora restablece
 la señal con `perl` antes de lanzar el paso; O2 gana una pierna con un llamador que la ignora (viñeta del oráculo en contenedor, en "Common
-gotchas"). **PR #102 abierto el 09-10-2026. Pendiente:** su revisión y su merge por el operador, y las tres noches posteriores al merge (T049): el
-nightly programado de las 05:00 UTC ejecuta el workflow de `main`, así que seguirá en rojo hasta que 039 mergee.
+gotchas"). **PR #102 mergeado el 09-10-2026 (squash `d345a5f`) y T049 cerrada el 12-10-2026:** las tres nocturnas programadas siguientes (10, 11 y 12-10, runs 38047040835, 38135162982 y 38252436900, sobre `13cafc3`) pasaron 48 de 48 sin `exit code 141`. Medido por paginación ese día: el historial expone 158 corridas programadas (07-05 a 12-10-2026), 155 rojas y 3 verdes (las tres de arriba), o sea que antes de 039 el nightly no pasó nunca, y empezaron entre las 05:30Z y las 17:17Z, no a las 05:00Z que declara el cron. Que un rojo llegue a alguien sin abrir Actions lo atiende la feature 040.
 
 **038-schema-delta-boot-nudge SPEC + PLAN + TASKS + ANALYZE + IMPLEMENT (2026-09-30/10-01; rama `038-schema-delta-boot-nudge`
 sobre `037-second-brain-rag` v0.27.0, NO sobre main; el PR espera el merge de 037, precedente 023-sobre-022;
@@ -416,8 +676,11 @@ ejecuta `SessionStart`? requiere al operador: runbook en quickstart §7; sin med
 garantizado y la documentación lo declara), G1 en linus (decisión del operador, 02-10-2026: antes de cualquier merge, desde la rama 038, lo ejecuta él con un
 runbook), G2 y el rollout, y el PR de 038 con confirmación del operador (el PR #100 de 037 se abrió el 02-10-2026).
 037 mergeó el 03-10-2026 (PR #100, squash `6a6ce54`) y 038 se rebasó sobre main sin conflictos (el rebase no cambió
-el árbol; los hashes `d88cbfb` y `91da8c6` de arriba son de antes del rebase). **Siguiente:** G0 y G1 con el
-operador; el PR de 038 se abre con su confirmación y no se mergea antes de G1.
+el árbol; los hashes `d88cbfb` y `91da8c6` de arriba son de antes del rebase). **038 mergeó el 05-10-2026 (PR #101,
+squash `da22a06`, VERSION 0.28.0; árbol idéntico al de la rama validada), sin G0 ni G1 registrados.** **Siguiente:** G1
+en linus, ahora desde main (decisión del operador, 05-10-2026; runbook de §7 adaptado) y G0 en ferrari-admin; después
+el rollout. Aparte: el nightly `docker-e2e` no ejecutaba ningún e2e, porque abortaba a los pocos segundos por SIGPIPE en
+`docker info | head -10` bajo pipefail (cinco noches seguidas, confirmado el 05-10-2026); lo atendió 039, mergeada el 09-10-2026 (PR #102): ver su entrada.
 
 **037-second-brain-rag SPEC + PLAN + TASKS + IMPLEMENT EN CURSO (2026-09-26/28; rama
 `037-second-brain-rag` desde main=`70214d9` v0.26.0→**0.27.0**; NO mergeada, sin commit — working

@@ -1,0 +1,25 @@
+# Contrato: el protocolo de evidencia
+
+**Origen**: spec FR-007 a FR-010, SC-001 a SC-006 y la Clarifications del 06-11-2026 (FR-009); `research.md` D3.
+**Reglas**: todo lo que sale del equipo (commit, push, `workflow_dispatch`, issue, PR, merge, borrado de ramas) lleva COMPUERTA y exige la confirmación del operador CADA VEZ. Las corridas del DOCKER_E2E también la llevan. Los contenedores desechables `--rm` de unos minutos, con imágenes base ya en caché, no la llevan: se avisa antes de lanzarlos (precedente de T027 y T031 de 043). El merge es del operador.
+
+| Etapa | Qué | Dónde | Esperado | COMPUERTA |
+| --- | --- | --- | --- | --- |
+| 0 | Línea base de la suite del host | copia aislada de `origin/main` (`git worktree add --detach` en el scratchpad), bash 5.x y 3.2, en secuencia | 1894 de 1894 en cada bash (la CI de `main` en `ef2f4cf`; #119 solo tocó documentos) | no |
+| 1 | ROJO del oráculo nuevo contra el código actual | host, los dos bash | L1, L2, L3, L4, L7 y G1 caen con la firma del lock tomado; L5, L6, L8 y G2 nacen verdes | no |
+| 2 | VERDE con el arreglo | host, los dos bash | 10 de 10 | no |
+| 3 | El control M0 y las mutaciones M1 a M9 | host, los dos bash; pata Linux para el `flock` real | M0 con el resultado de su fila; cada mutación cazada por las pruebas de su fila | no (contenedor desechable) |
+| 4 | Revisión independiente de solo lectura (code-reviewer) | sobre el diff | hallazgos atendidos test-first o declarados | no |
+| 5 | Gate completo | host, árbol congelado, los dos bash | la línea base más 10, 0 `not ok`, la salida de error vacía; `shellcheck -S error` en 0; un diff contra `origin/main` limitado a `scripts/lib/qmd_index.sh`, las pruebas y fixtures nuevas, `VERSION`, `CHANGELOG.md`, `CLAUDE.md`, `README.md`, los documentos de `docs/` que haya cambiado la revisión de documentos y `specs/044-qmd-lock-fd-leak/`; la comprobación estructural de `scripts/lib/qmd_index.sh`: las líneas agregadas caen dentro de `qmd_setup_if_needed` y de `qmd_reindex`, y los cuerpos de `_qmd_run` y de `_qmd_ensure_prefix` son idénticos a los de `origin/main` (SC-004, `lock-release.md` I5) | no |
+| 6 | Confirmación con el `timeout` real (SC-001, SC-004) | contenedores desechables `alpine:3.24.1` (1.37.0), `alpine:3.20` (1.36.1) y `ubuntu:24.04` (GNU), con las secciones reales de `origin/main` y del árbol final | 0 sondeos tras el setup, el reindex y el reindex con migración, en 3 de 3 repeticiones; el perdedor se salta con rc 0; una llamada colgada con `QMD_CMD_TIMEOUT=2` termina con el mismo código en las dos variantes (143 en BusyBox, 124 en GNU) y el lock queda libre en el primer sondeo tras esa sección; en BusyBox, un SIGTERM al subshell de la sección con el motor colgado deja el lock tomado mientras viva el motor, en las dos variantes, y la variante descartada del `trap` se mide como referencia (`research.md` M8) | no (se avisa) |
+| 7 | DOCKER_E2E local de `tests/docker-e2e-qmd.bats` (arm64) | Docker Desktop del operador; reconstruye `agent-admin:qmd-real` y `agent-admin:qmd-embed` | 5 de 5; `qmd real (041)` con sus ocho marcas; se registra si el segundo tick de la prueba 13 reporta R-BUSY y con qué dueños (se espera que no) | sí |
+| 8 | Commits locales | rama `044-qmd-lock-fd-leak` | dos commits sin ninguno intermedio en rojo (documentos; producto con sus pruebas) | sí |
+| 9 | Push y corrida manual del workflow (FR-009) | `docker-e2e.yml` sobre la rama, amd64 | 49 de 49; margen frente a 45 min; `ok 16` ejecutada; R-BUSY de la prueba 13 registrado con sus dueños | sí (push y dispatch, cada uno) |
+| 10 | PR | contra `main`, con `Closes #116` solo si están registradas las etapas 1 (el ROJO), 6 (el `timeout` real) y 9 (la corrida de CI) | la CI del PR con la línea base más 10 en los dos brazos (más las 2 saltadas propias de un PR) | sí |
+| 11 | Merge | el operador, no antes de la décima noche de T046 de 043 (hacia el 11-11-2026) | `main` igual a la cabeza validada; `VERSION` 0.30.0; #116 cerrado | sí (del operador) |
+| 12 | Noches posteriores (FR-010, SC-005) | las cinco primeras nocturnas tras el merge | 49 de 49; el segundo tick de la prueba 13 sin R-BUSY con dueños `timeout 900 .../qmd`; todo otro dueño nombrado y clasificado | el PR de documentos, sí |
+| 13 | Limpieza | ramas, worktree de 044, imágenes de prueba | con confirmación del operador | sí |
+
+**El orden de ejecución** no es el de la numeración: las etapas 6 y 7 corren antes del gate (5), como en 043. Un defecto que aparezca en un contenedor obliga a editar y a repetir el gate, que cuesta unos 36 minutos por los dos bash; con este orden el gate corre una sola vez, sobre el árbol final, y su huella sha256 se compara con la de las etapas 6 y 7 (decidido al generar las tareas, 07-11-2026).
+
+**El registro**: cada etapa deja en el Registro de `tasks.md` los identificadores, las duraciones, los conteos y las líneas citadas del log, como en 043. Los logs de la CI se cuentan solo después de comprobar que traen `GNU bash, version` (tests) o `e2e summary:` (nocturnas).

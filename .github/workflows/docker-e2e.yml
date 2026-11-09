@@ -36,10 +36,12 @@ jobs:
   e2e:
     name: docker e2e suite (DOCKER_E2E=1)
     runs-on: ubuntu-latest
-    # 30 minutes for the scheduled run and for a normal manual run (inputs has no
-    # such keys then); 1 minute only in the timeout trial, which sleeps on purpose
-    # to see how the platform reports a job that hits its limit.
-    timeout-minutes: ${{ (inputs.alert_trial && inputs.trial_outcome == 'timeout') && 1 || 30 }}
+    # 45: with the embed phase active a slow runner takes about 24 min (042: 24 min 10 s,
+    # 24 min 24 s, 23 min 6 s; 20 min 42 s on a fast one) and 30 left 5 min 36 s of margin on
+    # the slowest night. The cap only bounds a hung job. 1 minute only in the timeout trial of
+    # the notice (040), which sleeps on purpose to see how the platform reports a job that
+    # hits its limit; the scheduled run and a normal manual run have no such inputs.
+    timeout-minutes: ${{ (inputs.alert_trial && inputs.trial_outcome == 'timeout') && 1 || 45 }}
     # What the notice job needs to know about this run: the step that failed, the
     # suite summary and the failed tests, all computed by the last step (collect).
     outputs:
@@ -91,17 +93,35 @@ jobs:
           docker compose version
           docker info --format 'server={{.ServerVersion}} os={{.OperatingSystem}} arch={{.Architecture}} cgroup={{.CgroupVersion}} storage={{.Driver}}'
 
+      # 041: the qmd models the embed phase uses (embeddings + query expansion, ~1.6 GB)
+      # are fetched and verified HERE, in a step of their own: a Hugging Face or network
+      # failure must read as infrastructure (this step), never as a regression of the
+      # embed. Bounded retries; a persistent failure turns the night red in this step
+      # and the suite still runs, with the embed phase skipped (see the `if:` of the
+      # suite step).
+      - name: Fetch the qmd models
+        id: fetch_models
+        # 040: the trial of the notice stands in for the suite, so it does not fetch the models either.
+        if: ${{ !inputs.alert_trial }}
+        env:
+          # A recorded open defect switches the embed phase off (FR-014): '#<issue> <short
+          # reason>' in plain ASCII, or the URL of an issue. Empty means the phase runs.
+          QMD_EMBED_DEFECT: ''
+        run: .github/scripts/fetch-qmd-models.sh
+
       # --tap + tee: the log shows every test live and e2e.tap stays for
       # counting (tee reads to EOF, so it cannot close the pipe early). bats
       # exits 0 when every test is skipped or the list is empty (DOCKER_E2E not
       # propagated, no daemon), so the step turns "nothing executed" into a RED
       # run: a green that ran no test is not a green. A non-zero code from bats
       # always wins over that guard.
+      # 041: !cancelled() lets the suite run when only the model fetch failed.
       - name: Run docker-e2e suite
         id: run_suite
-        if: ${{ !inputs.alert_trial }}
+        if: ${{ !inputs.alert_trial && !cancelled() && steps.verify_deps.outcome == 'success' }}
         env:
           DOCKER_E2E: '1'
+          QMD_EMBED_E2E: '1'
         run: |
           set -euo pipefail
           rc=0

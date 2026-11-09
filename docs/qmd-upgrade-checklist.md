@@ -29,10 +29,12 @@ As of v0.12.0:
   the trustedDependencies strategy no longer prevents a native `tree-sitter` build →
   BUG 4 would return (or require a redesign).
 - 017 pairs the qmd pin with **sqlite-vec 0.1.9**: qmd's transitive
-  `sqlite-vec-linux-arm64` prebuilt is glibc-only, so in docker mode the image
+  `sqlite-vec-linux-x64` and `sqlite-vec-linux-arm64` prebuilts (the CPU decides which
+  one gets installed) are glibc-only, so in docker mode the image
   compiles the pinned amalgamation for musl (`docker/scripts/build-sqlite-vec.sh`,
   `ARG SQLITE_VEC_VERSION=0.1.9` in `docker/Dockerfile`) and
-  `_qmd_swap_sqlite_vec` swaps it into the managed prefix at runtime. A qmd bump can
+  `_qmd_swap_sqlite_vec` swaps it into the managed prefix at runtime, onto the package
+  of the machine's architecture (042). A qmd bump can
   drag the transitive sqlite-vec version along, invalidating the baked build.
 - 018's multi-pass embed loop parses qmd's CLI output verbatim:
   `_qmd_pending_count` greps `Pending: N` from `qmd status`, and completion is
@@ -63,10 +65,15 @@ Facts below (versions, defaults) are as of v0.12.0.
       tarball pin in `docker/scripts/build-sqlite-vec.sh`, then re-verify the musl
       amalgamation compile still works (the `-Du_int8_t=uint8_t` BSD-typedef shim
       and the no-GLIBC-symbols guard in that script).
-- [ ] **017 swap path** (docker mode): `_qmd_swap_sqlite_vec`'s target
-      `node_modules/sqlite-vec-linux-arm64/vec0.so` still matches the target
-      version's package layout (`scripts/lib/qmd_index.sh`). Local mode (glibc) is
-      unaffected — the swap is a no-op there.
+- [ ] **017 swap path** (docker mode): `_qmd_swap_sqlite_vec`'s targets
+      `node_modules/sqlite-vec-linux-x64/vec0.so` (amd64) and
+      `node_modules/sqlite-vec-linux-arm64/vec0.so` (arm64) still match the target
+      version's package layout (`scripts/lib/qmd_index.sh`): sqlite-vec's
+      `getLoadablePath()` must still build the package name as
+      `sqlite-vec-${os}-${arch}` (`os` from `process.platform`, `arch` from
+      `process.arch`), and the swap must cover every Linux architecture the package
+      publishes (today `x64` and `arm64`; the map lives in `_qmd_swap_sqlite_vec`).
+      Local mode (glibc) is unaffected — the swap is a no-op there.
 - [ ] **018 output contract**: on the target version, `qmd status` still prints
       `Pending: N ...` and a fully-embedded `qmd embed` still prints
       "All content hashes already have embeddings". If either string changed,
@@ -95,6 +102,16 @@ Facts below (versions, defaults) are as of v0.12.0.
       and relies on qmd's own `~/.cache/qmd` default, which lands in the `.state`
       bind-mount. Either way, a storage-resolution change in the target version
       would orphan the existing index under `.state`.
+- [ ] **041 model table** (the nightly's embed phase): the models the target version loads by
+      default are still the ones in the table at the top of
+      `.github/scripts/fetch-qmd-models.sh` — the embedding model and the query-expansion model
+      (`vsearch` expands every query), found in the target's `dist/llm.js` as the default model
+      URIs. For each row re-check the Hugging Face repo and file, the local name node-llama-cpp
+      gives it (`hf_<user>_<file>`, which needs the repo name to end in `-gguf` and the file to
+      start with the rest of it), the size in bytes and the sha256 (the `oid` of the LFS file in
+      `https://huggingface.co/api/models/<repo>/tree/main`). Then update
+      `QMD_MODELS_QMD_VERSION` in that script to the new pin: `tests/qmd-embed-nightly.bats` (G1)
+      fails until you do, which is the point.
 - [ ] **MCP**: the `qmd mcp` stdio subcommand still exists (`qmd_mcp_exec` execs it
       from the managed prefix — the MCP server must never fall back to `bunx`).
 - [ ] `tests/qmd-version-guard.bats` updated to assert the new version string, AND
@@ -104,10 +121,28 @@ Facts below (versions, defaults) are as of v0.12.0.
       that word when rewriting the tree-sitter item.
 - [ ] `DOCKER_E2E=1` (Phase A build-detector: baked `vec0.so` is musl + `_qmd_run
       --help` RC 0 from the managed prefix, plus the RED rebuild with
-      `--build-arg QMD_NATIVE_TOOLCHAIN=0`) and `QMD_EMBED_E2E=1` (Tier 2: real
-      update + embed + semantic vsearch) re-run green on the new version
-      (`tests/docker-e2e-qmd.bats`); confirmatory hardware gate on Alpine musl
-      aarch64 re-run.
+      `--build-arg QMD_NATIVE_TOOLCHAIN=0`; `qmd real (016)`) and the embed phase
+      (`qmd real (041)`: real update + embed + semantic vsearch + MCP server) re-run green
+      on the new version (`tests/docker-e2e-qmd.bats`). Since 041 the embed phase does not
+      download its models inside the container: it needs them fetched beforehand, so running
+      it takes two commands (about 1.6 GB of models; `QMD_E2E_MODELS_DIR` is required with
+      `QMD_EMBED_E2E=1` and the test fails, not skips, without it):
+
+          QMD_MODELS_DIR="$HOME/.cache/agentic-qmd-e2e/models" .github/scripts/fetch-qmd-models.sh
+          DOCKER_E2E=1 QMD_EMBED_E2E=1 QMD_E2E_MODELS_DIR="$HOME/.cache/agentic-qmd-e2e/models" \
+            bats tests/docker-e2e-qmd.bats -f 'qmd real'
+
+      The nightly (`.github/workflows/docker-e2e.yml`) runs the same two steps on amd64.
+      A red run prints a block that starts with `# --- state at the failure` after the container
+      log (free disk, the verdict of the container itself, the architecture, what `vec0-libc.sh`
+      says about the vector extension, and the state and output files of the reindex and of the
+      semantic search): read it before suspecting qmd. A reindex or a semantic search that does
+      not finish fails as its own phase, after 600 s or 300 s. Since 043 the block also shows the
+      first three lines of `qmd-setup.err` and, under a heading of its own, who has `.reindex.lock`
+      open (pid, descriptor and command); and the reindex phase waits up to
+      `QMD_E2E_REINDEX_LOCK_WAIT_S` seconds (120 by default) for a lock held by another run, which
+      it notes in the TAP stream as `reindex lock busy (...)` together with the owner.
+      Confirmatory hardware gate on Alpine musl aarch64 re-run.
 - [ ] Post-upgrade (both modes): run a full reindex against a real vault and confirm
       the state file `<workspace>/scripts/heartbeat/qmd-index.json` reaches
       `last_status=indexed` with `pending: 0` (the multi-pass loop ran to

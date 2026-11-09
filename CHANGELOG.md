@@ -167,7 +167,295 @@
     correctness bug. Tracked as an optional follow-up (`--exclude`-ing
     `.graph/` from the inotify watch) rather than blocking this release.
 
+### Changed
+- **The manual reindex of the qmd e2e tests waits for the reindex lock instead of assuming it is
+  free — `043-e2e-lock-race-hardening`** (no VERSION change: tests only, the precedent of 019, 025,
+  039, 041 and the entry below; issues #112 and #109). The product takes `.reindex.lock` with
+  `flock -n`, and a run that loses it prints `already running` and exits 0 on purpose. The reindex
+  phase of `qmd real (041)` assumed the lock was free once the setup was done and went red that way
+  on the night of 29-10-2026 (run 40865079036, #112); the retry loop of test 13 of 037 aborted on its
+  first round when `engine-calls.log` did not exist yet (#109); and phase 3 of test 12 and the second
+  tick of test 13 made the same assumption. The four call sites now go through one helper,
+  `tests/helper-qmd-e2e.bash`: it runs the command of the 041 phase (`timeout -k 10 600 heartbeatctl
+  qmd-reindex`, its output in a file), which the call sites of tests 12 and 13 now share instead of
+  their bare call (the `timeout` of BusyBox 1.36.1, the `alpine:3.20` base of those two tests,
+  accepts `-k`: measured), retries only while the output says `already running`, every 2 s up to
+  120 s (`QMD_E2E_REINDEX_LOCK_WAIT_S` overrides the deadline), and fails naming the lock when the
+  deadline runs out. A lost lock exits 0, so the sites require the helper's return and not
+  the exit status alone. The 041 phase asserts the effect of the reindex on the index state (the
+  hash of the vault, `pending` 0, and `indexed` or `skipped`, the second when another legitimate
+  reindex did the work first) instead of the state of its own run. The first contention of each wait
+  writes who holds the lock (pid, descriptor and command, read from `/proc/*/fd` as `agent`, without
+  taking it) into the TAP stream, and the failure state of 041 gains the same probe and the first
+  three lines of `qmd-setup.err`; test 13 dumps the logs of its container when it fails anywhere.
+  Unchanged: the product and its `flock -n`, `docker/`, `scripts/`, `VERSION` 0.29.0 and the 49 e2e
+  tests of the nightly (`total=49`); with a free lock each call site still makes one attempt with no
+  wait. The host oracle is `tests/qmd-e2e-lock.bats` (26 tests: the helper driven by a fake exec and
+  a fake clock, the read of the effect that runs in the container run for real against a temporary
+  state file and vault, and the bodies of the call sites read from the file), with a catalog of 89
+  mutations for bash 5.x and 3.2, every one caught in both, so that each assertion on the bodies of
+  the call sites has one that turns it red, and three more for Linux
+  (`specs/043-e2e-lock-race-hardening/contracts/host-oracle.md`). Worst case: 120 s of wait plus a
+  reindex bounded at 600 s, which fits the 45-minute cap. The evidence is recorded in
+  `specs/043-e2e-lock-race-hardening/tasks.md`: with the lock held on purpose, the current bodies went
+  red with the signatures of #109 and #112 and the new ones green; the full DOCKER_E2E passed locally
+  on arm64, and so did one manual run of the nightly workflow on amd64 (run 41366019180: 49 of 49 in
+  a 24 min 28 s job, test 16 without its setup in 21.8 s), in which the first attempt of the 041
+  reindex phase lost the lock and the retry absorbed it. The holders the reports named (test 13,
+  locally and in CI) are the watchdog children of BusyBox `timeout`, which the product puts around
+  every qmd call and which keep descriptor 9 for about a second after each locked section (measured;
+  #116, filed apart and not fixed here). The second boot race of test 13 is #117.
+- **The nightly's job cap goes from 30 to 45 minutes — follow-up of `042-qmd-sqlite-vec-x64`** (no VERSION
+  change: CI only, the precedent of 019, 025, 039 and 041). `timeout-minutes` of the `e2e` job in
+  `.github/workflows/docker-e2e.yml` is now 45. With the embed phase running again, four scheduled nights
+  that passed (25 to 28-10-2026) lasted 24 min 10 s, 20 min 42 s, 24 min 24 s and 23 min 6 s, against the
+  17 to 21 minutes of the three manual runs that sized the cap in 042. The runners the schedule lands on
+  vary in speed by a factor of about 1.6 (the native build of `qmd real (016)`, a proxy for it, took 188 to
+  298 s), and the two slowest nights left 5 min 36 s and 5 min 50 s of margin against the 30-minute cap,
+  36 to 50 seconds above the floor that 042 set itself (a margin under 5 minutes raises the cap first). The
+  cap only bounds a hung job; a normal night takes the same time. The 042 entry below says the cap stays
+  at 30, which was true when it was written. A fifth night, 29-10, was red for an unrelated reason: the
+  reindex phase of `qmd real (041)` lost a start-up race for the reindex lock (#112, a harness defect,
+  not touched here).
+
 ### Fixed
+- **qmd's locked sections release `.reindex.lock` as soon as they end — `044-qmd-lock-fd-leak`**
+  (VERSION 0.29.0 → 0.30.0; issue #116). `qmd_setup_if_needed` and `qmd_reindex`
+  (`scripts/lib/qmd_index.sh`) run their work inside a subshell that holds `.reindex.lock` on file
+  descriptor 9, and every qmd call inside them is wrapped in `timeout` (the `bun install` of
+  `_qmd_ensure_prefix` too). BusyBox's `timeout` (1.36.1 and 1.37.0, the one in the Alpine image) leaves
+  a watchdog child that inherits that descriptor and lives about a second after the command ends. A
+  `flock(2)` lock belongs to the open file description, not to the process that took it, so the lock
+  stayed taken for 0.9 to 1 s (about ten 100 ms probes) after each section ended. A manual reindex, a
+  scheduled one or the file watcher's that arrived in that second lost the lock and skipped with exit 0,
+  as designed, so a vault edit could stay unindexed until the next cron tick. The five scheduled nights
+  of 02 to 06-11-2026 each lost the first attempt of the second tick of test 13 of
+  `tests/docker-e2e-qmd.bats` to those watchdogs (the 043 helper absorbs it in the tests; the product
+  has no helper).
+
+  - **The fix is one line per section**: `flock -u 9 2>/dev/null || true` as the LAST command of the
+    section subshell, right after the section function returns. It covers every descendant that exists when the
+    section ends (qmd, `bun install`, whatever a later change adds) because it releases the description
+    itself, with no list of processes to keep. The lock now protects the section, not an orphan the
+    section might leave behind. It is not a `trap ... EXIT`: a trap also fires on a SIGTERM to the subshell and
+    would release the lock while a qmd child that ignored the signal still ran, which today keeps the
+    lock; the discarded design was measured and is recorded in `specs/044-qmd-lock-fd-leak/research.md`.
+  - **What does not change**: `flock -n` and the loser skipping with exit 0, the 900 s and 3600 s caps,
+    every exit and return code, the redacted log, the local-mode `timeout` of GNU coreutils (no watchdog,
+    so no defect there), the degraded run without `flock`, `docker/` and the 043 test helper.
+  - **Verification**: `tests/qmd-lock-release.bats` has 10 tests, built on a fake `timeout` shaped like
+    BusyBox's. Six of them fail against the previous code on the lock-held signature and pass with the
+    fix, in bash 3.2 and 5.x and on Linux with util-linux `flock`; the other four pin what must not
+    change and pass on both. A catalog of mutations pins each placement and form of the fix (L8 is an
+    equivalence guard that only the harness mutations turn red). With the real BusyBox `timeout` (1.36.1
+    and 1.37.0, disposable containers, the library's real sections and a fake engine) the probes after
+    setup, reindex and reindex-with-migration go from 10, about a second, to 0, three repetitions per
+    cell; GNU `timeout` never had the defect. A hung call is still cut by `QMD_CMD_TIMEOUT` with the same
+    exit code before and after (143 on BusyBox, 124 on GNU), and a SIGTERM to the section subshell still
+    leaves the lock held while the engine lives. The host suite gives 1904 of 1904 in bash 5.3.15 and in
+    3.2.57 (the 1894 of the baseline plus the ten new tests). The local DOCKER_E2E of qmd on arm64 gives 5
+    of 5 in 13 min 4 s, and a manual run of the docker-e2e workflow on the branch (amd64, run 42508121834)
+    gives 49 of 49 in a 19 min 12 s job, with `qmd real (041)` executed and no lock contention reported by
+    the 043 probe in test 13 (one run: an observation, not a proof). The detail is in
+    `specs/044-qmd-lock-fd-leak/tasks.md`.
+  - **Fleet**: rebuild the image with the normal upgrade; nothing else to do.
+
+- **The sqlite-vec musl swap follows the machine's architecture, and says why when it cannot replace
+  anything — `042-qmd-sqlite-vec-x64`** (VERSION 0.28.0 → 0.29.0; issue #107). qmd's vector search
+  (`qmd embed`, `qmd vsearch`) needs the `vec0` extension of sqlite-vec. The glibc prebuilt that
+  `bun install` lays down cannot be loaded inside the Alpine (musl) image, so the image bakes a musl
+  build and `_qmd_swap_sqlite_vec` (`scripts/lib/qmd_index.sh`) copies it over the prebuilt at
+  runtime. That copy only knew the arm64 package. On an amd64 machine bun installs
+  `sqlite-vec-linux-x64`, the arm64 path did not exist, and the function returned without a word,
+  leaving a glibc binary inside a musl container. The first real amd64 run of the 041 embed phase (a
+  manual dispatch of the nightly workflow on a rehearsal branch, 17-10-2026, run 39069243972)
+  measured the consequence: `qmd real (041)` red at `setup` with `sqlite-vec extension is
+  unavailable`. The deployed agents run aarch64, which is why nothing had shown it before. The 041
+  entry below records this defect as open; this entry fixes its cause.
+
+  - **The swap follows the architecture of the machine.** `uname -m` `x86_64` or `amd64` selects the
+    `sqlite-vec-linux-x64` package, `aarch64` or `arm64` selects `sqlite-vec-linux-arm64`. Only the
+    package of the machine's own architecture is touched; the other one, when it is there, is left
+    alone. On glibc (local mode) nothing changes: the function still returns before it asks `uname`.
+    (Musl is recognized by the presence of `/lib/ld-musl-*.so.1`; a glibc host that also carries that
+    file is treated as musl, which on arm64 already logged `musl build absent` since 017 and now does
+    on x86_64 too.)
+  - **A swap that cannot happen leaves a line in the log, where it used to be mute.** One line per
+    call and always exit 0. `sqlite-vec: no sqlite-vec-linux-<x64|arm64> package in the managed
+    prefix (found: <list or none>) - vector embed unavailable, lexical index intact` when the prefix
+    has no package for this architecture (a workspace carried over from another architecture, or an
+    incomplete install; the line lists the `sqlite-vec-linux-*` directories it did find), and
+    `sqlite-vec: no musl build for machine architecture '<arch>' (supported: x86_64, aarch64) - ...`
+    for an architecture the image is not built for. The line for the baked build being absent
+    (`musl build absent`), the one for a failed copy (`swap failed (cp)`) and the success line are
+    unchanged, so anything that greps them keeps working. Where the line shows up depends on the
+    caller: setup, reindex and migrate capture the output of the ensure in files under
+    `<qmd cache root>/tmp/` (`qmd-setup.err`, `reindex.err`, `embed-pass.err`, `qmd-migrate.err`; the
+    swap line is the first line of each) and log only the last 500 bytes of a failing step (setup's
+    go to the container log, the scheduled reindex's and the migrate it runs to
+    `scripts/heartbeat/logs/qmd-reindex.log`, and the reindex the file watcher triggers has no log,
+    because `scripts/qmd_watch.sh` discards its output), a tail that starts cutting into the swap
+    line from the left once qmd printed more than about 350 bytes after it (the `found:` list
+    survives up to about 430 bytes, the whole line is gone from about 500); the qmd MCP server does
+    not capture it (it goes to the server's stderr) and the status poll discards it. Reading the
+    file with `head -n 1` is the reliable way, and `docs/vault.md` has the diagnosis.
+  - **A test seam, not an operator knob.** `QMD_MACHINE_ARCH` overrides what `uname -m` says, even
+    when it is empty (the way `QMD_MUSL_LOADER` already works). The CI runs the host suite on ubuntu
+    amd64 and on macOS arm64, so no test can depend on the machine it runs on.
+  - **What does not change.** arm64 images (same package, same swap, same log line), glibc and local
+    mode, the pins (qmd 2.5.3, sqlite-vec 0.1.9), the Alpine base, the musl build itself and
+    `docker/Dockerfile`. The only edit under `docker/` is the header comment of
+    `docker/scripts/build-sqlite-vec.sh`, which named the arm64 package only; the container
+    privilege model is untouched. The docs that described the arm64-only path
+    (`docs/qmd-upgrade-checklist.md`, `docs/architecture.md`, `docs/vault.md`) say the swap is per
+    architecture now, and the checklist asks the next qmd bump to re-check the package naming.
+  - **Tests.** `tests/qmd-sqlite-vec.bats` goes from 7 tests to 21: 14 new, and the three that were
+    there for the swap now also assert its log lines. They cover the x64 layout of run 39069243972,
+    the two architecture spellings of each package, a prefix that holds only the other
+    architecture's package, an unsupported architecture, glibc (silent, and `uname` never asked),
+    idempotency, a failing copy (an unwritable package directory; that test is skipped when the
+    suite runs as root), the `uname -m` fallback without the seam, and one test that pins the
+    upgrade checklist item to both package names. Three more came out of the independent review:
+    stdout stays empty in every branch (the stdout of the qmd MCP server is its protocol channel), the
+    swap always hands control back to a caller running under `set -euo pipefail` with its variables
+    untouched (in each branch, a failing `uname` among them), and a package directory without its
+    `vec0.so` counts as missing, with an exact `found:` list. The review also tightened seven tests
+    (E1, E5, N1, N4, N5, N8, N11) and, in a second pass, E3 (the whole line, and an amd64 round with
+    the baked build absent), N4, N5, N8 and N14; a third pass made E3, N4, N5 and N8 compare the
+    whole log line, made E2 and E4 assert silence, started N1 from a read-only prebuilt, gave N5 eight
+    architecture spellings and N8 the retry that follows, and rewrote N13. The host suite grows by 14
+    tests. A catalog of 50 mutations of the swap code and of the checklist (56 variants), run in bash
+    5.3.15 and 3.2.57 on isolated copies, catches all of them; 30 of the 35 mutations the three review
+    passes added survived the oracle they were written against, which is what the three new tests and
+    the tightening are for. The catalog shows that each test can fail, not that each assertion can.
+  - **Checked in a real musl container (19-10-2026).** The real function, with no test seams and
+    under `set -euo pipefail`, in throwaway `alpine:3.24.1` containers with the published sqlite-vec
+    0.1.9 packages. On amd64 (emulated) the code of origin/main leaves the glibc `vec0.so` in place
+    without a word and the extension fails to load (`__memcpy_chk: symbol not found`); this code prints
+    one line, swaps it, and the extension loads (`v0.1.9`). With only the arm64 package on amd64 it logs
+    what it found and touches nothing. On arm64 (native) both versions behave the same.
+  - **Checked on arm64 in the real end-to-end test (22-10-2026).** `qmd real (016)` and `qmd real (041)`
+    of `tests/docker-e2e-qmd.bats` (the second one runs the whole embed: setup, vector extension,
+    reindex, semantic search and the MCP server) pass on an Apple Silicon Mac in 7 min 32 s, with the
+    eight phase marks in order. The `vector-extension` phase confirms that the package's `vec0.so` is
+    the musl build, so arm64 behaves as before the change.
+  - **Checked on amd64 in CI (24-10-2026).** Three manual runs of the nightly workflow on this branch,
+    with the embed phase switched on again (this change empties `QMD_EMBED_DEFECT`): `qmd real (041)`
+    passed in all three, with its eight phase marks, on `ubuntu-latest` amd64, which is the first time
+    the embed ran end to end there. The job lasted 17 min 40 s, 20 min 51 s and 20 min 44 s, so the
+    margin against the 30-minute cap is at least 9 min 9 s and the cap stays as it is (the `setup`
+    phase, which compiles llama.cpp, took 283 to 403 s, and the peak memory was 3.2 GiB). Two of the
+    runs were fully green (49 of 49 tests); the first had one red in an unrelated test, `qmd e2e (037)`,
+    a start-up race in its retry loop that is tracked in #109 and did not repeat. A fourth run on a
+    throwaway branch, with the test's image built without the native toolchain, turned red as intended:
+    `not ok qmd real (041)` after 33 s, last phase `setup`, and the failure state names the reason (the
+    llama.cpp build cannot run) and shows the glibc `vec0.so` left in place. From the merge on, the
+    nightly runs the phase.
+
+- **The nightly runs the real qmd embed, and says so when it does not —
+  `041-nightly-qmd-embed`** (no VERSION change: CI and tests only, no runtime code; the precedent
+  of 019, 025 and 039). Until now the nightly passed `qmd real (016)` without ever running its embed
+  phase: it sat behind `QMD_EMBED_E2E=1`, the workflow never set it, and the test did not even show
+  up as skipped. A regression of the embed (the vector extension, llama.cpp, the models, the musl
+  stack, the semantic search) only surfaced on the hardware gate. This supersedes the "Not a
+  coverage claim" bullet of the 039 entry below.
+
+  - **The embed phase is a test of its own, `qmd real (041)`.** It moved out of `qmd real (016)`,
+    which keeps its name, its build detector and its RED rebuild. It opens with its gate, before any
+    Docker call: a closed gate, or an open defect, is a **skip with a written reason** that the
+    `e2e summary:` line counts; a gate open with no models fails and names the variable. Its eight
+    phases (`models-seed`, `boot`, `setup`, `vector-extension`, `reindex`, `semantic-search`, `mcp`,
+    `models-untouched`) print `# qmd embed phase: <name>`, so the last mark before a `not ok` names
+    the phase that failed; a failed test dumps the container log once. The wait for the setup ends
+    the moment the container log reports a failed step instead of running out its 600 s.
+  - **The models are fetched in a step of their own, `fetch_models`**
+    (`.github/scripts/fetch-qmd-models.sh`): the embeddings model and the query-expansion model
+    (`qmd vsearch` expands every query, which the first assumption of this work missed), 1,616,029,856
+    bytes in all, fetched on every run (no cache between nights: a decision to revisit with the
+    numbers this change logs), each verified by size and sha256 against one table, with bounded
+    retries (3 attempts, 10 s and 30 s of back-off, a 480 s budget). A failure turns `fetch_models`
+    red, which is the step the 040 notice names, and the suite still runs with the embed skipped. A
+    file that changed at origin (same size, another sha256) is not retried and says so. The models are
+    placed where qmd reads them, under the name node-llama-cpp expects, so qmd uses them with no
+    network; the last phase checks that qmd did not download or rewrite any. The version of qmd the
+    table was checked for is recorded in the script and a guard test fails when the qmd pin moves
+    without anyone revisiting it (`docs/qmd-upgrade-checklist.md` has the step).
+  - **The vector-extension check no longer passes on nothing.** The assertion it replaces looked at
+    the `linux-arm64` package only and printed MUSL when the file did not exist. `vec0-libc.sh` takes
+    whichever `sqlite-vec-linux-*` package the install laid down, for any CPU, and an absent file
+    fails. Separately, `_qmd_swap_sqlite_vec` (`scripts/lib/qmd_index.sh`) only knows the arm64 path
+    and does nothing, silently, with the x64 layout. The first real run (17-10-2026, run
+    39069243972, amd64) **confirmed that it breaks the embed there**: the `vec0.so` of the x64
+    package is a glibc binary inside a musl container, `setup` fails with `sqlite-vec extension is
+    unavailable`, and the failure dump names the cause in that one run. It is not fixed here (out of
+    scope: no change under `scripts/`); it is tracked as #107, and the deployed agents run aarch64,
+    where the swap works.
+  - **The test page now lives where qmd looks.** The Tier 2 that moved here wrote its page at the
+    vault root, which stopped being part of qmd's collection in 037 (it covers `wiki/**/*.md` only,
+    and the skeleton ships `wiki/` empty). It had not run since, so with a healthy product the
+    semantic search could not have found it and the first boot had nothing to embed: found by the
+    independent review before the first real run. The vault is now seeded before the first boot with
+    the skeleton and one page under `wiki/`, and the page the `reindex` phase adds goes under
+    `wiki/` too.
+  - **A phase that hangs ends as that phase, and a red run leaves the evidence it cannot be asked for
+    afterwards.** The reindex and the semantic search run bounded inside the container
+    (`timeout -k 10 600` and `-k 10 300`, with the output in a file). Measured on busybox 1.37: a plain
+    `timeout` sends TERM only, so a child that ignores it blocks the timeout for as long as it lives,
+    and the exit status is 143 after TERM and 137 after KILL, not 124. A hang therefore fails as
+    `reindex` or `semantic-search` instead of cancelling the job at its 30 minute cap with no
+    `e2e summary:` and with the 33 e2e tests that run after this file lost; the report gives the exit
+    status, how many seconds the command ran (a 137 long before the limit is a kill from outside, not
+    a hang) and the last lines of its output. When the test fails, its teardown dumps, after the
+    container log, the free disk, the verdict of the container itself (OOM kill, exit code, restarts)
+    and, from inside it, the architecture, the verdict of `vec0-libc.sh` on the prefix, the
+    `sqlite-vec-linux-*` packages, the memory counters of its cgroup and the state and output files of
+    the reindex and of the semantic search (a failure that is not a timeout names its cause only
+    there, and the workspace is gone when the job ends): the first real red (the x64 package is glibc and `_qmd_swap_sqlite_vec` only knows arm64) was
+    conclusive in that one run instead of two. The workspace of the real-qmd tests schedules the qmd cron
+    backstop for 31 February: a tick between the end of the setup and the manual reindex could take the lock
+    and turn a healthy night red (about 3% of the nights; inferred, not measured).
+  - **The fetch step is stricter about its own output.** A budget that runs out keeps the cause of
+    the last attempt (`budget (480s) tras: curl exit 28`, not a bare `budget`); a `GITHUB_ENV` it
+    cannot write fails this step (on the open-defect branch too) instead of leaving it green and
+    blaming the suite; a size with a
+    leading zero in the table is refused (shell arithmetic reads it as octal); the default directory,
+    when it cannot be created, no longer blames a `QMD_MODELS_DIR` nobody set; and the script pins
+    `LC_ALL=C`, because bash translates its own error messages into the language of the user even from
+    a clean environment (seen on a Spanish macOS).
+  - **A known open defect switches the phase off by name, never in silence.** `QMD_EMBED_DEFECT` in
+    the fetch step takes `'#<issue> <reason>'` or the URL of an issue and nothing else (anything else
+    is a configuration error): no model is downloaded, the night stays green and the skip carries the
+    defect. Empty means the phase runs. It ships **set** to `#107` (the amd64 defect above): the night stays
+    green with the phase off, the skip line names the defect and a `::warning::` repeats it on every
+    run; the issue lists what to run before emptying it.
+  - **For whoever runs the embed phase by hand:** `QMD_EMBED_E2E=1` now also needs
+    `QMD_E2E_MODELS_DIR` (fetch first with the script, choosing the directory with
+    `QMD_MODELS_DIR`; two commands in `docs/qmd-upgrade-checklist.md`) and fails, not skips,
+    without it. The cache variable
+    `QMD_E2E_MODEL_CACHE` that the 016 entry mentions never existed: no test, script or document ever
+    read it. Nothing implements it here and that entry is history, so it stays as written.
+  - **Counts.** The e2e suite goes from 48 tests to 49 (13 files). The host suite grows by 37 tests:
+    the 36 of `tests/qmd-embed-nightly.bats` plus the new e2e, which counts as a skip without Docker.
+    The `run:` text of the two steps 039 froze did not change; a test pins their sha256.
+  - **What the real runs measured (17-10-2026; the amd64 runs on GitHub runners, the arm64 run
+    local).** E1 (run 39069243972, phase on): 48 of 49 e2e green and `qmd real (041)` red at `setup`
+    after 369 s, for the product defect above; the models took 40 s to fetch (191 s on a Mac); the
+    job ran 21 min 19 s and stopped before `reindex`, so the duration of a green run with the phase
+    on is **not measured**. E2 (run 39081039747, phase off by #107): green in 11 min 52 s, 18 min 8 s
+    under the 30 minute cap, with `e2e summary: total=49 executed=48 skipped=1 failed=0`. E3 (run
+    39086250738, an embeddings file that does not exist at origin): `fetch_models` red after three
+    attempts (`curl exit 22 (http 404)`), the suite still ran, `qmd real (041)` came out as a skip
+    carrying the reason and the job ended red; the runner applies what a step wrote to
+    `$GITHUB_ENV` even when that step exits 1. The same 48 e2e took 11 min 45 s in E2 and 15 min 8 s
+    in E3, so the cap decision for the active phase (30 minutes today; raise it first if the margin
+    is under 5) needs more than one run and stays with #107. The whole embed phase also ran green on
+    arm64 (Docker Desktop, local): eight marks in order, 8 min 42 s for 016 and 041 together, 4.3 GiB
+    of container memory at the peak.
+  - **Not a claim of parity.** The nightly runs amd64 and the deployed agents run aarch64: it catches
+    regressions of the stack in one architecture, and the hardware gate on ferrari stays. While #107
+    is open the nightly does not run the embed at all, so the evidence on arm64 is the manual run
+    above.
+
 - **The nightly `docker-e2e` job reaches its suite again, and a green now means tests ran —
   `039-fix-nightly-e2e-sigpipe`** (no VERSION change: CI and tests only, no runtime code; the
   precedent of 019 and 025). The nightly was red on every night measured and died within 4 to 11
