@@ -34,6 +34,7 @@ ASCII only, standard library only, Python 3.9 compatible.
 import json
 import os
 import re
+import socketserver
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -142,8 +143,24 @@ class Handler(BaseHTTPRequestHandler):
     do_GET = handle_any
 
 
+class LocalServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer without the reverse DNS lookup of HTTPServer.server_bind.
+
+    HTTPServer.server_bind calls socket.getfqdn() on the bound address. On the macOS runner
+    of the CI (Python 3.15) that lookup took about 35 seconds from the second server of a run
+    on, longer than the 10 seconds the harness waits for the port (measured 10-11-2026,
+    PR 128). The name is only used for the SERVER_NAME of CGI handlers; nothing here reads it.
+    """
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = host
+        self.server_port = port
+
+
 def main():
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server = LocalServer(("127.0.0.1", 0), Handler)
     port = server.server_address[1]
     tmp = os.path.join(TG_DIR, "tg-port.tmp")
     with open(tmp, "w") as fh:
