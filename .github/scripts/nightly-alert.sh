@@ -116,11 +116,35 @@ rand_delim() {
 
 collect() {
   local failed="" summary="" names="" raw="" total skipped nfailed executed line name delim
+  local timed="" start lim now_s margin=60
 
   if [ -n "${STEPS_JSON:-}" ] && make_tmp; then
     printf '%s' "$STEPS_JSON" > "$TMP_DIR/steps.json"
     failed=$(jq -r 'to_entries | map(select(.key != "collect" and (.value.outcome == "failure" or .value.outcome == "cancelled"))) | (.[0].key // "")' "$TMP_DIR/steps.json" 2>/dev/null) || failed=""
     failed=${failed//[^A-Za-z0-9_-]/}
+
+    # A job that hits its limit is reported by the platform as `cancelled` (measured in
+    # the timeout trial, run 42727561516), the same word a person cancelling gets. What
+    # tells them apart is the time: the first step of the job recorded its start, and
+    # this step, which still runs after the limit, compares the time since then with the
+    # limit of the job minus a margin (the start is recorded a few seconds into the job).
+    # Any datum that is missing or is not a number leaves the output empty: unknown.
+    start=$(jq -r '.mark_start.outputs.epoch // ""' "$TMP_DIR/steps.json" 2>/dev/null) || start=""
+    case "$start" in ''|*[!0-9]*) start="" ;; esac
+    case "${#start}" in [1-9]|1[0-2]) ;; *) start="" ;; esac
+    lim="${JOB_LIMIT_MIN:-}"
+    case "$lim" in ''|*[!0-9]*) lim="" ;; esac
+    case "${#lim}" in [1-6]) ;; *) lim="" ;; esac
+    if [ -n "$lim" ]; then lim=$((10#$lim)); if [ "$lim" -le 0 ]; then lim=""; fi; fi
+    now_s="${NIGHTLY_ALERT_NOW:-}"
+    case "$now_s" in ''|*[!0-9]*) now_s=$(date +%s 2>/dev/null) ;; esac
+    case "$now_s" in ''|*[!0-9]*) now_s="" ;; esac
+    case "${#now_s}" in [1-9]|1[0-2]) ;; *) now_s="" ;; esac
+    if [ -n "$start" ] && [ -n "$lim" ] && [ -n "$now_s" ]; then
+      start=$((10#$start))
+      now_s=$((10#$now_s))
+      if [ $((now_s - start)) -ge $((lim * 60 - margin)) ]; then timed=yes; else timed=no; fi
+    fi
   fi
 
   if [ -f e2e.tap ] && make_tmp; then
@@ -141,6 +165,7 @@ collect() {
   fi
 
   emit "failed_step=$failed"
+  emit "timed_out=$timed"
   emit "summary=$summary"
   delim=$(rand_delim)
   emit "failed_tests<<$delim"
@@ -611,7 +636,7 @@ tg_push() {
 }
 
 notify() {
-  local mode class plan action reason result_s url_keep created
+  local mode class plan action reason result_s url_keep created timed=0 sig
 
   # the two secrets of the push: read once into shell variables and taken out of the
   # environment, so gh, jq and date, which never need them, do not inherit them
@@ -643,6 +668,12 @@ notify() {
   case "${RUN_RESULT:-}" in
     success) class=green ;;
     failure) class=red ;;
+    # FR-007, amended after the timeout trial: a cancellation does nothing, except one that
+    # `collect` saw come after the limit of the job (the platform reports a job that hit its
+    # limit as cancelled, and ignoring it would swallow the red of a hung suite)
+    cancelled)
+      if [ "${TIMED_OUT:-}" = yes ]; then class=red; timed=1; else class=none; fi
+      ;;
     *) class=none ;;
   esac
   TG_PRE=""
@@ -652,7 +683,10 @@ notify() {
     return 0
   fi
   if [ "$class" = none ]; then
-    say_notice "modo=$mode resultado=$result_s accion=ninguna motivo=ni verde ni rojo (cancelada, saltada u otro valor)"
+    # a cancellation says what the time-out signal was, so a missing start time is not a silent no
+    sig=""
+    if [ "${RUN_RESULT:-}" = cancelled ]; then sig=" (senal de tiempo agotado: $(san "${TIMED_OUT:-ausente}" 20))"; fi
+    say_notice "modo=$mode resultado=$result_s accion=ninguna motivo=ni verde ni rojo (cancelada, saltada u otro valor)$sig"
     return 0
   fi
 
@@ -739,6 +773,7 @@ notify() {
     resolve) action=actualiza ;;
     *)       action=ninguna ;;
   esac
+  if [ "$timed" = 1 ]; then reason="tiempo agotado: la cancelacion cuenta como roja${reason:+; $reason}"; fi
   say_notice "modo=$mode resultado=$result_s accion=$action${reason:+ motivo=$reason}"
 
   case "$plan" in

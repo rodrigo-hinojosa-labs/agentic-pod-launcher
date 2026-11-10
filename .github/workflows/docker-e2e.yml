@@ -46,9 +46,18 @@ jobs:
     # suite summary and the failed tests, all computed by the last step (collect).
     outputs:
       failed_step: ${{ steps.collect.outputs.failed_step }}
+      timed_out: ${{ steps.collect.outputs.timed_out }}
       summary: ${{ steps.collect.outputs.summary }}
       failed_tests: ${{ steps.collect.outputs.failed_tests }}
     steps:
+      # 040: the start of the job, in seconds. A job that hits timeout-minutes is reported as
+      # cancelled, like one a person cancels; collect (last step, still runs after the limit)
+      # compares the time since this mark with the limit to tell them apart.
+      - name: Mark the start of the job
+        id: mark_start
+        continue-on-error: true
+        run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+
       - name: Checkout
         id: checkout
         uses: actions/checkout@v6
@@ -159,6 +168,9 @@ jobs:
         continue-on-error: true
         env:
           STEPS_JSON: ${{ toJSON(steps) }}
+          # The limit of this job, the very expression of timeout-minutes (the context `env`
+          # is not available there, so it is written twice; a test holds the two equal).
+          JOB_LIMIT_MIN: ${{ (inputs.alert_trial && inputs.trial_outcome == 'timeout') && 1 || 45 }}
         run: .github/scripts/nightly-alert.sh collect
 
   # The red-night notice (040-nightly-red-alert). A job of its own, so the first
@@ -196,6 +208,7 @@ jobs:
           FAILED_STEP: ${{ needs.e2e.outputs.failed_step }}
           SUMMARY: ${{ needs.e2e.outputs.summary }}
           FAILED_TESTS: ${{ needs.e2e.outputs.failed_tests }}
+          TIMED_OUT: ${{ needs.e2e.outputs.timed_out }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

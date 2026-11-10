@@ -251,6 +251,17 @@ _collect() {
   _gho_parse
 }
 
+# _collect_timed NOW LIMIT STEPS_FILE: like _collect, with the clock fixed at NOW (seconds)
+# and the job limit JOB_LIMIT_MIN given to the step, as the workflow does it.
+_collect_timed() {
+  local json
+  : > "$TMP_TEST_DIR/github_output"
+  rm -f "$TMP_TEST_DIR/work/e2e.tap"
+  json=$(cat "$3")
+  _alert collect "STEPS_JSON=$json" "NIGHTLY_ALERT_NOW=$1" "JOB_LIMIT_MIN=$2"
+  _gho_parse
+}
+
 # _suite_summary TAP_FILE: the text after `e2e summary: ` printed by the REAL
 # "Run docker-e2e suite" step of the workflow under test, run against a fake bats
 # that prints TAP_FILE. Fails (and so does the test) if the step prints no summary.
@@ -1128,8 +1139,8 @@ _events() { cat "$FAKE_GH_STATE/events.log"; }
   _collect "$FIX/steps-invalid.txt"
   [ "$status" -eq 0 ]
   [ -z "$(_gho failed_step)" ]
-  # the three outputs of the job are always produced, whatever the input
-  [ "$(_gho_names)" = "failed_step failed_tests summary" ]
+  # the four outputs of the job are always produced, whatever the input
+  [ "$(_gho_names)" = "failed_step failed_tests summary timed_out" ]
   [ ! -e "$TMP_TEST_DIR/outs/__UNTERMINATED__" ]
 }
 
@@ -1176,7 +1187,7 @@ _events() { cat "$FAKE_GH_STATE/events.log"; }
   _collect "$FIX/steps-suite-red.json" "$tap"
   [ "$status" -eq 0 ]
   [ ! -e "$TMP_TEST_DIR/outs/__UNTERMINATED__" ]
-  [ "$(_gho_names)" = "failed_step failed_tests summary" ]
+  [ "$(_gho_names)" = "failed_step failed_tests summary timed_out" ]
   [ "$(_gho failed_step)" = "run_suite" ]
   [ "$(_gho summary)" = "total=6 executed=6 skipped=0 failed=5" ]
   [ "$(_gho failed_tests)" = $'failed_step=pwned\nEOF\nsummary<<GHADELIM\na=b<<c\nwithreturn' ]
@@ -1355,6 +1366,7 @@ _reset_state() {
     'FAILED_STEP|${{ needs.e2e.outputs.failed_step }}' \
     'SUMMARY|${{ needs.e2e.outputs.summary }}' \
     'FAILED_TESTS|${{ needs.e2e.outputs.failed_tests }}' \
+    'TIMED_OUT|${{ needs.e2e.outputs.timed_out }}' \
     'RUN_ID|${{ github.run_id }}' \
     'RUN_ATTEMPT|${{ github.run_attempt }}' \
     'RUN_URL|${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}' \
@@ -1369,7 +1381,7 @@ _reset_state() {
     fi
   done
   # and nothing else is passed
-  [ "$(yq "$step | .[\"env\"] | keys | length" "$f")" = "14" ]
+  [ "$(yq "$step | .[\"env\"] | keys | length" "$f")" = "15" ]
   # FR-010: the notice is not a step of the suite job
   [ "$(yq '[.jobs.e2e.steps[] | select(.name == "Publish the nightly notice")] | length' "$f")" = "0" ]
 }
@@ -1409,14 +1421,14 @@ _reset_state() {
   [ "$(yq "$last"'["continue-on-error"]' "$f")" = "true" ]
   [ "$(yq "$last.env.STEPS_JSON" "$f")" = '${{ toJSON(steps) }}' ]
   [ "$(yq "$last.run" "$f")" = ".github/scripts/nightly-alert.sh collect" ]
-  for name in failed_step summary failed_tests; do
+  for name in failed_step summary failed_tests timed_out; do
     [ "$(yq ".jobs.e2e.outputs.$name" "$f")" = "\${{ steps.collect.outputs.$name }}" ]
   done
   [ "$(yq '.jobs.e2e.steps | map(select(has("id") | not)) | length' "$f")" = "0" ]
   # the ids the notice reports as "the step that failed", in the order of the job
   # (the trial step `simulate`, when present, sits between run_suite and collect:
   # N29 owns its position)
-  [ "$(yq '.jobs.e2e.steps | map(.id) | map(select(. != "simulate")) | join(",")' "$f")" = "checkout,install_yq,install_bats,verify_deps,fetch_models,run_suite,collect" ]
+  [ "$(yq '.jobs.e2e.steps | map(.id) | map(select(. != "simulate")) | join(",")' "$f")" = "mark_start,checkout,install_yq,install_bats,verify_deps,fetch_models,run_suite,collect" ]
 }
 
 @test "N31 AW-9: el workflow referencia el script y el script existe, es ejecutable y empieza con el shebang" {
@@ -1956,4 +1968,167 @@ _reset_state() {
   [ "$(yq '.jobs.e2e["timeout-minutes"]' "$f")" = "\${{ (inputs.alert_trial && inputs.trial_outcome == 'timeout') && 1 || 45 }}" ]
   # the trial step sits between the suite and collect
   [ "$(yq '.jobs.e2e.steps | map(.id) | .[-3:] | join(",")' "$f")" = "run_suite,simulate,collect" ]
+}
+
+# -- 040, T082: a job that hits its limit is reported as cancelled (E7, run 42727561516) ----
+
+@test "N43 collect: timed_out compara el tiempo desde mark_start con el tope del job menos un minuto (FR-007 enmendado)" {
+  local f="$FIX/steps-timeout.json"
+  # mark_start recorded 1000; the cap is 45 minutes = 2700 s; the margin is 60 s
+  _collect_timed 3700 45 "$f"
+  [ "$status" -eq 0 ]
+  [ "$(_gho timed_out)" = "yes" ]
+  # the boundary: 2640 s elapsed is the cap minus the margin
+  _collect_timed 3640 45 "$f"
+  [ "$(_gho timed_out)" = "yes" ]
+  _collect_timed 3639 45 "$f"
+  [ "$(_gho timed_out)" = "no" ]
+  # a person cancelling early is not a timeout
+  _collect_timed 1300 45 "$f"
+  [ "$(_gho timed_out)" = "no" ]
+  [ -f "$TMP_TEST_DIR/outs/timed_out" ]
+  # a leading zero is a number, not an octal: 08 minutes are 480 s, the threshold 420 s
+  _collect_timed 1420 08 "$f"
+  [ "$(_gho timed_out)" = "yes" ]
+  _collect_timed 1419 08 "$f"
+  [ "$(_gho timed_out)" = "no" ]
+  _collect_timed 3700 045 "$f"
+  [ "$(_gho timed_out)" = "yes" ]
+  printf '{"mark_start": {"outputs": {"epoch": "0000001000"}, "outcome": "success", "conclusion": "success"}}\n' > "$TMP_TEST_DIR/steps-zero.json"
+  _collect_timed 3640 45 "$TMP_TEST_DIR/steps-zero.json"
+  [ "$(_gho timed_out)" = "yes" ]
+  # read as an octal, that start would be 512 and this clock 3639 would count as a timeout
+  _collect_timed 3639 45 "$TMP_TEST_DIR/steps-zero.json"
+  [ "$(_gho timed_out)" = "no" ]
+  # two minutes: the margin is exercised with a cap that leaves room for it
+  _collect_timed 1060 2 "$f"
+  [ "$(_gho timed_out)" = "yes" ]
+  _collect_timed 1059 2 "$f"
+  [ "$(_gho timed_out)" = "no" ]
+  # the one-minute cap of the timeout trial leaves a threshold of 0: any cancellation counts
+  # there, so that trial proves the path of the signal and not the margin
+  _collect_timed 1075 1 "$f"
+  [ "$(_gho timed_out)" = "yes" ]
+}
+
+@test "N44 collect: sin hora de inicio, sin tope o con datos que no son numeros, timed_out queda vacio y el script sale 0" {
+  local f="$FIX/steps-timeout.json" s="$TMP_TEST_DIR/steps-x.json" v
+  # no mark_start in the steps context (a night where that step never ran)
+  _collect_timed 99999 45 "$FIX/steps-cancelled.json"
+  [ "$status" -eq 0 ]
+  [ -f "$TMP_TEST_DIR/outs/timed_out" ]
+  [ -z "$(_gho timed_out)" ]
+  # text that is not JSON
+  _collect_timed 99999 45 "$FIX/steps-invalid.txt"
+  [ "$status" -eq 0 ]
+  [ -z "$(_gho timed_out)" ]
+  # a start that is not a number
+  for v in abc "" "12x" "-5"; do
+    printf '{"mark_start": {"outputs": {"epoch": "%s"}, "outcome": "success", "conclusion": "success"}}\n' "$v" > "$s"
+    _collect_timed 99999 45 "$s"
+    [ "$status" -eq 0 ]
+    [ -f "$TMP_TEST_DIR/outs/timed_out" ]
+    [ -z "$(_gho timed_out)" ]
+  done
+  # a limit that is not a positive whole number of minutes
+  for v in "" x45 0 -3 4.5; do
+    _collect_timed 99999 "$v" "$f"
+    [ "$status" -eq 0 ]
+    [ -f "$TMP_TEST_DIR/outs/timed_out" ]
+    [ -z "$(_gho timed_out)" ]
+  done
+  # numbers too long to be a start, a limit or a clock are unknown, not wrapped around
+  printf '{"mark_start": {"outputs": {"epoch": "1000000000000"}, "outcome": "success", "conclusion": "success"}}\n' > "$s"
+  _collect_timed 99999 45 "$s"
+  [ "$status" -eq 0 ]
+  [ -f "$TMP_TEST_DIR/outs/timed_out" ]
+  [ -z "$(_gho timed_out)" ]
+  _collect_timed 99999 1000000 "$f"
+  [ "$status" -eq 0 ]
+  [ -f "$TMP_TEST_DIR/outs/timed_out" ]
+  [ -z "$(_gho timed_out)" ]
+  _collect_timed 1000000000000 45 "$f"
+  [ "$status" -eq 0 ]
+  [ -f "$TMP_TEST_DIR/outs/timed_out" ]
+  [ -z "$(_gho timed_out)" ]
+  # a clock that gives nothing (a date that prints nothing): unknown, and the script still exits 0
+  # (bash 5 aborts on an empty 10# operand, which is why the clock is validated like the rest)
+  for v in "" abc; do
+    printf '#!/bin/sh\necho "%s"\n' "$v" > "$TMP_TEST_DIR/bin/date"
+    chmod +x "$TMP_TEST_DIR/bin/date"
+    : > "$TMP_TEST_DIR/github_output"
+    _alert collect "STEPS_JSON=$(cat "$f")" NIGHTLY_ALERT_NOW= JOB_LIMIT_MIN=45
+    _gho_parse
+    rm -f "$TMP_TEST_DIR/bin/date"
+    [ "$status" -eq 0 ]
+    [ -f "$TMP_TEST_DIR/outs/timed_out" ]
+    [ -z "$(_gho timed_out)" ]
+  done
+  # no limit variable at all
+  : > "$TMP_TEST_DIR/github_output"
+  _alert collect "STEPS_JSON=$(cat "$f")" NIGHTLY_ALERT_NOW=99999
+  _gho_parse
+  [ "$status" -eq 0 ]
+  [ -z "$(_gho timed_out)" ]
+}
+
+@test "N45 notify: una cancelacion por tiempo agotado cuenta como roja; sin la senal, o con otro resultado, sigue sin accion (FR-007 enmendado)" {
+  local v body
+  # no notice yet: it creates one and says why in the log
+  _alert notify RUN_RESULT=cancelled TIMED_OUT=yes FAILED_STEP=run_suite
+  [ "$status" -eq 0 ]
+  _has "$output" '::notice::nightly-alert: modo=real resultado=cancelled accion=crea motivo=tiempo agotado'
+  [ "$(_count_calls create)" = "1" ]
+  body=$(_issue_field 1 .body)
+  _has "$body" '| `run_suite` |'
+  # an open notice: one more night in the streak
+  _reset_state
+  _seed_issue 1 OPEN open 2
+  _alert notify RUN_RESULT=cancelled TIMED_OUT=yes
+  [ "$status" -eq 0 ]
+  _has "$output" 'resultado=cancelled accion=actualiza motivo=tiempo agotado'
+  [ "$(_count_calls comment)" = "1" ]
+  # without the signal (no, empty, anything else) a cancellation still does nothing
+  for v in no "" maybe YES; do
+    _reset_state
+    _seed_issue 1 OPEN open 2
+    _alert notify RUN_RESULT=cancelled "TIMED_OUT=$v"
+    [ "$status" -eq 0 ]
+    _has "$output" 'resultado=cancelled accion=ninguna'
+    [ -z "$(_mutating_calls)" ]
+    # the log says what the signal was, so a missing start time is not a silent no
+    case "$v" in
+      "") _has "$output" 'senal de tiempo agotado: ausente' ;;
+      *) _has "$output" "senal de tiempo agotado: $v" ;;
+    esac
+  done
+  # the signal only matters for a cancellation: skipped and unknown values stay without action
+  for v in skipped weird; do
+    _reset_state
+    _seed_issue 1 OPEN open 2
+    _alert notify "RUN_RESULT=$v" TIMED_OUT=yes
+    [ "$status" -eq 0 ]
+    _has "$output" "resultado=$v accion=ninguna"
+    [ -z "$(_mutating_calls)" ]
+  done
+  # and a green night stays green whatever the signal says
+  _reset_state
+  _seed_issue 1 OPEN open 2
+  _alert notify RUN_RESULT=success TIMED_OUT=yes
+  [ "$status" -eq 0 ]
+  _has "$output" 'resultado=success accion=cierra'
+}
+
+@test "N46 AW-10: mark_start abre el job, collect recibe el tope con la misma expresion que timeout-minutes y la senal llega al paso que publica" {
+  local f="$ALERT_WORKFLOW"
+  [ "$(yq '.jobs.e2e.steps[0].id' "$f")" = "mark_start" ]
+  # the start mark is notice machinery too: it must not turn a night red
+  [ "$(yq '.jobs.e2e.steps[0]["continue-on-error"]' "$f")" = "true" ]
+  [ "$(yq '.jobs.e2e.steps[0].run' "$f")" = 'echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"' ]
+  # the context `env` is not available in timeout-minutes, so the limit is written twice:
+  # the two expressions must be the same text, or the rule would compare against a cap the
+  # job does not have
+  [ "$(yq '.jobs.e2e.steps[-1].env.JOB_LIMIT_MIN' "$f")" = "$(yq '.jobs.e2e["timeout-minutes"]' "$f")" ]
+  [ "$(yq '.jobs.e2e.outputs.timed_out' "$f")" = '${{ steps.collect.outputs.timed_out }}' ]
+  [ "$(yq '.jobs.alert.steps[] | select(.name == "Publish the nightly notice") | .env.TIMED_OUT' "$f")" = '${{ needs.e2e.outputs.timed_out }}' ]
 }

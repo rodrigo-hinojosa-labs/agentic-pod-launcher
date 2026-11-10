@@ -17,12 +17,13 @@ Una corrida manual con los valores por defecto se comporta como hoy: corre la su
 
 - **Se conserva**: el nombre del job, `runs-on`, el texto de los pasos `Checkout`, `Install yq v4 (mikefarah)`, `Install bats-core`, `Verify deps + docker` y `Run docker-e2e suite` (incluido `env: DOCKER_E2E: '1'`), y `permissions: contents: read` heredado del workflow. Los tests O1 a O5 y S1 a S6 de 039 siguen valiendo sin cambios.
 - **Cambia**:
-  1. Cada paso gana un `id` legible, que es lo que `collect` reporta como "paso que falló": `checkout`, `install_yq`, `install_bats`, `verify_deps`, `run_suite`, `simulate`, `collect`.
+  1. Cada paso gana un `id` legible, que es lo que `collect` reporta como "paso que falló": `mark_start`, `checkout`, `install_yq`, `install_bats`, `verify_deps`, `fetch_models`, `run_suite`, `simulate`, `collect`.
   2. `run_suite` gana `if: ${{ !inputs.alert_trial }}`.
   3. Paso nuevo `simulate` (`if: ${{ inputs.alert_trial }}`, entorno `TRIAL_OUTCOME: ${{ inputs.trial_outcome }}`): `run: .github/scripts/nightly-alert.sh simulate "$TRIAL_OUTCOME"`.
-  4. Paso nuevo `collect`, el último (`if: ${{ always() }}`, `continue-on-error: true`, entorno `STEPS_JSON: ${{ toJSON(steps) }}`): `run: .github/scripts/nightly-alert.sh collect`. El script sale siempre con 0; el `continue-on-error` cubre lo único que el script no puede: que ni siquiera arranque (un bit ejecutable perdido en el commit, un `checkout` que falló). Sin él, esa falla volvería roja una noche verde, que es justo lo que FR-009 prohíbe (hallazgo de la implementación, 13-10-2026; no estaba en el contrato original).
-  5. `outputs` del job: `failed_step`, `summary` y `failed_tests`, cada uno `${{ steps.collect.outputs.<nombre> }}`.
-  6. `timeout-minutes: ${{ (inputs.alert_trial && inputs.trial_outcome == 'timeout') && 1 || 30 }}`: vale 30 en las corridas programadas y en las manuales normales (`inputs` no define esas claves) y 1 solo en el ensayo de tiempo agotado.
+  4. Paso nuevo `collect`, el último (`if: ${{ always() }}`, `continue-on-error: true`, entorno `STEPS_JSON: ${{ toJSON(steps) }}` y `JOB_LIMIT_MIN`, la misma expresión que `timeout-minutes`): `run: .github/scripts/nightly-alert.sh collect`. El script sale siempre con 0; el `continue-on-error` cubre lo único que el script no puede: que ni siquiera arranque (un bit ejecutable perdido en el commit, un `checkout` que falló). Sin él, esa falla volvería roja una noche verde, que es justo lo que FR-009 prohíbe (hallazgo de la implementación, 13-10-2026; no estaba en el contrato original).
+  5. `outputs` del job: `failed_step`, `summary`, `failed_tests` y `timed_out`, cada uno `${{ steps.collect.outputs.<nombre> }}`.
+  6. `timeout-minutes: ${{ (inputs.alert_trial && inputs.trial_outcome == 'timeout') && 1 || 45 }}`: vale 45 (30 hasta la feature 042) en las corridas programadas y en las manuales normales (`inputs` no define esas claves) y 1 solo en el ensayo de tiempo agotado.
+  7. Paso nuevo `mark_start`, el primero (`continue-on-error: true`): `run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"`. `collect` lo lee de `toJSON(steps)` para saber cuánto lleva el job y distinguir un tiempo agotado (que la plataforma reporta como `cancelled`) de una cancelación humana (FR-007, T082).
 
 ## 3. Job `alert` (el aviso)
 
@@ -52,6 +53,7 @@ alert:
         FAILED_STEP: ${{ needs.e2e.outputs.failed_step }}
         SUMMARY: ${{ needs.e2e.outputs.summary }}
         FAILED_TESTS: ${{ needs.e2e.outputs.failed_tests }}
+        TIMED_OUT: ${{ needs.e2e.outputs.timed_out }}
         RUN_ID: ${{ github.run_id }}
         RUN_ATTEMPT: ${{ github.run_attempt }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -78,15 +80,16 @@ alert:
 | AW-1 | El job `alert` existe, tiene `needs: e2e`, su `if` es exactamente la expresión de la sección 3 y `timeout-minutes` vale 5 |
 | AW-2 | `permissions` del job `alert` es exactamente `{contents: read, issues: write}` |
 | AW-3 | El nivel del workflow y el job `e2e` no tienen `issues` en `permissions` (solo `contents: read`) |
-| AW-4 | El paso `notify` lleva `continue-on-error: true` y `timeout-minutes: 3`; el `Checkout` del job `alert` lleva `continue-on-error: true`; su `run` llama al script con `notify` sin `${{ }}` dentro; y cada una de las 14 variables de su entorno (y ninguna más) vale exactamente la expresión de la sección 3 |
+| AW-4 | El paso `notify` lleva `continue-on-error: true` y `timeout-minutes: 3`; el `Checkout` del job `alert` lleva `continue-on-error: true`; su `run` llama al script con `notify` sin `${{ }}` dentro; y cada una de las 15 variables de su entorno (y ninguna más) vale exactamente la expresión de la sección 3 |
 | AW-5 | Hay exactamente dos referencias a `secrets.` en el workflow (`TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID`), ambas en el entorno del paso `Publish the nightly notice` del job `alert`; ninguna a nivel del workflow ni en el job `e2e` |
 | AW-6 | Las entradas `alert_trial` y `trial_outcome` existen con tipo, valores y por defecto de la sección 1 |
 | AW-7 | `run_suite` y `simulate` tienen las condiciones de la sección 2; `timeout-minutes` del job `e2e` es el literal de la sección 2, punto 6 |
-| AW-8 | `collect` es el último paso, con `if: ${{ always() }}` y `continue-on-error: true`; las tres salidas del job apuntan a `steps.collect.outputs.*`; todos los pasos tienen `id` |
+| AW-8 | `collect` es el último paso, con `if: ${{ always() }}` y `continue-on-error: true`; las cuatro salidas del job (`failed_step`, `summary`, `failed_tests`, `timed_out`) apuntan a `steps.collect.outputs.*`; todos los pasos tienen `id` y `mark_start` es el primero |
 | AW-9 | El script referenciado existe, es ejecutable y empieza con `#!/usr/bin/env bash` |
+| AW-10 | `mark_start` es el primer paso, lleva `continue-on-error: true` y registra la hora; `JOB_LIMIT_MIN` de `collect` es el mismo texto que `timeout-minutes` del job; la salida `timed_out` llega al paso que publica como `TIMED_OUT` |
 
 ## 6. Limitaciones declaradas
 
 - La rama `schedule` de la condición del job `alert` solo la ejercen el oráculo del host y la primera noche roja real; las corridas programadas solo ocurren sobre la rama por defecto.
 - Un nightly que no llega a arrancar (cola atascada, workflow deshabilitado por inactividad) no puede avisarse desde dentro del propio job (FR-018).
-- Si la plataforma reportara un tiempo agotado como `cancelled`, la regla por defecto lo ignoraría; se mide con `trial_outcome=timeout` antes del merge (research R7).
+- Un tiempo agotado se reporta como `cancelled` (medido el 09-11-2026, E7). `collect` lo distingue de una cancelación humana por el tiempo transcurrido desde `mark_start`; si `collect` no llega a correr, o `mark_start` no registró la hora, `timed_out` queda vacío y esa corrida no avisa por el issue. Que `collect` corra tras un tiempo agotado real de 45 minutos solo se mide en el ensayo de 1 minuto: es el mismo mecanismo de la plataforma.

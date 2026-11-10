@@ -21,7 +21,7 @@ PATH=/bin:$PATH bats tests/nightly-alert.bats      # bash 3.2.57
 perl -e '$SIG{PIPE}="IGNORE"; exec @ARGV' bats tests/nightly-alert.bats   # el proceso de bats con SIGPIPE ignorada, como en el runner (los casos de comportamiento fijan su propia disposición con SIGPIPE_MODE; esta pasada cubre el resto del archivo)
 
 # 2.3 El gate completo, un bash tras otro (nunca a la vez)
-bats tests/                                        # esperado: 1860 ok, 0 not ok (1817 + 43; con la primera versión del oráculo fueron 1849 = 1817 + 32)
+bats tests/                                        # esperado: 1860 ok, 0 not ok sobre la rama sin fusionar (1817 + 43; con la primera versión 1849 = 1817 + 32); sobre la rama fusionada con main y con T082: 1951 (1947 medidos el 09-11-2026 más 4)
 PATH=/bin:$PATH bats tests/                        # esperado: lo mismo
 
 # 2.4 shellcheck con el comando exacto del job de CI (incluye .github/scripts)

@@ -21,13 +21,14 @@ nightly-alert.sh notify           # decide y publica el aviso
 
 ## 2. `collect`
 
-**Entrada**: variable `STEPS_JSON` (`toJSON(steps)`); archivo `e2e.tap` en el directorio actual (puede no existir); `GITHUB_OUTPUT` (si no está definida, escribe a `stdout`).
+**Entrada**: variable `STEPS_JSON` (`toJSON(steps)`), `JOB_LIMIT_MIN` (los minutos del tope del job; `NIGHTLY_ALERT_NOW` fija el reloj en las pruebas); archivo `e2e.tap` en el directorio actual (puede no existir); `GITHUB_OUTPUT` (si no está definida, escribe a `stdout`).
 
 **Salidas** (formato `nombre=valor`; las de varias líneas con un delimitador aleatorio `nombre<<DELIM`):
 
 | Salida | Cómo se calcula |
 |---|---|
 | `failed_step` | el primer id, en el orden de `STEPS_JSON`, cuyo `outcome` es `failure` o `cancelled`; vacío si ninguno o si `STEPS_JSON` no es JSON válido |
+| `timed_out` | `yes` si la hora de inicio que registró el paso `mark_start` (`.mark_start.outputs.epoch` de `STEPS_JSON`) y el reloj dan un tiempo transcurrido de al menos `JOB_LIMIT_MIN * 60 - 60` segundos; `no` si dan menos; vacío (la salida existe) si falta la hora, falta el tope o alguno no es un número entero positivo. La plataforma reporta un tiempo agotado como `cancelled` (M7) y esta salida es lo que lo distingue de una cancelación humana (FR-007) |
 | `summary` | si hay `e2e.tap`: `total=N executed=N skipped=N failed=N`, con las mismas tres cuentas del paso `Run docker-e2e suite` (`^(ok\|not ok) [0-9]+`, `^ok [0-9]+ .*# skip`, `^not ok [0-9]+`; `executed = total - skipped`); vacío si no hay archivo |
 | `failed_tests` | los nombres de las líneas `not ok N <nombre>`, uno por línea, cada uno saneado (sección 4, "Texto inerte") y recortado a 120 caracteres con `...`, hasta 20, más la línea `... y M mas` (en ASCII, sin tilde) si había más; vacío si no hay fallos o no hay archivo. Siempre se escribe con delimitador aleatorio, vacío incluido |
 

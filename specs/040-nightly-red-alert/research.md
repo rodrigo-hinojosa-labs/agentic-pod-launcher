@@ -37,7 +37,7 @@ Fase 0 de `/speckit-plan` para `specs/040-nightly-red-alert/spec.md`. Cada decis
 
 ## R2. Cómo pasan los datos de la suite al aviso sin tocar el paso de la suite
 
-**Decisión**: un paso final del job `e2e`, `collect` (`if: always()`, id `collect`), que llama a `nightly-alert.sh collect` y publica tres salidas del job: `failed_step`, `summary` y `failed_tests`. El paso fallido sale de `toJSON(steps)` (el primer id cuyo `outcome` es `failure` o `cancelled`; se pasa por una variable de entorno); el resumen y los nombres salen de `e2e.tap`. Los pasos del job ganan un `id` con un nombre legible (`verify_deps`, `run_suite`…) y no cambian de nombre ni de texto.
+**Decisión**: un paso final del job `e2e`, `collect` (`if: always()`, id `collect`), que llama a `nightly-alert.sh collect` y publica las salidas del job `failed_step`, `summary` y `failed_tests` (más `timed_out`, desde T082). El paso fallido sale de `toJSON(steps)` (el primer id cuyo `outcome` es `failure` o `cancelled`; se pasa por una variable de entorno); el resumen y los nombres salen de `e2e.tap`. Los pasos del job ganan un `id` con un nombre legible (`verify_deps`, `run_suite`…) y no cambian de nombre ni de texto.
 
 **Razón**: los tests S1 a S6 de 039 ejecutan el texto del paso `Run docker-e2e suite` tal cual; no tocar ese texto los deja valiendo sin reabrirlos. No hay acciones nuevas (`upload-artifact`/`download-artifact`) ni el permiso `actions: read`. Las salidas del job están disponibles para un job dependiente con `if: always()` aunque el job termine en rojo.
 
@@ -86,6 +86,10 @@ Fase 0 de `/speckit-plan` para `specs/040-nightly-red-alert/spec.md`. Cada decis
 - Si la plataforma devolviera un valor distinto de los cuatro conocidos, el script lo trata como "sin acción" y lo anota.
 
 **Por qué hasta entonces es seguro**: una cancelación manual de la corrida programada es rarísima; un tiempo agotado que se reportara como cancelado es el caso que importa, y queda medido antes de merge.
+
+**Medición M7, resuelta (09-11-2026, corrida 42727561516, `trial_outcome=timeout`, sobre `f9d46ac`)**: la plataforma reporta el job que agota su tope como **`cancelled`**, tanto en su conclusión como en `needs.e2e.result`, con la anotación `The job has exceeded the maximum execution time of 1m0s`. El paso `collect` (`always()`) **sí corrió** después del tope y terminó en `success`, y sus salidas **sí llegaron** al job `alert` (`FAILED_STEP=simulate`); el job duró 75 s con un tope de 60 s. Con la regla por defecto el script respondió `accion=ninguna`, o sea que el rojo de una suite colgada se habría perdido.
+
+**Regla adoptada (T082)**: no hace falta la API de jobs ni `actions: read` (FR-013 no cambia), porque `collect` corre. Un primer paso del job (`mark_start`) registra la hora de inicio como salida; `collect` la lee de `toJSON(steps)`, la compara con el tope del job (`JOB_LIMIT_MIN`, la misma expresión de `timeout-minutes`, repetida porque el contexto `env` no existe ahí y con una prueba que exige que las dos sean iguales) y emite `timed_out=yes` si el tiempo transcurrido alcanzó el tope menos un margen de 60 s (el inicio se registra unos segundos después de que arranca el job y la cancelación llega con retraso); `no` si no; vacío si falta algún dato. `notify` cuenta como roja una cancelación con `timed_out=yes` (`motivo=tiempo agotado`); cualquier otro valor deja la cancelación sin acción. **Alternativa descartada**: `github.run_started_at`; no se pudo confirmar que exista en el contexto `github` (de memoria no figura en su lista de propiedades y no se contrastó con la documentación), y un paso propio que registra la hora no depende de ello. **Límite declarado**: si `collect` no llega a correr, la salida queda vacía y esa noche no avisa.
 
 ## R8. Banderas de `gh` verificadas (M1, gh 2.102.0)
 

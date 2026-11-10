@@ -12,6 +12,7 @@ Lo que el job `alert` recibe como entorno, ya resuelto por el workflow.
 | `TRIAL` | `inputs.alert_trial` | `true` o vacío/`false`; solo cuenta con `workflow_dispatch` |
 | `RUN_RESULT` | `needs.e2e.result` | `success`, `failure`, `cancelled`, `skipped`; otro valor o vacío: sin acción, anotado |
 | `FAILED_STEP` | salida `failed_step` del job `e2e` | id del primer paso con `outcome` `failure` o `cancelled`; vacío si ninguno o si `collect` no corrió |
+| `TIMED_OUT` | salida `timed_out` del job `e2e` | `yes` si `collect` vio que el job llegó a su tope menos 60 s; cualquier otro valor o vacío: no. Solo cuenta junto con `RUN_RESULT=cancelled` |
 | `SUMMARY` | salida `summary` | `total=N executed=N skipped=N failed=N`; vacío si no hubo `e2e.tap` |
 | `FAILED_TESTS` | salida `failed_tests` | nombres de los tests fallidos, uno por línea, ya acotados; vacío si no hubo |
 | `RUN_URL`, `RUN_ID`, `RUN_ATTEMPT` | contexto `github` | enlace, identificador y número de intento de la corrida |
@@ -23,7 +24,7 @@ Lo que el job `alert` recibe como entorno, ya resuelto por el workflow.
 
 **Modo derivado**: `real` si `EVENT=schedule`; `trial` si `EVENT=workflow_dispatch` y `TRIAL=true`; en cualquier otro caso **ninguno** (corrida manual normal: no abre, actualiza ni cierra nada, FR-011).
 
-**Clase derivada del resultado**: `green` (`success`), `red` (`failure`), `none` (`cancelled`, `skipped`, otro valor). Pendiente de la medición M7: si la plataforma reportara un tiempo agotado como `cancelled`, una regla adicional lo reclasifica como `red` (research R7) y FR-007 se enmienda con esa salvedad (tarea T082).
+**Clase derivada del resultado**: `green` (`success`), `red` (`failure`, o `cancelled` con `TIMED_OUT=yes`), `none` (`cancelled` sin esa señal, `skipped`, otro valor). La plataforma reporta un job que agota su tope como `cancelled` (M7, medido el 09-11-2026), de modo que esa cancelación se reclasifica como roja (research R7, FR-007 enmendado).
 
 ## 2. Aviso (el issue)
 
@@ -109,7 +110,7 @@ Qué hace cada fila de la tabla de decisión de la sección 5 con el empuje:
 | Fila de la sección 5 | Empuje |
 |---|---|
 | modo ninguno (manual normal) | no |
-| clase `none` (cancelada, saltada, otro valor) | no |
+| clase `none` (cancelada sin tiempo agotado, saltada, otro valor) | no |
 | rojo y no hay aviso previo (crear) | `rojo-nuevo` |
 | rojo con aviso abierto y la noche aún no registrada (actualizar) | `rojo-sigue` |
 | rojo con aviso abierto y la noche ya registrada | no |
