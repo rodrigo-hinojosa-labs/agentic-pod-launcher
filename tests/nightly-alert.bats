@@ -432,9 +432,19 @@ _tg_up() {
     i=$((i + 1))
   done
   if [ ! -s "$TG_DIR/tg-port" ]; then
+    echo "DIAG python3=$(command -v python3) pid=$TG_PID" >&2
+    ps -axo pid,ppid,stat,etime,command > "$TMP_TEST_DIR/ps.txt" 2>&1
+    grep -i python "$TMP_TEST_DIR/ps.txt" >&2
+    ls -la "$TG_DIR" >&2
+    i=0
+    while [ ! -s "$TG_DIR/tg-port" ] && [ "$i" -lt 60 ]; do sleep 1; i=$((i + 1)); done
+    echo "DIAG after ${i}s more: port=$(cat "$TG_DIR/tg-port" 2>/dev/null) out=$(cat "$TG_DIR/server.out")" >&2
+    ( time python3 -c 'print("probe ok")' ) >&2 2>&1
+    ( time env -i PATH=/usr/bin:/bin python3 -c 'print("probe2 ok")' ) >&2 2>&1
     echo "nightly-alert oracle: tg-server.py did not start: $(cat "$TG_DIR/server.out")" >&2
     return 1
   fi
+  echo "DIAG started after $i ticks" >&2
   TG_PORT=$(cat "$TG_DIR/tg-port")
 }
 
