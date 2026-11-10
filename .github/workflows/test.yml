@@ -130,30 +130,17 @@ jobs:
         if: runner.os == 'Linux'
         run: bats --print-output-on-failure tests/
 
-      - name: DIAG python
+      - name: DIAG getfqdn
         if: runner.os == 'macOS'
         run: |
-          command -v python3; python3 -V; time python3 -c pass
-          PATH="/bin:$PATH"; command -v python3; python3 -V
+          python3 - <<'EOF'
+          import socket, time, http.server
+          for i in range(4):
+              t = time.time(); n = socket.getfqdn("127.0.0.1"); print("getfqdn", i, round(time.time() - t, 2), n, flush=True)
+          for i in range(3):
+              t = time.time(); s = http.server.ThreadingHTTPServer(("127.0.0.1", 0), http.server.BaseHTTPRequestHandler); print("stock bind", i, round(time.time() - t, 2), flush=True); s.server_close()
+          EOF
 
-      - name: DIAG qmd-embed alone
+      - name: DIAG the two files with the fix
         if: runner.os == 'macOS'
-        continue-on-error: true
-        run: PATH="/bin:$PATH" bats --print-output-on-failure -f 'F11' tests/qmd-embed-nightly.bats
-
-      - name: DIAG nightly-alert alone
-        if: runner.os == 'macOS'
-        continue-on-error: true
-        run: PATH="/bin:$PATH" bats --print-output-on-failure tests/nightly-alert.bats
-
-      - name: DIAG qmd-embed after
-        if: runner.os == 'macOS'
-        continue-on-error: true
-        run: |
-          ps -axo pid,ppid,stat,etime,command > /tmp/ps.txt; grep -i python /tmp/ps.txt || true
-          PATH="/bin:$PATH" bats --print-output-on-failure -f 'F11' tests/qmd-embed-nightly.bats
-
-      - name: DIAG nightly-alert under bash 5
-        if: runner.os == 'macOS'
-        continue-on-error: true
-        run: bats --print-output-on-failure -f 'N3[23]' tests/nightly-alert.bats
+        run: PATH="/bin:$PATH" bats --print-output-on-failure tests/nightly-alert.bats tests/qmd-embed-nightly.bats
