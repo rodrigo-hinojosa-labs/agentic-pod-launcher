@@ -1,0 +1,8 @@
+{
+"checkout": {"outputs": {}, "outcome": "success", "conclusion": "success"},
+"install_yq": {"outputs": {}, "outcome": "success", "conclusion": "success"},
+"install_bats": {"outputs": {}, "outcome": "success", "conclusion": "success"},
+"verify_deps": {"outputs": {}, "outcome": "success", "conclusion": "success"},
+"run_suite": {"outputs": {}, "outcome": "success", "conclusion": "success"},
+"simulate": {"outputs": {}, "outcome": "skipped", "conclusion": "skipped"}
+}

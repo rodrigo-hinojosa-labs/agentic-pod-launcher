@@ -1,0 +1,125 @@
+# Data Model: Una noche en rojo del nightly le llega a alguien
+
+Fase 1 de `/speckit-plan`. Esta feature no guarda datos en disco: el estado de una racha vive en el propio issue. Las entidades son tres (la corrida, el aviso y la racha; desde la enmienda 1, también el empuje por Telegram: sección 6) y una tabla de decisión que dice qué hace el script con cada combinación. Los campos son lógicos; el formato exacto del issue está en `contracts/notice-format.md`.
+
+## 1. Corrida (entrada del script)
+
+Lo que el job `alert` recibe como entorno, ya resuelto por el workflow.
+
+| Campo | Origen | Valores y reglas |
+|---|---|---|
+| `EVENT` | `github.event_name` | `schedule` o `workflow_dispatch`; cualquier otro valor: sin acción |
+| `TRIAL` | `inputs.alert_trial` | `true` o vacío/`false`; solo cuenta con `workflow_dispatch` |
+| `RUN_RESULT` | `needs.e2e.result` | `success`, `failure`, `cancelled`, `skipped`; otro valor o vacío: sin acción, anotado |
+| `FAILED_STEP` | salida `failed_step` del job `e2e` | id del primer paso con `outcome` `failure` o `cancelled`; vacío si ninguno o si `collect` no corrió |
+| `TIMED_OUT` | salida `timed_out` del job `e2e` | `yes` si `collect` vio que el job llegó a su tope menos 60 s; cualquier otro valor o vacío: no. Solo cuenta junto con `RUN_RESULT=cancelled` |
+| `SUMMARY` | salida `summary` | `total=N executed=N skipped=N failed=N`; vacío si no hubo `e2e.tap` |
+| `FAILED_TESTS` | salida `failed_tests` | nombres de los tests fallidos, uno por línea, ya acotados; vacío si no hubo |
+| `RUN_URL`, `RUN_ID`, `RUN_ATTEMPT` | contexto `github` | enlace, identificador y número de intento de la corrida |
+| `NIGHTLY_ALERT_NOW` | solo pruebas (el workflow no la define) | segundos desde la época que el script usa como "ahora" para fechar la noche; ausente: el reloj |
+| `ASSIGNEE` | `env` fijo del workflow (no es secreto) | usuario a asignar; `rodrigo-hinojosa` |
+| `GH_TOKEN`, `GH_REPO` | `github.token`, `github.repository` | lo que `gh` necesita; el token nunca se imprime |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | secretos del repositorio del mismo nombre (enmienda 1, FR-021) | token del bot de la CI y chat de destino; validados por formato; el script los copia a variables del shell y los quita del entorno; nunca se imprimen |
+| `TELEGRAM_API_BASE`, `TELEGRAM_MAX_TIME` | solo pruebas (el workflow no las define) | base de la API (por defecto `https://api.telegram.org`) y segundos de `--max-time` (por defecto 15) |
+
+**Modo derivado**: `real` si `EVENT=schedule`; `trial` si `EVENT=workflow_dispatch` y `TRIAL=true`; en cualquier otro caso **ninguno** (corrida manual normal: no abre, actualiza ni cierra nada, FR-011).
+
+**Clase derivada del resultado**: `green` (`success`), `red` (`failure`, o `cancelled` con `TIMED_OUT=yes`), `none` (`cancelled` sin esa señal, `skipped`, otro valor). La plataforma reporta un job que agota su tope como `cancelled` (M7, medido el 09-11-2026), de modo que esa cancelación se reclasifica como roja (research R7, FR-007 enmendado).
+
+## 2. Aviso (el issue)
+
+| Campo | Valor |
+|---|---|
+| Identidad | etiqueta `nightly-red` (modo `real`) o `nightly-red-trial` (modo `trial`) |
+| Título | `docker-e2e nightly en rojo` (real) o `[ensayo] docker-e2e nightly en rojo` (trial) |
+| Asignado | `ASSIGNEE`; si la asignación falla, se publica sin asignar y se anota |
+| Estado de GitHub | `OPEN` o `CLOSED` |
+| Marcador (primera línea del cuerpo) | `<!-- nightly-red:v1 state=open|resolved total=N first=YYYY-MM-DD -->` |
+| Detalle | filas de las últimas 10 noches (fecha UTC, corrida con enlace, paso fallido), resumen de la última noche, nombres de los tests fallidos (hasta 20) |
+| Comentarios | una línea por noche nueva; una línea al cerrar por verde; una línea al reabrir |
+
+**Reglas de validación**:
+
+- El marcador se escribe siempre desde cero con valores propios del script (números y una fecha), nunca con texto del log.
+- `total` es un entero positivo; `first` es una fecha ISO en UTC.
+- El cuerpo no pasa de 60.000 caracteres: si pasara, se recortan primero las filas de detalle.
+- Cada nombre de test: máximo 120 caracteres, sin caracteres de control, sin comillas invertidas, con `<!--` y `-->` neutralizados, y dentro de un bloque de código cercado.
+- Una fila se identifica por el id de la corrida; repetir el id no suma la noche.
+
+## 3. Racha
+
+La secuencia de corridas programadas consecutivas en rojo, desde la primera hasta el siguiente verde. No tiene almacenamiento propio: es el issue que lleva su marcador. Una racha tiene **como máximo un aviso abierto**; un aviso cerrado por el mecanismo (`state=resolved`) es el historial de una racha terminada, y uno cerrado a mano con `state=open` es una racha que sigue hasta que una noche verde la termina y reescribe su marcador a `resolved`.
+
+## 4. Estados y transiciones del aviso
+
+```text
+                  rojo (no hay aviso, o el ultimo es state=resolved)
+   (ninguno) ---------------------------------------------------> ABIERTO (state=open, total=1)
+                                                                      |   ^
+                       rojo (misma racha)                              |   |
+                       total=total+1, fila nueva, comentario           v   |
+                                                                  ABIERTO (total=N)
+                                                                      |   |
+        verde (corrida programada)                                    |   | persona lo cierra a mano
+        escribe state=resolved, comenta, cierra                       |   v
+                                                                      |  CERRADO (state=open)
+                                                                      |   |
+                                                                      |   | rojo: reabre y comenta (misma racha)
+                                                                      v   |
+                                                         CERRADO (state=resolved) <- historial
+                                                                      |
+                                       rojo: abre un aviso NUEVO (otra racha)
+```
+
+Transición que el diagrama no dibuja: desde **CERRADO (`state=open`)**, un **verde** reescribe el marcador a `state=resolved` (solo `gh issue edit`; no reabre, no comenta y no vuelve a cerrar) y lo deja como historial; así el rojo siguiente abre un aviso nuevo en vez de reabrir uno viejo (hallazgo I1 del análisis del 12-10-2026).
+
+## 5. Tabla de decisión del subcomando `notify`
+
+`U` es el aviso más reciente con la etiqueta de la identidad, de cualquier estado (o "ninguno").
+
+| Modo | Clase | `U` | Acción | Cubre |
+|---|---|---|---|---|
+| ninguno (manual normal) | cualquiera | cualquiera | ninguna; anota el motivo | FR-011 |
+| real o trial | `none` | cualquiera | ninguna; anota `RUN_RESULT` | FR-007 |
+| real o trial | `red` | ninguno | crea etiqueta si falta; crea el aviso (asignado) | FR-001, FR-002, FR-019 |
+| real o trial | `red` | abierto | si la fila de esta corrida ya está: nada; si no: suma la noche, reescribe el cuerpo, comenta | FR-005 |
+| real o trial | `red` | cerrado, `state=open` | reabre con comentario y suma la noche | FR-008 |
+| real o trial | `red` | cerrado, `state=resolved` | crea un aviso nuevo (otra racha); el anterior no se toca | FR-008 |
+| real o trial | `green` | abierto | escribe `state=resolved`, comenta con el enlace de la corrida verde y cierra con razón `completed` | FR-006 |
+| real o trial | `green` | ninguno, o cerrado con `state=resolved` | ninguna | FR-006 |
+| real o trial | `green` | cerrado, `state=open` (cerrado a mano) | reescribe el marcador a `state=resolved` con `gh issue edit`; no reabre, no comenta y no cierra | FR-008 |
+| cualquiera | cualquiera | (falla una llamada a `gh`) | anota `::warning::` y sigue; el script sale con 0 | FR-009 |
+
+El modo `trial` usa su propia etiqueta y su propio título, de modo que un ensayo jamás lee ni modifica el aviso real, y viceversa.
+
+## 6. Empuje por Telegram (enmienda 1, 14-10-2026)
+
+No guarda estado: es una función de la acción que `notify` decidió sobre el issue (sección 5) y de los datos de la corrida. Detalle de formato y de la petición en `contracts/telegram-push.md`.
+
+| Campo | Valor |
+|---|---|
+| Tipo | `rojo-nuevo`, `rojo-sigue`, `rojo-reabierto`, `verde` o `rojo-sin-aviso`, según la acción |
+| Sonido | normal; `verde` en silencio |
+| Prefijo | `[ensayo] ` cuando el modo es `trial` |
+| Destino | `TELEGRAM_CHAT_ID` |
+| Racha | `N` noches y fecha de inicio, tomadas del marcador cuando es válido (sin marcador válido la línea se omite) |
+| Enlaces | la corrida (`RUN_URL`) y el issue (la URL que imprime `gh issue create` o la del issue leído); si el issue no se conoce, solo la corrida |
+
+Qué hace cada fila de la tabla de decisión de la sección 5 con el empuje:
+
+| Fila de la sección 5 | Empuje |
+|---|---|
+| modo ninguno (manual normal) | no |
+| clase `none` (cancelada sin tiempo agotado, saltada, otro valor) | no |
+| rojo y no hay aviso previo (crear) | `rojo-nuevo` |
+| rojo con aviso abierto y la noche aún no registrada (actualizar) | `rojo-sigue` |
+| rojo con aviso abierto y la noche ya registrada | no |
+| rojo con el último aviso cerrado a mano (reabrir) | `rojo-reabierto` si el `reopen` funcionó; `rojo-sigue` si falló |
+| rojo con el último aviso cerrado por el verde (crear otra racha) | `rojo-nuevo` |
+| verde con aviso abierto (cerrar) y el aviso quedó cerrado | `verde` (en silencio) |
+| verde con aviso abierto, pero el cierre no se completó | no (la noche verde siguiente lo cierra y lo envía) |
+| verde sin aviso, o con el último ya resuelto | no |
+| verde con el último aviso cerrado a mano (solo marcador) | no |
+| no se pudo consultar el issue | rojo: `rojo-sin-aviso`; verde: no |
+
+Cualquier falla de la llamada a Telegram solo produce un `::warning::`; no cambia la tabla ni el código de salida.

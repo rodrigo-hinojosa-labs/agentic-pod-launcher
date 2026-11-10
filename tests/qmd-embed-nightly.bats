@@ -161,10 +161,12 @@ _run_fetch() {
 }
 
 # _http_up: serve $SRV on 127.0.0.1 at a port the kernel picks; sets SRV_PORT and
-# SRV_PID. Fds 3 and 4 are closed in the child (see the header).
+# SRV_PID. Fds 3 and 4 are closed in the child (see the header). serve-dir.py, not
+# `python3 -m http.server`: the latter binds through a reverse DNS lookup that took
+# about 35 s on the macOS runner of the CI (PR 128, 10-11-2026).
 _http_up() {
   local log="$TMP_TEST_DIR/http.log" i=0
-  python3 -u -m http.server 0 --bind 127.0.0.1 --directory "$SRV" > "$log" 2>&1 3>&- 4>&- &
+  python3 -u "$REPO_ROOT/tests/fixtures/qmd-e2e/serve-dir.py" "$SRV" > "$log" 2>&1 3>&- 4>&- &
   SRV_PID=$!
   SRV_PORT=""
   while [ "$i" -lt 100 ]; do
@@ -656,7 +658,9 @@ _fake_seams() { FSEAMS=("QMD_MODELS_BASE_URL=http://127.0.0.1:9" "QMD_MODELS_TAB
   [ "$(_step_get "$WF_FILE" e2e "$name" .id)" = "fetch_models" ]
   [ "$(_step_get "$WF_FILE" e2e "$name" .run)" = ".github/scripts/fetch-qmd-models.sh" ]
   [ "$(_step_get "$WF_FILE" e2e "$name" 'has("continue-on-error")')" = "false" ]
-  [ "$(_step_get "$WF_FILE" e2e "$name" .if)" = "null" ]
+  # 040: the trial of the notice stands in for the suite and does not fetch the models;
+  # a scheduled or normal manual run has no such input, so the step always runs there
+  [ "$(_step_get "$WF_FILE" e2e "$name" .if)" = "\${{ !inputs.alert_trial }}" ]
   names=$(yq '.jobs.e2e.steps[].name' "$WF_FILE")
   while IFS= read -r line; do
     case "$line" in
@@ -688,7 +692,7 @@ _fake_seams() { FSEAMS=("QMD_MODELS_BASE_URL=http://127.0.0.1:9" "QMD_MODELS_TAB
 }
 
 @test "W5: the suite runs when only the fetch failed (its if is the one agreed) and cannot hide a failure" {
-  local want="\${{ !cancelled() && steps.verify_deps.outcome == 'success' }}"
+  local want="\${{ !inputs.alert_trial && !cancelled() && steps.verify_deps.outcome == 'success' }}"
   [ "$(_step_get "$WF_FILE" e2e "Run docker-e2e suite" .if)" = "$want" ]
   [ "$(_step_get "$WF_FILE" e2e "Run docker-e2e suite" 'has("continue-on-error")')" = "false" ]
 }
