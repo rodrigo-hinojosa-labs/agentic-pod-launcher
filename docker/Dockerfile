@@ -121,8 +121,11 @@ RUN set -eux; \
 # is a dangling link holding the executable name, and `uv tool install` refuses
 # to overwrite it: every affected package becomes permanently unwarmable. That
 # split is what took donna down for 25 minutes on 2026-09-18.
-# PATH is deliberately NOT extended: measured in a live container, ~/.local/bin
-# was never on it, so a new bin dir there would be surface with no consumer.
+# PATH is deliberately NOT extended here: every root process (tini, the entrypoint,
+# the crontab sync loop, crond, a default `docker exec -u root`) inherits this ENV,
+# and ~/.local/bin is writable by `agent`. Since 045 the agent's claude sessions get
+# ~/.local/bin at the END of their PATH from scripts/lib/agent_path.sh, because
+# claude-mem 15.x calls the launcher it installs there by name; root never does.
 ENV UV_TOOL_DIR=/opt/uv/tools \
     UV_TOOL_BIN_DIR=/opt/uv/bin \
     UV_CACHE_DIR=/opt/uv/cache \
@@ -266,6 +269,7 @@ COPY scripts/lib/qmd_index.sh       /opt/agent-admin/scripts/lib/qmd_index.sh
 COPY scripts/lib/wiki_graph.sh      /opt/agent-admin/scripts/lib/wiki_graph.sh
 COPY scripts/lib/rag_obs.sh         /opt/agent-admin/scripts/lib/rag_obs.sh
 COPY scripts/lib/mcp_warm.sh        /opt/agent-admin/scripts/lib/mcp_warm.sh
+COPY scripts/lib/agent_path.sh      /opt/agent-admin/scripts/lib/agent_path.sh
 COPY scripts/check_token_health.sh  /opt/agent-admin/scripts/check_token_health.sh
 RUN chmod +x /opt/agent-admin/scripts/heartbeatctl \
               /opt/agent-admin/scripts/check_token_health.sh \

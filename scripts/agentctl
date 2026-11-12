@@ -963,7 +963,10 @@ cmd_mcp() {
   local agent
   agent=$(resolve_agent_name) || exit $?
   _require_docker
-  exec docker exec -u agent "$agent" claude mcp "${@:-list}"
+  # 045: claude mcp sees the same PATH as the agent's sessions (~/.local/bin at the
+  # end, from the image lib). An older image without the lib behaves as before.
+  # shellcheck disable=SC2016
+  exec docker exec -u agent "$agent" sh -c 'L=/opt/agent-admin/scripts/lib/agent_path.sh; if [ -f "$L" ]; then . "$L"; PATH=$(agent_path_compose "$PATH" "$HOME" "$(id -u)"); export PATH; fi; exec claude mcp "$@"' agentctl-mcp "${@:-list}"
 }
 
 cmd_compose() {

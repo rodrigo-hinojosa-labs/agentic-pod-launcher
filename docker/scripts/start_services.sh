@@ -74,6 +74,17 @@ elif [ -f "$(dirname "${BASH_SOURCE[0]}")/../../scripts/lib/mcp_warm.sh" ]; then
   source "$(dirname "${BASH_SOURCE[0]}")/../../scripts/lib/mcp_warm.sh"
 fi
 
+# 045: agent_path_compose builds the PATH of the claude sessions this supervisor
+# creates (~/.local/bin appended at the END, never for root). Image path first, then
+# the repo path for host bats tests. Sourced no-op if missing: start_session then
+# keeps the plain PATH and says so once in the log.
+# shellcheck source=/dev/null
+if [ -f /opt/agent-admin/scripts/lib/agent_path.sh ]; then
+  source /opt/agent-admin/scripts/lib/agent_path.sh
+elif [ -f "$(dirname "${BASH_SOURCE[0]}")/lib/agent_path.sh" ]; then
+  source "$(dirname "${BASH_SOURCE[0]}")/lib/agent_path.sh"
+fi
+
 # seed_vault_if_needed — at first boot, copy the skeleton into the per-agent
 # vault dir if vault.enabled + vault.seed_skeleton and the target is empty.
 # Honors vault.force_reseed: when true, the existing vault is moved aside to
@@ -854,6 +865,22 @@ start_session() {
   cmd=$(next_tmux_cmd)
   log "launching: $cmd"
 
+  # 045: the session gets ~/.local/bin at the END of its PATH, so launchers that
+  # plugins install there (claude-mem 15.x calls its own by name, without a shell)
+  # resolve. Passed as a PATH prefix on the tmux client: tmux gives a new pane the
+  # PATH of the client that creates it and ignores `new-session -e PATH=` (045 research
+  # M10), and the prefix reaches only that client and its session, not this supervisor.
+  local session_path="$PATH"
+  if command -v agent_path_compose >/dev/null 2>&1; then
+    session_path=$(agent_path_compose "$PATH" "${HOME-}" "$(id -u)")
+    if [ "$session_path" != "$PATH" ]; then
+      log "session PATH: appended ${session_path##*:}"
+    fi
+  elif [ -z "${_AGENT_PATH_WARNED:-}" ]; then
+    log "WARN: agent_path lib not loaded; ~/.local/bin is not on the session PATH"
+    _AGENT_PATH_WARNED=1
+  fi
+
   # Reset the channel marker — a fresh launch may or may not be a
   # --channels session, depending on which case next_tmux_cmd picked.
   # Marker is set only after verify_channel_healthy succeeds below.
@@ -862,7 +889,7 @@ start_session() {
 
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   sleep 1
-  tmux new-session -d -s "$SESSION" -c "$WORKDIR" "$cmd"
+  PATH="$session_path" tmux new-session -d -s "$SESSION" -c "$WORKDIR" "$cmd"
   tmux pipe-pane -t "$SESSION" "cat >> /workspace/claude.log"
   sleep 2
   tmux has-session -t "$SESSION" 2>/dev/null || return 1
