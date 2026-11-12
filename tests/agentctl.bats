@@ -144,12 +144,17 @@ YML
 }
 
 @test "agentctl mcp default delegates to 'claude mcp list'" {
+  # 045: claude mcp runs inside `sh -c` so it sees the sessions' PATH
+  # (~/.local/bin at the end), so `claude` and `mcp` are no longer loose argv.
   cd "$TMP_TEST_DIR"
   AGENT_NAME=test run "$AGENTCTL" mcp
   [ "$status" -eq 0 ]
-  grep -q "^claude$" "$TMP_TEST_DIR/recorded"
-  grep -q "^mcp$" "$TMP_TEST_DIR/recorded"
-  grep -q "^list$" "$TMP_TEST_DIR/recorded"
+  grep -qx -- "-u" "$TMP_TEST_DIR/recorded"
+  grep -qx "agent" "$TMP_TEST_DIR/recorded"
+  grep -qx "sh" "$TMP_TEST_DIR/recorded"
+  grep -qx -- "-c" "$TMP_TEST_DIR/recorded"
+  grep -qF 'exec claude mcp "$@"' "$TMP_TEST_DIR/recorded"
+  [ "$(tail -n 1 "$TMP_TEST_DIR/recorded")" = "list" ]
 }
 
 # ─── Doctor + friendly errors ────────────────────────────────────────────

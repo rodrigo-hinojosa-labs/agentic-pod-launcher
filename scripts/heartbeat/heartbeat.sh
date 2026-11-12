@@ -18,6 +18,15 @@ STATE_LIB="${HEARTBEAT_STATE_LIB:-/opt/agent-admin/scripts/lib/state.sh}"
 # shellcheck source=/dev/null
 source "$STATE_LIB"
 
+# 045: agent_path_compose gives the tick's claude ~/.local/bin at the END of its
+# PATH, like the interactive session (the tick loads no plugins today; kept for
+# consistency). Fail-silent: an image without the lib leaves the PATH as it is.
+AGENT_PATH_LIB="${HEARTBEAT_AGENT_PATH_LIB:-/opt/agent-admin/scripts/lib/agent_path.sh}"
+if [ -f "$AGENT_PATH_LIB" ]; then
+  # shellcheck source=/dev/null
+  . "$AGENT_PATH_LIB"
+fi
+
 mkdir -p "$LOG_DIR" "$SESSION_LOG_DIR"
 
 if [ ! -f "$CONF_FILE" ]; then
@@ -213,7 +222,13 @@ run_claude_session() {
   #     the interactive agent session. Plan mode makes sense when a
   #     human reviews proposed changes; for a cron tick with nobody
   #     watching, auto just runs the prompt and exits.
-  tmux new-session -d -s "$sess" -c "$WORKSPACE_DIR" \
+  local hb_path="$PATH"
+  if command -v agent_path_compose >/dev/null 2>&1; then
+    hb_path=$(agent_path_compose "$PATH" "${HOME-}" "$(id -u)")
+  fi
+  # 045: a PATH prefix on the tmux client, not `new-session -e PATH=`, which tmux
+  # ignores (the pane takes the creating client's PATH; research M10).
+  PATH="$hb_path" tmux new-session -d -s "$sess" -c "$WORKSPACE_DIR" \
     "CLAUDE_CONFIG_DIR=$cfg_sq claude --print --dangerously-skip-permissions --permission-mode auto $prompt_sq > $log_sq 2>&1; echo HEARTBEAT_DONE >> $log_sq"
 
   local waited=0

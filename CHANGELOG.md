@@ -237,6 +237,56 @@
   not touched here).
 
 ### Fixed
+- **Plugin launchers in `~/.local/bin` resolve in the agent's claude sessions — `045-plugin-launcher-path`**
+  (VERSION 0.30.0 → 0.31.0). claude-mem 15.x declares its hooks in exec form (`"command": "claude-mem"`,
+  no shell) and installs that launcher in `/home/agent/.local/bin`, a directory that was on no PATH in
+  the container (036 kept it out because it had no consumer). Every hook failed on every prompt with
+  `Executable not found in $PATH: "claude-mem"` (non-blocking, recorded as `hook_non_blocking_error` in
+  the session transcript) and claude-mem recorded nothing. cbum, the first agent with claude-mem
+  15.16.0, ran on a manual root symlink in `/usr/local/bin` that every container recreation dropped;
+  donna and linus (13.x hooks, which build their own PATH in a shell) would fail the same way once their
+  claude-mem moves to 15.x.
+
+  - **The fix**: `start_session` (and so every respawn, the `/login` session and the token wizard) and
+    the heartbeat tick call `tmux new-session` with `/home/agent/.local/bin` appended at the **end** of
+    the PATH, as a `PATH=` prefix on the tmux client. tmux gives a new pane the PATH of the client that
+    creates it and ignores `new-session -e PATH=` (measured on tmux 3.6b with distinct values; an early
+    measurement that used the same value for both missed it, and the host test with a real tmux caught
+    it). The PATH comes from one POSIX function, `agent_path_compose`, in the new image library
+    `docker/scripts/lib/agent_path.sh`: it appends the directory, never twice, and returns the input
+    unchanged for a UID that is 0, empty or not decimal (fail closed), a doubtful `HOME` (empty, `/`, relative, with a trailing slash, `:` or a newline) or an empty PATH. `agentctl mcp` runs `claude mcp` with the
+    same PATH. The supervisor's own PATH does not change.
+  - **What does not change**: the image `ENV PATH` (every root process inherits it, and the directory is
+    writable by `agent`), the entrypoint, `crond`, compose, the privilege model, the 036 pruning of stale
+    uv links, `_run_watchdog`, the text of every tmux command, local mode (its render is byte-identical;
+    it already had `~/.local/bin` first) and `agentctl shell`. If the library is missing (a newer
+    `heartbeat.sh` on an older image, or a forgotten `COPY`), the session and the tick start with the plain
+    PATH, and the supervisor logs it once.
+  - **The heartbeat tick loads no plugins** (its isolated config disables them all), so today no hook
+    there uses the directory; it is covered for consistency, by decision of the operator.
+  - **Verification**: `tests/agent-user-bin-path.bats` has 16 tests (the function under dash, the session
+    with a stubbed tmux, the heartbeat tick with a real tmux on a server started by a client with another
+    PATH, the `agentctl mcp` script run for real with and without the library, the real UID reaching the
+    function, and structural guards that keep the directory out of the Dockerfile, compose's environment,
+    the entrypoint and any exported PATH). Twelve fail against the previous code and pass with the fix,
+    in bash 3.2 and 5.x; the other four pin what must not change. The `agentctl mcp`
+    test of `tests/agentctl.bats` was rewritten for the new argv. `tests/docker-e2e-user-bin-path.bats`
+    (5 tests, `DOCKER_E2E=1`) checks the main session, a respawn, a real cron tick, `agentctl mcp` and,
+    through `docker inspect` (no root exec), the environment root processes inherit. Against the previous
+    code it fails on the main session, the respawn, the tick and `agentctl mcp`. A catalog of 26 mutations
+    (each caught in bash 3.2 and 5.x) pins every guard and the placement of the fix, and an independent
+    read-only review, including the privilege review the constitution asks for, was applied in full. The
+    host suite gives 1972 of 1972 in bash 5.3.15 and in 3.2.57 (the 1951 of the baseline plus the 16 new
+    tests and the 5 new e2e, skipped on the host). The local DOCKER_E2E on arm64 gives 53 of 54; the one red
+    is the smoke test's 20 s wait for the tmux session, which fails the same way on the previous code on
+    this host (a known local timing issue; the CI nightly passes it). On cbum, the agent with claude-mem
+    15.16.0, the branch image (`a886996`) ran without the manual symlink. After the restart and three
+    Telegram prompts, the session transcript had 0 `Executable not found` records, against the 3 recorded
+    before the restart. `claude-mem start` and the `PreToolUse` file-context hook ran by name and exited 0,
+    and claude-mem recorded the session. The detail is in `specs/045-plugin-launcher-path/tasks.md`.
+  - **Fleet**: rebuild the image with the normal upgrade. cbum's manual symlink is gone: it disappeared
+    with the old container when cbum was rebuilt from the branch.
+
 - **qmd's locked sections release `.reindex.lock` as soon as they end — `044-qmd-lock-fd-leak`**
   (VERSION 0.29.0 → 0.30.0; issue #116). `qmd_setup_if_needed` and `qmd_reindex`
   (`scripts/lib/qmd_index.sh`) run their work inside a subshell that holds `.reindex.lock` on file
