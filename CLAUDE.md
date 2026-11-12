@@ -250,7 +250,7 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 - **A child that stalls is a failure too.** A `gh` that accepts the call and never answers left a red night with neither issue nor message, because the push was sequenced after every `gh` call and the step has its own 3-minute limit. Every external call on a notifier path needs its own limit (portable: poll `kill -0` with `sleep 0.05`, since macOS has no `timeout`) and a total budget, with a fake that hangs to prove it.
 
 <!-- SPECKIT START -->
-**045-plugin-launcher-path SPEC + CLARIFY + PLAN + TASKS + ANALYZE + IMPLEMENT EN CURSO (2026-11-11; rama
+**045-plugin-launcher-path SPEC + CLARIFY + PLAN + TASKS + ANALYZE + IMPLEMENT + GATE EN CBUM (2026-11-11/12; rama
 `045-plugin-launcher-path` en el worktree `.claude/worktrees/045-plugin-launcher-path`, desde `origin/main` = `c242c31`,
 VERSION 0.30.0 -> **0.31.0**, MINOR por defecto declarado; arreglo de producto en código horneado).** Origen: el alta de
 CBum (11-11-2026). claude-mem 15.16.0 declara sus hooks en forma exec (`"command": "claude-mem"`, sin shell) y deja su
@@ -276,7 +276,13 @@ supervisor con la sesión (corregido: el stub registra `TMUX_PANE`), y pidió gu
 shebang. **Hecho en local (11-11-2026):** mutaciones M0 a M26 detectadas en los dos bash; pata Linux con dash; revisión independiente
 con revisión de privilegios (1 ALTA, 2 MEDIA y 10 BAJA, aplicadas todas); DOCKER_E2E en arm64 53 de 54 (el smoke falla igual en
 `origin/main`: es la espera de 20 s de este Mac, registrada en 013); gate del host 1972 de 1972 en bash 5.3.15 y 3.2.57 (huella
-`c0e3b9669688519f`). **Pendiente:** commits, push, gate en cbum y PR. Artefactos: `specs/045-plugin-launcher-path/`.
+`c0e3b9669688519f`). **Hecho fuera del equipo:**
+  - commits `36a9669`, `2c31724` y `a886996`, y la rama empujada (11-11-2026);
+  - el gate en cbum con la imagen de la rama, sin el enlace manual. Tras el reinicio y tres prompts por Telegram (11 y 12-11-2026) hubo 0 errores del lanzador, contra los 3 de antes del reinicio. `claude-mem start` y el hook `PreToolUse` salieron con 0, y claude-mem registró la sesión.
+
+El worker de claude-mem avisa cada 10 min "None of the allowed agents (Claude Code) is logged in", también con la imagen anterior: es ajeno a 045.
+
+**Pendiente:** el PR y su CI, el merge del operador, y el despliegue de donna y linus. Artefactos: `specs/045-plugin-launcher-path/`.
 
 **044-qmd-lock-fd-leak SPEC + CLARIFY + PLAN + TASKS + ANALYZE + IMPLEMENT + EVIDENCIA EN CI + MERGE (2026-11-06/09; rama
 `044-qmd-lock-fd-leak` en el worktree `.claude/worktrees/044-qmd-lock-fd-leak`, desde `origin/main` = `8cb45e4`

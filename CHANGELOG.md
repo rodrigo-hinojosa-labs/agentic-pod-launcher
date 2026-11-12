@@ -279,10 +279,13 @@
     host suite gives 1972 of 1972 in bash 5.3.15 and in 3.2.57 (the 1951 of the baseline plus the 16 new
     tests and the 5 new e2e, skipped on the host). The local DOCKER_E2E on arm64 gives 53 of 54; the one red
     is the smoke test's 20 s wait for the tmux session, which fails the same way on the previous code on
-    this host (a known local timing issue; the CI nightly passes it). The detail is in
-    `specs/045-plugin-launcher-path/tasks.md`.
-  - **Fleet**: rebuild the image with the normal upgrade. cbum's manual symlink becomes unnecessary and
-    disappears with the old container.
+    this host (a known local timing issue; the CI nightly passes it). On cbum, the agent with claude-mem
+    15.16.0, the branch image (`a886996`) ran without the manual symlink. After the restart and three
+    Telegram prompts, the session transcript had 0 `Executable not found` records, against the 3 recorded
+    before the restart. `claude-mem start` and the `PreToolUse` file-context hook ran by name and exited 0,
+    and claude-mem recorded the session. The detail is in `specs/045-plugin-launcher-path/tasks.md`.
+  - **Fleet**: rebuild the image with the normal upgrade. cbum's manual symlink is gone: it disappeared
+    with the old container when cbum was rebuilt from the branch.
 
 - **qmd's locked sections release `.reindex.lock` as soon as they end — `044-qmd-lock-fd-leak`**
   (VERSION 0.29.0 → 0.30.0; issue #116). `qmd_setup_if_needed` and `qmd_reindex`
