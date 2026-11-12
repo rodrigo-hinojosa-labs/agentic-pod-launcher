@@ -22,15 +22,15 @@ El valor que `agent_path_compose` devuelve para un contexto del agente (contrato
 
 | Entrada | Regla | Salida |
 | --- | --- | --- |
-| UID 0 | root nunca recibe el directorio | PATH sin cambios |
-| `HOME` vacío, `/`, o con `:` o salto de línea | no se puede formar un directorio confiable | PATH sin cambios |
+| UID 0, `00`, vacío o no decimal | root nunca recibe el directorio, y un UID que no se puede leer cuenta como root (falla cerrada) | PATH sin cambios |
+| `HOME` vacío, `/`, relativo, con barra final, o con `:` o salto de línea | no se puede formar un directorio confiable | PATH sin cambios |
 | PATH vacío | no se crea un PATH que tenga solo el directorio del usuario | PATH sin cambios (vacío) |
-| PATH que ya contiene el directorio en cualquier posición | idempotencia | PATH sin cambios |
+| PATH que ya contiene el directorio como elemento entero, en cualquier posición | idempotencia (un directorio parecido no cuenta) | PATH sin cambios |
 | cualquier otro caso | se agrega al final | `PATH:$HOME/.local/bin` |
 
 Invariantes:
 
-- El directorio, si aparece, es el **último** elemento del resultado (FR-003).
+- Si la función agrega el directorio, queda como **último** elemento del resultado (FR-003). Si el PATH de entrada ya lo traía en otra posición (por ejemplo, desde un entorno heredado), la función no lo mueve: FR-003 se garantiza para lo que agrega la función, no para lo que ya venía.
 - El resultado empieza con el PATH de entrada, sin cambios. Ningún directorio de la imagen se mueve ni se quita.
 - La función no exporta nada, no lee el sistema de archivos y sale con 0.
 
@@ -40,9 +40,9 @@ Cada proceso en que el producto crea una sesión de `claude`, y cómo recibe el 
 
 | Contexto | Quién crea la sesión | Cómo recibe el PATH | Requisito |
 | --- | --- | --- | --- |
-| Sesión interactiva (los tres casos de `next_tmux_cmd`) | `start_session` en `start_services.sh`, como `agent` | `tmux new-session -e PATH=...` | FR-002 |
-| Respawn del watchdog | la misma `start_session` | el mismo `-e` | FR-002 |
-| Tick del heartbeat | `heartbeat.sh`, job de `crond` como `agent` | `tmux new-session -e PATH=...` | FR-002 |
+| Sesión interactiva (los tres casos de `next_tmux_cmd`) | `start_session` en `start_services.sh`, como `agent` | un prefijo `PATH=... tmux new-session` (el pane toma el PATH del cliente que lo crea; `-e PATH=` se ignora, `research.md` M10) | FR-002 |
+| Respawn del watchdog | la misma `start_session` | el mismo prefijo | FR-002 |
+| Tick del heartbeat (hoy sin plugins; se cubre por consistencia, `research.md` M9) | `heartbeat.sh`, job de `crond` como `agent` | un prefijo `PATH=... tmux new-session` | FR-002 |
 | `agentctl mcp` | `docker exec -u agent` desde el host | `sh -c` que carga la librería en el contenedor | FR-002 (D3) |
 | `agentctl shell` y un `docker exec -u agent` manual | el operador | PATH de la imagen, sin cambios (documentado) | FR-002, cláusula del exec manual |
 

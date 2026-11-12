@@ -14,27 +14,27 @@ bats tests/ 2>/dev/null | grep -c '^ok '                          # bash 5.x
 PATH=/bin:$PATH bats tests/ 2>/dev/null | grep -c '^ok '          # bash 3.2.57
 ```
 
-Se registran los `ok`, los `not ok` y los saltados de cada bash. El esperado final es esa línea base más 18: las 13 pruebas del oráculo y las 5 del e2e nuevo, que en el host salen saltadas.
+Se registran los `ok`, los `not ok` y los saltados de cada bash. El esperado final es esa línea base más 21: las 16 pruebas del oráculo y las 5 del e2e nuevo, que en el host salen saltadas.
 
 ## V2. ROJO y después VERDE del oráculo
 
 ```bash
-bats tests/agent-user-bin-path.bats                     # contra el código actual: 11 rojas, 2 verdes (H2, G1)
+bats tests/agent-user-bin-path.bats                     # contra el código actual: 12 rojas, 4 verdes (H2, G1, S3, H3)
 # ... implementación ...
-bats tests/agent-user-bin-path.bats                     # 13 de 13
-PATH=/bin:$PATH bats tests/agent-user-bin-path.bats     # 13 de 13 en bash 3.2
+bats tests/agent-user-bin-path.bats                     # 16 de 16
+PATH=/bin:$PATH bats tests/agent-user-bin-path.bats     # 16 de 16 en bash 3.2
 bats tests/agentctl.bats                                # incluida la prueba actualizada de agentctl mcp
 ```
 
 ## V3. Mutaciones
 
-Se aplican M1 a M18 de `contracts/host-oracle.md`, cada una sobre una copia aislada, y se corre el oráculo en los dos bash. Cada mutación tiene que hacer caer su prueba. P5 y M7 se repiten en `ubuntu:24.04` como no root, con el repo copiado y no montado.
+Se aplican M1 a M26 de `contracts/host-oracle.md`, cada una sobre una copia aislada, y se corre el oráculo en los dos bash. Cada mutación tiene que hacer caer su prueba. P5 y M7 se repiten en `ubuntu:24.04` como no root, con el repo copiado y no montado.
 
 ## V4. Gate completo del host
 
 ```bash
 shellcheck -S error docker/scripts/lib/agent_path.sh docker/scripts/start_services.sh scripts/heartbeat/heartbeat.sh scripts/agentctl
-bats tests/                      # línea base + 18 (13 del oráculo y 5 e2e saltadas), 0 not ok
+bats tests/                      # línea base + 21 (16 del oráculo y 5 e2e saltadas), 0 not ok
 PATH=/bin:$PATH bats tests/      # ídem en bash 3.2
 ```
 

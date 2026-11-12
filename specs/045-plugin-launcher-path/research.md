@@ -38,9 +38,9 @@ Todas en un contenedor desechable (`docker run --rm -u 0 --entrypoint sh`) de `a
 
 Un cliente sin el directorio arranca el servidor, y después el cliente extendido crea la sesión principal. Esa sesión tiene `...:/bin:/home/agent/.local/bin`. **Conclusión**: no importa quién arrancó el servidor; manda el cliente que crea la sesión.
 
-### M4. `new-session -e PATH=...`
+### M4. `new-session -e PATH=...` (medición defectuosa; la corrige M10)
 
-`tmux new-session -d -s main3 -e "PATH=$PATH" ...` deja el PATH pedido en el pane y en el entorno de la sesión (`show-environment -t main3 PATH`). **Conclusión**: `-e` funciona en tmux 3.6b (y en el 3.6a del host) y fija el PATH de forma explícita, sin depender del entorno del cliente ni del servidor.
+`tmux new-session -d -s main3 -e "PATH=$PATH" ...` dejó el PATH pedido en el pane. **La medición no probaba nada**: el cliente ya tenía ese mismo PATH, así que no distinguía `-e` del PATH del cliente (la misma trampa de los fakes con dos fuentes que devuelven el mismo valor). La prueba H1 del host, con un tmux real, lo destapó durante la implementación, y M10 lo midió con valores distintos: `-e PATH=` se ignora.
 
 ### M5. La resolución por nombre con el directorio al final
 
@@ -77,12 +77,31 @@ Lectura de solo los campos del registro, sin la conversación, en el transcript 
 
 **Conclusión**: SC-001 se mide en el transcript, con el texto con comillas y filtrando por hora (con `--continue` la sesión es la misma). Los 3 registros existentes son el control positivo. `claude.log` no sirve: no tiene saltos de línea y se reinicia con el contenedor. El almacén de claude-mem es `~/.claude-mem/claude-mem.db` con su `-wal`, cuya fecha marca la última escritura.
 
+### M9. El heartbeat no carga plugins (leído en código, durante la implementación)
+
+`ensure_heartbeat_config_dir` (`scripts/heartbeat/heartbeat.sh:125-172`) arma el `CLAUDE_CONFIG_DIR` del tick con `enabledPlugins = {}`, `extraKnownMarketplaces = {}` y un `plugins/` vacío, y quita del `settings.json` los hooks `Stop`, `PreToolUse` y `SessionStart`. Lo hace para que el tick no lance el plugin de Telegram, cuyo `bun server.ts` mataría al de la sesión. **Conclusión**: hoy ningún hook de plugin corre en el tick, y el directorio no tiene consumidor ahí. El primer borrador del spec decía lo contrario. El operador decidió (11-11-2026) mantener el heartbeat en el alcance por consistencia, y por si el tick llega a habilitar plugins o hooks propios.
+
+### M10. Qué PATH recibe un pane nuevo, con valores distintos (corrige M4)
+
+En el mismo contenedor desechable de la Fase 0 (tmux 3.6b, como `agent`), con el PATH del cliente `A` (el de la imagen), `B = A:/opt/045-B` y `C = A:/opt/045-C` (script `scratchpad/045/m10_tmux_path.sh`):
+
+| Caso | PATH del pane |
+| --- | --- |
+| cliente `A`, sin `-e` (arranca el servidor) | `A` |
+| cliente `A`, `-e PATH=B` | `A`: **`-e PATH=` se ignora** |
+| prefijo `PATH=C tmux new-session` | `C` |
+| prefijo `C` y `-e PATH=B` | `C` |
+| entorno global del servidor | `A` |
+| servidor nuevo arrancado con el prefijo `C`, y después una sesión de un cliente con `A` | `C` para la primera y `A` para la segunda |
+
+**Conclusión**: el pane toma el PATH del cliente que crea la sesión, y ni `-e` ni el entorno global del servidor lo cambian. El mecanismo correcto es un prefijo `PATH=...` en la llamada a `tmux new-session`. Ese prefijo solo alcanza al cliente y a su sesión, no a sesiones posteriores ni al proceso que llama.
+
 ## Decisiones
 
-### D1. El mecanismo: `tmux new-session -e PATH=...` en los dos lugares que crean sesiones de `claude`
+### D1. El mecanismo: un prefijo `PATH=... tmux new-session` en los dos lugares que crean sesiones de `claude`
 
-- **Decisión**: `start_session` (`docker/scripts/start_services.sh:842-880`) y la función que lanza el tick en `scripts/heartbeat/heartbeat.sh` (`:216`) pasan `-e "PATH=<PATH compuesto>"` a su `tmux new-session`. El PATH compuesto es el PATH del proceso que crea la sesión con `/home/agent/.local/bin` agregado al final (D2). El entorno de `start_services.sh` y el de `heartbeat.sh` no cambian: solo el de la sesión que crean.
-- **Por qué**: M2 y M3 muestran que tmux toma el PATH del cliente que crea la sesión. Fijarlo en la creación, con `-e`, cubre la sesión principal, sus respawns (todos pasan por `start_session`), el `claude` sin canal del `/login`, el wizard del token (los tres son el comando de esa sesión) y los ticks del heartbeat. No depende de quién arrancó el servidor tmux (M3 y M4) ni del entorno de `crond` (M1). Los procesos root no se tocan, así que FR-004 se cumple por construcción.
+- **Decisión**: `start_session` (`docker/scripts/start_services.sh:842-880`) y la función que lanza el tick en `scripts/heartbeat/heartbeat.sh` (`:216`) llaman a su `tmux new-session` con el PATH compuesto como prefijo del cliente (`PATH="$session_path" tmux new-session ...`). Era `-e "PATH=..."` hasta que M10 midió que tmux lo ignora. El PATH compuesto es el PATH del proceso que crea la sesión con `/home/agent/.local/bin` agregado al final (D2). El entorno de `start_services.sh` y el de `heartbeat.sh` no cambian: solo el de la sesión que crean.
+- **Por qué**: M2, M3 y M10 muestran que tmux le da a un pane nuevo el PATH del cliente que crea la sesión, aunque se pase `-e PATH=`. Fijarlo en ese cliente, con un prefijo, cubre la sesión principal, sus respawns (todos pasan por `start_session`), el `claude` sin canal del `/login`, el wizard del token (los tres son el comando de esa sesión) y los ticks del heartbeat. No depende de quién arrancó el servidor tmux (M3 y M10) ni del entorno de `crond` (M1), y el prefijo solo alcanza a ese cliente y a su sesión: una sesión creada después por otro cliente conserva su PATH (M10). Los procesos root no se tocan, así que FR-004 se cumple por construcción.
 - **Alternativas descartadas**:
   - `ENV PATH` en el Dockerfile: llega a todo proceso del contenedor, incluidos el entrypoint, el bucle del crontab, `crond` y un `docker exec -u root` (viola FR-004). El entrypoint podría limpiarlo para sus hijos, pero `docker exec -u root` lo recibiría igual.
   - Un `export PATH` global en `start_services.sh`: no llega al heartbeat (M1 y M2) y extiende el PATH de cada hijo del supervisor (instalación de plugins, calentamiento de uv y npm, qmd) sin un consumidor.
@@ -119,7 +138,7 @@ El `ENV` del Dockerfile no cambia. Su comentario (`:118-125`) deja de decir que 
 
 ## Riesgos residuales
 
-- **tmux de otra versión**: M2 y M4 se midieron en 3.6b (imagen) y 3.6a (host). `-e` hace que el resultado no dependa de la semántica de herencia de cada versión, que es justo lo que M2 mostró que cambia de lo esperado.
+- **tmux de otra versión**: M2 y M10 se midieron en 3.6b (imagen), y H1 corre con el tmux del host (3.6a en el Mac; 3.6 y 3.8 en la CI). Que el pane tome el PATH del cliente es lo que el diseño usa. H1 arranca antes el servidor privado desde un cliente con otro PATH, así que si una versión futura cambiara esa regla H1 lo detectaría; E1 a E4 no la distinguen, porque en el contenedor el primer cliente ya usa el PATH compuesto.
 - **Un plugin que instale en `~/.local/bin` un binario con el nombre de uno de la imagen** no se usa (FR-003). Es una decisión, no un defecto.
 - **La primera sesión tras instalar claude-mem 15.x** puede fallar en los dos primeros hooks de `SessionStart` (orden del vendor; spec, casos borde).
 - **Agentes con imagen anterior**: siguen con el defecto hasta reconstruirla.

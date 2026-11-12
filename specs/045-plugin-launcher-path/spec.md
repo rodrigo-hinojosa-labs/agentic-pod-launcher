@@ -29,7 +29,7 @@ El mismo `SessionStart` corre `node ${CLAUDE_PLUGIN_ROOT}/scripts/ensure-launche
 **Dónde corre `claude` en docker (leído en código).**
 
 - La sesión interactiva en tmux que lanza `docker/scripts/start_services.sh` (`start_session`, `:842`; `tmux new-session`, `:865`), con sus tres variantes: el `claude` sin canal para el `/login`, el wizard del token y la sesión con canales (`next_tmux_cmd`, `:668-697`). El watchdog la respawnea cuando muere.
-- Los ticks del heartbeat: `scripts/heartbeat/heartbeat.sh:216` abre un `tmux new-session` con `claude --print` desde un job de busybox `crond`, con un `CLAUDE_CONFIG_DIR` aislado que enlaza los plugins, así que los hooks de claude-mem también corren ahí. Hoy el heartbeat está desactivado en los tres agentes.
+- Los ticks del heartbeat: `scripts/heartbeat/heartbeat.sh:216` abre un `tmux new-session` con `claude --print` desde un job de busybox `crond`, con un `CLAUDE_CONFIG_DIR` aislado que deshabilita todos los plugins (`enabledPlugins = {}` y un `plugins/` vacío, `heartbeat.sh:125-172`), así que hoy los hooks de claude-mem no corren ahí. Se cubre igual, por consistencia y por si el tick llega a habilitar plugins o hooks propios (decisión del operador del 11-11-2026). Hoy el heartbeat está desactivado en los tres agentes.
 - `agentctl mcp`, que corre `docker exec -u agent <agente> claude mcp` (`scripts/agentctl:966`), y, fuera de lo que lanza el producto, `agentctl run` (`:918-927`), `agentctl shell` y cualquier `docker exec -u agent` manual.
 
 **Una restricción de seguridad que el arreglo no puede romper (Principio II).** El entrypoint, el bucle de sincronización del crontab y `crond` corren como root (`docker/entrypoint.sh:64-108`); `start_services.sh` corre como `agent` tras `su-exec` (`:118`). `/home/agent/.local/bin` lo puede escribir el usuario `agent`. Si un proceso root tuviera ese directorio en su PATH y resolviera un nombre que la imagen no trae, ejecutaría como root algo que `agent` plantó ahí (inferido por razonamiento, sin medir). El arreglo no debe abrir esa vía.
@@ -50,11 +50,11 @@ El mismo `SessionStart` corre `node ${CLAUDE_PLUGIN_ROOT}/scripts/ensure-launche
 | La imagen deja `~/.local/bin` fuera del PATH a propósito (036) | Leído en código | `docker/Dockerfile:118-125` |
 | La poda de enlaces colgantes de uv corre en cada arranque | Leído en código | `scripts/lib/mcp_warm.sh:150-182`; `start_services.sh:837` |
 | El modo local ya pone `~/.local/bin` del operador primero en el PATH, con su `HOME` | Leído en código | `modules/remote-control.env.tpl:8,13` |
-| El heartbeat lanza `claude` en un `tmux new-session` desde un job de `crond`, con los plugins enlazados | Leído en código | `scripts/heartbeat/heartbeat.sh:216`; `docker/entrypoint.sh:105-108` |
+| El heartbeat lanza `claude` en un `tmux new-session` desde un job de `crond`, con todos los plugins deshabilitados, y quita del `settings.json` los hooks `Stop`, `PreToolUse` y `SessionStart` | Leído en código (corrige el primer borrador, que decía que enlazaba los plugins) | `scripts/heartbeat/heartbeat.sh:125-172,216`; `docker/entrypoint.sh:105-108` |
 | El heartbeat está desactivado en los tres agentes | Medido (`features.heartbeat.enabled: false`) | `agent.yml` de donna, linus y cbum |
 | El entrypoint, el bucle del crontab y `crond` corren como root; la sesión, como `agent` | Leído en código | `docker/entrypoint.sh:64-108,118` |
 | Un job de busybox `crond` hereda el PATH de `crond` | Medido en la Fase 0 del plan: hereda todo el entorno de `crond` (que es root) y `crond` solo fija `HOME`, `USER`, `LOGNAME` y `SHELL` | `research.md` M1 (BusyBox 1.37.0) |
-| Una sesión tmux nueva hereda el entorno global del servidor tmux del agente | **Refutado**: en tmux 3.6b la sesión toma el PATH del cliente que la crea, no el del servidor; `new-session -e` lo fija de forma explícita | `research.md` M2 a M4 |
+| Una sesión tmux nueva hereda el entorno global del servidor tmux del agente | **Refutado**: en tmux 3.6b la sesión toma el PATH del cliente que la crea, no el del servidor, e ignora `new-session -e PATH=`; un prefijo `PATH=... tmux new-session` sí lo fija | `research.md` M2, M3 y M10 |
 | `_run_watchdog` está congelado por un oráculo de sha | Leído en código | `tests/start-services-watchdog.bats:587` |
 | En la primera sesión tras instalar claude-mem 15.x, `claude-mem start` corre antes que `ensure-launcher.cjs` | Leído (orden del `SessionStart` en `hooks.json`); la consecuencia es inferida | `hooks.json` de 15.16.0 |
 | Un proceso root con `~/.local/bin` en su PATH podría ejecutar un binario plantado por `agent` | Inferido por razonamiento, sin medir; el diseño lo evita, y el e2e lo verifica en el entorno que Docker entrega al contenedor (`docker inspect`), sin entrar como root | Principio II; `contracts/e2e-and-gate.md` E5 |
@@ -72,6 +72,7 @@ El mismo `SessionStart` corre `node ${CLAUDE_PLUGIN_ROOT}/scripts/ensure-launche
 - Q: El análisis encontró 1 CRITICAL, 2 HIGH, 7 MEDIUM y 6 LOW. ¿Qué se corrige antes de implementar? → A: Todo, incluidos los LOW.
 - Q: La prueba E5 leía el entorno de los procesos root con `docker exec -u root`, que el Principio II prohíbe. ¿Cómo se verifica FR-004? → A: Con `docker inspect` (el entorno que Docker entrega al contenedor y del que heredan los procesos root) y con la guardia G1 sobre el código, sin ningún `docker exec -u root`.
 - Q: SC-001 buscaba un texto que no coincide con el error real y en un log que no sirve para contarlo. ¿Cómo se mide? → A: En el transcript de la sesión, contando los registros `hook_non_blocking_error` con `Executable not found in $PATH: "claude-mem"` posteriores al reinicio. Los 3 registros que ya existen son el control positivo.
+- Q: El tick del heartbeat no carga plugins, así que hoy nadie usa `~/.local/bin` ahí. ¿Se mantiene en el alcance? → A: Sí, por consistencia, y por si el tick llega a habilitar plugins o hooks propios (decisión del operador del 11-11-2026, durante la implementación). Se conservan H1, H2, M12, M16 y E3.
 - Q: FR-001 decía "el PATH de los procesos del agente", y el diseño solo cubre las sesiones de `claude` que crea el producto y `agentctl mcp`. ¿Cuál es el alcance? → A: El del diseño. `agentctl run`, `agentctl shell` y un `docker exec -u agent` manual quedan fuera y documentados (FR-001 y FR-002).
 
 ## User Scenarios & Testing *(mandatory)*
@@ -88,7 +89,7 @@ En un agente docker con claude-mem 15.x, cada hook que invoca `claude-mem` por n
 
 1. **Given** un agente docker con claude-mem 15.x y su lanzador ya instalado, **When** el operador envía un prompt en la sesión interactiva, **Then** los hooks `UserPromptSubmit`, `PreToolUse`, `PostToolUse` y `Stop` corren sin el error `Executable not found in $PATH`.
 2. **Given** la sesión interactiva respawneada por el watchdog, **When** arranca, **Then** el `SessionStart` de claude-mem corre sin ese error.
-3. **Given** un agente con el heartbeat activado, **When** corre un tick, **Then** los hooks de claude-mem del tick encuentran el lanzador.
+3. **Given** un agente con el heartbeat activado, **When** corre un tick, **Then** el `claude` del tick corre con el directorio al final de su PATH, igual que la sesión. Hoy el tick no carga plugins, así que no hay hooks de claude-mem que lo usen: se cubre por consistencia.
 4. **Given** un contenedor recreado (rebuild, `docker compose up` tras un stop), **When** arranca, **Then** los hooks siguen funcionando sin volver a crear ningún enlace.
 
 ---
@@ -121,7 +122,7 @@ Las pruebas nuevas que cubren el arreglo caen contra el código actual; las que 
 
 **Acceptance Scenarios**:
 
-1. **Given** el código actual, **When** corre el oráculo nuevo, **Then** caen las 11 pruebas que cubren el arreglo y pasan las 2 que guardan lo que no cambia.
+1. **Given** el código actual, **When** corre el oráculo nuevo, **Then** caen las 12 pruebas que cubren el arreglo y pasan las 4 que guardan lo que no cambia.
 2. **Given** el código con el arreglo, **When** corre el oráculo en bash 3.2 y en 5.x, **Then** pasan todas, y cada mutación del catálogo hace caer al menos una.
 3. **Given** cbum, antes del merge, con la imagen de la rama y sin el enlace manual, **When** se reinicia y se envían tres prompts, **Then** el transcript no tiene ningún registro `hook_non_blocking_error` con `Executable not found in $PATH: "claude-mem"` posterior al reinicio, y claude-mem registra la sesión.
 
@@ -147,7 +148,7 @@ Las pruebas nuevas que cubren el arreglo caen contra el código actual; las que 
 - **FR-002**: El arreglo cubre todos los contextos en que el producto corre `claude` como `agent`:
   - la sesión interactiva en tmux y sus respawns del watchdog;
   - la sesión sin canal del `/login` y el wizard del token;
-  - los ticks del heartbeat;
+  - los ticks del heartbeat, por consistencia: hoy el tick no carga plugins (decisión del operador del 11-11-2026);
   - los subcomandos de `agentctl` que corren `claude` dentro del contenedor (hoy, `agentctl mcp`).
 
   `agentctl run`, `agentctl shell` y un `docker exec -u agent` manual no se cubren. Con el diseño elegido (`research.md` D1 y D3), cubrirlos exigiría un `ENV PATH` de imagen, y eso violaría FR-004. La documentación dice cómo agregar el directorio a mano.
@@ -195,7 +196,7 @@ Las pruebas nuevas que cubren el arreglo caen contra el código actual; las que 
 
 - **SC-001**: En el gate previo al merge (FR-011), en cbum con claude-mem 15.16.0, la imagen de la rama y sin el enlace manual, tras el reinicio y tres prompts, el transcript de la sesión tiene 0 registros `hook_non_blocking_error` con `Executable not found in $PATH: "claude-mem"` y hora posterior al reinicio. El mismo conteo sin el filtro de hora encuentra los 3 registros del 11-11-2026 anteriores al parche: es el control positivo de que el método ve el error. Además, claude-mem registra la sesión: su worker sigue vivo y `~/.claude-mem/claude-mem.db-wal` cambia de fecha o de tamaño después de los prompts.
 - **SC-002**: En el contenedor real, el ejecutable de prueba se resuelve en el 100 % de los contextos de FR-002 que el arnés puede reproducir, el señuelo no gana en ninguno y el entorno que Docker entrega al contenedor no tiene el directorio.
-- **SC-003**: La suite del host da la línea base medida más las pruebas nuevas, con 0 `not ok` en bash 3.2 y en 5.x. Las 11 pruebas que cubren el arreglo caen contra `origin/main`, las 2 que nacen verdes caen con sus mutaciones, el catálogo de mutaciones cae entero en los dos bash y `shellcheck` queda limpio. El DOCKER_E2E pasa entero.
+- **SC-003**: La suite del host da la línea base medida más las pruebas nuevas, con 0 `not ok` en bash 3.2 y en 5.x. Las 12 pruebas que cubren el arreglo caen contra `origin/main`, las 4 que nacen verdes caen con sus mutaciones, el catálogo de mutaciones cae entero en los dos bash y `shellcheck` queda limpio. El DOCKER_E2E pasa entero.
 - **SC-004**: El render del modo local entre `origin/main` y la rama, para el mismo `agent.yml`, tiene 0 bytes de diferencia.
 - **SC-005**: Tras el despliegue posterior al merge, que hace el operador, donna y linus (claude-mem 13.x) y cbum (15.16.0) tienen 0 errores de hook nuevos y 0 reinicios atribuibles al cambio en sus primeras 24 h, y cbum sigue sin el enlace manual.
 

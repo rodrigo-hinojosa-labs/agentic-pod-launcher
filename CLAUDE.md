@@ -246,9 +246,38 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 - **A local test server in Python must not bind through `HTTPServer.server_bind`.** It calls `socket.getfqdn()` on the bound address, and on the macOS runner of the CI (Python 3.15.2, 10-11-2026) that took about 35 s per server from the second server of a bats run on, past the 10 s the harnesses wait for the port: the first CI run of PR #128 lost 11 tests that way, including F11 of 041, which is green on `main` only because no other server starts before it there. Override `server_bind` to call `socketserver.TCPServer.server_bind` and set `server_name` to the host (`tests/fixtures/nightly-alert/tg-server.py`, `tests/fixtures/qmd-e2e/serve-dir.py`), and never `python3 -m http.server`. Why the lookup turns slow inside the run is not measured (a separate step measured it at 0.01 s); a local Mac does not show it.
 - **A generic "there is a warning" assertion is satisfied by any warning added later.** 040's push to Telegram prints `::warning::nightly-alert: empuje por Telegram omitido` on every night that moves the notice when the job has no secrets, so every older `_has "$output" '::warning::nightly-alert:'` kept passing while testing nothing: N12 and N16 had to name the warning of the call that fails (and mutations that silence that call must make them fall). Whenever a new message appears on a path that old tests already cross, grep the old assertions for the generic form.
 - **Oracles for secrets must look at VALUES and at nodes, not at names and text.** Checking that `TELEGRAM_BOT_TOKEN` is not in a child's environment passes `export TG_TOKEN`; counting the literal `secrets.` passes `toJSON(secrets)` and `secrets['X']`. Search the sentinel value in the environment of each fake child (`gh`, the spy `curl`) and count YAML string nodes that mention `secrets` (comments are not nodes). Keep the token off `argv` with `curl -K <0600 file>` (or `-K -` on stdin) and assert it with a spy that logs argv, the mode of the config file and a masked copy of its content at call time, because the file is gone when the script ends.
+- **A new tmux pane takes the PATH of the client that creates it, and `new-session -e PATH=` does not change it (045, measured on tmux 3.6b).** Neither the server's global environment nor `-e` wins: `tmux new-session -e PATH=B` from a client with PATH `A` gives a pane with `A`, while `PATH=C tmux new-session` gives `C`, and a later session from a plain client keeps its own. So whatever a supervisor exports never reaches a session that another process creates (the heartbeat tick, from cron), and a test of tmux behaviour must use DISTINCT values for the client's PATH and the one under test: the first measurement of 045 used the same value for both and "confirmed" `-e`. Relatedly, a busybox `crond` job inherits all of `crond`'s environment (root's) and `crond` only sets `HOME`, `USER`, `LOGNAME` and `SHELL`. The heartbeat's isolated config disables every plugin (`heartbeat.sh:125-172`), so no plugin hook runs on a tick.
 - **A child that stalls is a failure too.** A `gh` that accepts the call and never answers left a red night with neither issue nor message, because the push was sequenced after every `gh` call and the step has its own 3-minute limit. Every external call on a notifier path needs its own limit (portable: poll `kill -0` with `sleep 0.05`, since macOS has no `timeout`) and a total budget, with a fake that hangs to prove it.
 
 <!-- SPECKIT START -->
+**045-plugin-launcher-path SPEC + CLARIFY + PLAN + TASKS + ANALYZE + IMPLEMENT EN CURSO (2026-11-11; rama
+`045-plugin-launcher-path` en el worktree `.claude/worktrees/045-plugin-launcher-path`, desde `origin/main` = `c242c31`,
+VERSION 0.30.0 -> **0.31.0**, MINOR por defecto declarado; arreglo de producto en código horneado).** Origen: el alta de
+CBum (11-11-2026). claude-mem 15.16.0 declara sus hooks en forma exec (`"command": "claude-mem"`, sin shell) y deja su
+lanzador en `/home/agent/.local/bin`, que no estaba en ningún PATH del contenedor (036 lo dejó fuera por no tener
+consumidor). Cada hook fallaba con `Executable not found in $PATH: "claude-mem"`, con comillas, registrado como
+`hook_non_blocking_error` en el transcript de la sesión (`claude.log` no sirve para contarlo: no tiene saltos de línea y se
+reinicia con el contenedor). cbum corría con un enlace manual como root, que se pierde al recrear el contenedor.
+**Decisiones del operador (11-11-2026):** arreglo general, con el directorio AL FINAL del PATH del agente y nunca en el de
+root; evidencia antes del merge = DOCKER_E2E local más un gate en cbum con la imagen de la rama, sin corrida manual de
+CI; tras el análisis, corregir todo, incluidos los LOW; y mantener el heartbeat en el alcance por consistencia, aunque el
+tick no cargue plugins. **Diseño:** `docker/scripts/lib/agent_path.sh` (POSIX, nueva, con su `COPY`) define
+`agent_path_compose CURRENT_PATH HOME UID`: agrega `$HOME/.local/bin` al final, idempotente, sin cambios con UID 0, un
+`HOME` dudoso o un PATH vacío. `start_session` y el tick del heartbeat llaman `PATH="$x" tmux new-session ...` (un prefijo
+en el cliente: tmux ignora `-e PATH=`, medido en M10 de `research.md`); `agentctl mcp` corre `claude mcp` dentro de un
+`sh -c` que carga la librería si existe. El `ENV PATH` de la imagen, el entrypoint, `crond`, compose, `_run_watchdog`, el
+texto de los comandos y el modo local no cambian. **Medido:** línea base del host 1951 de 1951 en bash 5.3.15 y 3.2.57;
+el oráculo `tests/agent-user-bin-path.bats` (16 pruebas tras la revisión independiente) cayó en ROJO en las previstas y está
+en verde en los dos bash; la revisión independiente encontró que el stub del e2e confundía las llamadas `claude plugin ...` del
+supervisor con la sesión (corregido: el stub registra `TMUX_PANE`), y pidió guardas de falla cerrada y pruebas del UID real; el e2e nuevo `tests/docker-e2e-user-bin-path.bats` tiene 5 casos (E5 usa `docker inspect`, sin
+`docker exec -u root`). **Hallazgos durante la implementación:** el tick del heartbeat deshabilita todos los plugins
+(el spec decía lo contrario); `-e PATH=` no funciona (la medición M4 de la Fase 0 usaba el mismo valor en el cliente y en
+`-e`, y H1, con un tmux real, lo destapó); el `shellcheck` de la CI exige `# shellcheck shell=sh` en una librería sin
+shebang. **Hecho en local (11-11-2026):** mutaciones M0 a M26 detectadas en los dos bash; pata Linux con dash; revisión independiente
+con revisión de privilegios (1 ALTA, 2 MEDIA y 10 BAJA, aplicadas todas); DOCKER_E2E en arm64 53 de 54 (el smoke falla igual en
+`origin/main`: es la espera de 20 s de este Mac, registrada en 013); gate del host 1972 de 1972 en bash 5.3.15 y 3.2.57 (huella
+`c0e3b9669688519f`). **Pendiente:** commits, push, gate en cbum y PR. Artefactos: `specs/045-plugin-launcher-path/`.
+
 **044-qmd-lock-fd-leak SPEC + CLARIFY + PLAN + TASKS + ANALYZE + IMPLEMENT + EVIDENCIA EN CI + MERGE (2026-11-06/09; rama
 `044-qmd-lock-fd-leak` en el worktree `.claude/worktrees/044-qmd-lock-fd-leak`, desde `origin/main` = `8cb45e4`
 (VERSION 0.29.0 -> **0.30.0** por defecto declarado, MINOR como 042; arreglo de producto en

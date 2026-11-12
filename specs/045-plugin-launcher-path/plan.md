@@ -15,13 +15,13 @@ La Fase 0 midió dos cosas que el spec dejaba sin medir y que deciden el diseño
 
 En consecuencia, ni un `ENV PATH` de imagen ni un `export` en el supervisor cubren el heartbeat sin abrirle el directorio a root.
 
-El arreglo (D1) fija el PATH donde se crea cada sesión de `claude`: `start_session` y el tick del heartbeat pasan `tmux new-session -e "PATH=..."`. El PATH sale de una función pura y POSIX, `agent_path_compose`, en una librería nueva solo para docker, `docker/scripts/lib/agent_path.sh` (D2). La función agrega el directorio al final, no lo duplica y no hace nada con UID 0 ni con un `HOME` dudoso.
+El arreglo (D1) fija el PATH donde se crea cada sesión de `claude`: `start_session` y el tick del heartbeat llaman a `tmux new-session` con el PATH compuesto como prefijo del cliente (`PATH=... tmux new-session`), porque tmux le da al pane el PATH del cliente e ignora `new-session -e PATH=` (`research.md` M10; el plan original usaba `-e`, y la prueba H1 lo desmintió). El PATH sale de una función pura y POSIX, `agent_path_compose`, en una librería nueva solo para docker, `docker/scripts/lib/agent_path.sh` (D2). La función agrega el directorio al final, no lo duplica y no hace nada con UID 0 ni con un `HOME` dudoso.
 
 `agentctl mcp` la usa dentro del contenedor, para que el diagnóstico vea el mismo PATH que la sesión (D3). Los procesos root, el `ENV` de la imagen, el entrypoint, compose y el modo local no cambian.
 
 La evidencia tiene tres partes:
 
-- un oráculo nuevo de 13 pruebas en el host, en los dos bash, con 18 mutaciones;
+- un oráculo nuevo de 16 pruebas en el host, en los dos bash, con 26 mutaciones (13 pruebas y 18 mutaciones en el diseño; la revisión independiente agregó 3 y 8);
 - un e2e nuevo de 5 pruebas en un contenedor real, más el DOCKER_E2E entero;
 - el gate en cbum con la imagen de la rama, antes del merge.
 
@@ -29,14 +29,14 @@ La evidencia tiene tres partes:
 
 **Language/Version**: bash (scripts del launcher y del contenedor) y POSIX sh (la librería nueva, que también carga el `sh` de BusyBox). El oráculo corre en bash 3.2.57 y 5.x.
 
-**Primary Dependencies**: tmux 3.6b en la imagen (`alpine:3.24.1`, medido en M4) y 3.6a en el Mac. En la CI, 3.6 en el brazo ubuntu y 3.8 en el macOS, leídos del `tmux -V` de la corrida 42878267508 de `test.yml` sobre `main`. H1 ejercita `new-session -e` en cada una de esas versiones del host y de la CI. Para el producto solo cuenta la versión de la imagen, que se mide en M4 y en el e2e. BusyBox 1.37.0 (`crond` y `sh`) y `su-exec`. Ninguna dependencia nueva.
+**Primary Dependencies**: tmux 3.6b en la imagen (`alpine:3.24.1`, medido en M2 y M10) y 3.6a en el Mac. En la CI, 3.6 en el brazo ubuntu y 3.8 en el macOS, leídos del `tmux -V` de la corrida 42878267508 de `test.yml` sobre `main`. H1 ejercita el prefijo con el tmux real de cada una de esas versiones del host y de la CI. Para el producto solo cuenta la versión de la imagen, que se mide en M10 y en el e2e. BusyBox 1.37.0 (`crond` y `sh`) y `su-exec`. Ninguna dependencia nueva.
 
 **Storage**: no aplica; no cambia ningún dato persistente (`data-model.md`).
 
 **Testing**:
 
-- **Host**: bats, con `tests/agent-user-bin-path.bats` (13 pruebas) y una prueba actualizada en `tests/agentctl.bats`.
-- **Mutaciones**: M0 a M18, en los dos bash, más una pata en `ubuntu:24.04` para P5 y M7.
+- **Host**: bats, con `tests/agent-user-bin-path.bats` (16 pruebas) y una prueba actualizada en `tests/agentctl.bats`.
+- **Mutaciones**: M0 a M26, en los dos bash, más una pata en `ubuntu:24.04` para P5 y M7.
 - **Contenedor**: `tests/docker-e2e-user-bin-path.bats` (5 pruebas) y el DOCKER_E2E entero.
 - **Agente real**: el gate en cbum.
 
@@ -60,7 +60,7 @@ La evidencia tiene tres partes:
 - una librería de unas 25 líneas;
 - unas 8 líneas en `start_services.sh`, unas 6 en `heartbeat.sh` y unas 3 en `agentctl`;
 - una línea `COPY` y un comentario reescrito en el Dockerfile;
-- 13 pruebas en el host, una prueba existente actualizada y 5 pruebas e2e;
+- 16 pruebas en el host, una prueba existente actualizada y 5 pruebas e2e;
 - CHANGELOG, `VERSION` 0.31.0 y documentos.
 
 No queda ningún NEEDS CLARIFICATION. El spec se clarificó el 11-11-2026 y la Fase 0 resolvió las dos afirmaciones inferidas (M1 y M2; la segunda quedó refutada).
@@ -73,7 +73,7 @@ No queda ningún NEEDS CLARIFICATION. El spec se clarificó el 11-11-2026 y la F
 | --- | --- | --- |
 | I. Single Source of Truth (`agent.yml`) | No cambia `agent.yml`, plantillas ni archivos derivados; `--regenerate` no tiene nada nuevo que producir | N/A |
 | II. Least-Privilege Container Model | Revisión de privilegios hecha en el diseño. No agrega capacidades, mounts ni sockets, y no toca `docker-compose.yml.tpl` ni el entrypoint. El directorio que `agent` puede escribir queda fuera del PATH de todo proceso root (FR-004): por eso se descartó el `ENV PATH` de imagen (D1). La guarda de UID 0 de la función lo refuerza, y G1 (código) y E5 (`docker inspect`) lo verifican, sin ningún `docker exec -u root`. Antes del merge, la revisión de privilegios del diff de `docker/` (T031) cumple el gate de la constitución | PASS |
-| III. Test-First, Host-Runnable | Las 13 pruebas nuevas corren en el host sin Docker y en los dos bash. Las 11 que caen se ven en ROJO contra `origin/main` antes del VERDE, y las 2 que nacen verdes se prueban con mutaciones. El e2e queda detrás de `DOCKER_E2E=1`. La librería solo define funciones (cargarla no tiene efectos, P5). Todo pasa `shellcheck -S error` | PASS |
+| III. Test-First, Host-Runnable | Las 16 pruebas nuevas corren en el host sin Docker y en los dos bash. Las 12 que caen se ven en ROJO contra `origin/main` antes del VERDE, y las 4 que nacen verdes se prueban con mutaciones. El e2e queda detrás de `DOCKER_E2E=1`. La librería solo define funciones (cargarla no tiene efectos, P5). Todo pasa `shellcheck -S error` | PASS |
 | IV. Idempotent, Fail-Silent Lifecycle | La función es idempotente (no duplica el directorio) y siempre sale con 0. Sin la librería, la sesión se crea como antes y el arranque lo dice en el log (S2 y H2). Un respawn repite el cálculo sin acumular | PASS |
 | V. Workspace-Is-the-Agent | El directorio vive en `.state/` y no se toca: ni se crea, ni se borra, ni se respalda. La poda de 036 sigue igual | PASS |
 | VI. Reproducible, Pinned Dependencies | Sin dependencias nuevas. CHANGELOG y `VERSION` 0.31.0 (MINOR), verificada contra `origin/main` antes y después de cualquier rebase | PASS |
@@ -95,7 +95,7 @@ specs/045-plugin-launcher-path/
 ├── quickstart.md        # V1 a V7
 ├── contracts/
 │   ├── agent-path.md        # C1 a C5: la función, la sesión, el heartbeat, agentctl y lo que no cambia
-│   ├── host-oracle.md       # P1 a P6, S1, S2, H1, H2, A1, G1, G2; mutaciones M0 a M18
+│   ├── host-oracle.md       # P1 a P6, S1, S2, H1, H2, A1, G1, G2; mutaciones M0 a M26
 │   └── e2e-and-gate.md      # E1 a E5, el gate en cbum y el despliegue
 ├── checklists/
 │   └── requirements.md
@@ -108,13 +108,13 @@ specs/045-plugin-launcher-path/
 docker/
 ├── Dockerfile                       # + COPY de agent_path.sh; comentario de 036 reescrito; ENV sin cambios
 └── scripts/
-    ├── start_services.sh            # carga la librería; start_session pasa -e PATH=...
+    ├── start_services.sh            # carga la librería; start_session llama PATH=... tmux new-session
     └── lib/
         └── agent_path.sh            # NUEVO: agent_path_compose (POSIX)
 scripts/
 ├── agentctl                         # cmd_mcp corre claude mcp dentro de sh -c con el PATH compuesto
 └── heartbeat/
-    └── heartbeat.sh                 # carga la librería (HEARTBEAT_AGENT_PATH_LIB); el tick pasa -e PATH=...
+    └── heartbeat.sh                 # carga la librería (HEARTBEAT_AGENT_PATH_LIB); el tick llama PATH=... tmux new-session
 tests/
 ├── agent-user-bin-path.bats         # NUEVO: oráculo del host (13)
 ├── agentctl.bats                    # se actualiza la prueba de agentctl mcp
@@ -135,7 +135,7 @@ CLAUDE.md                            # bloque de la feature, a mano (git add -f)
 5. **Heartbeat** (C3): H1 y H2 en verde.
 6. **agentctl** (C4): A1 en verde y la prueba de `tests/agentctl.bats` actualizada.
 7. **Dockerfile** (C5): G2 en verde y G1 sigue en verde.
-8. **Mutaciones** M0 a M18 en los dos bash, más la pata Linux.
+8. **Mutaciones** M0 a M26 en los dos bash, más la pata Linux.
 9. **E2E nuevo** (E1 a E5) y **DOCKER_E2E entero**, con COMPUERTA.
 10. **Documentos**: comentario de 036, `docs/architecture.md`, CHANGELOG, `VERSION` 0.31.0 y `CLAUDE.md`.
 11. **Revisión independiente** de solo lectura antes del gate completo, y después el **gate completo** del host (V4).

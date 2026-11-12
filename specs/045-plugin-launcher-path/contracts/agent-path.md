@@ -18,14 +18,14 @@ Archivo nuevo, `docker/scripts/lib/agent_path.sh`. Es POSIX sh (lo cargan bash y
 - En `start_session`, después de `cmd=$(next_tmux_cmd)` y antes de crear la sesión:
   - si `agent_path_compose` existe, el PATH de la sesión es `agent_path_compose "$PATH" "$HOME" "$(id -u)"`;
   - si no, es `"$PATH"`, y el log dice, una vez por arranque, que el directorio no entró.
-- La única línea `tmux new-session` de `start_session` pasa `-e "PATH=<PATH de la sesión>"`. El texto de `$cmd` no cambia.
+- La única línea `tmux new-session` de `start_session` lleva el PATH de la sesión como prefijo del cliente: `PATH="$session_path" tmux new-session ...`. No se usa `-e PATH=`, que tmux ignora (`research.md` M10). El texto de `$cmd` no cambia.
 - El PATH del propio `start_services.sh` no cambia (no hay `export`).
 - No cambian: `_run_watchdog` (su oráculo de sha), `next_tmux_cmd`, la línea `launching:` del log, `pre_warm_mcps` ni la poda.
 
 ## C3. El tick del heartbeat (`scripts/heartbeat/heartbeat.sh`)
 
 - Carga la librería desde `${HEARTBEAT_AGENT_PATH_LIB:-/opt/agent-admin/scripts/lib/agent_path.sh}`, con la guarda `[ -f ]`. El script no usa `set -e` y no puede abortar por la librería.
-- Antes de su `tmux new-session`, compone el PATH con la misma regla que C2 y lo pasa con `-e "PATH=..."`. Si la función no existe, usa `"$PATH"`.
+- Antes de su `tmux new-session`, compone el PATH con la misma regla que C2 y lo pasa con el mismo prefijo (`PATH="$hb_path" tmux new-session ...`). Si la función no existe, usa `"$PATH"`.
 - No cambian: el texto del comando del tick (`CLAUDE_CONFIG_DIR=... claude --print ...`), el escapado con `sh_sq`, el aislamiento de `CLAUDE_CONFIG_DIR` ni el contrato de `runs.jsonl` y `state.json`.
 
 ## C4. `agentctl mcp` (`scripts/agentctl`)
