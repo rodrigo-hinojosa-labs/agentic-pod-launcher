@@ -318,7 +318,7 @@ Setup -> Foundational (esqueleto del oráculo) -> US1 (P1, el arreglo) -> US2 (P
   6. registrar lo que pide FR-011.
 
   Si falla, volver a `agentic-pod:cbum-pre045` con los archivos respaldados. Los hooks de claude-mem vuelven a fallar (sin bloquear) hasta corregir la causa. Rehacer el enlace manual exige `docker exec -u root`, fuera del Principio II, y solo se hace con la autorización explícita del operador, como el 11-11-2026. Registrar la causa.
-- [ ] T036 [US3] COMPUERTA (PR): abrir el PR contra `main` con el resumen, la evidencia de T027 a T035 y el despliegue pendiente. Esperar la CI en verde en los tres checks (shellcheck, bats en ubuntu y en macOS) y registrar los conteos de cada brazo. El merge lo hace el operador.
+- [X] T036 [US3] COMPUERTA (PR): abrir el PR contra `main` con el resumen, la evidencia de T027 a T035 y el despliegue pendiente. Esperar la CI en verde en los tres checks (shellcheck, bats en ubuntu y en macOS) y registrar los conteos de cada brazo. El merge lo hace el operador.
 
 **Checkpoint**: la evidencia de cierre de FR-011 está completa y el PR espera el merge.
 
@@ -326,8 +326,8 @@ Setup -> Foundational (esqueleto del oráculo) -> US1 (P1, el arreglo) -> US2 (P
 
 ## Phase 7: Cierre
 
-- [ ] T037 Tras el merge que hace el operador: verificar `main` con lecturas. El árbol debe ser igual al de la cabeza validada, `VERSION` 0.31.0, existir `docker/scripts/lib/agent_path.sh` con su línea `COPY`, y la línea `tmux new-session` de `start_session` debe llevar el prefijo `PATH="$session_path"`. Registrar.
-- [ ] T038 COMPUERTA (despliegue de donna y linus; `contracts/e2e-and-gate.md` sección D). Cada agente lleva su respaldo `agentic-pod:<agente>-pre045`, se reconstruye y se reinicia con stop, 150 s, up. Después se observan 24 h (SC-005): 0 errores de hook nuevos y 0 reinicios atribuibles. Si `main` cambió algo respecto de la rama, cbum se vuelve a alinear.
+- [X] T037 Tras el merge que hace el operador: verificar `main` con lecturas. El árbol debe ser igual al de la cabeza validada, `VERSION` 0.31.0, existir `docker/scripts/lib/agent_path.sh` con su línea `COPY`, y la línea `tmux new-session` de `start_session` debe llevar el prefijo `PATH="$session_path"`. Registrar.
+- [X] T038 COMPUERTA (despliegue de donna y linus; `contracts/e2e-and-gate.md` sección D). Cada agente lleva su respaldo `agentic-pod:<agente>-pre045`, se reconstruye y se reinicia con stop, 150 s, up. Después se observan 24 h (SC-005): 0 errores de hook nuevos y 0 reinicios atribuibles. Si `main` cambió algo respecto de la rama, cbum se vuelve a alinear.
 - [ ] T039 COMPUERTA (registro fuera del repo):
   - actualizar la ficha de cbum (memoria y `definiciones/cbum/cbum.md`): parche manual retirado, 045 desplegada;
   - en Confluence, el pendiente «claude-mem 15.x» de la página del equipo (397072) y una fila por agente en el Historial de versiones de la flota (32243715);
@@ -421,3 +421,54 @@ US1 sola ya cierra el defecto: con la librería y el prefijo de PATH de la sesi�
   - **claude-mem registró la sesión**: el worker sigue vivo (1 proceso). `~/.claude-mem/claude-mem.db-wal` cambió de fecha tras los prompts (12-11-2026 01:11:12). El log del worker pasó de 20.457 a 35.411 bytes, y sus líneas con `observation` pasaron de 2 a 10 y con `summar` de 2 a 8.
   - **Estado**: el enlace manual `/usr/local/bin/claude-mem` no existe, y el PATH del pane termina en `/home/agent/.local/bin`. El contenedor sigue `healthy`, con 0 reinicios y el canal arriba (1 `bun server.ts`).
   - **Observación fuera del alcance**: cada 10 minutos, el worker de claude-mem escribe `WARN` "None of the allowed agents (Claude Code) is logged in". Viene de su tarea programada de vista de trabajo, ya aparecía con la imagen anterior (5 veces antes del reinicio, 20 después) y no impide que registre la sesión.
+- **T036 (12-11-2026)**: PR #130 contra `main` desde `af6c274`. La CI quedó en verde en los tres checks (run 43159511328):
+  - bats en ubuntu: 1972 de 1972 con bash 5.3.9, 56 saltadas, en 14 min 51 s;
+  - bats en macOS: 1972 de 1972 con bash 3.2.57, 64 saltadas, en 24 min 9 s;
+  - shellcheck.
+
+  El operador lo mergeó el 12-11-2026 a las 11:30:34 como el merge `b0da902`.
+- **T037 (12-11-2026)**: `git diff af6c274 b0da902` sale vacío, o sea que el árbol de `main` es el de la cabeza validada. `VERSION` dice 0.31.0, `docker/Dockerfile:272` copia `scripts/lib/agent_path.sh`, y `start_services.sh:892` lanza la sesión con `PATH="$session_path" tmux new-session ...`. La `main` local avanzó por fast-forward. Entre `a886996`, la cabeza del gate en cbum, y `af6c274` solo cambiaron `CHANGELOG.md`, `CLAUDE.md` y este archivo, así que no hubo que realinear cbum.
+- **T038 (12-11-2026, despliegue)**: se hizo por ssh a ferrari por la LAN, porque `ssh-ferrari` pedía volver a autenticar en Cloudflare Access. Un script siguió el procedimiento de `README.md` desde un worktree del clon de ferrari en `b0da902`, con estos pasos:
+  1. respaldo de la imagen y de los archivos de sistema;
+  2. archivos de sistema de `main`;
+  3. `--regenerate`;
+  4. `custom-apply --no-regenerate` del overlay del agente;
+  5. comprobar que el conjunto de MCPs y el bloque de overlay no cambiaron;
+  6. build;
+  7. stop, 150 s, up.
+
+  Por agente:
+  - **linus**:
+    - respaldo: imagen `agentic-pod:linus-pre045` (`89e122bdeb2e`) y archivos en `~/linus-pre045-20261112`;
+    - imagen nueva `9ed2359e9922`, arriba a las 16:50:09 (`19:50:09Z`);
+    - el primer intento abortó antes del build, sin tocar el contenedor: `custom-apply.sh` necesita `yq`, que en ferrari está en `~/.local/bin` y no en el PATH de un ssh no interactivo. El script ahora agrega ese directorio al PATH, y el segundo intento retomó desde el respaldo.
+  - **donna**:
+    - respaldo: imagen `agentic-pod:donna-pre045` (`ad97124efd0a`) y archivos en `~/donna-pre045-20261112`;
+    - imagen nueva `e429afc47dad`, arriba a las 16:55:29 (`19:55:29Z`);
+    - 4 de 4 `expected_mcp_keys` del overlay.
+
+  Los dos quedaron así:
+  - `healthy`, con 0 reinicios y 1 `bun server.ts`;
+  - el PATH del pane termina en `/home/agent/.local/bin`, y el log tiene la línea `session PATH: appended /home/agent/.local/bin`;
+  - 0 `hook_non_blocking_error`;
+  - los mismos MCPs que antes y el bloque de overlay presente.
+- **SC-005 (13-11-2026 11:07, unas 18 h después del despliegue)**: medido por `ssh-ferrari`, solo con `docker inspect` y `docker exec -u agent`.
+  - **linus y donna**:
+    - `healthy`, con 0 reinicios, arriba desde el despliegue y con 1 `bun server.ts`;
+    - una sola línea `session PATH: appended`, es decir, sin respawns del watchdog;
+    - 0 `hook_non_blocking_error` y 0 `Executable not found`.
+
+    Sus transcripts no cambian desde el arranque (12-11 a las 16:50:22 y 16:56:17): en estas horas solo corrieron los hooks del arranque, y los de los prompts no se ejercieron. claude-mem sigue en 13.14.0 y 13.13.1, y `~/.local/bin` está vacío en los dos.
+  - **cbum**:
+    - `healthy`, con 0 reinicios desde el 11-11-2026 a las 21:53 y 1 `bun server.ts`;
+    - sin el enlace manual, y con los mismos 3 registros de error de antes del reinicio de T035;
+    - un respawn del watchdog el 12-11-2026 a las 02:12:38 (`tmux session ended (crash 1/5)`), con su línea `session PATH: appended` al relanzar. La hora coincide con el `kick-channel` del retiro del plugin `github` de ese día (issue #131), así que se infiere que vino de ahí y no de 045.
+
+  Esta medición cubre 18 de las 24 h del criterio, y el cierre se registra con ella: las últimas 6 h de la ventana quedaron sin observar.
+- **Nocturna posterior al merge (13-11-2026)**: el run 43429404702 sobre `b0da902`, en amd64, dio `e2e summary: total=54 executed=54 skipped=0 failed=0`, con E1 a E5 de `tests/docker-e2e-user-bin-path.bats` en verde (pruebas 22 a 26). Tardó 24 min 38 s, con un margen de 20 min 22 s sobre el tope de 45. Es la primera corrida de los e2e de 045 en amd64: antes del merge solo se corrieron en arm64 (T030), porque se decidió no hacer una corrida manual de CI.
+- **CI de `main` tras el merge**: el job `tests` del push de `b0da902` salió cancelado. El brazo macOS agotó el tope de 30 min en la prueba 1871 de 1972, con 0 `not ok`, y el de ubuntu pasó en 11 min 36 s. Ya había pasado con `c242c31`, así que no lo introdujo 045; el seguimiento está en el issue #132.
+- **T039 (13-11-2026, en curso)**:
+  - **Ficha de cbum**: la sección 11 de `definiciones/cbum/cbum.md` y su memoria tienen el pendiente cerrado.
+  - **Confluence, página del equipo** (397072, versión 17): launcher 0.31.0 en linus, donna y cbum. El pendiente «claude-mem 15.x» quedó resuelto, y se agregó uno nuevo para borrar los respaldos `*-pre045`.
+  - **Confluence, Historial de versiones de la flota** (32243715): la actualización, con la versión actual a 0.31.0 y una fila por agente, se envió, pero el conector de Atlassian respondió con un timeout y no se pudo confirmar. Ese día el conector alternó errores 500, 502, timeouts y un error de permisos de sesión.
+  - **Este PR de documentos**.
