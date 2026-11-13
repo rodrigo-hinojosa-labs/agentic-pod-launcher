@@ -328,7 +328,7 @@ Setup -> Foundational (esqueleto del oráculo) -> US1 (P1, el arreglo) -> US2 (P
 
 - [X] T037 Tras el merge que hace el operador: verificar `main` con lecturas. El árbol debe ser igual al de la cabeza validada, `VERSION` 0.31.0, existir `docker/scripts/lib/agent_path.sh` con su línea `COPY`, y la línea `tmux new-session` de `start_session` debe llevar el prefijo `PATH="$session_path"`. Registrar.
 - [X] T038 COMPUERTA (despliegue de donna y linus; `contracts/e2e-and-gate.md` sección D). Cada agente lleva su respaldo `agentic-pod:<agente>-pre045`, se reconstruye y se reinicia con stop, 150 s, up. Después se observan 24 h (SC-005): 0 errores de hook nuevos y 0 reinicios atribuibles. Si `main` cambió algo respecto de la rama, cbum se vuelve a alinear.
-- [ ] T039 COMPUERTA (registro fuera del repo):
+- [X] T039 COMPUERTA (registro fuera del repo):
   - actualizar la ficha de cbum (memoria y `definiciones/cbum/cbum.md`): parche manual retirado, 045 desplegada;
   - en Confluence, el pendiente «claude-mem 15.x» de la página del equipo (397072) y una fila por agente en el Historial de versiones de la flota (32243715);
   - un PR de documentos con el Registro final.
@@ -467,8 +467,8 @@ US1 sola ya cierra el defecto: con la librería y el prefijo de PATH de la sesi�
   Esta medición cubre 18 de las 24 h del criterio, y el cierre se registra con ella: las últimas 6 h de la ventana quedaron sin observar.
 - **Nocturna posterior al merge (13-11-2026)**: el run 43429404702 sobre `b0da902`, en amd64, dio `e2e summary: total=54 executed=54 skipped=0 failed=0`, con E1 a E5 de `tests/docker-e2e-user-bin-path.bats` en verde (pruebas 22 a 26). Tardó 24 min 38 s, con un margen de 20 min 22 s sobre el tope de 45. Es la primera corrida de los e2e de 045 en amd64: antes del merge solo se corrieron en arm64 (T030), porque se decidió no hacer una corrida manual de CI.
 - **CI de `main` tras el merge**: el job `tests` del push de `b0da902` salió cancelado. El brazo macOS agotó el tope de 30 min en la prueba 1871 de 1972, con 0 `not ok`, y el de ubuntu pasó en 11 min 36 s. Ya había pasado con `c242c31`, así que no lo introdujo 045; el seguimiento está en el issue #132.
-- **T039 (13-11-2026, en curso)**:
+- **T039 (13-11-2026)**:
   - **Ficha de cbum**: la sección 11 de `definiciones/cbum/cbum.md` y su memoria tienen el pendiente cerrado.
   - **Confluence, página del equipo** (397072, versión 17): launcher 0.31.0 en linus, donna y cbum. El pendiente «claude-mem 15.x» quedó resuelto, y se agregó uno nuevo para borrar los respaldos `*-pre045`.
-  - **Confluence, Historial de versiones de la flota** (32243715): la actualización, con la versión actual a 0.31.0 y una fila por agente, se envió, pero el conector de Atlassian respondió con un timeout y no se pudo confirmar. Ese día el conector alternó errores 500, 502, timeouts y un error de permisos de sesión.
-  - **Este PR de documentos**.
+  - **Confluence, Historial de versiones de la flota** (32243715): versión actual a 0.31.0 en los tres agentes docker, y una fila por agente arriba del historial. El conector de Atlassian respondió a la escritura con un timeout, pero una lectura posterior confirmó que se aplicó una sola vez.
+  - **Este PR de documentos** (#133).
