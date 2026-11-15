@@ -186,6 +186,14 @@
     `.graph/` from the inotify watch) rather than blocking this release.
 
 ### Changed
+- **The `tests` workflow's job cap goes from 30 to 45 minutes** (no VERSION change: CI only, the
+  precedent of #113; issue #132). `timeout-minutes` of the `bats` job in `.github/workflows/test.yml`
+  is now 45, for both legs of the matrix. On `main` the macOS leg (bash 3.2) finished in 25 min 42 s on
+  13-11-2026 and was cancelled at the 30-minute cap on 10-11 and 12-11-2026, so `main` had no green
+  bats signal on those runs; the ubuntu leg took 11 min 36 s to 15 min. Feature 046 adds six suites
+  that take about 6 minutes per bash on a Mac, which would push the macOS leg past the old cap on
+  every run. The cap only bounds a hung job; a healthy run takes the same time.
+
 - **The manual reindex of the qmd e2e tests waits for the reindex lock instead of assuming it is
   free — `043-e2e-lock-race-hardening`** (no VERSION change: tests only, the precedent of 019, 025,
   039, 041 and the entry below; issues #112 and #109). The product takes `.reindex.lock` with

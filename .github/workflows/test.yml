@@ -47,7 +47,12 @@ jobs:
     #
     # 30 still catches a genuine hang; it just stops cancelling healthy runs.
     # Revisit by MEASURING both legs if the suite grows materially again.
-    timeout-minutes: 30
+    #
+    # 45 (issue #132): the suite grew again. On main the macOS leg finished in
+    # 25m42s on 13-11-2026 and was CANCELLED at 30m on 10-11 and 12-11-2026, while
+    # ubuntu took 11m36s to 15m00s. Feature 046 adds six suites that take about
+    # 6 minutes per bash on a Mac. The cap only bounds a hung job.
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v6
