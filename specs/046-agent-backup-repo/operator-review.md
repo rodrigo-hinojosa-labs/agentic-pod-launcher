@@ -30,6 +30,8 @@ No se obtuvo un inventario vivo por la falla de acceso. La observación históri
 
 Para cada entrada sin cobertura, el operador decidirá entre declararla en `backup.extra_paths` para respaldo cifrado o dejarla fuera con su razón. No se borrará, moverá ni reemplazará el clon antiguo por inferencia.
 
+**El commit local requiere revisión propia**: declarar un clon como ruta adicional copia sus archivos, pero `_memory_find_files` excluye los directorios `.git`. Por tanto, esa declaración no conserva por sí sola la historia ni los commits sin publicar. No se debe sustituir el clon antiguo hasta resolver ese punto (T077).
+
 La lista de archivos que podrían viajar en claro sale del código; todavía requiere comprobar los nombres presentes en linus y la revisión del operador:
 
 | Unidad | Candidatos en un agente sin marca sensible |

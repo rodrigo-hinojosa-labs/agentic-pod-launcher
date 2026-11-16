@@ -371,7 +371,22 @@ _ta_example() { printf '%s/.env.example\n' "$TMP_TEST_DIR"; }
 @test "TA06: without a repository the Backups section of CLAUDE.md is byte-identical to main and nothing of 046 shows" {
   cd "$TMP_TEST_DIR"
   cp "$REPO_ROOT/tests/fixtures/sample-agent.yml" agent.yml
-  _ta_regen
+  # This is a render oracle, independent of the host's sudo/systemd availability.
+  # CI has passwordless sudo; never let this fixture install a real host service.
+  yq -i '.deployment.install_service = false' agent.yml
+  local sudo_bin="$TMP_TEST_DIR/ta06-sudo-bin"
+  mkdir -p "$sudo_bin"
+  export TA06_SUDO_LOG="$TMP_TEST_DIR/ta06-sudo.log"
+  cat > "$sudo_bin/sudo" << 'SH'
+#!/bin/bash
+printf 'called\n' >> "$TA06_SUDO_LOG"
+if [ "${1:-}" = "-n" ] && [ "${2:-}" = "true" ]; then exit 0; fi
+printf 'TA06: unexpected service installation\n' >&2
+exit 86
+SH
+  chmod +x "$sudo_bin/sudo"
+  PATH="$sudo_bin:$PATH" _ta_regen
+  [ ! -e "$TA06_SUDO_LOG" ]
   awk '/^## Backups \(what actually survives\)$/ { on = 1; print; next }
        on && /^## / { exit }
        on { print }' CLAUDE.md > section.md

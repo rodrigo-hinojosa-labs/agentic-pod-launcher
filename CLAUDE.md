@@ -307,6 +307,13 @@ corregir el producto ni ampliar el límite, con diagnóstico añadido para una r
 20/20 con SIGPIPE ignorada en ambos bash y las cuatro mutaciones afectadas siguen detectadas. T072/T074 se reabrieron
 para comprobar la nueva cabeza en CI; no considerar el PR listo por el cierre local histórico. Solo cambiaron dos
 archivos de pruebas; runtime y resto de la evidencia se conservan por comparación de hashes.
+**Segunda CI (16-11):** Ubuntu 2104/2104, shellcheck y e2e amd64 **62/62 sin saltadas**, con las ocho fases de QMD 041.
+MacOS falló de nuevo TA06; su captura confirmó que el fixture intentaba instalar un servicio systemd porque lleva
+`install_service: true` y el runner tiene sudo sin contraseña. Se reprodujo con sudo falso antes de corregir. TA06
+deshabilita la instalación en su copia del fixture y exige que no se invoque sudo; el stub bloquea cualquier comando
+real. La omisión plantada del flag cae en ambos bash y el archivo pasa 20/20 con SIGPIPE ignorada en cada uno. T072 se
+cierra con el alcance histórico/local explícito; T074 espera la nueva matriz completa. No cambió el producto ni el
+archivo e2e. El diagnóstico de TA06 tiene ahora causa confirmada; TE6 conserva la incertidumbre histórica.
 Artefactos y evidencia: `specs/046-agent-backup-repo/`, Registro de `tasks.md`.
 
 **045-plugin-launcher-path SPEC + CLARIFY + PLAN + TASKS + ANALYZE + IMPLEMENT + GATE EN CBUM + MERGE + DESPLIEGUE (2026-11-11/13; rama
