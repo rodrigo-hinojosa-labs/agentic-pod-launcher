@@ -9,15 +9,15 @@ Propósito: que Codex termine la feature 046 (agent-backup-repo) desde donde que
 | Worktree | `/Users/rodrigo-hinojosa/Documents/Cencosud/Claude/Agents/agentic-pod-launcher/.claude/worktrees/046-agent-backup-repo` |
 | Rama | `046-agent-backup-repo`, publicada por HTTPS el 16-11-2026; [PR #135](https://github.com/rodrigo-hinojosa-labs/agentic-pod-launcher/pull/135) en borrador |
 | Base | `origin/main` = `10f22a7` al crear la rama. Rebase completado el 15-11-2026 sobre `9608e4a` (PR #134, sube el tope del job `bats` a 45 min) |
-| Commits | `0f41236` (artefactos de spec-kit), `679b313` (constitución), `f30ad4c` (implementación y pruebas), `9ed154b` (documentos) y `d711942` (ajuste del arnés y diagnósticos), publicados |
+| Commits | `0f41236` (artefactos de spec-kit), `679b313` (constitución), `f30ad4c` (implementación y pruebas), `9ed154b` (documentos), `d711942` (ajuste del arnés y diagnósticos) y `b3eb8c4` (aislamiento de sudo en TA06), publicados |
 | VERSION | 0.32.0 (`main` tiene 0.31.0) |
 | Constitución | 1.1.0 (enmienda E1 a E6, hecha en T005) |
 
 **T075 hecha**: el WIP `3f11357` se sustituyó con `git reset --soft 0f41236` y los tres commits atómicos previstos, sin perder archivos ni cambiar la huella de runtime y pruebas validada en T074. El WIP sigue siendo solo un punto histórico de restauración. Las dos guías rápidas ES/EN acompañan al feat para que el test de documentación no falle en ese commit intermedio; la separación se probó antes de commitear.
 
-**Estado de validación al 16-11-2026**: la segunda CI sobre `d711942` dio Ubuntu 2104/2104, shellcheck correcto y e2e amd64 62/62 sin saltadas, con las ocho fases de QMD 041. El volumen del arnés queda limitado a Darwin tras aislar su fallo de permisos en Linux. T072 está cerrada con el alcance local/histórico y remoto explicado en el Registro. TE6 conserva una falla local histórica sin causa confirmada, seguida de cinco corridas completas locales 8/8 y el 62/62 remoto; se mantiene su captura al fallar.
+**Estado de validación al 16-11-2026, 07:29 Santiago**: T072 y T074 cerradas. La tercera CI, sobre `b3eb8c4`, dio 2104/2104 tanto en Ubuntu (13 min 58 s) como en macOS (36 min 51 s), con las 124 nuevas ejecutadas y shellcheck correcto. [Tests 43843656236](https://github.com/rodrigo-hinojosa-labs/agentic-pod-launcher/actions/runs/43843656236). El e2e amd64 sobre `d711942` dio 62/62 sin saltadas, con las ocho fases de QMD 041; runtime y archivo e2e siguen idénticos. El Registro distingue esa evidencia de la regresión local histórica 61/62 con el smoke previo. TU16 y TE6 conservan sus fallas históricas con causa desconocida y capturas para recurrencia; no se declara un arreglo de producto.
 
-**Siguiente comprobación: T074**. La segunda CI macOS volvió a fallar TA06, y su diagnóstico mostró la causa: el fixture llevaba `install_service: true` y el runner tiene sudo sin contraseña, por lo que intentaba copiar una unidad a `/etc/systemd/system`. Se reprodujo con sudo falso, sin tocar `/etc`, antes de corregir. TA06 deshabilita la instalación en su copia y conserva una guardia contra cualquier llamada a sudo. Pasa en ambos bash; la omisión plantada del flag cae en ambos, y el archivo completo da 20/20 con SIGPIPE ignorada por bash. Publicar esta corrección y repetir la matriz completa del host. Runtime y archivo e2e no cambiaron; no repetir el e2e ya verificado ni los gates locales largos sin un cambio que lo justifique. El Registro contiene las 300 repeticiones previas y por qué no simulaban el sudo del runner.
+**Siguiente: T077, pendiente de acceso y decisiones humanas**. TA06 quedó corregida y confirmada por la tercera CI: deshabilita la instalación de servicios en su copia del fixture y conserva una guardia contra sudo. Su causa se reprodujo antes con un sudo falso, sin tocar `/etc`. macOS usó yq 4.54.1; los controles locales con 4.44.3 son cobertura adicional, no la versión efectiva de ese runner. No repetir gates largos sin un cambio que lo justifique. Las decisiones concretas y el paquete de actualización sin aplicar están en [operator-review.md](operator-review.md). El último commit solo registra documentación; recoger sus checks en `publication/final-doc-ci-final.json`, si aún están corriendo.
 
 ## 2. Reglas del operador (no negociables)
 
@@ -93,7 +93,7 @@ Propósito: que Codex termine la feature 046 (agent-backup-repo) desde donde que
 ## 5. Qué sigue, en orden
 
 1. **Llevar la rama sobre `main` (`9608e4a`) — Hecho el 15-11-2026**:
-   - `git rebase origin/main` terminó sin conflictos; la rama sigue sin push;
+   - `git rebase origin/main` terminó sin conflictos; en ese momento la rama seguía sin push;
    - Git integró automáticamente `CHANGELOG.md`: conserva la entrada de `main` en `### Changed` y las de 046 en `### Added` y `### Fixed`;
    - verificado `VERSION`: `git show origin/main:VERSION` da 0.31.0 y la rama conserva 0.32.0;
    - `git range-diff 10f22a7..8463586 9608e4a..HEAD` muestra los dos parches equivalentes. Los commits ahora son `0f41236` y `3f11357`; ver el Registro de `tasks.md`.
@@ -101,14 +101,14 @@ Propósito: que Codex termine la feature 046 (agent-backup-repo) desde donde que
 3. **SC-007 — Hecho**: 30 ciclos, 101,8 MiB al final, comparado con T039 en el Registro.
 4. **T068 y T069 — Hechas**: 167 anclas válidas, control sin mutar de 124 de 124 por bash, M0 final conforme y 167 mutaciones detectadas en ambos bash. No repetir el catálogo completo sin un cambio que lo justifique; conservar las cuatro correcciones de pruebas y sus evidencias.
 5. **T070 — Hecha**: Ubuntu 124/124, Alpine 40/40, candado y TERM/KILL conformes. Evidencia en el Registro.
-6. **T072, DOCKER_E2E — Hecha con el rojo previo del smoke**:
+6. **T072, DOCKER_E2E — Hecha, con el alcance local y remoto distinguido**:
    - huellas en `pre-e2e-hashes.json` y `validated-046-hashes.json`; entre ellas solo cambió el arnés e2e;
    - `tests/docker-e2e-backup-repo.bats`, 8 de 8. T071 marcada;
-   - regresión completa: 61 de 62; mismo smoke en rojo confirmado en la base, con runtime/tests idénticos a `origin/main`. Evidencia y alcance calificado en el Registro.
-7. **T074 — Reabierta tras la publicación**: la medición local histórica dio 2104/2104 y 124/124 con SIGPIPE ignorada por bash, cinco TU16 verdes, stderr vacío y estáticas conformes. Después la CI descubrió la falta de aislamiento de sudo en TA06, ya corregida y verde localmente. Recoger la nueva matriz completa antes de volver a cerrarla; ver el estado al principio y el Registro.
+   - regresión local completa histórica: 61 de 62; mismo smoke en rojo confirmado en la base, con runtime/tests idénticos a `origin/main`. Después del ajuste del arnés: cinco corridas completas locales 8/8 y regresión amd64 62/62, cero saltadas. Evidencia y alcance calificado en el Registro.
+7. **T074 — Cerrada tras la tercera CI**: 2104/2104 en cada brazo y ninguna nueva saltada; TA06 corregida y confirmada. Se conservan la base local completa, las comprobaciones focales posteriores con SIGPIPE ignorada y stderr vacío, los cinco TU16 verdes y las estáticas conformes, con el puente de hashes explicado en el Registro.
 8. **T075 — Hecha**: WIP sustituido por tres commits. Las dos guías rápidas van en el feat por la dependencia demostrada de `quickstart-doc`; 9/9 en ambos bash, stderr vacío. Modos y huellas conformes.
 9. **Lo que sigue, según la autorización del 16-11 y las decisiones humanas pendientes**:
-   - T076 y apertura del PR borrador #135, hechos; recoger la CI de ambos bash y el e2e amd64 en los runs enlazados en el Registro;
+   - T076 y apertura del PR borrador #135, hechos; la CI de ambos bash y el e2e amd64 están verificados en los runs enlazados en el Registro; comprobar también la última cabeza solo documental;
    - preparar T077 con lecturas e inventario, y dejar al operador las decisiones sobre rutas, archivos en claro y la llave; después ejecutar T077 a T080;
    - T081 sigue abierta hasta adjuntar la evidencia real de linus y dejar el PR listo para revisión; no marcarla hecha solo por abrir el borrador;
    - T082 a T089, después del merge del operador: el despliegue en linus, donna y cbum, los issues y el cierre.

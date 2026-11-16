@@ -314,6 +314,14 @@ deshabilita la instalación en su copia del fixture y exige que no se invoque su
 real. La omisión plantada del flag cae en ambos bash y el archivo pasa 20/20 con SIGPIPE ignorada en cada uno. T072 se
 cierra con el alcance histórico/local explícito; T074 espera la nueva matriz completa. No cambió el producto ni el
 archivo e2e. El diagnóstico de TA06 tiene ahora causa confirmada; TE6 conserva la incertidumbre histórica.
+**Tercera CI, T074 cerrada de nuevo (16-11, 07:29 Santiago):** sobre `b3eb8c4`, 2104/2104 en Ubuntu
+(bash 5.3.9, bats 1.11.0, 13 min 58 s) y en macOS (bash 3.2.57, bats 1.14.0, 36 min 51 s), las 124 nuevas
+ejecutadas en ambos, y shellcheck en verde. Run `43843656236`. El yq efectivo de las tres corridas macOS fue 4.54.1,
+aunque el paso descarga 4.44.3; los controles locales con 4.44.3 son cobertura adicional, no una réplica exacta del
+runner. T072 conserva el 62/62 amd64, con fuentes sin cambios. El paquete de 138 archivos de sistema se preparó y
+verificó contra Git, sin aplicarlo en ferrari. **Siguiente: T077**, tras restablecer SSH y resolver inventario,
+archivos en claro y llave con el operador. El PR sigue en borrador por FR-022. El último commit solo registra estos
+resultados; sus checks finales se recogen sin crear otro commit que registre su propio SHA.
 Artefactos y evidencia: `specs/046-agent-backup-repo/`, Registro de `tasks.md`.
 
 **045-plugin-launcher-path SPEC + CLARIFY + PLAN + TASKS + ANALYZE + IMPLEMENT + GATE EN CBUM + MERGE + DESPLIEGUE (2026-11-11/13; rama

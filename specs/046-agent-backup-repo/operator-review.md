@@ -1,6 +1,6 @@
 # Revisión del operador para terminar 046
 
-Estado al 16-11-2026: implementación local validada, T075 en tres commits y rama publicada; [PR #135](https://github.com/rodrigo-hinojosa-labs/agentic-pod-launcher/pull/135) en borrador para adelantar la CI. El merge sigue condicionado al respaldo y restauración reales en linus (FR-022). El Registro de [tasks.md](tasks.md) conserva resultados y excepciones.
+Estado al 16-11-2026: implementación y gates automáticos validados, T075 en tres commits y rama publicada; [PR #135](https://github.com/rodrigo-hinojosa-labs/agentic-pod-launcher/pull/135) en borrador. La CI sobre `b3eb8c4` dio 2104/2104 por sistema y shellcheck correcto; el e2e amd64 dio 62/62 con el mismo runtime y archivo e2e. El último commit solo publica el Registro y la guía de retoma. El merge sigue condicionado al respaldo y restauración reales en linus (FR-022). El Registro de [tasks.md](tasks.md) conserva resultados y excepciones.
 
 ## 1. Restablecer el acceso a ferrari
 
@@ -45,6 +45,8 @@ El archivo de secretos de la raíz, claude-mem, las rutas adicionales y los tran
 Fuentes: `identity_whitelist` en `docker/scripts/lib/backup_identity.sh`, `config_build_maps` en `backup_config.sh`, FR-009 y T077. Esta tabla describe el código; no certifica contenidos del agente.
 
 ## 4. Continuación después de esas confirmaciones
+
+El paquete local `publication/deployment-preparation/046-system-b3eb8c4.tar`, dentro del directorio de evidencia del Registro, contiene los 138 archivos de sistema rastreados que indica el procedimiento del README. Su SHA-256 es `03705882b2899ab9fa98464b8f6645592b7c5ede55481f350a1d6dfb828ae6a5`; `manifest.json` comprueba cada archivo contra el blob del commit `b3eb8c4`, sus modos y tamaños. Se creó con `git -c tar.umask=022 archive` para conservar los modos 0644/0755. No incluye configuración ni estado de un agente, y no se ha llevado a ferrari. Se debe extraer en un directorio de preparación y aplicar el procedimiento del README, que conserva el estado vivo bajo `scripts/`; el tar no es un instalador ni reemplaza las decisiones anteriores.
 
 1. Refrescar las cabezas remotas y la privacidad, guardar imagen y archivos de sistema, llevar el código y regenerar.
 2. Asociar linus, instalar la llave pública confirmada y ejecutar los cinco respaldos; verificar ramas y segundo ciclo sin commits nuevos.
