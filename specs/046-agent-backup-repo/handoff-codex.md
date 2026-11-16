@@ -7,13 +7,17 @@ Propósito: que Codex termine la feature 046 (agent-backup-repo) desde donde que
 | Dato | Valor |
 | --- | --- |
 | Worktree | `/Users/rodrigo-hinojosa/Documents/Cencosud/Claude/Agents/agentic-pod-launcher/.claude/worktrees/046-agent-backup-repo` |
-| Rama | `046-agent-backup-repo`, **sin push** |
+| Rama | `046-agent-backup-repo`, publicada por HTTPS el 16-11-2026; [PR #135](https://github.com/rodrigo-hinojosa-labs/agentic-pod-launcher/pull/135) en borrador |
 | Base | `origin/main` = `10f22a7` al crear la rama. Rebase completado el 15-11-2026 sobre `9608e4a` (PR #134, sube el tope del job `bats` a 45 min) |
-| Commits locales | `0f41236` (artefactos de spec-kit), `679b313` (constitución), `f30ad4c` (implementación y pruebas), más el commit de documentos que contiene este traspaso |
+| Commits | `0f41236` (artefactos de spec-kit), `679b313` (constitución), `f30ad4c` (implementación y pruebas) y `9ed154b` (documentos); ver el Registro para la actualización posterior de evidencia |
 | VERSION | 0.32.0 (`main` tiene 0.31.0) |
 | Constitución | 1.1.0 (enmienda E1 a E6, hecha en T005) |
 
 **T075 hecha**: el WIP `3f11357` se sustituyó con `git reset --soft 0f41236` y los tres commits atómicos previstos, sin perder archivos ni cambiar la huella de runtime y pruebas validada en T074. El WIP sigue siendo solo un punto histórico de restauración. Las dos guías rápidas ES/EN acompañan al feat para que el test de documentación no falle en ese commit intermedio; la separación se probó antes de commitear.
+
+**Validación posterior a la publicación, en curso (16-11-2026)**: la primera CI pasó en Ubuntu (2104/2104) y shellcheck, pero macOS falló TA06 dentro de un regenerate sin diagnóstico (2103/2104). El e2e amd64 dio 55/62 por un volumen hijo del arnés sin propietario inicializado; la sonda de metadata confirmó la causa y el workaround se limitó a Darwin, sin tocar producto. La repetición local pasó siete casos y falló TE6, con log de cron ausente; una copia instrumentada pasó después 8/8. Se diagnostican las fallas antes de corregir y se reabrieron T072/T074 hasta la nueva validación. El Registro conserva resultados, causas confirmadas y lo que sigue desconocido. No tomar el cierre local histórico como CI final verde.
+
+**Revalidación focal hecha**: TA06 pasó 300 intentos, con contraste de yq 4.44.3 y bats 1.14.0 de CI; la causa original sigue desconocida. El archivo de superficie pasó 20/20 con SIGPIPE ignorada en cada bash, las cuatro mutaciones afectadas siguen detectadas y el e2e local dio cinco corridas consecutivas de 8/8 con stderr vacío. Se preservaron aserciones y plazos. Solo cambiaron dos archivos de pruebas; el mapa de hashes y los resultados están en el Registro. Publicar la corrección y repetir CI completa y e2e amd64; no repetir los gates locales largos que no cambiaron.
 
 ## 2. Reglas del operador (no negociables)
 
@@ -59,7 +63,8 @@ Propósito: que Codex termine la feature 046 (agent-backup-repo) desde donde que
 - **T070 cerrada (16-11-2026)**: Ubuntu 24.04, 124 de 124; Alpine 3.24.1/Python 3.14.5, 40 de 40; TU02 consecutiva sin candado retenido, y consulta con un git que ignora TERM terminada por BusyBox en 12,132 s (límite 2 s más 10 s hasta KILL). Usuario no root, `CI=1`, repo copiado y sin saltadas. El primer Alpine carecía de dos dependencias: se completó la imagen desechable y se repitió sobre el mismo tar. Ver el Registro y `ubuntu.json`, `alpine.json`, `alpine-lock.json`, `alpine-ignore-term.json` en el directorio de cierre.
 - **T071/T072 cerradas con la excepción previa del smoke (16-11-2026)**: los ocho e2e de 046 pasaron solos y dentro de la regresión completa. Esta ejecutó 62 casos, 61 en verde y el smoke en rojo en la línea 79, sin saltadas y stderr vacío, en 1.343,572 s. Se confirmó el mismo rojo sobre `10f22a7`, cuyo runtime y tests son idénticos a `origin/main=9608e4a`. El informe conserva rc 1; no es un 62/62 verde. QMD 016 y 041 pasaron, esta última con sus ocho fases y modelos sin cambios. Los arreglos fueron del arnés e2e, sin cambios de runtime; ver el Registro y `e2e-all.*`, `baseline-smoke.*`.
 - **T074 cerrada (16-11-2026, 03:15:39 Santiago)**: 2104 ok y 0 fallas en ambos bash, con las 69/70 saltadas previstas y stderr vacío; las 124 con SIGPIPE ignorada pasan en ambos, sin saltadas y stderr vacío; TU16 sola da cinco verdes consecutivos, sin diagnóstico ni stderr. La falla original de 4/5 sigue no reproducida y con causa desconocida: no se declara corregida. `T074-verified.json` verifica TAP completos y huellas sin cambios; `host-active.json` dice complete. La base temporal propia fue retirada limpia, sin fuerza; para repetir M0/T067 se recrea sobre `10f22a7`.
-- **T075 hecha (16-11-2026)**: constitución, implementación con pruebas y documentación en tres commits; auditoría de bytes de líneas nuevas sin hallazgos y scripts de credenciales en 100755. El árbol intermedio del feat pasa las nueve pruebas de `quickstart-doc` en ambos bash, con stderr vacío. Huella de T074 conservada; ver el Registro. Siguiente: T076 y PR borrador para adelantar CI, con FR-022 pendiente y sin cambios en agentes reales.
+- **T075/T076 hechas (16-11-2026)**: constitución `679b313`, implementación `f30ad4c` y documentos `9ed154b`, publicados; auditoría de bytes de líneas nuevas sin hallazgos y scripts de credenciales en 100755. El árbol intermedio del feat pasa las nueve pruebas de `quickstart-doc` en ambos bash, con stderr vacío. Huella de T074 conservada. PR #135 en borrador para adelantar CI, con FR-022 pendiente y sin cambios en agentes reales.
+- **T077 pendiente de acceso y decisiones humanas**: SSH a ferrari terminó con `websocket: bad handshake` antes de inspeccionar linus; no hay inventario vivo nuevo. Privacidad y cabezas remotas verificadas en GitHub, sin escribir en esos repositorios. Las cinco huellas públicas y los puntos que se deben resolver están en [operator-review.md](operator-review.md). No asociar ni reiniciar el agente hasta revisar inventario, archivos en claro y llave. Se prepararon seis borradores de issues locales, sin publicarlos.
 
 ## 4. Decisiones del operador que no se reabren
 
@@ -103,7 +108,7 @@ Propósito: que Codex termine la feature 046 (agent-backup-repo) desde donde que
 7. **T074 — Hecha**: 2104 ok/0 fallas en cada bash, 124/124 con SIGPIPE ignorada en cada bash y cinco TU16 verdes en 3.2, con stderr vacío. Estáticas, renders y huellas conformes; ver el Registro. No repetir los gates sin un cambio o hallazgo que lo justifique.
 8. **T075 — Hecha**: WIP sustituido por tres commits. Las dos guías rápidas van en el feat por la dependencia demostrada de `quickstart-doc`; 9/9 en ambos bash, stderr vacío. Modos y huellas conformes.
 9. **Lo que sigue, según la autorización del 16-11 y las decisiones humanas pendientes**:
-   - T076, publicar la rama, y abrir un PR borrador para adelantar CI;
+   - T076 y apertura del PR borrador #135, hechos; recoger la CI de ambos bash y el e2e amd64 en los runs enlazados en el Registro;
    - preparar T077 con lecturas e inventario, y dejar al operador las decisiones sobre rutas, archivos en claro y la llave; después ejecutar T077 a T080;
    - T081 sigue abierta hasta adjuntar la evidencia real de linus y dejar el PR listo para revisión; no marcarla hecha solo por abrir el borrador;
    - T082 a T089, después del merge del operador: el despliegue en linus, donna y cbum, los issues y el cierre.

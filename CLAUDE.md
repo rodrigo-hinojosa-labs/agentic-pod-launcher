@@ -263,7 +263,7 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 **046-agent-backup-repo SPEC + CLARIFY + PLAN + TASKS + ANALYZE + IMPLEMENT LOCAL VALIDADO (2026-11-13/16; rama
 `046-agent-backup-repo` en el worktree `.claude/worktrees/046-agent-backup-repo`, desde `origin/main` = `10f22a7`,
 rebasada sobre `9608e4a`; VERSION 0.31.0 -> **0.32.0**, MINOR; artefactos en `0f41236`, constitución en `679b313`
-e implementación en `f30ad4c`, más el commit de documentos que contiene este registro).** Un repositorio
+e implementación en `f30ad4c`, documentos en `9ed154b`, todos publicados).** Un repositorio
 privado por agente (`backup.repo.url`, modo docker, solo GitHub), para su trabajo (clon en `/workspace/agent-repo`) y
 para su respaldo completo: cinco ramas `backup/*` con repositorio (las tres de hoy, `config` ampliada, y `memory` e
 `history` nuevas), un almacén cifrado por bloques con una llave de datos por almacén (`docker/scripts/backup_store.py`),
@@ -291,10 +291,22 @@ en rojo confirmado en la base: no es un verde total. Gate host 2104 ok y 0 falla
 su falla original sigue no reproducida y con causa desconocida, sin arreglo de producto. SC-007 repetido: 101,8 MiB tras
 30 ciclos, frente a 102,5 MiB de T039. Los tres commits de T075 sustituyen el WIP, conservando la huella validada
 `23dfb736beb560fa6552da80e445479c4cd725b2e273e91e624e351d1fc21099`. Las dos guías rápidas van con el feat porque
-sus pruebas las requieren: la separación se comprobó ROJO y VERDE en ambos bash. **Siguiente:** publicación y CI del PR
-borrador, sin proponer merge hasta el gate real de respaldo y restauración en linus (FR-022). El operador autorizó
+sus pruebas las requieren: la separación se comprobó ROJO y VERDE en ambos bash. **PR #135 en borrador (16-11-2026)**,
+para adelantar CI y e2e amd64, sin proponer merge hasta el gate real de respaldo y restauración en linus (FR-022).
+SSH a ferrari terminó con `websocket: bad handshake` antes de inspeccionar linus; no se cambió ningún agente.
+Privacidad y cabezas remotas verificadas en GitHub. Las decisiones pendientes están en
+`specs/046-agent-backup-repo/operator-review.md`. El operador autorizó
 avanzar con autonomía el 16-11; siguen requiriendo su decisión el inventario de rutas, los archivos que viajan en claro,
 la posesión de la llave privada, M5 y el merge. Después del merge, despliegue en linus, donna y cbum.
+**Primera CI y ajuste posterior (16-11):** Ubuntu 2104/2104 y shellcheck pasan; macOS falló TA06 dentro de un regenerate
+cuya salida se descartaba. TA06 pasó después 300 veces, incluidas 100 con bats 1.14.0 y yq 4.44.3 de CI; la causa sigue
+desconocida y ahora se captura el error sin cambiar el rc. El e2e amd64 dio 55/62 por un volumen hijo 0:0 añadido solo
+por el arnés: una sonda confirmó el defecto y el workaround se limitó a Darwin, dejando Linux con el bind del producto.
+Una repetición local falló TE6 con log de cron ausente; cinco corridas completas posteriores dieron 8/8 cada una, sin
+corregir el producto ni ampliar el límite, con diagnóstico añadido para una recurrencia. El archivo de superficie da
+20/20 con SIGPIPE ignorada en ambos bash y las cuatro mutaciones afectadas siguen detectadas. T072/T074 se reabrieron
+para comprobar la nueva cabeza en CI; no considerar el PR listo por el cierre local histórico. Solo cambiaron dos
+archivos de pruebas; runtime y resto de la evidencia se conservan por comparación de hashes.
 Artefactos y evidencia: `specs/046-agent-backup-repo/`, Registro de `tasks.md`.
 
 **045-plugin-launcher-path SPEC + CLARIFY + PLAN + TASKS + ANALYZE + IMPLEMENT + GATE EN CBUM + MERGE + DESPLIEGUE (2026-11-11/13; rama

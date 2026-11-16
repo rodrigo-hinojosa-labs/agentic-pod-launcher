@@ -347,7 +347,19 @@ _ta_local() {
 
 # ── US4: el contexto del agente y los archivos derivados (A3, A8) ───────────
 
-_ta_regen() { echo 'n' | ./setup.sh --regenerate > /dev/null 2>&1; }
+_ta_regen() {
+  local rc=0
+  echo 'n' | ./setup.sh --regenerate > "$TMP_TEST_DIR/ta-regen.log" 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf 'TA_REGEN_DIAG rc=%s bash=%s\n' "$rc" "$BASH_VERSION" >&2
+    # Fixture output only; redact before taking the tail, as the product does.
+    (
+      source "$REPO_ROOT/scripts/lib/rag_obs.sh"
+      redact_secrets < "$TMP_TEST_DIR/ta-regen.log" | tail -n 60
+    ) >&2
+  fi
+  return "$rc"
+}
 
 _ta_next_steps() {  # deja NEXT_STEPS.md en TMP_TEST_DIR, como lo escribe el wizard
   bash -c 'source "$1/setup.sh" > /dev/null 2>&1 || true; render_next_steps "$1" quiet' _ "$TMP_TEST_DIR"

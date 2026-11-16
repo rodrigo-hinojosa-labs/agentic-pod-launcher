@@ -142,10 +142,18 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./bin/claude:/usr/local/bin/claude:ro
+OVR
+  # Only Docker Desktop needs this cache workaround (T072). On native Linux an
+  # unseeded nested volume is root-owned while the bind-mounted home already has
+  # the agent UID, so the entrypoint correctly leaves the home alone. Keep Linux
+  # on the product's actual state bind mount instead of introducing that volume.
+  if [ "$(uname -s)" = "Darwin" ]; then
+    cat >> "$d/docker-compose.override.yml" << 'OVR'
       - br046-cache:/home/agent/.cache
 volumes:
   br046-cache: {}
 OVR
+  fi
 }
 
 _e2e_wait_running() {
@@ -167,9 +175,19 @@ _e2e_unit() { _e2e_exec heartbeatctl "backup-$1"; }
 
 _e2e_dump() {
   echo "--- identity cache ownership (metadata only)" >&2
-  _e2e_exec sh -c 'id; for p in "$HOME/.cache/identity-backup" "$HOME/.cache/identity-backup/identity-repo" "$HOME/.cache/identity-backup/identity-repo/.git"; do
+  _e2e_exec sh -c 'id; for p in "$HOME" "$HOME/.cache" "$HOME/.cache/identity-backup" "$HOME/.cache/identity-backup/identity-repo" "$HOME/.cache/identity-backup/identity-repo/.git"; do
     if [ -e "$p" ]; then stat -c "%u:%g %a %n" "$p"; fi
   done' >&2 || true
+  echo "--- cron staging, active file and process metadata" >&2
+  _e2e_exec sh -c 'date -u; pgrep -x crond; for p in /workspace/scripts/heartbeat /workspace/scripts/heartbeat/logs /workspace/scripts/heartbeat/.crontab.staging /etc/crontabs /etc/crontabs/agent; do
+    if [ -e "$p" ]; then stat -c "%u:%g %a %Y %n" "$p"; fi
+  done
+  grep -F backup-memory /workspace/scripts/heartbeat/.crontab.staging /etc/crontabs/agent || true
+  ps -o pid,ppid,user,comm
+  if [ -f /workspace/claude.cron.log ]; then cat /workspace/claude.cron.log; fi' 2>&1 | (
+    source "$REPO_ROOT/scripts/lib/rag_obs.sh"
+    redact_secrets | tail -n 60
+  ) >&2 || true
   echo "--- docker logs" >&2
   docker logs "$AGENT_NAME" 2>&1 | tail -n 30 >&2
   echo "--- server log" >&2
