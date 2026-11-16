@@ -296,10 +296,13 @@ it (see `modules/vault-deltas/` + the `log.md` entry).
 
 ## Vault backup (the `backup/vault` orphan branch)
 
-When the agent has a fork configured, the vault's **markdown subset** is replicated to a
-`backup/vault` orphan branch in that fork (`scripts/lib/backup_vault.sh`). It is one of three
-independent backup branches (`identity`, `vault`, `config`) — see
-[`docs/architecture.md`](architecture.md) for the shared shape.
+The vault's **markdown subset** is replicated to a `backup/vault` orphan branch
+(`scripts/lib/backup_vault.sh`). The destination is the agent's associated repository when
+`backup.repo.url` is set (docker mode only, 046), else its fork. It is one of five independent
+backup branches with an agent repository (`identity`, `vault`, `config`, `memory`, `history`)
+and one of three with a fork (`identity`, `vault`, `config`) — see
+[`docs/architecture.md`](architecture.md#backup-destination-credential-and-encryption-046) for
+the shared shape and the README's *Backups* section for what each branch holds.
 
 - **What is staged**: every `*.md` under the vault, minus the exclusions
   (`.obsidian/cache`, `.obsidian/workspace*.json`, `.obsidian/.trash`, `.trash`,
@@ -310,11 +313,22 @@ independent backup branches (`identity`, `vault`, `config`) — see
   `0 * * * *`). Local: `agent-<name>-vault-backup.timer` with the same cron converted to
   `OnCalendar` (default `*-*-* *:00:00`).
 - **On demand**: `./scripts/agentctl heartbeat backup-vault` (both modes; supports `--dry-run`).
-- **State**: `scripts/heartbeat/vault-backup.json` (hash, last commit, last push).
-- **Restore**: `./setup.sh --restore-from-fork <url>` pulls `config` → `identity` → `vault`,
-  skipping any branch that is absent.
+- **State**: `scripts/heartbeat/vault-backup.json` (hash, last commit, last push; with an
+  agent repository also the record of the last attempt).
+- **Restore**: `./setup.sh --restore-from-repo <url>` (alias `--restore-from-fork`) pulls
+  `config` → `identity` → `vault` (→ `memory` → `history` with an agent repository), skipping
+  any branch that is absent. The vault lands in the restored `agent.yml`'s `vault.path`.
+- **Sensitive agents** (`backup.sensitive: true`, docker mode): with an agent repository the
+  same files travel encrypted, inside the branch's `store/`, and the branch holds no plaintext
+  `.md`; a restore needs the operator's private key (plus `age` and `python3` 3.9+) to open
+  them. With a fork and no repository the vault is **not pushed at all**: a fork carries nothing
+  encrypted, and a sensitive vault never travels in plaintext. Marking an agent sensitive drops
+  the plaintext files from the next commit, not from the branch history; deleting the
+  `backup/vault` branch on GitHub prunes it (the next cycle recreates it with one commit). In
+  local mode the mark is not honoured: the local vault backup stays plaintext and goes to the
+  fork, and `--regenerate` says so.
 
-No fork configured → the primitive is a clean no-op.
+No destination (neither an agent repository nor a fork) → the primitive is a clean no-op.
 
 ## Coexistence with auto-memoria and claude-mem
 
@@ -854,7 +868,7 @@ vault dir is empty, and QMD rebuilds its index from scratch.
 - [`docs/state-layout.md`](state-layout.md) — every persistent path in the agent, including
   the vault and the QMD cache.
 - [`docs/architecture.md`](architecture.md) — container/local architecture, render engine,
-  lifecycle phases, the three backup branches.
+  lifecycle phases, the backup branches (five with an agent repository, three with a fork).
 - `modules/vault-skeleton/CLAUDE.md` (in this repo, copied into each agent's vault) — the
   authoritative schema document the LLM follows when working with the vault.
 - Karpathy's gist: https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f

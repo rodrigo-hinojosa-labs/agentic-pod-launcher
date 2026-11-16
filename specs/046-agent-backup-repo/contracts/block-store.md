@@ -54,12 +54,14 @@ backup_store.py digest --map ARCHIVO [--extra TEXTO] [--snapshot-dir DIR] [--lis
 ```text
 backup_store.py pack --unit NOMBRE --map ARCHIVO --store DIR --recipients ARCHIVO
                      [--expect-recipient TEXTO] [--extra TEXTO] [--block-size BYTES] [--snapshot-dir DIR]
+                     [--block-map ARCHIVO]
   stdout: {"files": N, "blocks": N, "new_blocks": N, "bytes": N, "new_bytes": N,
            "digest": "<hash>", "recipient": "<age1...>", "rotated": ""}
 ```
 
 - Decide la rotación de S1 antes de leer ningún archivo.
 - Lee cada archivo de `--map`, lo parte en bloques y escribe en `DIR/blocks/` solo los que no existen.
+- **Nombres** (D37 de [research.md](../research.md)): un bloque se guarda con el nombre del SHA-256 de su archivo cifrado. `--block-map` es el mapa local del SHA-256 de cada bloque en claro al nombre de su archivo, válido solo para la `recipient` vigente; un bloque del mapa cuyo archivo existe no se vuelve a cifrar. `pack` reescribe el mapa al terminar, con los bloques que nombra el manifiesto. Sin el mapa, o con uno de otra `recipient`, cifra todos los bloques de nuevo.
 - `digest` es el hash de lo que de verdad se empaquetó. Es informativo. El hash que una unidad guarda en su estado es el que calculó antes, con el subcomando `digest`, sobre todos sus archivos, también los que viajan en claro (U1 de [backup-units.md](backup-units.md)).
 - `recipient` es la parte pública de la llave de datos con que se cifró. La unidad la guarda como `store_recipient`.
 - `rotated` vale `""`, `new`, `operator-changed` o `recipient-mismatch`.
@@ -78,9 +80,9 @@ backup_store.py unpack --store DIR --dest DIR --identity ARCHIVO [--work-dir DIR
 
 - Abre `DIR/key.age` con la llave del operador, en **una sola** invocación de `age`. Es la única vez que usa esa llave: si tiene passphrase, `age` la pide una vez (M19 de [research.md](../research.md)).
 - La llave de datos queda en un archivo con modo 0600, dentro de `--work-dir` (por defecto, un directorio temporal nuevo con modo 0700), y se borra al terminar, también ante un error o una interrupción.
-- Descifra el manifiesto y los bloques con la llave de datos, sin preguntar nada.
-- Reconstruye cada archivo bajo `--dest`, con sus permisos, y verifica su SHA-256 contra el manifiesto.
-- Rechaza cualquier `path` absoluto o con `..`.
+- Descifra el manifiesto y los bloques con la llave de datos, sin preguntar nada. Antes de descifrar un bloque, verifica que el SHA-256 de su archivo sea su nombre; después, que el bloque en claro tenga el SHA-256 que dice el manifiesto.
+- Reconstruye cada archivo bajo `--dest`, con sus permisos sin los bits setuid, setgid y sticky, y verifica su SHA-256 contra el manifiesto.
+- Rechaza cualquier `path` absoluto, con `..` o con un segmento `.git` (en mayúsculas o minúsculas: en un sistema de archivos que no las distingue, `.GIT` es `.git`).
 - Si algo falla, no deja ningún archivo en `--dest`.
 
 ### `sqlite-snapshot`
@@ -90,7 +92,7 @@ backup_store.py sqlite-snapshot ORIGEN DESTINO
   stdout: "ok" si la copia pasa la verificación de integridad
 ```
 
-Copia la base con la API de respaldo de SQLite y corre `PRAGMA integrity_check` sobre la copia. Abre el origen en modo de solo lectura. Es la misma rutina que usan `pack` y `digest`.
+Copia la base con la API de respaldo de SQLite y corre `PRAGMA integrity_check` sobre la copia. Abre el origen en modo de solo lectura, con una URI que escapa la ruta (`?`, `#` y `%` en un nombre de directorio no la cortan: sin escapar, SQLite abría otro archivo, vacío). Es la misma rutina que usan `pack` y `digest`.
 
 ### `fingerprint`
 
@@ -118,8 +120,8 @@ Un origen que ya no existe al momento de leerlo se omite, y no es un error: los 
 | 0 | Correcto |
 | 2 | Uso incorrecto |
 | 3 | Falta el archivo de la llave pública o el de la llave privada |
-| 4 | `age` o `age-keygen` fallaron o no están instalados. Incluye una llave privada que no corresponde |
-| 5 | La verificación de integridad falló: el hash de un archivo reconstruido no coincide, o la copia de SQLite no pasa la verificación |
+| 4 | `age` o `age-keygen` fallaron o no están instalados. Incluye una llave privada que no abre `key.age` |
+| 5 | La verificación de integridad falló: el hash de un archivo reconstruido no coincide, un bloque o el manifiesto no se descifran después de abrir `key.age`, o la copia de SQLite no pasa la verificación. Una restauración no prueba otra llave ante un 5 |
 | 6 | Error de lectura o escritura |
 
 Los mensajes de error van a stderr y nunca incluyen contenido de los archivos ni rutas de origen: solo la ruta lógica.
@@ -147,3 +149,6 @@ Los mensajes de error van a stderr y nunca incluyen contenido de los archivos ni
 - **I11**: `unpack` invoca a `age` con la llave del operador exactamente una vez, sea cual sea la cantidad de bloques.
 - **I12**: después de `pack` y después de `unpack`, la parte privada de la llave de datos no queda en ningún archivo en claro.
 - **I13**: con `--expect-recipient` distinto de `recipient`, ningún bloque se cifra para la `recipient` que traía el almacén.
+- **I14**: el nombre de cada archivo de `DIR/blocks/` es el SHA-256 de ese archivo, y nunca el de un bloque en claro.
+- **I15**: `unpack` no escribe ninguna ruta con un segmento `.git`, ni un archivo con los bits setuid, setgid o sticky.
+- **I16**: con la llave correcta, un manifiesto o un bloque que no se descifra termina con el código 5, no con el 4.

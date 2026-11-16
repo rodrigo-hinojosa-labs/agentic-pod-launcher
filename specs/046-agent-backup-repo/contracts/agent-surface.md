@@ -181,7 +181,7 @@ Una librería nueva, `docker/scripts/lib/agent_repo.sh`, con su línea `COPY`, d
 printf 'username=%s\npassword=%s\n' "x-access-token" "$GITHUB_PAT"
 ```
 
-Se configura con `credential.<esquema>://<servidor>.helper`, así que git solo lo consulta para el servidor del repositorio del agente. La configuración del clon guarda la ruta del script, nunca el valor.
+Se configura con `credential.<esquema>://<servidor>.helper`, así que git solo lo consulta para el servidor del repositorio del agente, precedido de un valor vacío que reinicia los ayudantes heredados (un `credential.helper=store` global guardaría el token en claro bajo `.state/`). La configuración del clon guarda la ruta del script, nunca el valor. El clon se crea sin el token en ningún argumento: `GITHUB_PAT` llega al ayudante por el entorno heredado (I2).
 
 ## A6. `heartbeatctl backup-status`
 

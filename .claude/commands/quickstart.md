@@ -36,6 +36,9 @@ You are running inside the **agentic-pod-launcher** repo. The user wants to scaf
    - FORK_ENABLED (y/n): ?
    - FORK_OWNER (si y, GitHub user/org): ?
    - FORK_PAT (si y, ghp_…, NUNCA lo invento): ?
+   - AGENT_REPO_URL (solo docker; vacío = sin repositorio del agente; https://github.com/<dueño>/<nombre>): ?
+   - AGENT_REPO_SENSITIVE (y/n, si hay repositorio; datos de salud, finanzas o legales): ?
+   - AGENT_REPO_PAT (si hay repositorio y GITHUB_MCP_ENABLED=n, NUNCA lo invento): ?
 
    HEARTBEAT (default: y / 30m / channel=none):
    - NOTIFY_CHANNEL (none/log/telegram, default none): ?
@@ -118,6 +121,7 @@ You are running inside the **agentic-pod-launcher** repo. The user wants to scaf
    - `HEARTBEAT_INTERVAL` matches `^[0-9]+[mh]$` or 5-field cron `^[0-9*,/-]+( +[0-9*,/-]+){4}$`.
    - `NOTIFY_BOT_TOKEN`, when non-empty, matches `^[0-9]+:[A-Za-z0-9_-]{25,}$`.
    - Any URL field (Atlassian, fork) starts with `http://` or `https://` and contains no whitespace.
+   - `AGENT_REPO_URL`, when non-empty, matches `^https://github\.com/[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+$` (no credentials, no spaces); the wizard exits 1 on an invalid one.
 
    Full table with examples in `docs/agentic-quickstart.es.md` ("Validaciones aplicadas por el wizard").
 
@@ -128,6 +132,7 @@ You are running inside the **agentic-pod-launcher** repo. The user wants to scaf
    about you:   USER_NAME, NICKNAME, TIMEZONE, EMAIL, LANGUAGE
    service:     INSTALL_SERVICE   (Linux only)
    fork:        FORK_ENABLED [y → FORK_OWNER, FORK_NAME, FORK_PRIVATE, TEMPLATE_URL, FORK_PAT]
+   agent repo:  (docker only) AGENT_REPO_URL empty → "n" | set → "y", AGENT_REPO_URL, AGENT_REPO_SENSITIVE
    notify:      NOTIFY_CHANNEL [telegram → NOTIFY_BOT_TOKEN, "n" (skip auto-discover), NOTIFY_CHAT_ID]
    optional MCPs (6, alphabetical):
                 MCPS_AWS, MCPS_FIRECRAWL [y → FIRECRAWL_API_KEY],
@@ -135,6 +140,7 @@ You are running inside the **agentic-pod-launcher** repo. The user wants to scaf
                 MCPS_TIME, MCPS_TREE_SITTER
    atlassian:   ATLASSIAN_ENABLED [y → loop: name, URL, email, token, "y/n add another"]
    github mcp:  GITHUB_MCP_ENABLED [y → GITHUB_MCP_EMAIL, GITHUB_MCP_PAT]
+                [n and AGENT_REPO_URL set → AGENT_REPO_PAT]
    heartbeat:   HEARTBEAT_ENABLED [y → HEARTBEAT_INTERVAL, HEARTBEAT_PROMPT]
    principles:  USE_DEFAULT_PRINCIPLES
    vault:       VAULT_ENABLED [y → VAULT_SEED_SKELETON, VAULT_MCP_ENABLED, VAULT_QMD_ENABLED]

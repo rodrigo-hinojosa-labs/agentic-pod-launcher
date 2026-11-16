@@ -13,7 +13,7 @@ Las decisiones que justifican cada forma están en [research.md](research.md). L
 | `backup.repo.url` | texto | `""` | Vacío significa sin repositorio asociado. Si no está vacío, debe tener la forma `https://github.com/<dueño>/<nombre>`, con `.git` opcional al final, sin credenciales ni espacios |
 | `backup.repo.allow_unverified` | booleano | `false` | En `true`, se acepta un destino cuya privacidad no se pudo comprobar. Nunca habilita un repositorio público |
 | `backup.sensitive` | booleano | `false` | En `true`, el vault, la auto-memoria y la configuración, salvo `agent.yml`, viajan cifrados |
-| `backup.extra_paths` | lista de textos | `[]` | Cada entrada es una ruta relativa a la raíz del workspace. Se normaliza antes de validar: sin `./` al comienzo ni `/` al final. No está vacía, no es `.`, no empieza con `/` y no tiene ningún segmento `..`. No puede ser `.state`, ni estar bajo `.state/.cache` o bajo `agent-repo`, ni tener un componente `.git`. Una entrada que no cumple, o que no existe, se omite y se informa |
+| `backup.extra_paths` | lista de textos | `[]` | Cada entrada es una ruta relativa a la raíz del workspace. Se normaliza antes de validar: sin `./` al comienzo ni `/` al final. No está vacía, no es `.`, no empieza con `/` y no tiene ningún segmento `..`. No puede ser `.state`, ni estar bajo `.state/.cache` o bajo `agent-repo`, ni tener un componente `.git`, ni ser una ruta reservada del launcher: `setup.sh`, `VERSION`, `agent.yml`, `CLAUDE.md`, `NEXT_STEPS.md`, `.mcp.json`, `.gitignore`, `docker-compose.yml`, `docker-compose.override.yml`, el archivo de secretos y sus variantes, ni nada bajo `scripts/`, `docker/`, `modules/`, `tests/`, `personas/` o `.github/` (`memory_extra_path_reserved`, una sola fuente para el respaldo y la restauración). El archivo que deja el login de `/login` nunca viaja, aunque esté dentro de una entrada. Una entrada que no cumple, o que no existe, se omite y se informa |
 | `features.memory_backup.enabled` | booleano | `true` | Habilita la unidad `memory` |
 | `features.memory_backup.schedule` | cron de 5 campos | `"40 3 * * *"` | Cinco campos válidos; se admite `*` y `*/N` en todos, incluido el minuto |
 | `features.history_backup.enabled` | booleano | `true` | Habilita la unidad `history` |
@@ -225,7 +225,7 @@ store/key.age                                          la llave de datos, cifrad
 store/recipient                                        la parte pública de la llave de datos, en claro
 store/operator                                         la huella de la llave del operador para la que se cifró key.age
 store/manifest.json.age                                cifrado para la llave de datos
-store/blocks/<2 hex>/<sha256 del bloque en claro>.age  cifrados para la llave de datos
+store/blocks/<2 hex>/<sha256 del bloque cifrado>.age  cifrados para la llave de datos
 ```
 
 ### Llave de datos
@@ -242,8 +242,8 @@ store/blocks/<2 hex>/<sha256 del bloque en claro>.age  cifrados para la llave de
 
 - Tamaño en claro: 1.048.576 bytes como máximo; el último de cada archivo puede ser más corto.
 - Contenido del archivo: el bloque comprimido con gzip y después cifrado con `age` para la llave de datos. Un bloque que no se comprime puede pesar algo más de 1 MiB.
-- Nombre: el SHA-256 del bloque en claro, en hexadecimal. Los dos primeros caracteres forman el subdirectorio.
-- Un bloque cuyo archivo ya existe en la rama no se vuelve a cifrar, salvo cuando el almacén rota.
+- Nombre: el SHA-256 del **archivo cifrado**, en hexadecimal, y nunca el del bloque en claro: quien lee el repositorio no puede confirmar el contenido de un archivo pequeño probando valores (D37 de [research.md](research.md)). Los dos primeros caracteres forman el subdirectorio. El manifiesto, cifrado, guarda el SHA-256 de cada bloque en claro.
+- **Mapa de bloques** (`<caché>/<unidad>-repo.blockmap`, fuera de todo árbol que se commitea): relaciona el SHA-256 de cada bloque en claro con el nombre de su archivo cifrado, para la llave de datos vigente. Un bloque que el mapa registra, y cuyo archivo existe en la rama, no se vuelve a cifrar. Si el almacén rota o el mapa se pierde, todos los bloques se cifran de nuevo y el ciclo es una subida completa.
 
 ### Manifiesto
 
@@ -260,7 +260,8 @@ store/blocks/<2 hex>/<sha256 del bloque en claro>.age  cifrados para la llave de
       "size": 71952401,
       "mode": "600",
       "sha256": "<hash del archivo tal como se capturó>",
-      "blocks": ["<sha256 del bloque 1>", "<sha256 del bloque 2>"]
+      "blocks": [{"name": "<sha256 del bloque 1 cifrado>", "sha256": "<sha256 del bloque 1 en claro>"},
+                 {"name": "<sha256 del bloque 2 cifrado>", "sha256": "<sha256 del bloque 2 en claro>"}]
     }
   ]
 }
@@ -268,7 +269,7 @@ store/blocks/<2 hex>/<sha256 del bloque en claro>.age  cifrados para la llave de
 
 - `files` va ordenado por `path`.
 - Un archivo vacío tiene `size` 0 y `blocks` vacío.
-- Los `path` son relativos, usan `/` y no pueden contener `..` ni empezar con `/`.
+- Los `path` son relativos, usan `/` y no pueden contener `..` ni un segmento `.git` (en mayúsculas o minúsculas), ni empezar con `/`. El `mode` se restaura sin los bits setuid, setgid y sticky.
 - `size` y `sha256` son los de lo que se capturó. En una base SQLite son los de la copia consistente, no los del archivo vivo; en un `.jsonl`, los de lo leído hasta su último salto de línea.
 
 ### Reglas de captura
@@ -294,7 +295,7 @@ store/blocks/<2 hex>/<sha256 del bloque en claro>.age  cifrados para la llave de
 | Ruta | `/workspace/agent-repo` (en el host, `<workspace>/agent-repo`) |
 | Lo crea | El arranque del contenedor, como `agent`, en segundo plano y con tiempo máximo, solo si falta. Si no pudo, la unidad `config` lo vuelve a intentar en cada corrida |
 | `remote.origin.fetch` | `+refs/heads/*:refs/remotes/origin/*` y además `^refs/heads/backup/*` |
-| `credential.<esquema>://<servidor>.helper` | La ruta de `git-credential-agent.sh` |
+| `credential.<esquema>://<servidor>.helper` | Un valor vacío y después la ruta de `git-credential-agent.sh`. El vacío reinicia la lista de ayudantes heredada de la configuración global y de sistema: un `credential.helper=store` ahí guardaría el token en claro |
 | `user.name`, `user.email` | `user.name` y `user.email` de `agent.yml`, solo si el clon no los tiene |
 | Rama que queda extraída | La primera que exista, en este orden: la rama por defecto del remoto, si es una rama de trabajo; `main`; la primera rama de trabajo en orden alfabético. Si el remoto no tiene ninguna rama de trabajo (está vacío, o solo tiene ramas `backup/*`), una rama `main` local sin commits |
 | En el `.gitignore` del workspace | `/agent-repo/` |

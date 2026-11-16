@@ -5,7 +5,7 @@ The launcher scaffolds agents in one of two **deployment modes**, selected by th
 - **docker mode** (recommended) — the agent runs inside its own container, with all state stored under the workspace directory (`<workspace>/.state/`, bind-mounted to `/home/agent`). Least-privilege by design.
 - **local mode** — the agent runs directly on the host as a `claude remote-control` session under systemd (Linux only). No container; see [Local standalone mode](#local-standalone-mode-linuxsystemd).
 
-In both modes teardown is clean and reversible: `./setup.sh --uninstall --nuke` removes the workspace and the agent's dotfiles/state (systemd units too, if it has passwordless sudo — see [Teardown](#teardown)). If the agent has a fork with backups, `./setup.sh --restore-from-fork <url>` brings it back.
+In both modes teardown is clean and reversible: `./setup.sh --uninstall --nuke` removes the workspace and the agent's dotfiles/state (systemd units too, if it has passwordless sudo — see [Teardown](#teardown)). If the agent has backups (in its agent repository or its fork), `./setup.sh --restore-from-repo <url>` (alias `--restore-from-fork`) brings it back — see [Backup and restore](#backup-and-restore).
 
 See [Architecture](architecture.md) for the technical design of both modes.
 
@@ -16,6 +16,7 @@ Host tools for the wizard (both modes):
 - Bash 4+, `git`, `jq` (chat-id auto-discovery and `agentctl status`/`doctor` parsing)
 - `yq` v4+ — auto-vendored into `scripts/vendor/bin/` if missing or the wrong version
 - Optional: `gum` (auto-downloaded; plain-`read` fallback without a TTY), `gh` (only for the GitHub-fork prompt; auto-bootstrapped when needed)
+- For a restore of encrypted backups only: `age`, and `python3` 3.9+ for the encrypted block stores of an agent repository
 
 Docker mode additionally needs (as of v0.12.0):
 
@@ -45,13 +46,14 @@ The wizard runs on the host. Prompt order (as of v0.12.0):
 4. Destination directory + optional systemd unit (the unit prompt is Linux-only; on macOS it is skipped — Docker Desktop plus the container's `unless-stopped` policy handles restart-on-login).
 5. Claude profile — informational, no prompt: it just tells you where the login will live (container `/home/agent/.claude` in docker mode, `<workspace>/.state/.claude` in local mode).
 6. GitHub fork for template sync (optional; asks for a fork PAT).
-7. Heartbeat notifications (optional bot token + chat-id auto-discovery).
-8. MCP servers (Atlassian workspaces + API tokens, GitHub MCP + PAT, per-MCP secrets).
-9. Heartbeat feature and agent principles.
-10. Knowledge vault (Karpathy three-layer pattern at `.state/.vault/`, default on): seed structure, MCPVault server, and QMD hybrid search (BM25+vector+rerank; downloads a ~300MB embedding model on first use — **default off**). See [vault.md](vault.md).
-11. Optional plugins (five defaults — telegram, claude-mem, context7, claude-md-management, security-guidance — are always installed and not asked about).
+7. Agent repository (docker mode only, optional, default no, 046): a private GitHub repository that belongs to the agent, where the launcher backs up its full state (five `backup/*` branches) and the agent keeps its own work. Asks for its URL (`https://github.com/<owner>/<name>`; create it with an initial commit on `main`) and whether the agent handles sensitive data (health, finance, legal), which encrypts its vault, auto memory and config too. See [Backup and restore](#backup-and-restore).
+8. Heartbeat notifications (optional bot token + chat-id auto-discovery).
+9. MCP servers (Atlassian workspaces + API tokens, GitHub MCP + PAT, per-MCP secrets). With an agent repository and the GitHub MCP off, this step asks for the repository's `GITHUB_PAT` instead.
+10. Heartbeat feature and agent principles.
+11. Knowledge vault (Karpathy three-layer pattern at `.state/.vault/`, default on): seed structure, MCPVault server, and QMD hybrid search (BM25+vector+rerank; downloads a ~300MB embedding model on first use — **default off**). See [vault.md](vault.md).
+12. Optional plugins (five defaults — telegram, claude-mem, context7, claude-md-management, security-guidance — are always installed and not asked about).
 
-**Secrets:** the host wizard *optionally* captures GitHub PAT, Atlassian API tokens, the heartbeat notifier token/chat id, the fork PAT, and per-MCP secrets — press Enter to skip any of them and fill `.env` later. Only the chat-plugin **Telegram bot token** is deferred to the container's first-run wizard (docker mode); that wizard skips `GITHUB_PAT` if the host wizard already set it.
+**Secrets:** the host wizard *optionally* captures GitHub PAT, Atlassian API tokens, the heartbeat notifier token/chat id, the fork PAT, and per-MCP secrets — press Enter to skip any of them and fill `.env` later. `GITHUB_PAT` is written when the GitHub MCP is on **or** an agent repository is associated: the backups and the agent's work clone push with it too. Only the chat-plugin **Telegram bot token** is deferred to the container's first-run wizard (docker mode); that wizard skips `GITHUB_PAT` if the host wizard already set it.
 
 Output:
 
@@ -261,17 +263,17 @@ The container restarts with the previous image. No state is lost.
 
 ## Backup and restore
 
-Agents with a GitHub fork replicate their non-regenerable state to three independent orphan branches in the fork: `backup/identity` (login, pairing, plugin config, encrypted `.env`), `backup/vault` (markdown subset of the vault), and `backup/config` (`agent.yml`, no secrets). Identity backups run automatically (watchdog + daily cron); trigger one manually with `./scripts/agentctl heartbeat backup-identity`.
+The non-regenerable state is replicated to independent orphan branches. The destination is the agent's **associated repository** when `backup.repo.url` is set (docker mode only): five branches, `backup/identity` (pairing, plugin config, settings, encrypted `.env`), `backup/vault` (the vault's markdown), `backup/config` (`agent.yml` plus `CLAUDE.md`, the persona and the workspace `.claude/` config), `backup/memory` (auto memory, claude-mem, `backup.extra_paths`) and `backup/history` (conversation transcripts, always encrypted). Otherwise it is the agent's **fork**, with the three branches of before (identity, vault, `agent.yml`-only config). Units run on their own schedule; trigger one manually with `./scripts/agentctl heartbeat backup-<unit>`, and see where they all stand with `./scripts/agentctl heartbeat backup-status`. Encrypted pieces open only with the private half of the operator's ssh key (`backup.identity.recipient`); an existing agent sets it with `heartbeatctl backup-identity --configure-key`, which prints its fingerprint. How to associate a repository with a new or an existing agent, what each branch holds, and what no branch covers: the README's *Backups* section.
 
 To rebuild an agent on a new host (or after `--nuke`):
 
 ```bash
-./setup.sh --restore-from-fork <fork-url>   # optionally --identity-key <ssh-key-path>
-                                            # to decrypt .env.age (defaults try
-                                            # ~/.ssh/id_ed25519 then id_rsa)
+./setup.sh --restore-from-repo <repository-or-fork-url>   # alias: --restore-from-fork
+                                                          # optionally --identity-key <ssh-key-path>
+                                                          # (defaults try ~/.ssh/id_ed25519 then id_rsa)
 ```
 
-Restore pulls the branches in order — config first (so `vault.path` is known), then identity, then vault — and skips any branch that is absent. Alternatively, since the workspace directory IS the agent, a plain `rsync`/`cp -a` of the workspace migrates everything.
+Restore runs at the end of the scaffold and pulls the branches in order — config first (so `vault.path` is known), then identity, vault, memory and history — skipping any branch that is absent. Anything encrypted needs `age` (and `python3` 3.9+ for a block store) on the host and a key that opens it; otherwise it is skipped with a line and the rest is restored. A passphrase-protected key is asked once per encrypted piece: 3 times for an unmarked agent, up to 5 for a sensitive one. The `/login` login travels in no backup: an agent that authenticates with `CLAUDE_CODE_OAUTH_TOKEN` in `.env` comes back authenticated, one that only used `/login` needs it again. Alternatively, since the workspace directory IS the agent, a plain `rsync`/`cp -a` of the workspace migrates everything.
 
 ## Rotating Secrets
 
@@ -286,7 +288,7 @@ nano <workspace>/.env             # edit the secret
 docker compose up -d --force-recreate
 ```
 
-No rebuild is needed.
+No rebuild is needed. With an agent repository, `GITHUB_PAT` also feeds the backups and the work clone: until the container is recreated they keep using the old value (or report `no-credential` if there was none).
 
 **`TELEGRAM_BOT_TOKEN` needs one extra step.** The channel plugin does not read `/workspace/.env`; it reads a channel-scoped env at `<workspace>/.state/.claude/channels/telegram/.env`. The supervisor seeds that file only when the key is *absent* (`ensure_channel_env_synced`, `docker/scripts/start_services.sh:408`) — it never overwrites an existing value, so after pairing a plain restart leaves the **old** token in place. To rotate:
 
@@ -339,7 +341,7 @@ To also delete the workspace directory itself:
 ./setup.sh --uninstall --nuke --yes
 ```
 
-After `--nuke`, no traces of the agent remain on the host (dotfiles and state gone; systemd units too, given sudo as above). If the agent had a fork with backups, a later `./setup.sh --restore-from-fork <url>` can resurrect it.
+After `--nuke`, no traces of the agent remain on the host (dotfiles and state gone; systemd units too, given sudo as above). Before deleting, `--nuke` warns if the agent's work clone (`agent-repo/`) holds commits on no remote branch or uncommitted files; with `--yes` it warns and goes on. If the agent had backups (its agent repository or its fork), a later `./setup.sh --restore-from-repo <url>` can resurrect it.
 
 ## Troubleshooting
 

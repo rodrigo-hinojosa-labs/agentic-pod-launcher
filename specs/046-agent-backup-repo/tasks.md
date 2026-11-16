@@ -159,7 +159,7 @@ _<unidad>_repo_git ARGS...                -> git con el entorno de C2 y timeout 
   - **Antes**: `python3 -I <scratchpad>/tools/byte_audit_files.py` sobre cada archivo de `specs/046-agent-backup-repo/`, con 0 hallazgos. Tras el `git add`, `git ls-files -s` muestra modo 100644.
   - **El mensaje**: en español, en imperativo y sin atribución. Por ejemplo, `docs: agrega los artefactos de spec-kit de 046 (repositorio privado por agente)`.
   - Sin push.
-- [ ] T003 Medir la línea base de la suite del host en una copia aislada de `origin/main` (`git worktree add --detach <scratchpad>/046/base origin/main`), que se conserva hasta el gate completo de T074:
+- [X] T003 Medir la línea base de la suite del host en una copia aislada de `origin/main` (`git worktree add --detach <scratchpad>/046/base origin/main`), que se conserva hasta el gate completo de T074:
   - **Las corridas**: en secuencia, `bats tests/` (bash 5.x) y `PATH=/bin:$PATH bats tests/` (bash 3.2.57), con la salida a archivos del scratchpad.
   - **Lo que se anota** en el Registro de `specs/046-agent-backup-repo/tasks.md`: `1..N`, los ok, los `not ok`, las saltadas, la duración y la salida de error.
   - **Lo esperado**: 1972 de 1972 en cada bash, con 61 saltadas en 5.x y 62 en 3.2, que es lo que dejó el gate de 045. Si da otra cifra, manda la medida. El esperado final es la línea base más 132: las 124 pruebas del host y las 8 de extremo a extremo, que en el host salen saltadas.
@@ -172,7 +172,7 @@ _<unidad>_repo_git ARGS...                -> git con el entorno de C2 y timeout 
 
 **Purpose**: la enmienda de la constitución, las claves de `agent.yml`, el doble de prueba y la regla de destino con su credencial. Bloquea todas las historias.
 
-- [ ] T005 Enmendar `.specify/memory/constitution.md` de 1.0.1 a 1.1.0, antes de cualquier cambio de código (FR-020; `contracts/constitution-amendment.md`, E1 a E9). Los textos se copian literalmente del contrato:
+- [X] T005 Enmendar `.specify/memory/constitution.md` de 1.0.1 a 1.1.0, antes de cualquier cambio de código (FR-020; `contracts/constitution-amendment.md`, E1 a E9). Los textos se copian literalmente del contrato:
   - la primera viñeta del Principio V gana la salvedad del subconjunto que llevan las ramas de respaldo (E1);
   - la tercera viñeta se reemplaza por las dos del contrato (E2);
   - el `Rationale` del principio deja de prometer una restauración sin iniciar sesión (E3);
@@ -180,14 +180,14 @@ _<unidad>_repo_git ARGS...                -> git con el entorno de C2 y timeout 
   - la línea final pasa a `**Version**: 1.1.0 | **Ratified**: 2026-06-18 | **Last Amended**: <fecha del día, en ISO>` (E5);
   - el bloque `SYNC IMPACT REPORT (1.0.1 → 1.1.0)` va después del bloque de 1.0.1 y antes del título (E6).
   - **Comprobación**: los seis comandos de E9 dan el resultado esperado.
-- [ ] T006 ROJO: crear `tests/agent-repo-surface.bats` con su cabecera y escribir TA04, TA05 y TA17:
+- [X] T006 ROJO: crear `tests/agent-repo-surface.bats` con su cabecera y escribir TA04, TA05 y TA17:
   - **La cabecera**: el propósito (046), los contratos y las reglas para escribir las pruebas.
   - **El `agent.yml` de partida** se escribe dentro de la prueba, sin las claves nuevas (molde: `_write_agent_yml` de `tests/mcp-handshake-timeout.bats`). No se saca de `git show`: la CI clona sin historia.
   - **TA04**: tras `./setup.sh --regenerate`, `yq` muestra `backup.repo.url` vacío, `backup.repo.allow_unverified` y `backup.sensitive` en `false`, `backup.extra_paths` como lista vacía, y las dos unidades nuevas con `enabled: true` y sus `schedule`. Segunda pierna: con `features.memory_backup.enabled: false`, `backup.sensitive: true`, `backup.repo.allow_unverified: true` y `backup.extra_paths: [".custom"]` escritos por el operador, regenerar no cambia ninguno. Tercera pierna: dos regeneraciones seguidas dejan el mismo `agent.yml`, salvo `meta.regenerated_at`.
   - **TA05**: `agent_yml_validate` rechaza un valor no booleano en cada una de las cuatro claves booleanas, y nombra la clave. Para la URL recorre `tests/fixtures/backup-repo/url-cases.tsv` (T008): rechaza `http://x/y`, `https://u:p@github.com/o/r`, `https://github.com/a b`, `git@github.com:o/r.git`, `https://gitlab.com/o/r` y `https://github.com/o`; acepta `https://github.com/o/r`, `https://github.com/o/r.git` y la cadena vacía. Con `BACKUP_DEST_ALLOW_HTTP=1` acepta `http://127.0.0.1:1/r` y sigue rechazando `http://example.com/r`.
   - **TA17**: `backup.extra_paths` con un texto en vez de una lista se rechaza; ausente, se completa con `[]`.
   - Contra el código actual caen las tres.
-- [ ] T007 Agregar las claves nuevas (sección 1 de `data-model.md`) en `setup.sh`, `scripts/lib/schema.sh`, `tests/fixtures/sample-agent.yml`, `tests/fixtures/sample-agent-with-vault.yml` y `tests/schema.bats`. Reglas, citadas literalmente:
+- [X] T007 Agregar las claves nuevas (sección 1 de `data-model.md`) en `setup.sh`, `scripts/lib/schema.sh`, `tests/fixtures/sample-agent.yml`, `tests/fixtures/sample-agent-with-vault.yml` y `tests/schema.bats`. Reglas, citadas literalmente:
   - `backup.repo.url`, texto, `""`: «Vacío significa sin repositorio asociado. Si no está vacío, debe tener la forma `https://github.com/<dueño>/<nombre>`, con `.git` opcional al final, sin credenciales ni espacios»;
   - `backup.repo.allow_unverified`, booleano, `false`: «En `true`, se acepta un destino cuya privacidad no se pudo comprobar. Nunca habilita un repositorio público»;
   - `backup.sensitive`, booleano, `false`: «En `true`, el vault, la auto-memoria y la configuración, salvo `agent.yml`, viajan cifrados»;
@@ -202,7 +202,7 @@ _<unidad>_repo_git ARGS...                -> git con el entorno de C2 y timeout 
   - **Los fixtures**: las claves nuevas con sus valores por defecto.
   - **`tests/schema.bats:28-30`**: la lista de claves de primer nivel de `sample-agent-with-vault.yml` gana `backup`.
   - TA04, TA05 y TA17 en verde; `tests/schema.bats`, `tests/regenerate.bats`, `tests/scaffold.bats` y `tests/e2e-smoke.bats` en verde, en los dos bash.
-- [ ] T008 [P] Crear el doble de prueba `tests/fixtures/backup-repo/git-auth-server.py`, el arnés `tests/helper-backup-repo.bash` y los archivos dorados (`contracts/evidence.md`, V1 y V2):
+- [X] T008 [P] Crear el doble de prueba `tests/fixtures/backup-repo/git-auth-server.py`, el arnés `tests/helper-backup-repo.bash` y los archivos dorados (`contracts/evidence.md`, V1 y V2):
   - **El servidor** sale del prototipo `<scratchpad>/046/git-auth-server.py`. Sirve los repositorios bare de `GIT_TEST_ROOT` pasando cada petición a `git http-backend`. En cada petición lee la credencial válida de `GIT_TEST_TOKEN_FILE` y los modos de `GIT_TEST_MODE_FILE` (`anon-read`, `anon-error-once`, `stall-anon-once`, `deny-push`, `stall-auth` y `stall-push`). Los dos modos `-once` valen solo para la próxima petición sin credencial: git empieza toda operación autenticada con una, así que un modo permanente rompería también la consulta autenticada. Escucha en `GIT_TEST_BIND` (`127.0.0.1` por defecto), en un puerto efímero que escribe en `GIT_TEST_PORT_FILE`. Deja en `GIT_TEST_LOG` una línea por petición, con el código, la ruta, el servicio y `auth=ok`, `auth=bad`, `auth=none` o `auth=anon`, y nunca la credencial. Una petición en modo `stall` se suelta sola a los 300 segundos.
   - **Lo que no usa**: `HTTPServer.server_bind`. Sobrescribe `server_bind` para llamar a `socketserver.TCPServer.server_bind`, como `tests/fixtures/nightly-alert/tg-server.py`.
   - **El arnés** entrega:
@@ -223,7 +223,7 @@ _<unidad>_repo_git ARGS...                -> git con el entorno de C2 y timeout 
     - `tests/fixtures/backup-repo/agent-fork.yml` y `tests/fixtures/backup-repo/crontab-fork.golden`: un `agent.yml` con fork, y el crontab que le genera el `heartbeatctl reload` de `origin/main`;
     - `tests/fixtures/backup-repo/claude-md-backups-section.golden`: la sección `## Backups (what actually survives)` que renderiza la plantilla de `origin/main` para `tests/fixtures/sample-agent.yml`;
     - `tests/fixtures/backup-repo/restore-fork-output.golden`: la salida de `restore_from_fork` de `origin/main` para el fork de tres ramas de `tests/restore-unified.bats`, con la ruta de destino reemplazada por `<DEST>`.
-- [ ] T009 ROJO: escribir TD01 a TD18 en `tests/backup-dest.bats`, con un solo servidor por archivo (`setup_file` y `teardown_file`):
+- [X] T009 ROJO: escribir TD01 a TD18 en `tests/backup-dest.bats`, con un solo servidor por archivo (`setup_file` y `teardown_file`):
   - **TD01 a TD03**: `backup_dest_resolve` entrega `tipo<TAB>url`. TD01: solo repositorio, y los dos (gana el repositorio). TD02: solo fork. TD03: ninguno, valores vacíos, `null` y `agent.yml` ausente.
   - **TD04 y TD05**: la tabla de `backup_dest_askpass`. El script responde `x-access-token` a una pregunta que empieza con `Username` y el valor de `GITHUB_PAT` a una que empieza con `Password`; no imprime nada con otra pregunta, y nada por stderr.
   - **TD06**: veredicto `private`; el log tiene una petición `auth=none` rechazada con 401 y una `auth=ok`.
@@ -240,7 +240,7 @@ _<unidad>_repo_git ARGS...                -> git con el entorno de C2 y timeout 
   - **TD17**: con `anon-read` y `allow_unverified` activo, `public`.
   - **TD18**: con `stall-auth` y un tope de 2 segundos, la consulta termina en menos de 15 segundos con `unreachable`.
   - Contra el código actual caen las dieciocho: la librería no existe.
-- [ ] T010 Crear `docker/scripts/lib/backup_dest.sh` y `docker/scripts/git-askpass-agent.sh`, y agregar sus líneas en `docker/Dockerfile` (`contracts/destination-and-credential.md`, C1 a C8):
+- [X] T010 Crear `docker/scripts/lib/backup_dest.sh` y `docker/scripts/git-askpass-agent.sh`, y agregar sus líneas en `docker/Dockerfile` (`contracts/destination-and-credential.md`, C1 a C8):
   - **La librería** es bash, sin efectos al cargarla. Define `backup_dest_resolve`, `backup_dest_askpass`, `backup_dest_url_ok`, `backup_dest_verify`, `backup_dest_branch_head`, `backup_dest_check_owner`, `backup_dest_record`, `backup_dest_lock` y `backup_dest_unlock`. No arma árboles, no hace commits, no empuja y no calcula hashes de contenido.
   - **El registro** `backup-dest.json` lleva `url`, `verdict`, `checked_at`, `checked_epoch`, `anon_checked_at` y `anon_checked_epoch`, y se escribe de forma atómica. Los plazos se calculan con los campos en segundos.
   - **La sonda anónima** corre con `LC_ALL=C`, y solo cuenta como rechazo por falta de credencial si su stderr trae `Authentication failed`, `could not read Username` o `terminal prompts disabled`.
@@ -250,8 +250,8 @@ _<unidad>_repo_git ARGS...                -> git con el entorno de C2 y timeout 
   - **El askpass** es el de C2, en `sh` POSIX, con modo 100755.
   - **El Dockerfile**: `COPY scripts/lib/backup_dest.sh /opt/agent-admin/scripts/lib/backup_dest.sh` junto a las demás librerías (`:263-272`), `COPY scripts/git-askpass-agent.sh /opt/agent-admin/scripts/git-askpass-agent.sh`, y el script en el `chmod +x` de `:274-275`.
   - TD01 a TD18 en verde en los dos bash. `shellcheck -S error` sobre la librería y `shellcheck -s sh` sobre el askpass, con código 0.
-- [ ] T011 Crear `tests/backup-repo-units.bats` con su cabecera, `load helper-backup-repo`, un servidor por archivo y la prueba TU31, que nace en verde: por cada archivo que entrega `git ls-files --cached --others --exclude-standard docker/scripts`, `docker/Dockerfile` tiene una línea `COPY scripts/<ruta>`. Con `--others` ve también los archivos nuevos que todavía no se commitean. La prueba falla si la lista tiene menos de 15 entradas, para que una lista vacía no pase.
-- [ ] T012 Punto de control en bash 5.x y en 3.2, anotado en `specs/046-agent-backup-repo/tasks.md`: `tests/backup-dest.bats` 18 de 18; TA04, TA05, TA17 y TU31 en verde; ninguna prueba deja un proceso del servidor vivo (`pgrep -f git-auth-server.py` vacío).
+- [X] T011 Crear `tests/backup-repo-units.bats` con su cabecera, `load helper-backup-repo`, un servidor por archivo y la prueba TU31, que nace en verde: por cada archivo que entrega `git ls-files --cached --others --exclude-standard docker/scripts`, `docker/Dockerfile` tiene una línea `COPY scripts/<ruta>`. Con `--others` ve también los archivos nuevos que todavía no se commitean. La prueba falla si la lista tiene menos de 15 entradas, para que una lista vacía no pase.
+- [X] T012 Punto de control en bash 5.x y en 3.2, anotado en `specs/046-agent-backup-repo/tasks.md`: `tests/backup-dest.bats` 18 de 18; TA04, TA05, TA17 y TU31 en verde; ninguna prueba deja un proceso del servidor vivo (`pgrep -f git-auth-server.py` vacío).
 
 **Checkpoint**: la regla de destino, la credencial y el doble de prueba están listos. Las historias pueden empezar.
 
@@ -263,28 +263,28 @@ _<unidad>_repo_git ARGS...                -> git con el entorno de C2 y timeout 
 
 **Independent Test**: `bats tests/backup-repo-units.bats` en los dos bash, con las pruebas de esta fase en verde, más las suites de respaldo que ya existían, sin editarlas.
 
-- [ ] T013 [US1] ROJO: escribir TU01, TU02 y TU24 en `tests/backup-repo-units.bats`:
+- [X] T013 [US1] ROJO: escribir TU01, TU02 y TU24 en `tests/backup-repo-units.bats`:
   - **TU01**: con un repositorio asociado, `backup-identity` deja `backup/identity` con `.agentic-pod-backup.json` (`schema` 1, el agente y la unidad `identity`), y el estado local con `hash`, `last_commit`, `last_push`, `last_attempt` y `last_result: ok`. Segunda pierna: lo mismo contra un repositorio creado con `--empty`.
   - **TU02**: un segundo ciclo sin cambios crea 0 commits y deja `last_result: no-change`. Segunda pierna: `backup-identity --gc`, también sin cambios, termina igual y no imprime `no fork url`.
   - **TU24**: con el workspace de `br_workspace` (el archivo de secretos solo en la raíz) y una llave de `br_keys`, la rama trae `.env.age`; su descifrado con la llave privada de prueba tiene el mismo SHA-256 que el original; `br_branch_has` no encuentra el centinela de los secretos; y la caché de la unidad tampoco lo tiene en claro. Segunda pierna: sin llave, el modo es `partial` y la rama no trae `.env.age`.
-- [ ] T014 [US1] ROJO: escribir TU13, TU14, TU15, TU17 y TU18 en `tests/backup-repo-units.bats`, cada una sobre `identity`, `vault` y `config`:
+- [X] T014 [US1] ROJO: escribir TU13, TU14, TU15, TU17 y TU18 en `tests/backup-repo-units.bats`, cada una sobre `identity`, `vault` y `config`:
   - **TU13**: sin `GITHUB_PAT`, el resultado es `no-credential`, el código es 0 y el log del servidor no gana ninguna petición.
   - **TU14**: con una credencial equivocada, `unreachable` y código 2.
   - **TU15**: con `anon-read`, `not-private`, código 0 y ninguna petición `receive-pack` en el log.
   - **TU17**: con una rama `backup/<unidad>` que no tiene la marca, `foreign-branch`; la cabeza de esa rama no cambia.
   - **TU18**: con una marca de otro agente, `other-agent`; la cabeza no cambia.
-- [ ] T015 [US1] ROJO: escribir TU22, TU23 y TU26 en `tests/backup-repo-units.bats`:
+- [X] T015 [US1] ROJO: escribir TU22, TU23 y TU26 en `tests/backup-repo-units.bats`:
   - **TU22**: con `deny-push` solo para una corrida, esa unidad termina en `push-failed` con código 2, y las otras dos, corridas después sin ese modo, terminan en `ok`. Segunda pierna: tras una corrida con la credencial equivocada (`unreachable`), se corrige la credencial y la unidad siguiente termina en `ok`: el veredicto anterior no se reutilizó.
   - **TU23**, sobre `config`, en tres piernas, cada una sin cambios de contenido: la prueba borra la rama en el repositorio bare, y el ciclo siguiente la vuelve a crear con su marca y los mismos archivos; la prueba agrega un commit ajeno que conserva la marca, y el ciclo siguiente deja otra vez el árbol de la unidad; la prueba quita la marca, y el ciclo siguiente termina en `foreign-branch` sin mover la cabeza.
   - **TU26**, sobre `config`: tras un respaldo correcto, la prueba cambia la credencial válida del servidor. El ciclo siguiente, sin cambios de contenido, da `unreachable` y código 2. Al restaurar la credencial, el ciclo siguiente da `no-change`.
-- [ ] T016 [US1] ROJO: escribir TU25 y TU34 en `tests/backup-repo-units.bats`. Dentro del cuerpo de cada prueba se carga `docker/scripts/start_services.sh` con `START_SERVICES_NO_RUN=1` (molde: `tests/start-services-watchdog.bats:9-23`), se fija `IDENTITY_BACKUP_WORKSPACE_OVERRIDE` y se reemplaza `_trigger_identity_backup` por una función que anota cada llamada:
+- [X] T016 [US1] ROJO: escribir TU25 y TU34 en `tests/backup-repo-units.bats`. Dentro del cuerpo de cada prueba se carga `docker/scripts/start_services.sh` con `START_SERVICES_NO_RUN=1` (molde: `tests/start-services-watchdog.bats:9-23`), se fija `IDENTITY_BACKUP_WORKSPACE_OVERRIDE` y se reemplaza `_trigger_identity_backup` por una función que anota cada llamada:
   - **TU25**: primero, con un repositorio asociado y sin ningún respaldo, `_check_identity_backup` (con `_last_backup_check=0`) anota una llamada. Después de un `backup-identity` correcto, no anota ninguna. Después de cambiar el archivo de secretos de la raíz, anota una.
   - **TU34**: tras un intento fallido (`unreachable`), con el mismo contenido y `BACKUP_DEST_NOW` 60 segundos después, no anota ninguna llamada; 901 segundos después, anota una; y con un contenido nuevo anota una de inmediato. Lo mismo tras un `no-credential`, que no deja `attempt_hash`: a los 60 segundos no anota ninguna. Con un archivo de estado truncado, y con un `last_attempt_epoch` que no es un número, la función devuelve 0 bajo `set -euo pipefail` y anota una llamada. Última pierna, sin reemplazar `_trigger_identity_backup` y con un `timeout` espía en el PATH: con repositorio, la llamada lleva `-k 10 300`; con fork, lleva `90`, como hoy.
-- [ ] T017 [US1] ROJO: escribir TU36, TU37 y TU38 en `tests/backup-repo-units.bats`:
+- [X] T017 [US1] ROJO: escribir TU36, TU37 y TU38 en `tests/backup-repo-units.bats`:
   - **TU36**, sobre `identity` y sobre `vault`, con `br_tools_path`: con `stall-push` y `BACKUP_GIT_TIMEOUT_S=2`, la unidad termina en menos de 30 segundos con `push-failed` y código 2; el estado tiene `last_result: push-failed` y `attempt_hash`; y una corrida inmediata, sin el modo, funciona: el candado quedó suelto.
   - **TU37**, sobre `identity`, con `br_tools_path`: mientras otro proceso tiene tomado `scripts/heartbeat/.backup-identity.lock`, una corrida imprime `another run holds the lock - skipping`, sale con 0 y no cambia el archivo de estado ni el log del servidor. Al soltarse el candado, la corrida siguiente termina en `ok`.
   - **TU38**: con un `HOME` cuyo `.gitconfig` trae un `url.<otra>.insteadOf` que desvía la URL del repositorio y `commit.gpgsign=true`, `backup-identity`, `backup-vault` y `backup-config` terminan en `ok` contra el repositorio verdadero.
-- [ ] T018 [US1] Escribir en `tests/backup-repo-units.bats` las pruebas que nacen en verde y las que caen:
+- [X] T018 [US1] Escribir en `tests/backup-repo-units.bats` las pruebas que nacen en verde y las que caen:
   - **TU19** (sin destino, nace en verde): los mensajes son los de hoy, palabra por palabra (`agent.yml has no scaffold.fork.url` en las tres unidades), el código es 0 y no se crea ningún archivo de estado ni `backup-dest.json`.
   - **TU20** (con fork, nace en verde): con un repositorio bare local, como en `tests/backup-identity-git.bats`, la rama no trae la marca y el estado no trae `last_attempt` ni `last_result`. Segunda pierna: con el fork apuntando al servidor de prueba, el log no tiene ninguna petición `auth=ok`, y la corrida falla como en `main`: el fork no recibe la credencial.
   - **TU05** (con fork, nace en verde): `backup/config` trae solo `agent.yml`.
@@ -292,22 +292,22 @@ _<unidad>_repo_git ARGS...                -> git con el entorno de C2 y timeout 
   - **TU06** (cae): sin la marca de datos sensibles, `backup/vault` trae los `.md` en claro, con su estructura.
   - **TU29** (cae): con un repositorio asociado y sin la clave `features.identity_backup.enabled`, el crontab generado tiene la línea de `backup-identity`; con `enabled: false`, no la tiene; con fork y sin la clave, no la tiene, como hoy. Segunda pierna: después de `heartbeatctl set-interval`, `agent.yml` conserva `backup.repo.url` y el crontab conserva la línea.
   - **TU33** (cae), sobre `config` y `vault`: tras un respaldo correcto, la prueba borra el archivo de estado y la caché. El ciclo siguiente crea 0 commits y deja el estado con `hash`, `last_commit` igual a la cabeza remota y `last_push`. El ciclo que sigue termina en `no-change` y no hace ningún `fetch`: el archivo `FETCH_HEAD` de la caché queda igual, byte a byte y en su fecha.
-- [ ] T019 [US1] Anotar el ROJO en `specs/046-agent-backup-repo/tasks.md`, en bash 5.x y en 3.2: caen TU01 a TU03, TU06, TU13 a TU15, TU17, TU18, TU22 a TU26, TU29, TU33, TU34 y TU36 a TU38; pasan TU05, TU19, TU20 y TU31. Cada una cae en la línea prevista y no por un error del arnés (un servidor que no levanta, una llave que no se genera o un `heartbeatctl` que no carga). Un ROJO por otra razón se corrige ahora y se vuelve a anotar.
-- [ ] T020 [US1] Extender `docker/scripts/lib/backup_identity.sh` (U2 de `contracts/backup-units.md`; D19 y D32), sin tocar `_identity_git` ni ninguna función que ya existe, salvo el argumento opcional:
+- [X] T019 [US1] Anotar el ROJO en `specs/046-agent-backup-repo/tasks.md`, en bash 5.x y en 3.2: caen TU01 a TU03, TU06, TU13 a TU15, TU17, TU18, TU22 a TU26, TU29, TU33, TU34 y TU36 a TU38; pasan TU05, TU19, TU20 y TU31. Cada una cae en la línea prevista y no por un error del arnés (un servidor que no levanta, una llave que no se genera o un `heartbeatctl` que no carga). Un ROJO por otra razón se corrige ahora y se vuelve a anotar.
+- [X] T020 [US1] Extender `docker/scripts/lib/backup_identity.sh` (U2 de `contracts/backup-units.md`; D19 y D32), sin tocar `_identity_git` ni ninguna función que ya existe, salvo el argumento opcional:
   - `identity_secrets_file TIPO WORKSPACE DIR_DE_ESTADO` entrega `<workspace>/.env` con el tipo `repo`, y `<directorio de estado>/.env` en otro caso;
   - `identity_hash` acepta la ruta del archivo de secretos como último argumento opcional. Sin él, lee el del directorio de estado, como hoy. `identity_commit_and_push` no cambia;
   - `_identity_repo_git`, `identity_repo_prepare`, `identity_repo_commit_and_push` e `identity_repo_write_state`, con el molde del camino `repo`. Copian la lista de archivos de hoy y cifran el archivo de secretos con `age -R`, leyéndolo desde su ruta: nunca se copia en claro a la caché ni al árbol (I8).
   - `tests/backup-identity-lib.bats` y `tests/backup-identity-git.bats` siguen en verde, sin editarlas.
-- [ ] T021 [US1] Cambiar `docker/scripts/heartbeatctl` para el camino `repo` de `identity` (U1 y U8):
+- [X] T021 [US1] Cambiar `docker/scripts/heartbeatctl` para el camino `repo` de `identity` (U1 y U8):
   - **La carga**: `backup_dest.sh` desde `$LIB_DIR`, con su guarda `[ -f ]`, junto a las demás (`:28-42`). Los archivos de estado nuevos junto a los de `:60-63`.
   - **El despacho**: al comienzo de `_bi_run`, después de sus salidas tempranas, si `backup_dest_resolve` existe y responde `repo`, se llama a `_bi_run_repo` y se devuelve su código. El resto del cuerpo de `_bi_run` no cambia.
   - **`_repo_begin`, `_repo_verify` y `_repo_end`**: los del molde. Dejan el archivo de cabezas en la caché de la unidad y, ante una falla, imprimen el mensaje de U1 y llaman a `backup_dest_record`, con el hash intentado si ya se calculó.
   - **`_bi_run_repo`**: los trece pasos de U1, con `identity_secrets_file`. Con `--dry-run` se detiene después del hash, sin tocar la red. Ante un árbol idéntico, completa el estado como dice U1.
   - **`--gc`** con repositorio: `git gc` sobre la caché `identity-repo`, si existe, y después la corrida.
   - TU01, TU02, TU24 y TU37, que corren solo sobre `identity`, en verde. Las que recorren las tres unidades siguen en rojo hasta T023. `tests/backup-identity-cmd.bats` y `tests/heartbeatctl.bats` en verde, sin editarlas.
-- [ ] T022 [US1] Agregar el camino `repo` de `vault` en claro: `_vault_repo_git`, `vault_repo_prepare`, `vault_repo_commit_and_push` y `vault_repo_write_state` en `scripts/lib/backup_vault.sh`, y `_bv_run_repo` con su `--gc` en `docker/scripts/heartbeatctl`. El contenido es el de `vault_list_markdown`, con su estructura, más la marca. El camino cifrado llega en T033. TU06 y TU36 quedan en verde; `tests/backup-vault-*.bats` y `tests/local-vault-backup.bats` siguen en verde, sin editarlas.
-- [ ] T023 [US1] Agregar el camino `repo` de `config` con el contenido de hoy: `_config_repo_git`, `config_repo_prepare`, `config_repo_commit_and_push` y `config_repo_write_state` en `docker/scripts/lib/backup_config.sh`, y `_bc_run_repo` con su `--gc` en `docker/scripts/heartbeatctl`. Por ahora la rama lleva `agent.yml` y la marca; el contenido ampliado llega en T031. Con las tres unidades en el camino `repo`, quedan en verde TU03, TU13 a TU15, TU17, TU18, TU22, TU23, TU26, TU33 y TU38; `tests/backup-config.bats` sigue en verde, sin editarla.
-- [ ] T024 [US1] Cambiar `docker/scripts/start_services.sh` (C1 y C6; U2), sin tocar `_run_watchdog`:
+- [X] T022 [US1] Agregar el camino `repo` de `vault` en claro: `_vault_repo_git`, `vault_repo_prepare`, `vault_repo_commit_and_push` y `vault_repo_write_state` en `scripts/lib/backup_vault.sh`, y `_bv_run_repo` con su `--gc` en `docker/scripts/heartbeatctl`. El contenido es el de `vault_list_markdown`, con su estructura, más la marca. El camino cifrado llega en T033. TU06 y TU36 quedan en verde; `tests/backup-vault-*.bats` y `tests/local-vault-backup.bats` siguen en verde, sin editarlas.
+- [X] T023 [US1] Agregar el camino `repo` de `config` con el contenido de hoy: `_config_repo_git`, `config_repo_prepare`, `config_repo_commit_and_push` y `config_repo_write_state` en `docker/scripts/lib/backup_config.sh`, y `_bc_run_repo` con su `--gc` en `docker/scripts/heartbeatctl`. Por ahora la rama lleva `agent.yml` y la marca; el contenido ampliado llega en T031. Con las tres unidades en el camino `repo`, quedan en verde TU03, TU13 a TU15, TU17, TU18, TU22, TU23, TU26, TU33 y TU38; `tests/backup-config.bats` sigue en verde, sin editarla.
+- [X] T024 [US1] Cambiar `docker/scripts/start_services.sh` (C1 y C6; U2), sin tocar `_run_watchdog`:
   - cargar `backup_dest.sh` con la cascada de `agent_path.sh` (`:82-86`);
   - `_identity_backup_fork_configured` conserva su nombre y responde 0 cuando el tipo es `repo` o `fork`. Si la librería no cargó, usa la lectura de hoy;
   - `_check_identity_backup` deja de salir cuando falta la ruta horneada de la librería: su guarda pasa a comprobar que `identity_hash` esté definida. Sin ese cambio, en el host la función sale antes de calcular nada, y TU25 pasaría sin probar nada;
@@ -316,8 +316,8 @@ _<unidad>_repo_git ARGS...                -> git con el entorno de C2 y timeout 
   - toda lectura del estado tolera un archivo ilegible: un valor que no se puede leer cuenta como ausente, y la función devuelve 0 siempre. El supervisor la llama sin `|| true`, bajo `set -euo pipefail`;
   - `_trigger_identity_backup` corre la unidad con `timeout -k 10 300` cuando el tipo es `repo`, y con `timeout 90`, como hoy, en otro caso. Su línea de log nombra el `last_result` anterior, si lo hay.
   - TU25 y TU34 en verde. `tests/start-services-watchdog.bats`, incluido su oráculo de sha de `_run_watchdog`, y `tests/backup-trigger-plugin-install.bats` en verde, sin editarlas.
-- [ ] T025 [US1] Cambiar `cmd_reload` de `docker/scripts/heartbeatctl` (`:319-326`) para la línea diaria de `identity` (U7; D20): con el tipo `repo`, la línea existe salvo que `features.identity_backup.enabled` sea `false`; con `fork` o `none`, existe solo si vale `true`, como hoy. TU29 en verde; `tests/heartbeatctl.bats` en verde, sin editarla.
-- [ ] T026 [US1] Punto de control en bash 5.x y en 3.2, anotado en `specs/046-agent-backup-repo/tasks.md`:
+- [X] T025 [US1] Cambiar `cmd_reload` de `docker/scripts/heartbeatctl` (`:319-326`) para la línea diaria de `identity` (U7; D20): con el tipo `repo`, la línea existe salvo que `features.identity_backup.enabled` sea `false`; con `fork` o `none`, existe solo si vale `true`, como hoy. TU29 en verde; `tests/heartbeatctl.bats` en verde, sin editarla.
+- [X] T026 [US1] Punto de control en bash 5.x y en 3.2, anotado en `specs/046-agent-backup-repo/tasks.md`:
   - `tests/backup-repo-units.bats`: TU01 a TU03, TU05, TU06, TU13 a TU15, TU17 a TU20, TU22 a TU26, TU29, TU31, TU33, TU34 y TU36 a TU38 en verde;
   - `tests/backup-identity-*.bats`, `tests/backup-vault-*.bats`, `tests/backup-config.bats`, `tests/local-vault-backup.bats`, `tests/restore-from-fork.bats`, `tests/restore-unified.bats`, `tests/heartbeatctl.bats` y `tests/start-services-*.bats` en verde, con `git diff origin/main --` sobre ellas vacío;
   - `git diff origin/main` no toca `_identity_git`, `_vault_git` ni `_config_git`;
@@ -333,14 +333,14 @@ _<unidad>_repo_git ARGS...                -> git con el entorno de C2 y timeout 
 
 **Independent Test**: `bats tests/backup-store.bats tests/backup-repo-units.bats` en los dos bash, con las 22 y las 40 pruebas en verde.
 
-- [ ] T027 [P] [US2] ROJO: crear `tests/backup-store.bats` y escribir TS01 a TS09 (`contracts/block-store.md`, S1 a S6). Todas usan un `--block-size` chico (por ejemplo 4096) para que un archivo de pocos KB ocupe varios bloques:
+- [X] T027 [P] [US2] ROJO: crear `tests/backup-store.bats` y escribir TS01 a TS09 (`contracts/block-store.md`, S1 a S6). Todas usan un `--block-size` chico (por ejemplo 4096) para que un archivo de pocos KB ocupe varios bloques:
   - **TS01 a TS04**: `unpack` de la salida de `pack` reproduce byte a byte un archivo de texto, uno binario de varios bloques, uno vacío, y un árbol con rutas anidadas y con espacios, con sus modos.
   - **TS05**: un segundo `pack` informa `new_blocks: 0` y `rotated` vacío.
   - **TS06**: tras agregar bytes al final de un archivo, el `pack` siguiente escribe como máximo el último bloque anterior y los nuevos.
   - **TS07**: tras quitar un archivo del mapa, `blocks/` contiene solo los bloques que nombra el manifiesto.
   - **TS08**: ningún archivo de `--store` contiene el centinela, y los únicos archivos legibles como texto son `recipient` y `operator`.
   - **TS09**: `manifest.json.age` no es JSON legible y no contiene ninguna ruta lógica.
-- [ ] T028 [US2] ROJO: escribir TS10 a TS22 en `tests/backup-store.bats`:
+- [X] T028 [US2] ROJO: escribir TS10 a TS22 en `tests/backup-store.bats`:
   - **TS10**: con una llave privada que no corresponde, `unpack` sale con 4 y no escribe nada en `--dest`.
   - **TS11**: con un bloque alterado, sale con 5 y no deja ningún archivo en `--dest`.
   - **TS12**: un manifiesto con una ruta absoluta o con `..` se rechaza. La prueba lo arma cifrando un manifiesto a mano para la `recipient` del almacén.
@@ -355,7 +355,7 @@ _<unidad>_repo_git ARGS...                -> git con el entorno de C2 y timeout 
   - **TS21**: la prueba reemplaza `recipient` por la de un par ajeno. Con `--expect-recipient` de la original, `pack` informa `rotated: recipient-mismatch`, y la llave ajena no descifra ningún bloque. Sin esa opción, `pack` no rota.
   - **TS22**: `digest --list` entrega una línea por archivo, con la ruta lógica, el tamaño y el SHA-256. Para un `.jsonl` con la última línea incompleta, el tamaño es el de lo capturado. Para una base SQLite, el SHA-256 es el del archivo que `unpack` reconstruye.
   - Contra el código actual caen las veintidós: la herramienta no existe.
-- [ ] T029 [US2] Crear `docker/scripts/backup_store.py` y agregar su línea en `docker/Dockerfile` (`contracts/block-store.md`; sección 6 de `data-model.md`; D27):
+- [X] T029 [US2] Crear `docker/scripts/backup_store.py` y agregar su línea en `docker/Dockerfile` (`contracts/block-store.md`; sección 6 de `data-model.md`; D27):
   - **Un solo archivo**, solo con la biblioteca estándar, que corre en Python 3.9 y en 3.14. Sin anotaciones ni sintaxis posteriores a 3.9.
   - **Subcomandos**: `digest` (con `--list`), `pack` (con `--expect-recipient`), `unpack` (con `--work-dir`), `sqlite-snapshot` y `fingerprint`, con los códigos de salida de S4.
   - **La llave de datos**: `pack` la genera con `age-keygen`, cuya salida lee por un pipe; cifra la parte privada para la llave del operador en `key.age`; y escribe `recipient` y `operator`. Rota en los tres casos de S1. La parte privada nunca toca un archivo en claro.
@@ -366,22 +366,22 @@ _<unidad>_repo_git ARGS...                -> git con el entorno de C2 y timeout 
   - **Errores**: por stderr, sin contenido de archivos y con la ruta lógica, nunca la de origen.
   - **El Dockerfile**: `COPY scripts/backup_store.py /opt/agent-admin/scripts/backup_store.py`. No necesita `chmod`: las librerías lo llaman con `python3 "$BACKUP_STORE_PY"`.
   - TS01 a TS22 en verde en los dos bash; TU31 sigue en verde.
-- [ ] T030 [US2] ROJO: escribir TU04, TU27, TU32 y TU35 en `tests/backup-repo-units.bats`:
+- [X] T030 [US2] ROJO: escribir TU04, TU27, TU32 y TU35 en `tests/backup-repo-units.bats`:
   - **TU04**: con un repositorio asociado, `backup/config` trae `agent.yml`, `CLAUDE.md`, `personas/<agente>.md` y `docker-compose.override.yml`; no trae `personas/<agente>.md.bak-...`; y un cambio en la persona produce un commit nuevo.
   - **TU27**: la rama trae `.claude/settings.json`, `.claude/skills/<algo>/SKILL.md` y un archivo de `commands/`, `agents/`, `hooks/` y `output-styles/`; no trae `.claude/settings.local.json`, `.claude/scheduled_tasks.lock`, nada de `.claude/worktrees/` ni un archivo suelto de otro nombre.
   - **TU32**: con repositorio, `backup-identity --configure-key` con la llave pública de `br_keys` imprime `key fingerprint SHA256:` con la huella de `ssh-keygen -lf` y la línea de las unidades cifradas, y deja el estado de `identity` con `mode: full`. Con fork, su salida es la de hoy.
   - **TU35**: con `backup.sensitive: true`, `backup/config` trae solo la marca, `agent.yml` y `store/`; `br_branch_has` no encuentra el centinela de la persona en el commit nuevo; y sin llave pública termina en `no-recipient`, con código 0 y sin empuje.
-- [ ] T031 [US2] Ampliar `config` en `docker/scripts/lib/backup_config.sh` y en `docker/scripts/heartbeatctl` (U2 y U3; D21, D28 y D29):
+- [X] T031 [US2] Ampliar `config` en `docker/scripts/lib/backup_config.sh` y en `docker/scripts/heartbeatctl` (U2 y U3; D21, D28 y D29):
   - **El árbol** con el tipo `repo`: `agent.yml`, `CLAUDE.md`, `personas/` sin las copias `*.bak*`, `docker-compose.override.yml` si existe, y la lista cerrada de `.claude/` (`settings.json`, `skills/`, `commands/`, `agents/`, `hooks/` y `output-styles/`).
   - **En un agente sensible**: `agent.yml` en claro y todo lo demás empaquetado con `backup_store.py pack`, con `--recipients`, `--expect-recipient` (el `store_recipient` del estado, si lo hay) y la caché de la unidad como directorio de copias. Sin llave pública, `no-recipient`.
   - **El hash**: con `repo`, el de `backup_store.py digest` sobre todos los archivos, con la marca de datos sensibles y la llave pública en `--extra`. Con `fork`, `config_hash` y el árbol son los de hoy.
   - **`--configure-key`** (`_bi_configure_key`, `:820-841`): con el tipo `repo`, después de `recipient updated` imprime las dos líneas de U2, con la huella de `backup_store.py fingerprint`. Con fork o sin destino no cambia.
   - TU04, TU05, TU27, TU32 y TU35 en verde.
-- [ ] T032 [US2] ROJO: escribir TU07 y TU16 en `tests/backup-repo-units.bats`:
+- [X] T032 [US2] ROJO: escribir TU07 y TU16 en `tests/backup-repo-units.bats`:
   - **TU07**: con `backup.sensitive: true`, `backup/vault` trae solo la marca y `store/`; `br_branch_has` no encuentra el centinela del vault en el commit nuevo; y pasar de sin marca a con marca produce un commit que quita los `.md` del árbol. Segunda pierna: con la marca y un fork en vez de repositorio, `backup-vault` imprime el mensaje de U1, sale con 0 y no crea ningún commit en el fork.
   - **TU16**: sin llave pública, `vault` y `config` en un agente sensible, `memory` e `history` terminan en `no-recipient`, con código 0 y sin ninguna petición `receive-pack`. `identity` corre en modo `partial`. Queda en verde al terminar T037.
-- [ ] T033 [US2] Agregar el camino cifrado de `vault` en `scripts/lib/backup_vault.sh` y en `_bv_run_repo` de `docker/scripts/heartbeatctl` (U4): con el tipo `repo` y `backup.sensitive: true`, la lista de `vault_list_markdown` se convierte en un mapa y se empaqueta con `backup_store.py pack`; el hash sale de `digest`, con la marca de datos sensibles y la llave pública en `--extra`; y el estado guarda `store_recipient`. Además, al comienzo de `_bv_run`: con el tipo `fork` y `backup.sensitive: true`, imprime el mensaje de U1 y sale con 0, sin empujar. El modo local no cambia: `tests/local-vault-backup.bats` sigue en verde, sin editarla. TU06 y TU07 en verde. TU16 sigue en rojo hasta T037.
-- [ ] T034 [US2] ROJO: escribir TU08, TU09, TU10, TU28, TU30 y TU39 en `tests/backup-repo-units.bats`, y extender TU03 a las cinco unidades:
+- [X] T033 [US2] Agregar el camino cifrado de `vault` en `scripts/lib/backup_vault.sh` y en `_bv_run_repo` de `docker/scripts/heartbeatctl` (U4): con el tipo `repo` y `backup.sensitive: true`, la lista de `vault_list_markdown` se convierte en un mapa y se empaqueta con `backup_store.py pack`; el hash sale de `digest`, con la marca de datos sensibles y la llave pública en `--extra`; y el estado guarda `store_recipient`. Además, al comienzo de `_bv_run`: con el tipo `fork` y `backup.sensitive: true`, imprime el mensaje de U1 y sale con 0, sin empujar. El modo local no cambia: `tests/local-vault-backup.bats` sigue en verde, sin editarla. TU06 y TU07 en verde. TU16 sigue en rojo hasta T037.
+- [X] T034 [US2] ROJO: escribir TU08, TU09, TU10, TU28, TU30 y TU39 en `tests/backup-repo-units.bats`, y extender TU03 a las cinco unidades:
   - **TU08**: sin la marca, `backup/memory` trae `auto-memory/<proyecto>/<archivo>` en claro y `store/`; el centinela de claude-mem no aparece en la rama. Segunda pierna: un cambio que solo toca la auto-memoria produce un commit nuevo.
   - **TU09**: con la marca, la rama no trae `auto-memory/`, y el centinela de la auto-memoria no aparece.
   - **TU10**: la base del fixture está en modo WAL, con filas que solo están en su `-wal`. Tras restaurar el almacén con `unpack`, la copia las trae. Una copia en bruto del archivo principal no las traería.
@@ -389,7 +389,7 @@ _<unidad>_repo_git ARGS...                -> git con el entorno de C2 y timeout 
   - **TU30**: tras un respaldo correcto, la prueba cambia solo `worker.pid`, `worker-heartbeat.json`, `supervisor.json`, `telemetry.json` y un archivo de `logs/`. El segundo ciclo crea 0 commits.
   - **TU39**, sobre `memory` e `history`: sin `GITHUB_PAT`, `no-credential`; con `anon-read`, `not-private`; con una rama sin marca, `foreign-branch`; con la marca de otro agente, `other-agent`. En los cuatro casos, ninguna petición `receive-pack`. Además: `memory` sin ninguna fuente termina en `nothing-to-back-up`, con código 0 y su registro; y con `stall-push` y `BACKUP_PUSH_TIMEOUT_S=2`, `history` termina en menos de 30 segundos con `push-failed`. Queda en verde al terminar T037.
   - **TU03**: los 10 ciclos pasan a correr las cinco unidades, y el repositorio queda con exactamente cinco ramas `backup/*`. Vuelve a verde al terminar T037.
-- [ ] T035 [US2] Crear `docker/scripts/lib/backup_memory.sh` y el comando `heartbeatctl backup-memory [--dry-run]` en `docker/scripts/heartbeatctl`, con su línea `COPY` en `docker/Dockerfile` (U5; D22, D23 y D33):
+- [X] T035 [US2] Crear `docker/scripts/lib/backup_memory.sh` y el comando `heartbeatctl backup-memory [--dry-run]` en `docker/scripts/heartbeatctl`, con su línea `COPY` en `docker/Dockerfile` (U5; D22, D23 y D33):
   - **Las fuentes**: `$IDENTITY_STATE_DIR/.claude/projects/<proyecto>/memory/**`, `$IDENTITY_STATE_DIR/.claude-mem/**` y cada ruta de `backup.extra_paths` bajo el workspace, con las exclusiones de la sección 5 de `data-model.md`.
   - **Las rutas adicionales** se validan con la regla de `backup.extra_paths` y, además, se resuelven: una que salga del workspace se omite. Los enlaces simbólicos no se siguen.
   - **El mapa** se arma con rutas lógicas `auto-memory/...`, `claude-mem/...` y `extra/...`. La auto-memoria va en claro en un agente sin marcar y al almacén en uno sensible.
@@ -400,22 +400,22 @@ _<unidad>_repo_git ARGS...                -> git con el entorno de C2 y timeout 
   - **Sin fuentes**: `nothing-to-back-up`, con su registro.
   - **El comando** sigue los trece pasos de U1 y entra al despacho de `main` (`:1251-1253`) y a `cmd_help`.
   - TU08 a TU10, TU28 y TU30 en verde. TU03, TU16 y TU39 siguen en rojo hasta T037; TU31 sigue en verde.
-- [ ] T036 [US2] ROJO: escribir TU11 y TU12 en `tests/backup-repo-units.bats`, y agregar a TU33 su pierna del almacén:
+- [X] T036 [US2] ROJO: escribir TU11 y TU12 en `tests/backup-repo-units.bats`, y agregar a TU33 su pierna del almacén:
   - **TU11**: `backup/history` trae solo la marca y `store/`; los centinelas del historial no aparecen; un `.jsonl` con una última línea a medio escribir se restaura sin ella; y `projects/<proyecto>/memory/` no entra.
   - **TU12**: con un bloque chico, tras agregar líneas al final de un `.jsonl` de muchos bloques, el commit siguiente agrega como máximo dos bloques nuevos por archivo cambiado.
   - **TU33**: tras un respaldo correcto de `history`, la prueba borra su archivo de estado y su caché. El ciclo siguiente no agrega ningún bloque a la rama, y el que sigue termina en `no-change`.
   - **TU40**, sobre `history`, con las dos llaves de `br_keys`. Primera pierna: tras un respaldo con la llave A, `backup-identity --configure-key` con la llave B; el ciclo siguiente de `history` crea un commit en que cambian todos los bloques, su almacén se abre con B y no con A, y el estado tiene un `store_recipient` nuevo. Segunda pierna: la prueba empuja a la rama un commit que reemplaza `store/recipient` por la de un par ajeno y conserva la marca; el ciclo siguiente rota, y la llave ajena no abre ningún bloque de la cabeza nueva.
-- [ ] T037 [US2] Crear `docker/scripts/lib/backup_history.sh` y el comando `heartbeatctl backup-history [--dry-run]` en `docker/scripts/heartbeatctl`, con su línea `COPY` en `docker/Dockerfile` (U6): las fuentes son `$IDENTITY_STATE_DIR/.claude/projects/**` sin los directorios `memory/`; todo va al almacén; el directorio de configuración aislado del heartbeat no entra; el `fetch` y el empuje usan `BACKUP_PUSH_TIMEOUT_S`; sin fuentes, `nothing-to-back-up`. El hash y el empaquetado siguen la misma regla que en T035: la llave pública del operador en `--extra`, `--recipients` y `--expect-recipient`. TU03, TU11, TU12, TU16, TU33, TU39 y TU40 en verde.
-- [ ] T038 [US2] ROJO y código: TU21 en `tests/backup-repo-units.bats` y las dos líneas de cron en `cmd_reload` de `docker/scripts/heartbeatctl` (U7):
+- [X] T037 [US2] Crear `docker/scripts/lib/backup_history.sh` y el comando `heartbeatctl backup-history [--dry-run]` en `docker/scripts/heartbeatctl`, con su línea `COPY` en `docker/Dockerfile` (U6): las fuentes son `$IDENTITY_STATE_DIR/.claude/projects/**` sin los directorios `memory/`; todo va al almacén; el directorio de configuración aislado del heartbeat no entra; el `fetch` y el empuje usan `BACKUP_PUSH_TIMEOUT_S`; sin fuentes, `nothing-to-back-up`. El hash y el empaquetado siguen la misma regla que en T035: la llave pública del operador en `--extra`, `--recipients` y `--expect-recipient`. TU03, TU11, TU12, TU16, TU33, TU39 y TU40 en verde.
+- [X] T038 [US2] ROJO y código: TU21 en `tests/backup-repo-units.bats` y las dos líneas de cron en `cmd_reload` de `docker/scripts/heartbeatctl` (U7):
   - **TU21**: sin destino, el crontab generado es idéntico byte a byte a `tests/fixtures/crontab-v0.26.0.golden`, con el `agent.yml` de `tests/heartbeatctl.bats:10-21`, como en la prueba de `:359`. Con fork, es idéntico a `tests/fixtures/backup-repo/crontab-fork.golden`. Con `repo` y `features.identity_backup.enabled: false`, gana exactamente dos líneas, las de `backup-memory` y `backup-history`, con sus `schedule`. Con una unidad deshabilitada, o con un `schedule` inválido, falta esa línea, y en el segundo caso stderr trae una advertencia que nombra la clave y no el valor.
   - **El código**: las dos líneas se concatenan al último renglón del heredoc (`:436`), con el mecanismo de `review_line`. El validador es nuevo y admite `*` y `*/N` en los cinco campos (`_v_cron5_field` con el cuarto argumento en 1).
   - TU21 en verde; `tests/heartbeatctl.bats` y la prueba del crontab dorado (`tests/fixtures/crontab-v0.26.0.golden`) siguen en verde, sin editarlas.
-- [ ] T039 [US2] Escribir el simulador de SC-007 en `specs/046-agent-backup-repo/tools/sc007_sim.py`, versionado, y anotar su resultado en `specs/046-agent-backup-repo/tasks.md`. No lleva compuerta: corre en un directorio temporal del Mac.
+- [X] T039 [US2] Escribir el simulador de SC-007 en `specs/046-agent-backup-repo/tools/sc007_sim.py`, versionado, y anotar su resultado en `specs/046-agent-backup-repo/tasks.md`. No lleva compuerta: corre en un directorio temporal del Mac.
   - **Los datos** son sintéticos, del tamaño de los de donna: un `.jsonl` de 68,6 MiB con líneas de hasta 5 MB, 32,6 MB en 86 archivos y una base SQLite de 13,9 MB.
   - **Los ciclos**: 30, y en cada uno se agregan unos 2 MB al `.jsonl` y se cambian filas de la base. Cada ciclo corre el `pack` real y un commit en un repositorio bare local.
   - **Lo que se anota**: el tamaño del repositorio tras el ciclo 1 y tras el 30 (`du -sk` después de `git gc`), los bloques nuevos por ciclo y la duración del primero.
   - **Lo esperado**: menos de 1 GB tras 30 ciclos. Si no se cumple, se detiene la fase y se revisa D8 con el operador.
-- [ ] T040 [US2] Punto de control en bash 5.x y en 3.2, anotado en `specs/046-agent-backup-repo/tasks.md`: `tests/backup-store.bats` 22 de 22 y `tests/backup-repo-units.bats` 40 de 40; las suites de respaldo que ya existían, en verde y sin editar; `bash -n` y `python3 -m py_compile` sobre lo cambiado.
+- [X] T040 [US2] Punto de control en bash 5.x y en 3.2, anotado en `specs/046-agent-backup-repo/tasks.md`: `tests/backup-store.bats` 22 de 22 y `tests/backup-repo-units.bats` 40 de 40; las suites de respaldo que ya existían, en verde y sin editar; `bash -n` y `python3 -m py_compile` sobre lo cambiado.
 
 **Checkpoint**: las cinco unidades respaldan, y lo que debe ir cifrado no se puede leer en el repositorio.
 
@@ -427,13 +427,13 @@ _<unidad>_repo_git ARGS...                -> git con el entorno de C2 y timeout 
 
 **Independent Test**: `bats tests/backup-repo-restore.bats` en los dos bash, 14 de 14, más `tests/restore-from-fork.bats` y `tests/restore-unified.bats` sin editarlas.
 
-- [ ] T041 [P] [US3] ROJO: crear `tests/backup-repo-restore.bats` y escribir TR01 a TR05. El origen de cada prueba se arma corriendo las unidades reales de US1 y US2 contra el servidor de prueba. La restauración se llama como en `tests/restore-unified.bats`, dentro del cuerpo de la prueba: `source setup.sh` y `restore_from_fork ORIGEN DESTINO`, con `RESTORE_IDENTITY_KEY` y `GIT_TERMINAL_PROMPT=0`. El origen es la ruta en disco del repositorio bare que sirve el servidor: así la restauración no necesita credencial, como cuando el operador la corre con las suyas. Todas corren con un `HOME` propio y vacío; "sin llave" quiere decir sin `RESTORE_IDENTITY_KEY` y sin ninguna llave por defecto en ese `HOME`:
+- [X] T041 [P] [US3] ROJO: crear `tests/backup-repo-restore.bats` y escribir TR01 a TR05. El origen de cada prueba se arma corriendo las unidades reales de US1 y US2 contra el servidor de prueba. La restauración se llama como en `tests/restore-unified.bats`, dentro del cuerpo de la prueba: `source setup.sh` y `restore_from_fork ORIGEN DESTINO`, con `RESTORE_IDENTITY_KEY` y `GIT_TERMINAL_PROMPT=0`. El origen es la ruta en disco del repositorio bare que sirve el servidor: así la restauración no necesita credencial, como cuando el operador la corre con las suyas. Todas corren con un `HOME` propio y vacío; "sin llave" quiere decir sin `RESTORE_IDENTITY_KEY` y sin ninguna llave por defecto en ese `HOME`:
   - **TR01**: con la llave, cada archivo restaurado de las cinco unidades cae en la ruta de la sección 8 de `data-model.md`. Los que viajan tal cual tienen el mismo SHA-256 que su origen. Los capturados (una base SQLite y un `.jsonl` con la última línea incompleta) coinciden con la salida de `backup_store.py digest --list` tomada en el origen.
   - **TR02**: sin la rama `backup/history`, las otras cuatro se restauran y la salida dice cuál faltó.
   - **TR03**: sin llave, lo cifrado se omite con su línea, y lo que va en claro se restaura.
   - **TR04**: sin `python3` en el PATH (un PATH armado para la prueba), lo que viene en `store/` se omite con su línea, y lo demás se restaura.
   - **TR05**: con un bloque alterado en `backup/memory`, lo que viene en el almacén de esa unidad no deja ningún archivo en el destino, y las demás unidades se restauran.
-- [ ] T042 [US3] ROJO: escribir TR06 a TR14 en `tests/backup-repo-restore.bats`:
+- [X] T042 [US3] ROJO: escribir TR06 a TR14 en `tests/backup-repo-restore.bats`:
   - **TR06** (nace en verde): con un fork de tres ramas como el de `tests/restore-unified.bats`, la salida de la restauración, con la ruta de destino reemplazada por `<DEST>`, es idéntica a `tests/fixtures/backup-repo/restore-fork-output.golden`.
   - **TR07**: `--restore-from-repo` deja `RESTORE_FORK_URL` igual que `--restore-from-fork`, y aparece en `--help`.
   - **TR08**: un vault respaldado con la marca de datos sensibles se restaura en `vault.path`, con sus `.md`.
@@ -443,7 +443,7 @@ _<unidad>_repo_git ARGS...                -> git con el entorno de C2 y timeout 
   - **TR12**: las rutas adicionales vuelven a su ruta, también la que está bajo `.state/`. Un manifiesto con una ruta `extra/../fuera` se rechaza y no escribe nada fuera del destino.
   - **TR13**: con la `config` de un agente sensible. Con llave, vuelven `agent.yml`, la persona, `CLAUDE.md` y `.claude/`. Sin llave, vuelve solo `agent.yml`, con la línea `only agent.yml was restored`.
   - **TR14**: en `memory` sin llave, la auto-memoria en claro se restaura y lo cifrado se omite con su línea. Al terminar no existe `<destino>/.restore-tmp/`, ni en este caso ni tras la falla de integridad de TR05. Y cuando la restauración deja un `docker-compose.override.yml`, la salida trae su aviso.
-- [ ] T043 [US3] Extender la restauración en `setup.sh` (`contracts/restore.md`, R1 a R8; D16, D19 y D36):
+- [X] T043 [US3] Extender la restauración en `setup.sh` (`contracts/restore.md`, R1 a R8; D16, D19 y D36):
   - **El alias**: `--restore-from-repo` en `parse_args` (`:465`) y en `print_usage`.
   - **`config`**: además de `agent.yml`, copia `CLAUDE.md`, `personas/`, `docker-compose.override.yml` y `.claude/`, si están. Si la rama trae `store/`, lo que no es `agent.yml` sale de ahí, y sin llave vuelve solo `agent.yml`.
   - **`identity`**: como hoy, y el archivo de secretos descifrado queda con modo 0600. Si no trae un `CLAUDE_CODE_OAUTH_TOKEN` con valor (`env_file_get`, que no lo imprime), sale el aviso de R3.
@@ -458,7 +458,7 @@ _<unidad>_repo_git ARGS...                -> git con el entorno de C2 y timeout 
   - **Los avisos**: el del token y el del override de compose, solo cuando el origen es un repositorio de agente. **Los prefijos** de cada línea son los que `setup.sh` ya usa en `:1806`, `:1810` y `:652`.
   - La herramienta se llama desde el clon del launcher: `$SCRIPT_DIR/docker/scripts/backup_store.py`.
   - TR01 a TR14 en verde.
-- [ ] T044 [US3] Punto de control en bash 5.x y en 3.2, anotado en `specs/046-agent-backup-repo/tasks.md`: `tests/backup-repo-restore.bats` 14 de 14; `tests/restore-from-fork.bats` y `tests/restore-unified.bats` en verde, sin editarlas; `bash -n setup.sh` con los dos bash.
+- [X] T044 [US3] Punto de control en bash 5.x y en 3.2, anotado en `specs/046-agent-backup-repo/tasks.md`: `tests/backup-repo-restore.bats` 14 de 14; `tests/restore-from-fork.bats` y `tests/restore-unified.bats` en verde, sin editarlas; `bash -n setup.sh` con los dos bash.
 
 **Checkpoint**: un agente respaldado se puede reconstruir, y la prueba lo compara con lo respaldado.
 
@@ -470,13 +470,13 @@ _<unidad>_repo_git ARGS...                -> git con el entorno de C2 y timeout 
 
 **Independent Test**: `bats tests/agent-repo-surface.bats` en los dos bash, 20 de 20, más las suites del wizard y del render, sin regresiones.
 
-- [ ] T045 [US4] ROJO: escribir TA01, TA02, TA03, TA16 y TA18 en `tests/agent-repo-surface.bats`, con flujos de respuestas hechos a mano para el paso nuevo:
+- [X] T045 [US4] ROJO: escribir TA01, TA02, TA03, TA16 y TA18 en `tests/agent-repo-surface.bats`, con flujos de respuestas hechos a mano para el paso nuevo:
   - **TA01**: en modo docker, la salida del wizard trae la pregunta `Associate a private repository with this agent?`. Con `n`, el `agent.yml` queda con `backup.repo.url` vacío, y el archivo de secretos no gana `GITHUB_PAT` si el MCP de GitHub está apagado.
   - **TA02**: con `y`, una URL válida, `y` a la pregunta de datos sensibles y el MCP de GitHub apagado, el wizard pide el token; `agent.yml` queda con la URL y `backup.sensitive: true`; y el archivo de secretos tiene la línea `GITHUB_PAT=`, con el valor de prueba.
   - **TA03**: con una URL inválida y la entrada por un pipe, el wizard termina con código 1 y un mensaje que nombra la regla. La prueba lo corre con un tope de 20 segundos: si se queda preguntando, falla. Además, `validate_backup_repo_url` da el resultado esperado para cada fila de `tests/fixtures/backup-repo/url-cases.tsv`.
   - **TA16**: en modo local, el flujo no tiene la pregunta (las mismas respuestas de hoy completan el wizard), y el `agent.yml` trae las claves nuevas con sus valores por defecto. Segunda pierna: con una URL en el `agent.yml` de un agente local, `--regenerate` imprime por stderr `WARN: backup.repo is docker-only - ignored in local mode`, y el `CLAUDE.md` renderizado no trae `## Your repository`. Tercera pierna: con `backup.sensitive: true` en un agente local, imprime `WARN: backup.sensitive is docker-only - the local vault backup stays in plaintext`.
   - **TA18**: en modo docker, con `backup.repo.url` y sin `backup.identity.recipient`, `--regenerate` imprime la advertencia de la llave con el comando `--configure-key`, y `agent.yml` sigue sin `recipient`. Sin `GITHUB_PAT` en el archivo de secretos, imprime la advertencia de la credencial. Con un `GITHUB_PAT` centinela presente, no la imprime, y el centinela no aparece en la salida. Sin `backup.repo.url`, no imprime ninguna.
-- [ ] T046 [US4] Agregar el paso del wizard en `setup.sh` y el validador en `scripts/lib/wizard-validators.sh` (A1 de `contracts/agent-surface.md`; D13 y D25):
+- [X] T046 [US4] Agregar el paso del wizard en `setup.sh` y el validador en `scripts/lib/wizard-validators.sh` (A1 de `contracts/agent-surface.md`; D13 y D25):
   - **El paso** va después del bloque del fork (`setup.sh:659`) y antes de las notificaciones, solo si `deploy_mode` es `docker`. Sus textos son los del contrato, en inglés.
   - **El validador** `validate_backup_repo_url` aplica la regla de `backup.repo.url`.
   - **Una URL inválida**: la pregunta no usa `ask_validated`. Lee con `ask`, valida, y si la URL no sirve vuelve a preguntar solo cuando la entrada es una terminal (`[ -t 0 ]`); sin terminal, imprime la regla y termina con `exit 1`.
@@ -486,7 +486,7 @@ _<unidad>_repo_git ARGS...                -> git con el entorno de C2 y timeout 
   - **El resumen** (`:984-991`): tres ítems nuevos al final de la lista numerada, 24 a 26, con sus casos de edición. Los ítems 1 a 23 no cambian de número. Al editar el 24 y dejar un repositorio sin token, se pide el token.
   - **Sin gum**: el paso funciona con `scripts/lib/wizard.sh` a secas.
   - TA01 a TA03 en verde. TA16 sigue en rojo hasta T049.
-- [ ] T047 [US4] Actualizar los puntos de contacto de una pregunta nueva del wizard, y dejar sus suites en verde en los dos bash:
+- [X] T047 [US4] Actualizar los puntos de contacto de una pregunta nueva del wizard, y dejar sus suites en verde en los dos bash:
   - `tests/helper.bash`: en `wizard_answers()`, una respuesta `n` después de la del fork, solo en modo docker, con su comentario marcador `# Agent repository (docker only)`;
   - `tests/e2e-smoke.bats`: la respuesta nueva en su arreglo, y su tabla de comentarios;
   - **los flujos hechos a mano**: buscar con `grep -ln 'setup.sh' tests/*.bats` los que pasan por el paso del fork en modo docker sin `wizard_answers`, y agregarles la respuesta;
@@ -494,18 +494,18 @@ _<unidad>_repo_git ARGS...                -> git con el entorno de C2 y timeout 
   - `.claude/commands/quickstart.md`: el bloque nuevo en la plantilla del flujo y en la lista de validaciones;
   - `tests/quickstart-doc.bats`: la palabra clave nueva en la lista de bloques, el marcador nuevo en la de `wizard_answers()` y `validate_backup_repo_url` en la lista de validadores (`:171-174`).
   - `tests/wizard-flow.bats`, `tests/scaffold.bats`, `tests/e2e-smoke.bats`, `tests/quickstart-doc.bats`, `tests/deployment-mode.bats`, `tests/fork-commands.bats` y `tests/voice-config.bats` en verde.
-- [ ] T048 [US4] ROJO y código: TA09 en `tests/agent-repo-surface.bats` y `configure_identity_backup` en `setup.sh` (`:211-229`; D17):
+- [X] T048 [US4] ROJO y código: TA09 en `tests/agent-repo-surface.bats` y `configure_identity_backup` en `setup.sh` (`:211-229`; D17):
   - **TA09**: con `SSH_KEYS_URL_TEMPLATE` apuntando a un archivo local y un `agent.yml` sin dueño de fork y con `backup.repo.url`, la llave pública queda en `backup.identity.recipient`, y la salida trae la huella `SHA256:` y el comentario de la llave. Sin fork y sin repositorio, la salida es la de hoy.
   - **El código**: el dueño sale del fork y, si no hay, de la URL del repositorio (el primer segmento de la ruta). Al fijar la llave se imprime el bloque de A2, con la huella de `backup_store.py fingerprint`. Si falta `python3`, se omite la línea de la huella. La función sigue llamándose solo desde el scaffold (`:2005`).
-- [ ] T049 [US4] Agregar los avisos de `--regenerate` en `setup.sh` (A2 de `contracts/agent-surface.md`; D25 y D29): después del backfill, las cinco líneas de la tabla del contrato, por stderr: las tres del repositorio y las dos de la marca de datos sensibles. La de la credencial mira solo si el valor existe, con `env_file_get` de `scripts/lib/env_file.sh`. `--regenerate` no escribe `backup.identity.recipient` ni ningún secreto. TA16 y TA18 en verde.
-- [ ] T050 [US4] ROJO: escribir TA06, TA07, TA08, TA13, TA14 y TA15 en `tests/agent-repo-surface.bats`:
+- [X] T049 [US4] Agregar los avisos de `--regenerate` en `setup.sh` (A2 de `contracts/agent-surface.md`; D25 y D29): después del backfill, las cinco líneas de la tabla del contrato, por stderr: las tres del repositorio y las dos de la marca de datos sensibles. La de la credencial mira solo si el valor existe, con `env_file_get` de `scripts/lib/env_file.sh`. `--regenerate` no escribe `backup.identity.recipient` ni ningún secreto. TA16 y TA18 en verde.
+- [X] T050 [US4] ROJO: escribir TA06, TA07, TA08, TA13, TA14 y TA15 en `tests/agent-repo-surface.bats`:
   - **TA06** (nace en verde): para un `agent.yml` sin repositorio, la sección `## Backups (what actually survives)` del `CLAUDE.md` renderizado es idéntica byte a byte a `tests/fixtures/backup-repo/claude-md-backups-section.golden`, y el archivo no contiene ninguna cadena nueva de 046 (`Your repository`, `agent-repo`, `backup-memory`, `backup-history`).
   - **TA07**: con repositorio, el `CLAUDE.md` trae la tabla con las cinco ramas, la sección `## Your repository` y el punto `Not covered` con `backup.extra_paths`; no trae la frase `Backups exist only if`.
   - **TA08**: con repositorio, la URL de `agent.yml` y `/workspace/agent-repo` aparecen en `CLAUDE.md` y en `NEXT_STEPS.md`. Es esa presencia la que detecta un marcador sin exportar: el motor lo deja vacío, sin `{{`. En modo docker `NEXT_STEPS.md` solo lo escribe el wizard, así que la prueba lo obtiene llamando a `render_next_steps` (`setup.sh:1480`), dentro de su cuerpo.
   - **TA13**: `.gitignore` tiene la línea `/agent-repo/`.
   - **TA14** (nace en verde): para un `agent.yml` de modo local, con y sin `backup.repo.url`, ningún archivo derivado contiene `agent-repo`, `backup-memory`, `backup-history` ni `BACKUP_REPO`. La comparación completa contra `origin/main` es la de T067.
   - **TA15**: con repositorio, el `NEXT_STEPS.md` que entrega `render_next_steps` nombra el repositorio del agente, `heartbeatctl backup-memory`, `backup-history` y `backup-status`, en el bloque de docker; sin repositorio, no contiene ninguna de esas cadenas. Con repositorio y el MCP de GitHub apagado, el ejemplo de secretos renderizado trae la línea `GITHUB_PAT=`; sin repositorio y sin MCP, no la trae.
-- [ ] T051 [US4] Cambiar las plantillas, exportar los marcadores en `setup.sh` y actualizar `tests/schema.bats` (A3 y A8; D25):
+- [X] T051 [US4] Cambiar las plantillas, exportar los marcadores en `setup.sh` y actualizar `tests/schema.bats` (A3 y A8; D25):
   - **`modules/claude-md.tpl`**: la sección `## Backups (what actually survives)` de hoy (`:232-244`) queda dentro de `{{#unless BACKUP_REPO_ENABLED}}`, sin cambiar ni un byte de su texto, y el texto nuevo del contrato va dentro de `{{#if BACKUP_REPO_ENABLED}}`. Las etiquetas van pegadas al texto, sin saltos de línea entre una etiqueta y lo que encierra, como muestra A3. Los dos bloques van en el nivel superior: el motor no admite condicionales anidados. El texto nuevo es ASCII.
   - **`modules/next-steps.en.tpl` y `modules/next-steps.es.tpl`**: el marcador `{{BACKUP_REPO_NEXT_STEPS}}`, pegado al final de una línea que ya existe dentro del bloque de docker, para que un valor vacío no deje rastro. El texto del marcador empieza con sus propios saltos de línea.
   - **`modules/env-example.tpl`** (`:23-26`): la condición de la línea `GITHUB_PAT=` pasa de `MCPS_GITHUB_ENABLED` a `GITHUB_PAT_NEEDED`.
@@ -513,12 +513,12 @@ _<unidad>_repo_git ARGS...                -> git con el entorno de C2 y timeout 
   - **`.gitignore`**: la línea `/agent-repo/`.
   - **`tests/schema.bats`**: los marcadores derivados entran a sus dos listas `known_external` (`:62-83` y `:129-139`).
   - TA06 a TA08 y TA13 a TA15 en verde; `tests/claude-md-refresh.bats`, `tests/local-render.bats` y `tests/docker-render.bats` en verde, sin editarlas.
-- [ ] T052 [US4] ROJO: escribir TA10, TA11, TA12 y TA19 en `tests/agent-repo-surface.bats`. Cargan `docker/scripts/lib/agent_repo.sh` dentro del cuerpo de la prueba y usan `AGENT_REPO_DIR` y `AGENT_REPO_CREDENTIAL_HELPER`:
+- [X] T052 [US4] ROJO: escribir TA10, TA11, TA12 y TA19 en `tests/agent-repo-surface.bats`. Cargan `docker/scripts/lib/agent_repo.sh` dentro del cuerpo de la prueba y usan `AGENT_REPO_DIR` y `AGENT_REPO_CREDENTIAL_HELPER`:
   - **TA10**: con el tipo `repo`, `agent_repo_ensure` crea el clon con la rama por defecto del remoto extraída; `git config --get-all remote.origin.fetch` trae la exclusión `^refs/heads/backup/*`; `credential.<esquema>://<servidor>.helper` es la ruta del ayudante; y el clon no tiene ninguna referencia `refs/remotes/origin/backup/*`, aunque el servidor las tenga.
   - **TA11**: con un directorio que ya es un repositorio, con una rama y un archivo propios, la función solo asegura las dos configuraciones. Con un directorio que no es un repositorio, no hace nada y deja una línea de log. Con el tipo `fork` o `none`, no hace nada y no escribe ningún log. Última pierna: con el clon borrado y sin la costura `AGENT_REPO_DIR`, `heartbeatctl backup-config` lo vuelve a crear en `<workspace>/agent-repo`.
   - **TA12**: desde el clon, `git push origin <rama nueva>` funciona sin preguntar; el centinela de la credencial aparece 0 veces en `.git/config`, y la URL del remoto no lleva credenciales.
   - **TA19**, en cuatro piernas: con un repositorio vacío, el clon queda en una rama `main` local sin commits; con uno que solo tiene ramas `backup/*`, lo mismo; con uno cuya rama por defecto es `trunk`, queda `trunk`; y con uno cuya rama por defecto es `backup/config` y que además tiene `main`, queda `main`. En las cuatro, `git branch --show-current` no empieza con `backup/`.
-- [ ] T053 [US4] Crear `docker/scripts/lib/agent_repo.sh` y `docker/scripts/git-credential-agent.sh`, llamarlos desde `docker/scripts/start_services.sh` y `docker/scripts/heartbeatctl`, y agregar sus líneas en `docker/Dockerfile` (A4 y A5; D11, D12 y D34):
+- [X] T053 [US4] Crear `docker/scripts/lib/agent_repo.sh` y `docker/scripts/git-credential-agent.sh`, llamarlos desde `docker/scripts/start_services.sh` y `docker/scripts/heartbeatctl`, y agregar sus líneas en `docker/Dockerfile` (A4 y A5; D11, D12 y D34):
   - **El ayudante** es el de A5, en `sh` POSIX, con modo 100755.
   - **`agent_repo_dir`** entrega `${AGENT_REPO_DIR:-${WORKDIR:-${HEARTBEATCTL_WORKSPACE:-/workspace}}/agent-repo}`: `heartbeatctl` no define `WORKDIR` y corre con `set -u`.
   - **`agent_repo_ensure`** sigue las dos tablas de A4. El `fetch` tiene el tope `AGENT_REPO_FETCH_TIMEOUT_S` y usa el ayudante, no el askpass de los respaldos. Si la creación falla a medias, borra el directorio.
@@ -527,10 +527,10 @@ _<unidad>_repo_git ARGS...                -> git con el entorno de C2 y timeout 
   - **`heartbeatctl`**: `_bc_run_repo` la llama al terminar, con cualquier resultado, sin cambiar su código de salida (U3).
   - **El Dockerfile**: las dos líneas `COPY`, y el ayudante en el `chmod +x` de `:274-275`.
   - TA10 a TA12 y TA19 en verde; el oráculo de sha de `_run_watchdog` sigue en verde; TU31 sigue en verde.
-- [ ] T054 [US4] ROJO y código: TA20 en `tests/agent-repo-surface.bats` y el aviso de `--nuke` en `uninstall` de `setup.sh` (`:3258`; A8):
+- [X] T054 [US4] ROJO y código: TA20 en `tests/agent-repo-surface.bats` y el aviso de `--nuke` en `uninstall` de `setup.sh` (`:3258`; A8):
   - **TA20**: con un `agent-repo` que tiene un commit que no está en ninguna rama remota, o un archivo sin commitear, `./setup.sh --uninstall --nuke --yes` imprime un aviso que dice cuántos son, antes de borrar. Sin ninguna de las dos cosas, o sin `agent-repo`, no lo imprime.
   - **El código**: la comprobación va antes de las dos ramas de `--nuke` (`:3308` y `:3419`). Con `--yes` avisa y sigue; sin `--yes`, el aviso va antes de la confirmación que ya existe.
-- [ ] T055 [US4] Punto de control en bash 5.x y en 3.2, anotado en `specs/046-agent-backup-repo/tasks.md`: `tests/agent-repo-surface.bats` 20 de 20; `tests/schema.bats`, `tests/regenerate.bats`, `tests/local-render.bats`, `tests/docker-render.bats`, `tests/uninstall.bats`, `tests/nuke-and-hints.bats` y las suites de T047 en verde.
+- [X] T055 [US4] Punto de control en bash 5.x y en 3.2, anotado en `specs/046-agent-backup-repo/tasks.md`: `tests/agent-repo-surface.bats` 20 de 20; `tests/schema.bats`, `tests/regenerate.bats`, `tests/local-render.bats`, `tests/docker-render.bats`, `tests/uninstall.bats`, `tests/nuke-and-hints.bats` y las suites de T047 en verde.
 
 **Checkpoint**: un agente nuevo puede nacer con su repositorio, y uno que ya existe lo adopta con `agent.yml`, `--regenerate` y su llave.
 
@@ -542,7 +542,7 @@ _<unidad>_repo_git ARGS...                -> git con el entorno de C2 y timeout 
 
 **Independent Test**: `bats tests/backup-status.bats` en los dos bash, 10 de 10.
 
-- [ ] T056 [P] [US5] ROJO: crear `tests/backup-status.bats` y escribir TB01 a TB06, TB09 y TB10 (A6 y A7 de `contracts/agent-surface.md`):
+- [X] T056 [P] [US5] ROJO: crear `tests/backup-status.bats` y escribir TB01 a TB06, TB09 y TB10 (A6 y A7 de `contracts/agent-surface.md`):
   - **TB01**: con repositorio, `backup-status --json` es JSON válido, con `destination`, `credential`, `sensitive`, `recipient`, `extra_paths`, las cinco `units` (con sus `max_age_hours`: 48, 25, 192, 49 y 49, y su `cache_bytes`), `cache_bytes_total` y `work_clone`.
   - **TB02**: con fork y sin destino, entrega el destino y las tres unidades de hoy, y no trae `work_clone`.
   - **TB03**: una unidad cuyo `last_push` supera su umbral aparece marcada como vencida en la salida legible.
@@ -551,12 +551,12 @@ _<unidad>_repo_git ARGS...                -> git con el entorno de C2 y timeout 
   - **TB06**: el centinela de la credencial aparece 0 veces en la salida con `--json` y sin `--json`, y `credential` vale `present` o `missing`.
   - **TB09**: con dos rutas adicionales declaradas y una que no existe, `extra_paths.declared` es 2 y `extra_paths.missing` trae esa ruta.
   - **TB10**: con una caché de tamaño conocido, `cache_bytes` de esa unidad y `cache_bytes_total` son mayores que 0, y sin el clon de trabajo `work_clone.present` es `false`. Las piernas del diagnóstico, con el doble de `docker` de T058: con `DOCTOR_BACKUP_CACHE_MAX_MB=1` y una caché de 2 MB sale la advertencia `Backup size`; sin el clon sale `Agent repository clone: missing`; y si `backup-status` falla con el contenedor arriba, el diagnóstico muestra las líneas que salen de los archivos de estado. Queda en verde al terminar T059.
-- [ ] T057 [US5] Agregar `heartbeatctl backup-status [--json]` en `docker/scripts/heartbeatctl`, con su entrada en `cmd_help` y en el despacho de `main` (A6; D14 y D35): lee la regla de destino, los archivos de estado, `backup-dest.json`, la huella de la llave (`backup_store.py fingerprint`), el tamaño de cada caché (`du -sk`), las rutas adicionales y el clon de trabajo. No toca la red y no modifica nada. TB01 a TB06 y TB09 en verde.
-- [ ] T058 [US5] ROJO: escribir TB07 y TB08 en `tests/backup-status.bats`, con un doble de `docker` propio. Parte del de `tests/agentctl-doctor-freshness.bats:26-40`, que responde "sano" y deja al diagnóstico llegar a su parte de respaldos, y le suma dos cosas: anota en un archivo los argumentos de cada llamada, y a `exec ... heartbeatctl backup-status --json` le responde un JSON fijo que la prueba elige:
+- [X] T057 [US5] Agregar `heartbeatctl backup-status [--json]` en `docker/scripts/heartbeatctl`, con su entrada en `cmd_help` y en el despacho de `main` (A6; D14 y D35): lee la regla de destino, los archivos de estado, `backup-dest.json`, la huella de la llave (`backup_store.py fingerprint`), el tamaño de cada caché (`du -sk`), las rutas adicionales y el clon de trabajo. No toca la red y no modifica nada. TB01 a TB06 y TB09 en verde.
+- [X] T058 [US5] ROJO: escribir TB07 y TB08 en `tests/backup-status.bats`, con un doble de `docker` propio. Parte del de `tests/agentctl-doctor-freshness.bats:26-40`, que responde "sano" y deja al diagnóstico llegar a su parte de respaldos, y le suma dos cosas: anota en un archivo los argumentos de cada llamada, y a `exec ... heartbeatctl backup-status --json` le responde un JSON fijo que la prueba elige:
   - **TB07**: con repositorio, `agentctl doctor` llama a `docker exec -u agent <agente> heartbeatctl backup-status --json` y muestra las líneas de A7: el destino, una por unidad, la llave, las rutas adicionales y el clon de trabajo. Cada situación de la lista de A7 produce su advertencia, incluido un veredicto `unverified`.
   - **TB08** (nace en verde): sin repositorio, el archivo de llamadas no tiene ninguna a `backup-status`; la parte de respaldos trae exactamente las tres líneas de hoy (`Backup identity`, `Backup vault` y `Backup config`, con `never pushed yet` en un agente sin fork); y no trae ninguna línea que nombre `Backup memory`, `Backup history`, `Backup destination`, `Backup size` ni `Agent repository clone`.
-- [ ] T059 [US5] Cambiar el diagnóstico en `scripts/agentctl` (`:193-243` y `:774-788`; A7): con `backup.repo.url` en el `agent.yml` del workspace, los datos salen de `backup-status --json`; si ese comando falla con el contenedor arriba, se leen los cinco archivos de estado. `_check_backup_freshness` gana las etiquetas de `memory` y de `history`. La advertencia de tamaño usa `DOCTOR_BACKUP_CACHE_MAX_MB`, 800 por defecto. Sin repositorio, el código de hoy no cambia. El contrato de salida (0, 1 o 2) no cambia. TB07, TB08 y TB10 en verde; `tests/agentctl*.bats` en verde, sin editarlas.
-- [ ] T060 [US5] Punto de control en bash 5.x y en 3.2, anotado en `specs/046-agent-backup-repo/tasks.md`: `tests/backup-status.bats` 10 de 10, y las seis suites nuevas juntas, 124 de 124.
+- [X] T059 [US5] Cambiar el diagnóstico en `scripts/agentctl` (`:193-243` y `:774-788`; A7): con `backup.repo.url` en el `agent.yml` del workspace, los datos salen de `backup-status --json`; si ese comando falla con el contenedor arriba, se leen los cinco archivos de estado. `_check_backup_freshness` gana las etiquetas de `memory` y de `history`. La advertencia de tamaño usa `DOCTOR_BACKUP_CACHE_MAX_MB`, 800 por defecto. Sin repositorio, el código de hoy no cambia. El contrato de salida (0, 1 o 2) no cambia. TB07, TB08 y TB10 en verde; `tests/agentctl*.bats` en verde, sin editarlas.
+- [X] T060 [US5] Punto de control en bash 5.x y en 3.2, anotado en `specs/046-agent-backup-repo/tasks.md`: `tests/backup-status.bats` 10 de 10, y las seis suites nuevas juntas, 124 de 124.
 
 **Checkpoint**: un respaldo roto deja de ser silencioso.
 
@@ -564,7 +564,7 @@ _<unidad>_repo_git ARGS...                -> git con el entorno de C2 y timeout 
 
 ## Phase 8: Polish (documentos y comprobaciones locales, sin compuertas)
 
-- [ ] T061 [P] Reescribir en `README.md` la sección de respaldos (`:235-290`) y la de actualización de un agente:
+- [X] T061 [P] Reescribir en `README.md` la sección de respaldos (`:235-290`) y la de actualización de un agente:
   - las cinco ramas, la regla de destino y cómo asociar un repositorio a un agente nuevo y a uno que ya existe, con el paso de la llave y su huella;
   - que el repositorio tiene que estar en GitHub, y la recomendación de crearlo con un commit inicial en `main`;
   - la restauración con `--restore-from-repo`, sus requisitos (`python3` y `age`), la llave, y cuántas veces se pide una passphrase;
@@ -572,9 +572,9 @@ _<unidad>_repo_git ARGS...                -> git con el entorno de C2 y timeout 
   - que el cifrado da confidencialidad y no autenticidad;
   - la tabla de lo que ninguna unidad cubre (sección 9 de `data-model.md`) y `backup.extra_paths`;
   - la corrección de lo que hoy promete de más: el login de `/login` no viaja en el respaldo.
-- [ ] T062 [P] Actualizar los documentos que describen los respaldos: `docs/heartbeatctl.md` (los tres comandos nuevos, los resultados y `--configure-key`), `docs/architecture.md` (la regla de destino, la credencial, la llave de datos, el candado y el modelo de privilegios de los dos scripts), `docs/state-layout.md`, `docs/getting-started.md`, `docs/creating-an-agent.md`, `docs/adding-an-mcp.md` (`GITHUB_PAT` ya no es solo del MCP) y `docs/vault.md`. Donde decían tres ramas, dicen cinco con un repositorio asociado y tres con un fork.
-- [ ] T063 [P] Escribir la entrada de 0.32.0 en `CHANGELOG.md` (FR-024) y subir `VERSION` a 0.32.0, tras verificar que `git show origin/main:VERSION` da 0.31.0. La entrada dice qué se agrega, qué defecto se corrige (la unidad de identidad nunca cifró el archivo de secretos), qué no cambia (fork, sin destino y modo local) y que hace falta reconstruir la imagen.
-- [ ] T064 Escribir a mano el bloque de 046 en `CLAUDE.md`, actualizar su sección "Backup model" a cinco ramas, y agregar en "Common gotchas" lo que sirve más allá de esta feature:
+- [X] T062 [P] Actualizar los documentos que describen los respaldos: `docs/heartbeatctl.md` (los tres comandos nuevos, los resultados y `--configure-key`), `docs/architecture.md` (la regla de destino, la credencial, la llave de datos, el candado y el modelo de privilegios de los dos scripts), `docs/state-layout.md`, `docs/getting-started.md`, `docs/creating-an-agent.md`, `docs/adding-an-mcp.md` (`GITHUB_PAT` ya no es solo del MCP) y `docs/vault.md`. Donde decían tres ramas, dicen cinco con un repositorio asociado y tres con un fork.
+- [X] T063 [P] Escribir la entrada de 0.32.0 en `CHANGELOG.md` (FR-024) y subir `VERSION` a 0.32.0, tras verificar que `git show origin/main:VERSION` da 0.31.0. La entrada dice qué se agrega, qué defecto se corrige (la unidad de identidad nunca cifró el archivo de secretos), qué no cambia (fork, sin destino y modo local) y que hace falta reconstruir la imagen.
+- [X] T064 Escribir a mano el bloque de 046 en `CLAUDE.md`, actualizar su sección "Backup model" a cinco ramas, y agregar en "Common gotchas" lo que sirve más allá de esta feature:
   - con `CLAUDE_CONFIG_DIR` definido, el archivo de configuración vivo de Claude es `<config>/.claude.json`, no el del directorio de estado, y se reescribe hasta una vez por minuto;
   - un fixture que pone un archivo donde producción no lo tiene esconde el defecto: la unidad de identidad pasó sus pruebas durante meses sin cifrar nunca el archivo de secretos real;
   - la copia de una base SQLite con la API de respaldo es determinista, y una copia en bruto en modo WAL pierde datos;
@@ -583,18 +583,18 @@ _<unidad>_repo_git ARGS...                -> git con el entorno de C2 y timeout 
   - el motor de plantillas deja los saltos de línea que rodean a un bloque condicional que no se renderiza.
 
   Se commitea con `git add -f CLAUDE.md`. Auditar los bytes de los archivos de esta fase.
-- [ ] T065 Agregar al nightly un paso que instala `age`, en `.github/workflows/docker-e2e.yml` (V4 de `contracts/evidence.md`; M21):
+- [X] T065 Agregar al nightly un paso que instala `age`, en `.github/workflows/docker-e2e.yml` (V4 de `contracts/evidence.md`; M21):
   - **El paso** es nuevo, con `id: install_age`, entre `install_bats` y `verify_deps`: instala el paquete y comprueba `age --version` y `age-keygen`, con el molde de `.github/workflows/test.yml:89-96`. Sin `continue-on-error` y sin ningún pipe hacia `head` o `grep -q`.
   - **Lo que no se toca**: el texto de `Verify deps + docker` ni el de `Run docker-e2e suite`, que otras features congelaron por sha256.
   - **El oráculo que cambia**: `tests/nightly-alert.bats:1431` (N30) fija la lista de ids de los pasos del job. Pasa a `mark_start,checkout,install_yq,install_bats,install_age,verify_deps,fetch_models,run_suite,collect`.
   - **Los que no cambian**: `tests/ci-workflows.bats` y `tests/qmd-embed-nightly.bats` siguen en verde en los dos bash, sin editarse.
-- [ ] T066 Correr las comprobaciones estáticas y medir la duración, anotado en `specs/046-agent-backup-repo/tasks.md`:
+- [X] T066 Correr las comprobaciones estáticas y medir la duración, anotado en `specs/046-agent-backup-repo/tasks.md`:
   - el `shellcheck` exacto del job de la CI (`.github/workflows/shellcheck.yml`), con código 0, y `shellcheck -s sh` sobre `docker/scripts/git-askpass-agent.sh` y `docker/scripts/git-credential-agent.sh`;
   - `python3 -m py_compile` sobre `docker/scripts/backup_store.py`, `tests/fixtures/backup-repo/git-auth-server.py` y `specs/046-agent-backup-repo/tools/sc007_sim.py`;
   - `git ls-files -s` muestra 100755 en los dos scripts de credenciales;
   - `python3 --version` del Mac del operador, que debe ser 3.9.x: es la pata que cubre el piso de la herramienta del almacén. Si ya no lo es, T070 suma una corrida de `tests/backup-store.bats` con Python 3.9;
   - la duración de las seis suites nuevas en cada bash. Objetivo: menos de 180 segundos en total por bash en el Mac. El brazo macOS de la CI corre con un tope de 30 minutos y ya tarda unos 25 (issue #132): si las suites nuevas lo empujan sobre el tope, se propone al operador subirlo en un PR aparte, antes de T081.
-- [ ] T067 Comprobar el alcance, anotado en `specs/046-agent-backup-repo/tasks.md` (SC-004 y FR-018):
+- [X] T067 Comprobar el alcance, anotado en `specs/046-agent-backup-repo/tasks.md` (SC-004 y FR-018):
   - `git diff --stat origin/main` y `git status --short`, que ve los archivos todavía sin rastrear, muestran solo los archivos del árbol de `plan.md`, más los puntos de contacto de T007, T047, T051 y T065;
   - `git diff origin/main -- tests/backup-identity-*.bats tests/backup-vault-*.bats tests/backup-config.bats tests/restore-*.bats tests/local-vault-backup.bats` queda vacío;
   - el render completo de un `agent.yml` de modo docker sin repositorio y el de uno de modo local, desde la rama y desde la copia de T003, no tienen diferencias (`diff -r`) en ningún archivo derivado, y el crontab que genera `heartbeatctl reload` tampoco;
@@ -608,157 +608,186 @@ _<unidad>_repo_git ARGS...                -> git con el entorno de C2 y timeout 
 
 **Independent Test**: el Registro de este archivo tiene cada medición con su comando y su resultado.
 
-- [ ] T068 [US6] Preparar el corredor de mutaciones en `<scratchpad>/046/mutate.py`, con el molde de 045: para cada mutación copia el árbol a un directorio limpio, aplica un reemplazo exacto (con error si no encuentra el ancla), corre las suites afectadas en bash 5.x y con `PATH=/bin:$PATH`, y anota qué pruebas cayeron. M0 corre las pruebas finales contra el código de `origin/main`.
-- [ ] T069 [US6] Correr M0 a M138 en los dos bash y anotar la tabla en `specs/046-agent-backup-repo/tasks.md`. Cada fila es una sola variante, y debe hacer caer, al menos, las pruebas nombradas. Una que sobreviva obliga a endurecer la prueba, con su ROJO visto, y a repetir la corrida.
+- [X] T068 [US6] Preparar el corredor de mutaciones en `<scratchpad>/046/mutate.py`, con el molde de 045: para cada mutación copia el árbol a un directorio limpio, aplica un reemplazo exacto (con error si no encuentra el ancla), corre las suites afectadas en bash 5.x y con `PATH=/bin:$PATH`, y anota qué pruebas cayeron. M0 corre las pruebas finales contra el código de `origin/main`.
+- [X] T069 [US6] Correr M0 a M167 en los dos bash (M139 a M167, de los arreglos de T073) y anotar la tabla en `specs/046-agent-backup-repo/tasks.md`. Cada fila es una sola variante, y debe hacer caer, al menos, las pruebas nombradas. Una que sobreviva obliga a endurecer la prueba, con su ROJO visto, y a repetir la corrida.
 
-  | Id | Mutación | Debe caer |
-  | --- | --- | --- |
-  | M0 | El código de `origin/main` con las pruebas finales | Todas, salvo TU05, TU19, TU20, TU31, TR06, TA06, TA14 y TB08 |
-  | M1 | La regla de destino ignora el repositorio asociado | TD01, TU01 |
-  | M2 | Con fork y repositorio, la regla prefiere el fork | TD01 |
-  | M3 | Con solo fork, la regla responde `none` | TD02 |
-  | M4 | Un valor `null` cuenta como una URL | TD03 |
-  | M5 | El askpass siempre es `/bin/true` | TD04, TD06, TU01 |
-  | M6 | El askpass responde la contraseña vacía | TD05, TU01 |
-  | M7 | La credencial se escribe en la URL del remoto | TD14 |
-  | M8 | Se omite la sonda anónima | TD07, TU15 |
-  | M9 | Se empuja con el veredicto `public` | TU15 |
-  | M10 | Una sonda anónima que falla por otra razón cuenta como privada | TD16 |
-  | M11 | `allow_unverified` habilita un repositorio público | TD17 |
-  | M12 | `allow_unverified` salta la sonda anónima | TD09 |
-  | M13 | El veredicto guardado nunca vence | TD10 |
-  | M14 | El plazo de la sonda anónima se cuenta desde la última corrida | TD10 |
-  | M15 | Un veredicto que no es `private` se guarda y se reutiliza | TD16, TU22 |
-  | M16 | Una consulta autenticada que falla cuenta como alcanzable | TD08, TU14 |
-  | M17 | La regla de la URL de la librería acepta otro servidor | TD11 |
-  | M18 | La regla de la URL del esquema acepta otro servidor | TA05 |
-  | M19 | El validador de la URL del wizard acepta otro servidor | TA03 |
-  | M20 | Una consulta no tiene tope | TD18 |
-  | M21 | `backup_dest_branch_head` no mira la rama pedida | TD15 |
-  | M22 | No se comprueba la marca de pertenencia | TD12, TU17 |
-  | M23 | No se compara el agente que nombra la marca | TD12, TU18 |
-  | M24 | No se escribe la marca | TU01, TU23 |
-  | M25 | El registro del intento reemplaza el estado en vez de fusionar | TD13 |
-  | M26 | No se comprueba que exista la credencial | TU13 |
-  | M27 | Un ciclo sin cambios no consulta al destino | TU23, TU26 |
-  | M28 | El hash no se guarda después de un empuje | TU02 |
-  | M29 | `--gc` con repositorio sigue leyendo solo el fork | TU02 |
-  | M30 | El estado no se completa cuando el árbol es idéntico | TU33 |
-  | M31 | Una unidad empuja con `--mirror` | TU03 |
-  | M32 | Se quita el candado | TU37 |
-  | M33 | El empuje de `identity` no tiene tope | TU36 |
-  | M34 | El empuje de `vault` no tiene tope | TU36 |
-  | M35 | El git de los respaldos honra la configuración global | TU38 |
-  | M36 | `identity` vuelve a leer el archivo de secretos del directorio de estado | TU24 |
-  | M37 | El supervisor y el comando calculan el hash de identidad con rutas distintas | TU25 |
-  | M38 | El supervisor no espera tras un intento fallido | TU34 |
-  | M39 | El disparador conserva el tope de 90 segundos con repositorio | TU34 |
-  | M40 | Un registro sin hash conserva el `attempt_hash` anterior | TU34 |
-  | M41 | Un estado ilegible hace fallar a `_check_identity_backup` | TU34 |
-  | M42 | `--configure-key` no muestra la huella | TU32 |
-  | M43 | Falta la línea diaria de `identity` con repositorio | TU29 |
-  | M44 | El crontab gana líneas sin repositorio | TU21 |
-  | M45 | Se quita la línea `COPY` de un archivo nuevo | TU31 |
-  | M46 | `config` se amplía también con fork | TU05 |
-  | M47 | El fork recibe la marca | TU20 |
-  | M48 | El fork recibe el askpass | TU20 |
-  | M49 | El estado gana campos nuevos con `fork` o `none` | TU19, TU20 |
-  | M50 | Un agente sin destino escribe `backup-dest.json` | TU19 |
-  | M51 | `unpack` escribe los bloques sin descomprimirlos | TS01, TS02, TS04 |
-  | M52 | Un archivo vacío queda fuera del manifiesto | TS03 |
-  | M53 | No se restauran los permisos | TS04 |
-  | M54 | `pack` vuelve a cifrar bloques que ya existen | TS05, TS06, TU12 |
-  | M55 | `pack` deja bloques sin referencia | TS07 |
-  | M56 | `pack` deja un temporal en claro dentro del almacén | TS08 |
-  | M57 | El manifiesto se escribe en claro | TS09 |
-  | M58 | `unpack` deja salida parcial cuando `age` falla | TS10 |
-  | M59 | `unpack` no verifica el hash | TS11 |
-  | M60 | `unpack` acepta una ruta con `..` | TS12, TR12 |
-  | M61 | Se quita la regla de las líneas completas | TS13, TU11 |
-  | M62 | La base se copia en bruto | TS14, TU10 |
-  | M63 | `digest` ignora `--extra` | TS15 |
-  | M64 | `fingerprint` calcula sobre la línea entera | TS16 |
-  | M65 | Un error de sintaxis en la herramienta | TS17 |
-  | M66 | Una base SQLite con otro nombre se empaqueta en bruto | TS18 |
-  | M67 | No hay rotación al cambiar la llave del operador | TS19 |
-  | M68 | `unpack` usa la llave del operador en cada bloque | TS20 |
-  | M69 | `unpack` deja la llave de datos en un archivo | TS20 |
-  | M70 | Se ignora `--expect-recipient` | TS21 |
-  | M71 | El hash de una unidad con almacén no incluye la llave del operador | TU40 |
-  | M72 | Una unidad no le pasa `--expect-recipient` a `pack` | TU40 |
-  | M73 | `digest --list` informa el tamaño del archivo vivo | TS22 |
-  | M74 | La persona queda fuera de `config` | TU04 |
-  | M75 | `config` incluye todo el directorio `.claude/` | TU27 |
-  | M76 | Con la marca de datos sensibles, la configuración queda en claro | TU35 |
-  | M77 | El vault va siempre al almacén | TU06 |
-  | M78 | Con la marca, el vault queda en claro | TU07 |
-  | M79 | Con la marca y un fork, el vault se empuja en claro | TU07 |
-  | M80 | claude-mem va en claro | TU08 |
-  | M81 | El hash de `memory` ignora la auto-memoria | TU08 |
-  | M82 | Con la marca, la auto-memoria queda en claro | TU09 |
-  | M83 | El historial va en claro | TU11 |
-  | M84 | Sin llave pública se sube en claro | TU16 |
-  | M85 | Una ruta adicional con `..` se acepta | TU28 |
-  | M86 | Una ruta adicional viaja en claro | TU28 |
-  | M87 | Una ruta adicional bajo `.state/.cache` se acepta | TU28 |
-  | M88 | Una entrada `.` de `backup.extra_paths` se acepta | TU28 |
-  | M89 | Se quitan las exclusiones de los archivos volátiles de claude-mem | TU30 |
-  | M90 | `memory` e `history` no comprueban la marca | TU39 |
-  | M91 | El empuje de `history` no tiene tope | TU39 |
-  | M92 | `memory` sin fuentes no registra `nothing-to-back-up` | TU39 |
-  | M93 | claude-mem se restaura en otro directorio | TR01 |
-  | M94 | Una rama que falta aborta la restauración | TR02 |
-  | M95 | Sin llave, la restauración aborta | TR03 |
-  | M96 | Sin `python3`, la restauración aborta | TR04 |
-  | M97 | La restauración deja una unidad a medias | TR05 |
-  | M98 | La restauración imprime las líneas de `memory` y de `history` para un fork | TR06 |
-  | M99 | El alias no se registra | TR07 |
-  | M100 | Un vault cifrado se restaura como su `store/` | TR08 |
-  | M101 | La marca se copia al workspace | TR09 |
-  | M102 | El archivo de secretos restaurado queda con otro modo | TR10 |
-  | M103 | El aviso del token sale siempre | TR10 |
-  | M104 | `.claude/` se restaura bajo `.state/` | TR11 |
-  | M105 | Las rutas adicionales se restauran bajo `extra/` | TR12 |
-  | M106 | Sin llave, la configuración cifrada no restaura `agent.yml` | TR13 |
-  | M107 | El directorio temporal no se borra | TR14 |
-  | M108 | `GITHUB_PAT` se escribe siempre en el archivo de secretos | TA01 |
-  | M109 | El token no se pide sin el MCP | TA02 |
-  | M110 | El wizard vuelve a preguntar sin terminal | TA03 |
-  | M111 | El backfill usa `//` y pisa un `false` | TA04 |
-  | M112 | El esquema acepta un `backup.sensitive` que no es booleano | TA05 |
-  | M113 | Los bloques `unless` e `if` de la plantilla se invierten | TA06, TA07 |
-  | M114 | Un marcador derivado no se exporta | TA08 |
-  | M115 | El dueño de la llave sale solo del fork | TA09 |
-  | M116 | El clon de trabajo trae las ramas de respaldo | TA10 |
-  | M117 | Un clon que ya existe se vuelve a crear | TA11 |
-  | M118 | `backup-config` no vuelve a intentar el clon de trabajo | TA11 |
-  | M119 | La credencial se escribe en la configuración del clon | TA12 |
-  | M120 | `.gitignore` pierde `/agent-repo/` | TA13 |
-  | M121 | `BACKUP_REPO_ENABLED` vale `true` en modo local | TA14, TA16 |
-  | M122 | `NEXT_STEPS.md` muestra el bloque sin repositorio | TA15 |
-  | M123 | La pregunta del wizard aparece en modo local | TA16 |
-  | M124 | El esquema acepta un `backup.extra_paths` que no es una lista | TA17 |
-  | M125 | `--regenerate` fija una llave por su cuenta | TA18 |
-  | M126 | El aviso de `--regenerate` muestra el valor de `GITHUB_PAT` | TA18 |
-  | M127 | El clon deja extraída una rama `backup/*` | TA19 |
-  | M128 | `--nuke` no avisa | TA20 |
-  | M129 | `backup-status` omite una unidad | TB01 |
-  | M130 | Con fork, el JSON trae `work_clone` | TB02 |
-  | M131 | El umbral de antigüedad nunca se supera | TB03 |
-  | M132 | Un último intento fallido se informa como correcto | TB04 |
-  | M133 | Los commits sin publicar siempre son 0 | TB05 |
-  | M134 | `backup-status` imprime el valor de la credencial | TB06 |
-  | M135 | El diagnóstico no advierte un intento fallido | TB07 |
-  | M136 | El diagnóstico muestra las líneas nuevas sin repositorio | TB08 |
-  | M137 | Una ruta adicional que falta no se lista | TB09 |
-  | M138 | La advertencia de tamaño nunca sale | TB10 |
+  | Id | Mutación | Debe caer | Resultado 5.x / 3.2 (s) |
+  | --- | --- | --- | --- |
+  | M0 | El código de `origin/main` con las pruebas finales | Todas, salvo TU05, TU19, TU20, TU31, TR06, TA06, TA14 y TB08 | 116 fallas; 8 verdes (70 / 75) |
+  | M1 | La regla de destino ignora el repositorio asociado | TD01, TU01 | Cazada (1 / 1) |
+  | M2 | Con fork y repositorio, la regla prefiere el fork | TD01 | Cazada (0 / 0) |
+  | M3 | Con solo fork, la regla responde `none` | TD02 | Cazada (0 / 0) |
+  | M4 | Un valor `null` cuenta como una URL | TD03 | Cazada (0 / 0) |
+  | M5 | El askpass siempre es `/bin/true` | TD04, TD06, TU01 | Cazada (2 / 2) |
+  | M6 | El askpass responde la contraseña vacía | TD05, TU01 | Cazada (2 / 1) |
+  | M7 | La credencial se escribe en la URL del remoto | TD14 | Cazada (1 / 1) |
+  | M8 | Se omite la sonda anónima | TD07, TU15 | Cazada (3 / 2) |
+  | M9 | Se empuja con el veredicto `public` | TU15 | Cazada (2 / 1) |
+  | M10 | Una sonda anónima que falla por otra razón cuenta como privada | TD16 | Cazada (1 / 0) |
+  | M11 | `allow_unverified` habilita un repositorio público | TD17 | Cazada (1 / 0) |
+  | M12 | `allow_unverified` salta la sonda anónima | TD09 | Cazada (0 / 0) |
+  | M13 | El veredicto guardado nunca vence | TD10 | Cazada (2 / 1) |
+  | M14 | El plazo de la sonda anónima se cuenta desde la última corrida | TD10 | Cazada (1 / 1) |
+  | M15 | Un veredicto que no es `private` se guarda y se reutiliza | TD16, TU22 | Cazada (10 / 12) |
+  | M16 | Una consulta autenticada que falla cuenta como alcanzable | TD08, TU14 | Cazada (3 / 2) |
+  | M17 | La regla de la URL de la librería acepta otro servidor | TD11 | Cazada (3 / 2) |
+  | M18 | La regla de la URL del esquema acepta otro servidor | TA05 | Cazada (7 / 8) |
+  | M19 | El validador de la URL del wizard acepta otro servidor | TA03 | Cazada (1 / 0) |
+  | M20 | Una consulta no tiene tope | TD18 | Cazada (301 / 300) |
+  | M21 | `backup_dest_branch_head` no mira la rama pedida | TD15 | Cazada (0 / 0) |
+  | M22 | No se comprueba la marca de pertenencia | TD12, TU17 | Cazada (4 / 3) |
+  | M23 | No se compara el agente que nombra la marca | TD12, TU18 | Cazada (4 / 3) |
+  | M24 | No se escribe la marca | TU01, TU23 | Cazada (8 / 6) |
+  | M25 | El registro del intento reemplaza el estado en vez de fusionar | TD13 | Cazada (0 / 1) |
+  | M26 | No se comprueba que exista la credencial | TU13 | Cazada (1 / 1) |
+  | M27 | Un ciclo sin cambios no consulta al destino | TU23, TU26 | Cazada (6 / 6) |
+  | M28 | El hash no se guarda después de un empuje | TU02 | Cazada (3 / 3) |
+  | M29 | `--gc` con repositorio sigue leyendo solo el fork | TU02 | Cazada (2 / 2) |
+  | M30 | El estado no se completa cuando el árbol es idéntico | TU33 | Cazada (4 / 4) |
+  | M31 | Una unidad empuja con `--mirror` | TU03 | Cazada (2 / 2) |
+  | M32 | Se quita el candado | TU37 | Cazada (2 / 2) |
+  | M33 | El empuje de `identity` no tiene tope | TU36 | Cazada (302 / 301) |
+  | M34 | El empuje de `vault` no tiene tope | TU36 | Cazada (306 / 307) |
+  | M35 | El git de los respaldos honra la configuración global | TU38 | Cazada (2 / 1) |
+  | M36 | `identity` vuelve a leer el archivo de secretos del directorio de estado | TU24 | Cazada (2 / 2) |
+  | M37 | El supervisor y el comando calculan el hash de identidad con rutas distintas | TU25 | Cazada (2 / 2) |
+  | M38 | El supervisor no espera tras un intento fallido | TU34 | Cazada (2 / 1) |
+  | M39 | El disparador conserva el tope de 90 segundos con repositorio | TU34 | Cazada (3 / 2) |
+  | M40 | Un registro sin hash conserva el `attempt_hash` anterior | TU34 | Cazada (2 / 2) |
+  | M41 | Un estado ilegible hace fallar a `_check_identity_backup` | TU34 | Cazada (2 / 2) |
+  | M42 | `--configure-key` no muestra la huella | TU32 | Cazada (2 / 2) |
+  | M43 | Falta la línea diaria de `identity` con repositorio | TU29 | Cazada (1 / 1) |
+  | M44 | El crontab gana líneas sin repositorio | TU21 | Cazada (1 / 1) |
+  | M45 | Se quita la línea `COPY` de un archivo nuevo | TU31 | Cazada (0 / 0) |
+  | M46 | `config` se amplía también con fork | TU05 | Cazada (1 / 1) |
+  | M47 | El fork recibe la marca | TU20 | Cazada (1 / 2) |
+  | M48 | El fork recibe el askpass | TU20 | Cazada (62 / 62) |
+  | M49 | El estado gana campos nuevos con `fork` o `none` | TU19, TU20 | Cazada (2 / 1) |
+  | M50 | Un agente sin destino escribe `backup-dest.json` | TU19 | Cazada (0 / 1) |
+  | M51 | `unpack` escribe los bloques sin descomprimirlos | TS01, TS02, TS04 | Cazada (1 / 1) |
+  | M52 | Un archivo vacío queda fuera del manifiesto | TS03 | Cazada (0 / 0) |
+  | M53 | No se restauran los permisos | TS04 | Cazada (1 / 2) |
+  | M54 | `pack` vuelve a cifrar bloques que ya existen | TS05, TS06, TU12 | Cazada (5 / 5) |
+  | M55 | `pack` deja bloques sin referencia | TS07 | Cazada (0 / 0) |
+  | M56 | `pack` deja un temporal en claro dentro del almacén | TS08 | Cazada (0 / 0) |
+  | M57 | El manifiesto se escribe en claro | TS09 | Cazada (0 / 0) |
+  | M58 | `unpack` deja salida parcial cuando `age` falla | TS10 | Cazada (0 / 0) |
+  | M59 | `unpack` no verifica el hash | TS11 | Cazada (0 / 0) |
+  | M60 | `unpack` acepta una ruta con `..` | TS12, TR12 | Cazada (13 / 12) |
+  | M61 | Se quita la regla de las líneas completas | TS13, TU11 | Cazada (3 / 3) |
+  | M62 | La base se copia en bruto | TS14, TU10 | Cazada (4 / 3) |
+  | M63 | `digest` ignora `--extra` | TS15 | Cazada (0 / 0) |
+  | M64 | `fingerprint` calcula sobre la línea entera | TS16 | Cazada (0 / 0) |
+  | M65 | Un error de sintaxis en la herramienta | TS17 | Cazada (0 / 0) |
+  | M66 | Una base SQLite con otro nombre se empaqueta en bruto | TS18 | Cazada (0 / 0) |
+  | M67 | No hay rotación al cambiar la llave del operador | TS19 | Cazada (0 / 0) |
+  | M68 | `unpack` usa la llave del operador en cada bloque | TS20 | Cazada (1 / 1) |
+  | M69 | `unpack` deja la llave de datos en un archivo | TS20 | Cazada (1 / 1) |
+  | M70 | Se ignora `--expect-recipient` | TS21 | Cazada (0 / 1) |
+  | M71 | El hash de una unidad con almacén no incluye la llave del operador | TU40 | Cazada (4 / 4) |
+  | M72 | Una unidad no le pasa `--expect-recipient` a `pack` | TU40 | Cazada (7 / 6) |
+  | M73 | `digest --list` informa el tamaño del archivo vivo | TS22 | Cazada (0 / 0) |
+  | M74 | La persona queda fuera de `config` | TU04 | Cazada (3 / 2) |
+  | M75 | `config` incluye todo el directorio `.claude/` | TU27 | Cazada (3 / 2) |
+  | M76 | Con la marca de datos sensibles, la configuración queda en claro | TU35 | Cazada (3 / 2) |
+  | M77 | El vault va siempre al almacén | TU06 | Cazada (1 / 1) |
+  | M78 | Con la marca, el vault queda en claro | TU07 | Cazada (2 / 2) |
+  | M79 | Con la marca y un fork, el vault se empuja en claro | TU07 | Cazada (5 / 4) |
+  | M80 | claude-mem va en claro | TU08 | Cazada (2 / 2) |
+  | M81 | El hash de `memory` ignora la auto-memoria | TU08 | Cazada (3 / 2) |
+  | M82 | Con la marca, la auto-memoria queda en claro | TU09 | Cazada (2 / 2) |
+  | M83 | El historial va en claro | TU11 | Cazada (3 / 2) |
+  | M84 | Sin llave pública se sube en claro | TU16 | Cazada (3 / 2) |
+  | M85 | Una ruta adicional con `..` se acepta | TU28 | Cazada (3 / 2) |
+  | M86 | Una ruta adicional viaja en claro | TU28 | Cazada (3 / 2) |
+  | M87 | Una ruta adicional bajo `.state/.cache` se acepta | TU28 | Cazada (3 / 2) |
+  | M88 | Una entrada `.` de `backup.extra_paths` se acepta | TU28 | Cazada (1 / 1) |
+  | M89 | Se quitan las exclusiones de los archivos volátiles de claude-mem | TU30 | Cazada (4 / 3) |
+  | M90 | `memory` e `history` no comprueban la marca | TU39 | Cazada (3 / 3) |
+  | M91 | El empuje de `history` no tiene tope | TU39 | Cazada (307 / 307) |
+  | M92 | `memory` sin fuentes no registra `nothing-to-back-up` | TU39 | Cazada (7 / 6) |
+  | M93 | claude-mem se restaura en otro directorio | TR01 | Cazada (8 / 7) |
+  | M94 | Una rama que falta aborta la restauración | TR02 | Cazada (8 / 7) |
+  | M95 | Sin llave, la restauración aborta | TR03 | Cazada (9 / 8) |
+  | M96 | Sin `python3`, la restauración aborta | TR04 | Cazada (13 / 13) |
+  | M97 | La restauración deja una unidad a medias | TR05 | Cazada (8 / 8) |
+  | M98 | La restauración imprime las líneas de `memory` y de `history` para un fork | TR06 | Cazada (1 / 1) |
+  | M99 | El alias no se registra | TR07 | Cazada (0 / 0) |
+  | M100 | Un vault cifrado se restaura como su `store/` | TR08 | Cazada (9 / 8) |
+  | M101 | La marca se copia al workspace | TR09 | Cazada (8 / 7) |
+  | M102 | El archivo de secretos restaurado queda con otro modo | TR10 | Cazada (8 / 8) |
+  | M103 | El aviso del token sale siempre | TR10 | Cazada (11 / 9) |
+  | M104 | `.claude/` se restaura bajo `.state/` | TR11 | Cazada (8 / 7) |
+  | M105 | Las rutas adicionales se restauran bajo `extra/` | TR12 | Cazada (9 / 8) |
+  | M106 | Sin llave, la configuración cifrada no restaura `agent.yml` | TR13 | Cazada (12 / 9) |
+  | M107 | El directorio temporal no se borra | TR14 | Cazada (8 / 7) |
+  | M108 | `GITHUB_PAT` se escribe siempre en el archivo de secretos | TA01 | Cazada (5 / 4) |
+  | M109 | El token no se pide sin el MCP | TA02 | Cazada (5 / 5) |
+  | M110 | El wizard vuelve a preguntar sin terminal | TA03 | Cazada (20 / 22) |
+  | M111 | El backfill usa `//` y pisa un `false` | TA04 | Cazada (4 / 4) |
+  | M112 | El esquema acepta un `backup.sensitive` que no es booleano | TA05 | Cazada (1 / 1) |
+  | M113 | Los bloques `unless` e `if` de la plantilla se invierten | TA06, TA07 | Cazada (4 / 5) |
+  | M114 | Un marcador derivado no se exporta | TA08 | Cazada (2 / 3) |
+  | M115 | El dueño de la llave sale solo del fork | TA09 | Cazada (0 / 0) |
+  | M116 | El clon de trabajo trae las ramas de respaldo | TA10 | Cazada (1 / 1) |
+  | M117 | Un clon que ya existe se vuelve a crear | TA11 | Cazada (1 / 1) |
+  | M118 | `backup-config` no vuelve a intentar el clon de trabajo | TA11 | Cazada (3 / 2) |
+  | M119 | La credencial se escribe en la configuración del clon | TA12 | Cazada (1 / 1) |
+  | M120 | `.gitignore` pierde `/agent-repo/` | TA13 | Cazada (0 / 0) |
+  | M121 | `BACKUP_REPO_ENABLED` vale `true` en modo local | TA14, TA16 | Cazada (15 / 15) |
+  | M122 | `NEXT_STEPS.md` muestra el bloque sin repositorio | TA15 | Cazada (5 / 4) |
+  | M123 | La pregunta del wizard aparece en modo local | TA16 | Cazada (5 / 5) |
+  | M124 | El esquema acepta un `backup.extra_paths` que no es una lista | TA17 | Cazada (1 / 1) |
+  | M125 | `--regenerate` fija una llave por su cuenta | TA18 | Cazada (2 / 2) |
+  | M126 | El aviso de `--regenerate` muestra el valor de `GITHUB_PAT` | TA18 | Cazada (3 / 3) |
+  | M127 | El clon deja extraída una rama `backup/*` | TA19 | Cazada (1 / 1) |
+  | M128 | `--nuke` no avisa | TA20 | Cazada (3 / 3) |
+  | M129 | `backup-status` omite una unidad | TB01 | Cazada (0 / 0) |
+  | M130 | Con fork, el JSON trae `work_clone` | TB02 | Cazada (0 / 0) |
+  | M131 | El umbral de antigüedad nunca se supera | TB03 | Cazada (0 / 0) |
+  | M132 | Un último intento fallido se informa como correcto | TB04 | Cazada (1 / 1) |
+  | M133 | Los commits sin publicar siempre son 0 | TB05 | Cazada (0 / 0) |
+  | M134 | `backup-status` imprime el valor de la credencial | TB06 | Cazada (0 / 1) |
+  | M135 | El diagnóstico no advierte un intento fallido | TB07 | Cazada (1 / 0) |
+  | M136 | El diagnóstico muestra las líneas nuevas sin repositorio | TB08 | Cazada (0 / 0) |
+  | M137 | Una ruta adicional que falta no se lista | TB09 | Cazada (0 / 0) |
+  | M138 | La advertencia de tamaño nunca sale | TB10 | Cazada (1 / 1) |
+  | M139 | El clon de trabajo pasa `GITHUB_PAT` en los argumentos de `env` | TA12 | Cazada (1 / 1) |
+  | M140 | El git de una unidad pasa `GITHUB_PAT` en los argumentos de `env` | TU01 | Cazada (2 / 2) |
+  | M141 | El clon no reinicia los ayudantes de credenciales heredados | TA12 | Cazada (2 / 1) |
+  | M142 | `--gc` corre `git gc` sin tomar el candado | TU37 | Cazada (2 / 2) |
+  | M143 | Un `--dry-run` registra su resultado | TU13 | Cazada (1 / 1) |
+  | M144 | El stderr de la herramienta del almacén se descarta | TU10 | Cazada (3 / 2) |
+  | M145 | Con repositorio, el supervisor ignora `identity_backup.enabled: false` | TU25 | Cazada (3 / 2) |
+  | M146 | El archivo del login de `/login` entra en las rutas adicionales | TU28 | Cazada (4 / 4) |
+  | M147 | `memory_extra_path_check` no consulta las rutas reservadas | TU28 | Cazada (1 / 1) |
+  | M148 | Un bloque se nombra con el SHA-256 de su contenido en claro | TS08 | Cazada (0 / 0) |
+  | M149 | `pack` no usa el mapa de bloques | TS05, TS06 | Cazada (0 / 1) |
+  | M150 | Una unidad no le pasa `--block-map` a `pack` | TU12 | Cazada (4 / 4) |
+  | M151 | `unpack` no verifica el nombre de un bloque antes de descifrarlo | TS11 | Cazada (0 / 0) |
+  | M152 | `unpack` acepta un segmento `.git` | TS12, TR12 | Cazada (11 / 11) |
+  | M153 | `unpack` conserva los bits setuid, setgid y sticky | TS04 | Cazada (1 / 1) |
+  | M154 | Una falla posterior a abrir `key.age` sale con 4 | TS11 | Cazada (0 / 0) |
+  | M155 | La URI de SQLite se arma sin escapar la ruta | TS14 | Cazada (0 / 0) |
+  | M156 | La restauración acepta un `vault.path` con `.git` | TR08 | Cazada (13 / 12) |
+  | M157 | La restauración escribe a través de un enlace del destino | TR11 | Cazada (11 / 10) |
+  | M158 | La configuración en claro se restaura sin su lista cerrada | TR11 | Cazada (9 / 9) |
+  | M159 | La configuración del almacén se restaura sin su lista cerrada | TR13 | Cazada (11 / 10) |
+  | M160 | El vault del almacén se restaura sin el filtro de markdown | TR08 | Cazada (11 / 9) |
+  | M161 | La restauración sigue un `vault.path` con `..` | TR08 | Cazada (11 / 10) |
+  | M162 | Las rutas adicionales se restauran sin las rutas reservadas | TR12 | Cazada (10 / 9) |
+  | M163 | Las rutas adicionales se restauran sin la lista declarada | TR12 | Cazada (9 / 9) |
+  | M164 | El archivo del login se restaura desde las rutas adicionales | TR12 | Cazada (10 / 9) |
+  | M165 | Las rutas adicionales restauradas no se excluyen del git del workspace | TR12 | Cazada (8 / 8) |
+  | M166 | La línea del vault sale aunque su almacén se haya omitido | TR08 | Cazada (14 / 13) |
+  | M167 | La identidad en claro copia los enlaces de su rama | TR11 | Cazada (10 / 9) |
 
   Las mutaciones de la clase SIGPIPE se plantan con un comando externo, no con un builtin. Cada una de las 124 pruebas cae con al menos una fila.
-- [ ] T070 [US6] Pata Linux en contenedores desechables (sin COMPUERTA; se avisa antes), anotada en `specs/046-agent-backup-repo/tasks.md`. El repo se copia, no se monta, y las pruebas corren como usuario no root:
+- [X] T070 [US6] Pata Linux en contenedores desechables (sin COMPUERTA; se avisa antes), anotada en `specs/046-agent-backup-repo/tasks.md`. El repo se copia, no se monta, y las pruebas corren como usuario no root:
   - **`ubuntu:24.04`** (GNU, bats 1.11, `git http-backend` del paquete `git`, `age`, `python3` y el `flock` de util-linux): las seis suites nuevas, 124 de 124, con la variable `CI` definida, para que ninguna dependencia que falte se salte en silencio.
   - **`alpine:3.24.1`** (BusyBox y el Python de la imagen del agente): `tests/backup-store.bats` y `tests/backup-dest.bats`, para ver el `timeout -k 10` de BusyBox y la herramienta en Python 3.14. Con un `git` falso que ignora TERM, la consulta termina dentro del tope más 10 segundos.
   - **El candado bajo BusyBox** (lección de 044): dos corridas seguidas de una unidad, sin espera entre ellas, y la segunda no encuentra el candado tomado.
-- [ ] T071 [US6] Escribir `tests/docker-e2e-backup-repo.bats` con TE1 a TE8 (`contracts/evidence.md`, V4), en el molde de `tests/docker-e2e-user-bin-path.bats`:
+- [X] T071 [US6] Escribir `tests/docker-e2e-backup-repo.bats` con TE1 a TE8 (`contracts/evidence.md`, V4), en el molde de `tests/docker-e2e-user-bin-path.bats`:
   - **El arranque**: `skip` sin `DOCKER_E2E=1`; un solo arranque en `setup_file`; agente `br-e2e`; `plugins: []`.
   - **El servidor** corre en el host, con `GIT_TEST_BIND=0.0.0.0`. El compose del agente de prueba gana `extra_hosts: ["host.docker.internal:host-gateway"]` con un `docker-compose.override.yml`.
   - **El archivo de secretos** del workspace de prueba lleva `GITHUB_PAT` con el centinela y `BACKUP_DEST_ALLOW_HTTP=1`. Se escribe con el arnés, no con un comando de shell que lo nombre.
@@ -767,23 +796,23 @@ _<unidad>_repo_git ARGS...                -> git con el entorno de C2 y timeout 
   - **TE7** restaura en un directorio del host, desde la ruta en disco del repositorio bare que llenó el contenedor, y compara con las dos listas de R7 de `contracts/restore.md`.
   - Cada prueba tiene su espera acotada y un volcado solo al fallar. `teardown_file` baja el contenedor, borra la imagen de prueba y mata el servidor.
   - En el host, sin Docker, el archivo carga y salta limpio en los dos bash.
-- [ ] T072 [US6] COMPUERTA (DOCKER_E2E local, arm64), anotada en `specs/046-agent-backup-repo/tasks.md`:
+- [X] T072 [US6] COMPUERTA (DOCKER_E2E local, arm64), anotada en `specs/046-agent-backup-repo/tasks.md`:
   - anotar la huella sha256 de los archivos de código de la rama;
   - correr `DOCKER_E2E=1 bats tests/docker-e2e-backup-repo.bats` (8 de 8);
   - correr `DOCKER_E2E=1 bats tests/docker-e2e-*.bats`: 62 casos. En este Mac, `tests/docker-e2e-smoke.bats:79` falla también en `origin/main`, y no es de esta feature;
   - anotar la duración y cada resultado. Un rojo se diagnostica con el volcado, se corrige con su prueba primero y se repite.
-- [ ] T073 [US6] Revisión independiente de solo lectura (agente `code-reviewer`), antes del gate completo, anotada en `specs/046-agent-backup-repo/tasks.md`. El encargo incluye:
+- [X] T073 [US6] Revisión independiente de solo lectura (agente `code-reviewer`), antes del gate completo, anotada en `specs/046-agent-backup-repo/tasks.md`. El encargo incluye:
   - **La revisión de privilegios** que la constitución exige para todo cambio bajo `docker/` (Principio II): capacidades, mounts, qué corre como root, y cualquier `docker exec` sin `-u agent` en el código y en las pruebas;
   - **El manejo de secretos**: que el valor de `GITHUB_PAT` no llegue a argumentos, URL, configuración de git, logs ni archivos de estado; que nada que deba ir cifrado toque el disco en claro dentro de un árbol que se commitea; y que la llave de datos no quede en ningún archivo en claro;
   - **Las clases de hallazgo** de la memoria: aserciones vacuas, guardias redundantes, una guardia de seguridad sin prueba, un verificador propio que falla en silencio, y fixtures que no tienen la disposición de producción.
 
   Los hallazgos que se acepten se corrigen con su prueba primero, y se repite lo afectado de T069 y T072.
-- [ ] T074 [US6] Gate completo del host sobre el árbol final, anotado en `specs/046-agent-backup-repo/tasks.md` (SC-009):
+- [X] T074 [US6] Gate completo del host sobre el árbol final, anotado en `specs/046-agent-backup-repo/tasks.md` (SC-009):
   - `bats tests/` en bash 5.x y en 3.2, en secuencia. Esperado: la línea base de T003 más 132, con 0 `not ok`, las saltadas de la línea base más las 8 de extremo a extremo, y stderr vacío;
   - las seis suites nuevas con SIGPIPE ignorada: `perl -e '$SIG{PIPE}="IGNORE"; exec @ARGV' bats ...`;
   - las comprobaciones de T066 y T067, y la huella de T072 sin cambios;
   - al terminar, se quita la copia de T003.
-- [ ] T075 [US6] COMPUERTA (commits locales), en commits atómicos y sin ninguno intermedio en rojo, con la identidad de T001 y sin atribución. Antes, `git ls-files -s` para los modos y la auditoría de bytes de los archivos nuevos:
+- [X] T075 [US6] COMPUERTA (commits locales), en commits atómicos y sin ninguno intermedio en rojo, con la identidad de T001 y sin atribución. Antes, `git ls-files -s` para los modos y la auditoría de bytes de los archivos nuevos:
   1. `docs:` la enmienda de `.specify/memory/constitution.md`;
   2. `feat:` las librerías, `docker/scripts/heartbeatctl`, `docker/scripts/start_services.sh`, `docker/scripts/backup_store.py`, los dos scripts de credenciales, `docker/Dockerfile`, `setup.sh`, `scripts/agentctl`, `modules/`, `.github/workflows/docker-e2e.yml` y las pruebas;
   3. `docs:` `README.md`, `docs/`, `CHANGELOG.md`, `VERSION`, `CLAUDE.md` y el Registro de este archivo.
@@ -1012,3 +1041,200 @@ El plan dejó abierta esa decisión para cuando existieran las tareas. Los dos c
   - **Los archivos de ignorar**: `.gitignore` todavía no tiene `/agent-repo/`; no existe `docker/.dockerignore`.
   - **La identidad de los commits**: `Rodrigo Andres Hinojosa Acuña` con el correo de desarrollador de los commits de 045 (`36a9669`), por `GIT_AUTHOR_*` y `GIT_COMMITTER_*`. El `user.email` local del repo es otro y no se usa.
 - **T004 (14-11-2026, solo lecturas)**: Docker 29.8.0, aarch64, 12 CPU y 7,75 GiB de memoria; en caché `alpine:3.24.1`, `ubuntu:24.04` y `agent-admin:e2e` (1,85 GB), más otras doce imágenes `agent-admin:*-e2e`; 26 GiB libres en el disco.
+- **T003 (14-11-2026, copia aislada de `10f22a7` en `<scratchpad>/046/base`)**:
+  - **bash 5.3.15**: `1..1972`, 1972 ok, 0 `not ok`, 61 saltadas, 20 min 39 s, salida de error vacía.
+  - **bash 3.2.57**: `1..1972`, 1971 ok, 1 `not ok`, 62 saltadas, 20 min 46 s, salida de error vacía. La que cayó es `verify_channel_healthy: returns 1 without sleeping the full timeout when bun never appears` (`tests/start-services-watchdog.bats:390`), que afirma un tiempo de reloj menor a 3 segundos; corrió mientras esta sesión generaba los archivos dorados en paralelo. Repetida 5 veces sola en bash 3.2, sobre la misma copia: 5 de 5 en verde. Queda anotada como sensible a la carga, sin más; se vuelve a mirar en el gate completo de T074.
+  - **Esperado final**: 1972 + 132 = 2104 por bash.
+- **T008 (14-11-2026)**: el servidor, el arnés y los dobles de `timeout` y `flock` (probados a mano: el `timeout` corta un hijo que ignora TERM a los 3 s con `-k 1 1` y sale con 124; el `flock` toma, rechaza la segunda toma y suelta). Archivos dorados, generados UNA vez con el código de `10f22a7` (`<scratchpad>/046/gen_goldens.sh`), con su sha256:
+  - `agent-fork.yml` `8f8b6a659cfbbecc7265b08e53cb55483c51e12242dbf82c00364a27bf2d9e34`;
+  - `crontab-fork.golden` `a3390d9274d784a80b10becff760417fa636619bb779ca350e3ed952eaeb3f40`;
+  - `claude-md-backups-section.golden` `6126169c9290a1181564d60dc35415999738ab5ec45b2e2b3eef62fe2ad5818d`;
+  - `restore-fork-output.golden` `0159012ff4dcb03548d8d21cf4ae197ff1f9c9607f7a909f111c3d9a5f680677`. Además de `<DEST>`, la ruta del fork se reemplaza por `<FORK>`; TR06 normaliza las dos.
+- **T012 (14-11-2026)**: en bash 5.3.15 y 3.2.57, `tests/backup-dest.bats` 18 de 18 y TA04, TA05 y TA17 en verde a la primera tras T007 y T010 (todas en ROJO antes, por la clave ausente o por la librería que no existía); TU31 en verde; `tests/schema.bats`, `tests/regenerate.bats`, `tests/scaffold.bats` y `tests/e2e-smoke.bats` 44 de 44; ningún servidor de prueba vivo al terminar. `shellcheck -S error` y `shellcheck -s sh` en 0.
+- **T019 (14-11-2026)**: el ROJO de US1, igual en los dos bash: caen TU01 a TU03, TU06, TU13 a TU15, TU17, TU18, TU22 a TU26, TU29, TU33, TU34 y TU36 a TU38, cada una en su afirmación del mensaje, del código o del estado (ninguna por el arnés); pasan TU05, TU19, TU20 y TU31.
+  - **Corrección del arnés antes del verde**: TU20 suponía que el camino del fork termina con un código distinto de 0 al fallar el empuje. En `main` termina con 0: `_bi_run` hace `if ! result=$(...); then return $?; fi`, y ese `$?` es el de la negación. La prueba ahora afirma la línea `push failed` y que el fork no recibe la credencial. Es un defecto del camino del fork que esta feature no cambia (FR-018); queda como hallazgo lateral para T086.
+- **T026 (14-11-2026)**: en bash 5.3.15 y 3.2.57, `tests/backup-repo-units.bats` 24 de 24 (TU01 a TU03, TU05, TU06, TU13 a TU15, TU17 a TU20, TU22 a TU26, TU29, TU31, TU33, TU34 y TU36 a TU38); las suites que ya existían (`backup-identity-*`, `backup-vault-*`, `backup-config`, `local-vault-backup`, `restore-from-fork`, `restore-unified`, `heartbeatctl`, `start-services-*` y `backup-trigger-plugin-install`) 210 de 210, con `git diff 10f22a7` vacío sobre ellas; los tres envoltorios de git sin cambios; `bash -n` con los dos bash y `shellcheck -S error` en 0.
+  - **Un defecto de la prueba, no del código**: el `_trigger_identity_backup` de reemplazo que define `_tu_check_strict` usaba `$2` dentro de la función, que bajo `set -u` no existe. Se corrigió en la prueba.
+- **US2 (14-11-2026)**:
+  - **El ROJO**: TS01 a TS22 cayeron todas porque la herramienta no existía, y pasaron a la primera al copiarla (22 de 22). TU04, TU07 a TU12, TU16, TU21, TU27, TU28, TU30, TU32, TU35, TU39 y TU40 cayeron en su afirmación (el árbol de `config`, el comando desconocido, la línea de cron o el mensaje), y TU03 y TU33 en su pierna nueva. TU21 ya mostraba en ROJO que el crontab sin destino y con fork es idéntico a los dorados.
+  - **T039 (SC-007)**, con `specs/046-agent-backup-repo/tools/sc007_sim.py` en el Mac (Python 3.9.6, age 1.3.1, git 2.53.0): datos de 72,1 MB de `.jsonl`, 31,5 MB en 86 archivos y una base de 14,5 MB. El repositorio pesó 15,4 MB tras el ciclo 1 y 102,5 MB tras el ciclo 30 (`du -sk` después de `git gc`): bajo 1 GB. El primer ciclo tardó 11,5 s; los siguientes, unos 2 s, con 17 a 20 bloques nuevos cada uno (18,6 en promedio), casi todos de la base. **Advertencia**: el texto sintético se comprime mucho mejor que un historial real; aun sin compresión (115 MB más 30 ciclos de unos 19 MB) quedaría cerca de 690 MB, bajo el tope.
+  - **T040**: en bash 5.3.15 y 3.2.57, `tests/backup-store.bats` 22 de 22 y `tests/backup-repo-units.bats` 40 de 40, y las suites de respaldo que ya existían en verde y sin editar (267 de 267 en total); `python3 -m py_compile` en 0.
+- **US3 (14-11-2026)**:
+  - **El ROJO**: TR01 a TR05 y TR07 a TR14 cayeron en su afirmación; TR06 nació en verde. Dos defectos del arnés se corrigieron antes del código: `setup.sh` pone `RESTORE_IDENTITY_KEY` en vacío al cargarse (`:403`), así que la prueba la fija después del `source`; y el ayudante que falsifica un bloque armaba mal su ruta.
+  - **Un defecto del código, visto en verde a medias (13 de 14)**: `dirname` del Mac trata como opción una ruta que empieza con `-` (`-workspace/...`). Todo `mkdir -p` nuevo pasa a `mkdir -p "$(dirname "$dest/$rel")"`, con la ruta absoluta.
+  - **T044**: en bash 5.3.15 y 3.2.57, `tests/backup-repo-restore.bats` 14 de 14, y `tests/restore-from-fork.bats` y `tests/restore-unified.bats` en verde y sin editar (19 de 19); `bash -n setup.sh` con los dos bash y `shellcheck -S error` en 0.
+- **US4 (14-11-2026)**:
+  - **El ROJO**: TA01 a TA03, TA07, TA08, TA09, TA10 a TA13, TA15, TA16, TA18, TA19 y TA20 cayeron en su afirmación (el encabezado del paso, el mensaje, la clave, la librería que no existía); TA06 y TA14 nacieron en verde, como estaba previsto.
+  - **Una desviación del texto de TA01**: sin terminal, `read -p` no imprime su pregunta, así que la prueba reconoce el paso por su encabezado (`▸ Agent repository (private backup + the agent's own work)`), que el wizard escribe con `echo`.
+  - **Un falso positivo del arnés, no del código**: TA14 encontraba `agent-repo` en el `NEXT_STEPS.md` de un agente local llamado `repo-bot`, porque sus unidades se llaman `agent-repo-bot-...`. La prueba usa otro nombre para el agente local.
+  - **T047**: `wizard_answers()` gana `repo=`, `sensitive=` y `repo_pat=`, con el marcador `# Agent repository (docker only)`; `tests/e2e-smoke.bats` gana la respuesta; los dos quickstart pasan de 52 a 56 preguntas (tres después de la 19 y la del token después de la del PAT del MCP), con sus referencias internas renumeradas, las variables `AGENT_REPO_*` y la fila de `validate_backup_repo_url`; el comando `/quickstart` y `tests/quickstart-doc.bats` también. 243 de 243 en las suites del wizard en bash 5.x.
+  - **T055**: en bash 5.3.15 y 3.2.57, 351 de 351: `tests/agent-repo-surface.bats` 20 de 20, las suites de T047 y las del render, `uninstall`, `nuke-and-hints`, y de nuevo `backup-repo-units`, `backup-repo-restore`, `start-services-*`, `backup-config` y `heartbeatctl` (el oráculo de sha de `_run_watchdog` en verde).
+- **US5 (14-11-2026)**:
+  - **El ROJO**: TB01 a TB07, TB09 y TB10 cayeron (el comando no existía); TB08 nació en verde.
+  - **Un defecto del código, visto en TB07**: con `IFS=$'\t'`, un `last_push` vacío colapsaba con el campo siguiente, porque un tab es un separador de espacio para `read`; `backup-status` y el diagnóstico pasan a separar con `|`.
+  - **T060**: en bash 5.3.15 y 3.2.57, las seis suites nuevas 124 de 124, y `tests/agentctl*.bats` en verde y sin editar (268 de 268 en total).
+- **Polish (14-11-2026)**:
+  - **T061 y T062**: los escribió un subagente de documentación, con el código como fuente. La revisión de esta sesión cruzó con el código las 75 cadenas citadas que agregó y las cifras del README (el tope de 800 MB del diagnóstico, la nueva consulta anónima a lo más una vez al día, los textos del wizard, la salida de `--configure-key`, las reglas de cron y de `backup.extra_paths`): ninguna inventada.
+  - **Cinco hallazgos de esa escritura, corregidos en el código**:
+    - `backup-history` saltaba cualquier directorio `memory` a cualquier profundidad, y no solo `<proyecto>/memory/`, que es de la unidad de memoria. TU11 ganó una pierna con un `memory/` anidado, se vio en ROJO y pasó a verde con el arreglo.
+    - La ayuda de `backup-identity` prometía el login y solo nombraba el fork.
+    - La ayuda de `backup-config` no decía lo que la unidad lleva con un repositorio.
+    - El aviso de la llave del diagnóstico no decía que identity sigue corriendo sin los secretos.
+    - El `trap` de la restauración borraba el temporal pero no terminaba el proceso ante INT o TERM. Ahora sale con 130 o 143.
+  - **Un comentario corregido**: el de `restore_from_fork` en `setup.sh` también prometía el login.
+  - **Después de los arreglos**: en bash 5.3.15 y 3.2.57, 118 de 118 en `backup-repo-units`, `backup-status`, `backup-repo-restore`, `backup-config`, `restore-from-fork` y `heartbeatctl`, con la salida de error vacía.
+  - **T064**: el bloque de 046, la sección "Backup model" con cinco ramas y los seis gotchas pedidos están en `CLAUDE.md`. Se commitea con `git add -f CLAUDE.md`. La auditoría de bytes de las líneas agregadas (`<scratchpad>/046/audit_added.py`) da 0 problemas en los documentos, el código, las pruebas, los specs y el workflow: ninguna marca combinante, ningún carácter de control y ningún emoji. Los archivos nuevos se auditaron enteros. Los únicos símbolos son `▸`, `✓`, `✗` y `⚠`, que reproducen la salida del propio programa.
+  - **T065**: el paso `install_age`; N30 con la lista nueva de pasos. `tests/nightly-alert.bats`, `tests/ci-workflows.bats` y `tests/qmd-embed-nightly.bats` dan 97 de 97 en los dos bash.
+  - **T066**:
+    - El `shellcheck` exacto del job de la CI da 0, y `shellcheck -s sh` sobre los dos scripts de credenciales también.
+    - `python3 -m py_compile` sobre los tres archivos da 0, sin dejar `__pycache__`.
+    - Los dos scripts de credenciales tienen modo 755 en el disco; `git ls-files -s` se mira en T075, cuando estén agregados.
+    - El Python del Mac es 3.9.6.
+    - **La duración de las seis suites nuevas es de 367 s en bash 5.3.15 y 361 s en 3.2.57**, sobre el objetivo de 180 s. `backup-repo-units` toma 174 a 176 s, `backup-repo-restore` 92 a 94 s y `agent-repo-surface` 68 a 69 s.
+    - En la CI, el brazo macOS de `main` ya se canceló a los 30 min en 2 de las 3 últimas corridas (el 10 y el 12-11-2026) y tardó 25 min 42 s en la que pasó. **Decisión del operador (14-11-2026)**: un PR aparte, antes de T081, que sube `timeout-minutes` de `.github/workflows/test.yml` de 30 a 45 y cierra #132.
+  - **T067**:
+    - `git status --short` muestra solo archivos del árbol de `plan.md` y los puntos de contacto de T007, T047, T051 y T065.
+    - `git diff origin/main` sobre `tests/backup-identity-*.bats`, `tests/backup-vault-*.bats`, `tests/backup-config.bats`, `tests/restore-*.bats` y `tests/local-vault-backup.bats` está vacío, y sobre `modules/docker-compose.yml.tpl` y `docker/entrypoint.sh` también.
+    - El render de `sample-agent.yml` de `10f22a7`, en modo docker sin repositorio y en modo local, no tiene diferencias en ningún archivo derivado entre la rama y la copia de T003: `CLAUDE.md`, `.mcp.json`, `docker-compose.yml` o `NEXT_STEPS.md`, `heartbeat.conf` y los 16 archivos de `scripts/local/`.
+    - El crontab de `heartbeatctl reload` es idéntico sin destino y con fork.
+    - Las dos copias se renderizan en la misma ruta, porque el `CLAUDE.md` de modo local lleva la ruta absoluta del vault. La herramienta es `<scratchpad>/046/t067_render_diff.sh`.
+- **T073, revisión independiente (15-11-2026)**: agente `code-reviewer`, de solo lectura, sin bats ni docker. Dio 2 hallazgos ALTOS, 3 MEDIOS y 11 BAJOS. El catálogo de mutaciones se pausó tras su control para no correr sobre un árbol a medio cambiar.
+  - **ALTA 1, verificada**: el clon de trabajo pasaba `GITHUB_PAT="$GITHUB_PAT"` en los argumentos de `env`, dentro de `timeout`, así que el token quedaba en `/proc/<pid>/cmdline` mientras duraban el `ls-remote` y el `fetch`. Ninguna prueba lo veía. Se quitó, porque la variable ya se hereda. Un espía de argumentos (`br_argv_spy`, un `timeout` delante del PATH) lo afirma en TA12 para el clon y en TU01 para las unidades.
+  - **ALTA 2, verificada leyendo el código**: la restauración movía al destino cualquier ruta del manifiesto, `.git/` incluido, y lo hacía después del `git init` y antes del primer commit del scaffold. Un manifiesto con `extra/.git/hooks/pre-commit` habría corrido como el operador; uno con `scripts/lib/render.sh`, en el `--regenerate` siguiente. Cualquiera que escriba el repositorio, el agente incluido, puede armarlo: `age` no autentica y `store/recipient` es público. Se corrigió con la regla R9 de `contracts/restore.md`:
+    - `unpack` rechaza un segmento `.git` en cualquier caja;
+    - `_restore_move_tree` no escribe a través de un enlace y nunca copia uno;
+    - `config` restaura solo su lista cerrada, en claro o del almacén;
+    - el vault restaura solo markdown, y un `vault.path` con `..` o `.git` cae a `.state/.vault` con su línea;
+    - las rutas adicionales vuelven solo bajo una entrada declarada que el launcher no reserve. `memory_extra_path_reserved` es la única fuente, para el respaldo y la restauración.
+  - **MEDIA 1**: un vault cifrado que no se abrió salía igual como `✓ restore: vault restored`. Ahora la línea sale solo cuando algo se restauró.
+  - **MEDIA 2**: lo descifrado entraba en claro en el primer commit del workspace. Las rutas adicionales restauradas fuera de `.state/` pasan a `.git/info/exclude`.
+  - **MEDIA 3**: una ruta adicional `.state/.claude` llevaba el archivo del login de `/login`. Ese archivo ya no viaja ni se restaura.
+  - **BAJAS corregidas**:
+    - el código 5 (integridad) para toda falla posterior a abrir `key.age`; antes una restauración probaba otras llaves y terminaba en "no usable key";
+    - `git gc` de `--gc` bajo el candado de la unidad;
+    - el stderr de la herramienta del almacén llega al log de la unidad;
+    - un `--dry-run` no registra nada;
+    - el clon reinicia los ayudantes de credenciales heredados: con un `credential.helper=store` global, el push del agente guardaba el token en claro;
+    - la URI de SQLite escapa la ruta;
+    - las pruebas e2e reponen el estado en `teardown`.
+  - **BAJA que resultó peor de lo descrito**: con `?` en la ruta, SQLite abría otro archivo y copiaba una base vacía que pasaba su verificación. TS14 la primera vez nació en verde porque solo miraba el código de salida; se endureció para mirar el contenido, se vio en ROJO y pasó a verde con el arreglo.
+  - **Decisiones del operador (15-11-2026)**, las tres la opción recomendada:
+    - nombres de bloque que no delaten el contenido (D37 de `research.md`): el nombre es el SHA-256 del archivo cifrado y la deduplicación usa un mapa local (`--block-map`). Un HMAC con la llave de datos no es posible tal cual, porque `pack` nunca tiene su parte privada (S1); esta forma cumple lo pedido sin un secreto nuevo;
+    - con repositorio, el supervisor respeta `features.identity_backup.enabled: false`; el fork, como en `main`;
+    - procesar archivo por archivo queda para un issue (T086), fuera de 046.
+  - **El ROJO**: TS04, TS08, TS11, TS12, TS14, TU13, TU25, TU37, TU10, TU28, TA12, TR08, TR11, TR12 y TR13 cayeron en su afirmación nueva contra el código anterior; TU01 nació en verde (es la guardia de las unidades, que ya no pasaban el token), y la pierna del ayudante heredado de TA12 se vio en ROJO aparte, con un mutante. Las piernas del almacén se corrieron desde una copia de la suite sin `--block-map`, para que cada una cayera por su propia afirmación.
+  - **Filas nuevas del catálogo**: M139 a M167, una por cada guardia nueva. Para que ninguna fuera redundante se agregaron tres piernas: un bloque cifrado de nuevo con el mismo contenido (TS11), un `vault.path` bajo `.git` (TR08) y un enlace que ya estaba en el destino (TR11).
+  - **Sin cambio**: el número de pruebas (124 del host). Todas las piernas nuevas viven en pruebas que ya existían.
+  - **Residuo declarado**: el contenido de la lista cerrada sigue confiando en el repositorio. Un `docker-compose.override.yml` o un hook de `.claude/` hacen lo que dicen dentro del contenedor. La restauración avisa del override; los hooks del proyecto corren en el contenedor y no en el equipo.
+  - **Checkpoint posterior (15-11-2026)**: las seis suites nuevas y las 21 de respaldo, restauración y supervisor que ya existían, 334 pruebas. En bash 5.3.15 dio 332 de 334, con la salida de error vacía. Cayeron TU33 (sin caché no hay mapa de bloques, y el ciclo sube todo una vez) y TU40 (tras una rotación los nombres cambian, así que `diff --name-only` cuenta altas y bajas). Las dos se adaptaron al costo de D37, que el operador aceptó el mismo día. La pasada de bash 3.2 se detuvo a propósito en la prueba 92 de 334, para dejar la máquina libre al traspaso. Hasta ahí solo habían caído TU33 y TU40 (con su texto anterior), y TU16 pasó. Se repite entera (sección 5 de `handoff-codex.md`).
+  - **Traspaso a Codex (15-11-2026)**: decisión del operador. Las herramientas pasaron del scratchpad a `specs/046-agent-backup-repo/tools/`, con las rutas parametrizadas (`BR046_REPO`, `BR046_WORK`). La guía para retomar es `specs/046-agent-backup-repo/handoff-codex.md`. Un commit local `wip:` (sin push) queda como punto de restauración; T075 lo rehace en los tres commits atómicos.
+- **Rebase a `9608e4a` (15-11-2026, sección 5, paso 1 del traspaso)**: autorizado por el operador, tras leer completos el traspaso y el índice de memoria del proyecto. El worktree estaba limpio en `8463586`, con base `10f22a7`. `git rebase origin/main` terminó con código 0 y sin conflictos; Git integró automáticamente `CHANGELOG.md`, conservando las entradas de 046 en `Added` y `Fixed` y la del tope de CI de 45 min en `Changed`.
+  - **Commits reescritos**: `3358cc3` pasa a `0f41236` y `8463586` a `3f11357`. `git range-diff 10f22a7..8463586 9608e4a..HEAD` marca los dos parches como equivalentes (`=`).
+  - **Verificación**: `git diff 8463586 HEAD` solo incorpora los cambios de `9608e4a` en `.github/workflows/test.yml` y `CHANGELOG.md`; el resto del árbol del commit de restauración permanece idéntico. `VERSION` de `origin/main` = 0.31.0 y de la rama = 0.32.0. El worktree quedó limpio al terminar el rebase, antes de registrar este paso.
+  - **Continuidad**: las referencias operativas del traspaso a T075 usan ahora `git reset --soft 0f41236`; esa compuerta no se ejecutó. Este registro y la actualización del traspaso quedan sin commit. El siguiente paso es el checkpoint de T073; no se corrieron pruebas en este paso de rebase.
+- **Checkpoint `t073b` posterior al traspaso (15-11-2026, 22:02:08 a 22:19:42, Santiago)**: pedido explícito del operador, sección 5, paso 2 de `handoff-codex.md`, sobre `3f11357`, sin modificar código ni correr dos bats a la vez.
+  - **Comando**: `/bin/bash specs/046-agent-backup-repo/tools/run_checkpoint.sh t073b` con las 27 suites de la sección 6 del traspaso (el glob `tests/start-services-*.bats` expandido en orden). `BR046_REPO` apunta a este worktree; `BR046_WORK` = `/Users/rodrigo-hinojosa/.cache/agentic-046/validation-20261115T220208`. La lista exacta de argumentos está en `checkpoint-start.json` de ese directorio.
+  - **bash 5.3.15, bats 1.13.0**: `1..334`, 334 ok, 0 `not ok`, 0 saltadas, rc 0, 515 s (8 min 35 s), stderr de 0 bytes.
+  - **bash 3.2.57, bats 1.13.0**: `1..334`, 334 ok, 0 `not ok`, 0 saltadas, rc 0, 539 s (8 min 59 s), stderr de 0 bytes. Esta pasada empezó después de terminar la de bash 5.
+  - **TU16, TU33 y TU40**: las tres pasan en los dos bash (líneas TAP 70, 64 y 79, respectivamente). Queda confirmada en este checkpoint la adaptación de TU33 y TU40 a D37.
+  - **Evidencia**: `checkpoints/t073b-bash{5,32}.{tap,err,sum}`, `checkpoint-runner-exit.json` y `checkpoint-verified.json` dentro de `BR046_WORK`. Se verificaron los conteos, la ausencia de saltadas y el tamaño de stderr; el `done` del corredor por sí solo no fue el criterio.
+- **TU16 sola, cinco corridas seguidas en bash 3.2.57 (15-11-2026, desde las 22:20:10, Santiago)**:
+  - **Comando**: `PATH=/bin:/opt/homebrew/bin:$PATH bats tests/backup-repo-units.bats -f TU16`, siempre una corrida a la vez.
+  - **Resultado solicitado: 4 de 5**, no 5 de 5. La primera dio rc 1 en 0,962 s; las otras cuatro, rc 0 en 2,753 s, 3,304 s, 2,737 s y 2,733 s. Las cinco tuvieron stderr de 0 bytes y ninguna saltada.
+  - **Hallazgo presentado al operador antes de tocar código**: la primera falla en `tests/backup-repo-units.bats:796`, en `[ "$output" = "$(_tu_msg "$u" no-recipient)" ]`. El TAP original no imprime el valor capturado ni identifica cuál unidad del bucle lo produjo. No se infiere la causa ni se clasifica como un problema de carga.
+  - **Diagnóstico sin cambios**: se leyó el bucle de TU16, `_tu_msg`, `br_unit`/`br_ctl` y la ruta `no-recipient` de `heartbeatctl`. Luego se corrió la misma prueba en secuencia con `--print-output-on-failure --no-tempdir-cleanup`, con un límite de 20 intentos y parada ante la primera falla: 20 de 20 en verde, 54,157 s en total. La falla no se reprodujo y la causa sigue sin determinarse; esas corridas adicionales no sustituyen el 4 de 5 original. Los temporales de diagnóstico se conservaron mediante la opción de bats, sin leer sus archivos de credenciales.
+  - **Evidencia**: `tu16-bash32-results.json`, `tu16-bash32-{1,2,3,4,5}.{tap,err}` y `tu16-diagnostic-results.json` con los 20 pares `tu16-diagnostic-N.{tap,err}`, dentro del mismo `BR046_WORK`. El criterio de cinco corridas consecutivas en verde sigue pendiente. No se modificó código ni se hizo commit.
+- **SC-007 repetido después de D37 (15-11-2026, 22:23:16 a 22:24:38, Santiago; sección 5, paso 3 del traspaso)**:
+  - **Comando**: `python3 specs/046-agent-backup-repo/tools/sc007_sim.py`, sin opciones (30 ciclos), con Python 3.9.6, age 1.3.1 y git 2.53.0. Usa el mapa local de bloques y la herramienta real `docker/scripts/backup_store.py`; los repositorios y commits de la simulación son temporales y locales. No se hizo commit en la rama de 046 ni se usó la red.
+  - **Datos sintéticos iniciales**: 72.072.288 bytes de historial, 31.507.042 bytes en 86 archivos y una base de 14.532.608 bytes. Se mantuvieron la semilla y los cambios del simulador de T039.
+  - **Resultado**: rc 0, 30 ciclos completos, 81,750 s totales. Tras `git gc`, 15.808 KiB (15,4 MiB) en el ciclo 1 y 104.224 KiB (101,8 MiB; 106.725.376 bytes) en el ciclo 30. El campo `repo_mb_*` del simulador divide los KiB de `du -sk` por 1024: su escala es MiB. `under_1_gb=true`; también queda bajo 1.000.000.000 bytes.
+  - **Comparación con T039**: 15,4 frente a 15,4 en el ciclo 1; 101,8 frente a 102,5 en el ciclo 30, una diferencia de -0,7 en la misma escala del simulador. El primer ciclo tomó 9,9 s frente a 11,5 s (-1,6 s). Los ciclos 2 a 30 agregaron entre 17 y 20 bloques, 18,621 de promedio (T039: 17 a 20, promedio 18,6). No se atribuye la pequeña diferencia de tamaño final a una causa sin medirla.
+  - **Alcance de la evidencia**: SC-007 cumple con este corpus sintético. Se mantiene la limitación de T039: ese texto se comprime mejor que un historial real; esta corrida no mide un respaldo vivo de donna.
+  - **Evidencia**: `sc007-start.json`, `sc007-report.json`, `sc007-progress.err`, `sc007-exit.json` y `sc007-verified.json` en `/Users/rodrigo-hinojosa/.cache/agentic-046/validation-20261115T220208`. El archivo de stderr contiene las 30 líneas de progreso que el simulador emite por diseño. La simulación se ejecutó después de terminar todas las corridas de bats.
+  - **Estado al cerrar estos pasos**: checkpoint de 334 pruebas por bash conforme; SC-007 conforme; las cinco repeticiones solicitadas de TU16 dieron 4 de 5 y su causa sigue pendiente de diagnóstico. No se modificó código ni se hizo commit. Antes de cualquier arreglo de TU16, presentar el hallazgo y verlo en ROJO por su propia afirmación.
+- **Diagnóstico instrumentado de TU16, invocación acotada de `speckit-implement` (15-11-2026, 23:41:25 a 23:46:47, Santiago)**:
+  - **Alcance autorizado**: una copia temporal de TU16, hasta 100 intentos secuenciales en bash 3.2, parada ante la primera falla, diagnóstico antes de corregir y ningún commit. No se avanzó a T068 ni se aplicó un arreglo.
+  - **Prerrequisitos**: `check-prerequisites.sh --json --require-tasks --include-tasks` resolvió este directorio de feature; `requirements.md` tiene 16 de 16 marcadas. `.specify/extensions.yml` se validó con `yq`: `hooks: {}`, sin hooks anteriores ni posteriores que ejecutar.
+  - **Copia temporal**: `/Users/rodrigo-hinojosa/.cache/agentic-046/tu16-instrumented-20261115T234023-o9vlnry4/backup-repo-units.tu16-diagnostic.bats`. Carga los dos helpers originales mediante rutas absolutas y usa el runtime original del worktree. Conserva las expresiones de todas las aserciones de TU16; solo agrega, en el camino de falla, una llamada de diagnóstico seguida de `return 1`.
+  - **Campos del diagnóstico**: `unit`, `check`, `status`, `expected`, `received` y `last_result`, en una línea JSON `TU16_DIAG`. Lee únicamente el campo `last_result` del estado de prueba y redacta el centinela de credencial del arnés si aparece en los mensajes. No lee archivos de credenciales. Se probó el formateador con datos sintéticos en `/bin/bash`; ese control no es una falla real de TU16.
+  - **Control de alcance de la copia**: la transformación se revirtió en memoria para comprobar que devuelve exactamente el texto del test original; `bats --count ... -f TU16` seleccionó una sola prueba. El original tiene SHA-256 `5cafc298557c6ff29d108097093182a43c4ff331001028d9db84335f3c712fd4`; la copia, `147356835646ce1889dc007aa995ea946421af468d9810ec299fa5638f512b71`.
+  - **Comando por intento**: `PATH=/bin:/opt/homebrew/bin:$PATH bats --print-output-on-failure --no-tempdir-cleanup <copia-temporal> -f TU16`. Se verificó que `bash` resuelve a 3.2.57; el corredor espera el término de cada proceso antes de iniciar el siguiente y se detiene ante rc distinto de 0, `not ok`, una saltada o un resultado distinto de una prueba ejecutada.
+  - **Resultado**: 100 de 100 en verde, rc 0 en cada intento, 0 saltadas, 0 registros de diagnóstico y 321,310 s totales (5 min 21,310 s). Duración por intento: mínimo 2,681 s, mediana 2,9665 s y máximo 10,585 s. La serie terminó por alcanzar el límite de 100, sin una primera falla que activara la parada.
+  - **Stderr**: 82 bytes por intento, exclusivamente la línea `BATS_RUN_TMPDIR: <ruta>` que emite `--no-tempdir-cleanup`. Se verificaron las 100 salidas; no es stderr vacío ni una salida de error del producto. Los temporales del arnés quedan conservados sin inspeccionar sus archivos de credenciales.
+  - **Hallazgo y límite de la evidencia, presentados antes de cualquier corrección**: no se reprodujo la comparación fallida de la corrida original de 4 de 5. Por eso no se obtuvo una unidad afectada ni un mensaje recibido inesperado de una falla real, y su causa sigue sin determinarse. Los 100 resultados de esta copia instrumentada no reescriben el 4 de 5 original ni demuestran que el defecto esté corregido.
+  - **Verificación final**: SHA-256 idéntico antes y después en los 10 archivos originales controlados (test, helpers, `heartbeatctl` y librerías de respaldo); `HEAD` sigue en `3f11357`; no quedan procesos de bats ni del servidor git de prueba. No se modificó código del repositorio ni se hizo commit.
+  - **Evidencia**: `manifest.json`, la copia `.bats`, `tu16-diagnostic-function.sh`, `formatter-control.json`, los 100 pares `attempt-NNN.{tap,err}`, `results.json` y `verified.json` en el directorio temporal indicado. La instrumentación queda disponible para la próxima reproducción; esta invocación concluye solo el diagnóstico acotado solicitado, con la causa original todavía abierta.
+- **Retoma del cierre local (15/16-11-2026, T068 en curso)**: el operador pidió terminar la feature. Se retoma el bloque local T068 a T074; continúan las compuertas de commit, push, linus y PR. TU16 permanece como falla no reproducida, sin declararla corregida: su captura solo al fallar se incorporó al test original, conservando sus aserciones, para que una reaparición en los controles o gates entregue el contexto y detenga la validación.
+  - **T068, anclas y catálogo**: el chequeo original falló; una inspección completa encontró 12 anclas obsoletas (M53, M54, M56, M59, M60, M68, M71, M87, M88, M101, M104 y M105) y las 29 filas ausentes M139 a M167. Un explorador de solo lectura mapeó las guardias actuales; no ejecutó bats ni Docker. Se actualizaron las anclas conservando el defecto descrito por cada fila y se agregaron M139 a M167. `python3 -B specs/046-agent-backup-repo/tools/mutate.py --check` dio `anclas ok: 167 filas`.
+  - **Cuatro defectos del corredor demostrados en ROJO antes del arreglo**: un control con una prueba fallida devolvía 0; un control con saltadas devolvía 0; M0 podía marcarse correcto con resultados incompletos; y un timeout podía contarse como mutación cazada. `tools/test_mutate.py` contiene siete pruebas sin bats ni Docker: las cuatro anteriores fallaron por sus propias aserciones contra el corredor anterior, y tres controles positivos pasaron. Tras el arreglo, siete de siete en verde.
+  - **Corredor corregido**: valida plan TAP, conjunto y cantidad de pruebas, ausencia de duplicadas/saltadas, código de salida y término sin timeout; un control defectuoso devuelve 1; una fila incompleta o sobreviviente detiene la secuencia. La copia usa archivos rastreados o no ignorados de git y omite rutas de estado y archivos sensibles; no copia indiscriminadamente el directorio del operador. El TAP activo queda disponible durante cada corrida para seguir su avance.
+  - **Evidencia de preparación**: `/Users/rodrigo-hinojosa/.cache/agentic-046/closure-20261115T235851-obh9ouin/{manifest.json,runner-red.log,runner-green.log}`. Se creó una copia base propia y separada, con `git worktree add --detach <ese-directorio>/base 10f22a7`; no se tocó la copia antigua del traspaso.
+  - **Control real iniciado**: `BR046_WORK=<ese-directorio> BR046_REPO=<worktree-046> python3 -u specs/046-agent-backup-repo/tools/mutate.py --control`, con las seis suites nuevas y ambos bash en secuencia. El catálogo completo no arranca hasta que este control confirme 124 de 124 sin saltadas en cada bash. Una revisión independiente está examinando los cambios del corredor y el diagnóstico de TU16 en solo lectura, sin ejecutar pruebas durante el control.
+- **T068 cerrada (16-11-2026)**:
+  - **Control real**: 124 de 124 en bash 5.3.15 (395 s) y 124 de 124 en bash 3.2.57 (501 s), en secuencia, con rc 0, sin saltadas, sin resultados faltantes y sin timeout. TU16 pasó en ambos. `mutations/CTRL.json` confirma `valid: true`; los TAP completos están en `CTRL.bash5.tap` y `CTRL.bash32.tap`.
+  - **Correspondencia**: las 167 filas M1 a M167 tienen exactamente los identificadores y pruebas objetivo de la tabla de T069, y todas sus anclas se verificaron contra el código actual. La base M0 sigue en `10f22a7`, como en el traspaso; el rebase a `9608e4a` solo agregó cambios de CI y CHANGELOG.
+  - **Revisión independiente del corredor**: sin hallazgos críticos; dos problemas adicionales confirmados. La superposición de `tests/` de M0 usaba un `rsync` que omitía las exclusiones, y `--only` aceptaba identificadores desconocidos omitiéndolos en silencio. Tres pruebas nuevas reprodujeron esos problemas en ROJO por sus propias aserciones. M0 reutiliza ahora el mismo inventario seguro y toda selección desconocida devuelve 2 antes de ejecutar filas. El chequeo total del corredor pasó de siete a diez pruebas, todas en verde.
+  - **Evidencia de la revisión**: `runner-review-red.log` y `runner-final-green.log` en el directorio de cierre. `control-code-hashes.json` confirma que la copia del control y el árbol actual coinciden en los 19 archivos de runtime y pruebas controlados; las correcciones posteriores solo afectan el corredor y sus pruebas auxiliares. `runner-final-hashes.json` identifica el corredor final y la captura de TU16 que usará el catálogo.
+  - **T069 iniciada**: `BR046_WORK=<directorio-de-cierre> BR046_REPO=<worktree-046> python3 -u specs/046-agent-backup-repo/tools/mutate.py --only M0`. No se ha declarado terminado el catálogo. Una fila incompleta o sobreviviente detiene la secuencia y requiere diagnóstico; no se cuenta un timeout como prueba de que una mutación fue detectada.
+- **T069, control M0 (16-11-2026)**: veredicto `ok` en el código de `10f22a7` con las pruebas finales. En bash 5.3.15 y en 3.2.57 dieron exactamente 116 `not ok` y las ocho previstas en verde: TA06, TA14, TB08, TR06, TU05, TU19, TU20 y TU31. Duración 79 s por bash; plan de 124 completo, rc 1 esperado por las pruebas en rojo, sin saltadas, sin timeout y sin errores de integridad del TAP. Evidencia: `mutations/M0.json` y `M0.bash{5,32}.tap` en el directorio de cierre. Después arrancó `mutate.py --no-m0` para M1 a M167, secuencialmente y con parada ante la primera fila que requiera revisión.
+- **T069, primera brecha del oráculo (16-11-2026, M15)**: el corredor se detuvo correctamente: TD16 detectó la mutación en ambos bash, pero TU22 no. La mutación evita volver a sondear de forma anónima tras `unreachable`; TU22 comprobaba la recuperación con credenciales y el veredicto `private`, pero no la renovación del sondeo. El hallazgo se presentó antes de editar. Se agregó a TU22 un reloj fijo antes y después de recuperar la conexión y la comparación exacta de `anon_checked_epoch` con el segundo instante, sin cambiar producto ni número de pruebas.
+  - **ROJO**: la nueva afirmación de TU22 cayó contra M15 en ambos bash; ahora TD16 y TU22 detectan M15, con plan completo y sin timeout (10 s y 12 s). La evidencia anterior del sobreviviente se conservó en `mutations/revisions/M15-before-TU22/`.
+  - **VERDE**: TU22 sin mutar pasó en bash 5.3.15 y 3.2.57, rc 0, stderr vacío, en 6,157 s y 6,251 s. Evidencia: `TU22-positive.json`, sus TAP y stderr, y `mutations/M15.json` dentro del directorio de cierre. La secuencia se retomó desde M16; M1 a M14 y M16 a M19 están detectadas en ambos bash.
+  - **Cobertura del catálogo**: la unión de las pruebas objetivo de M1 a M167 coincide exactamente con las 124 pruebas de las seis suites; sin identificadores ausentes ni desconocidos (`catalog-coverage.json`). Esto verifica la tabla; la ejecución del catálogo sigue en curso.
+- **Preparación de T070, sin correr otra suite (16-11-2026)**: durante la espera intencional de M20 se construyeron dos imágenes de dependencias aisladas, `agent-admin:br046-linux-ubuntu-obh9ouin` y `agent-admin:br046-linux-alpine-obh9ouin`. Ambas usan bats 1.11.0 (fuente oficial, commit `5da66876b8b619235aee1eb3e54954eaca88059b`) y yq 4.44.3 para Linux arm64, verificado contra el SHA-256 publicado `0e7e1524f68d91b3ff9b089872d185940ab0fa020a5a9052046ef10547023156`. Se revisó el instalador antes de ejecutarlo; las imágenes corren como `agent`, con temporales bajo `/work/tmp`. No contienen una copia del repositorio ni ejecutaron bats. Construcciones rc 0 en 40,719 s y 2,532 s; detalle en `linux-dependencies.json`, `linux-builds.json` y los logs de construcción del directorio de cierre.
+- **Preparación de los modelos de T072 (16-11-2026)**: durante la espera de M34 se ejecutó `.github/scripts/fetch-qmd-models.sh` con un directorio nuevo bajo el directorio de cierre. Verificó los dos tamaños y SHA-256 de su tabla: 333.590.944 bytes y 1.282.438.912 bytes, 1.616.029.856 en total, un intento por archivo y 121 s. El propósito es correr `qmd real (041)` con `QMD_EMBED_E2E=1` en la regresión completa. No se inició el DOCKER_E2E; los datos y el log están en `qmd-models/`, `qmd-models.env` y `qmd-fetch.log` del directorio de cierre.
+- **T066/T067 repetidas durante la espera de M34 (16-11-2026)**: sin otra corrida de bats. `shellcheck` con el texto exacto del workflow dio rc 0 en 14,896 s y el POSIX de los dos ayudantes, rc 0 en 0,025 s. Los tres Python de T066 compilaron con Python 3.9.6, dejando los bytecodes en el directorio de evidencia. `git ls-files -s` confirma 100755 en ambos ayudantes. `t067_render_diff.sh` dio rc 0 en 28,556 s: derivados docker/local, `heartbeat.conf`, `scripts/local/` y los dos crontabs idénticos; los cuatro regenerados dieron rc 0. La auditoría de líneas agregadas y la del archivo auxiliar nuevo dio 0 hallazgos. El diff protegido por T067 (suites anteriores, compose y entrypoint) sigue vacío. Evidencia: `static-gate.json`, `shellcheck-*`, `render-diff.*`, `byte-audit-*` en el directorio de cierre. El gate completo de T074 todavía no se ejecutó; si cambia el código se repite lo afectado.
+- **T069, segunda brecha del oráculo (16-11-2026, M60)**: TS12 detectaba la falta de las guardias de `..`, pero TR12 pasaba. Se diagnosticó y presentó antes de editar: el manifiesto hostil de TR12 convertía varias entradas a la misma ruta, por lo que la validación de duplicados rechazaba la unidad antes de probar la guardia mutada. Además, comprobar solo el destino final no observa una escritura dentro del temporal, que se borra al terminar.
+  - **Cambio del test, sin producto**: el caso hostil contiene una sola entrada con `extra/../../fuera`, sin los residuos de la pierna anterior de `.git`, y exige el mensaje de falla de integridad de memory.
+  - **ROJO**: TS12 y TR12 detectan M60 en ambos bash; TR12 cae en la afirmación nueva del mensaje. **VERDE**: TR12 sin mutar pasa en ambos, rc 0 y stderr vacío, en 11,784 s y 11,271 s. Los resultados anteriores se conservan en `mutations/revisions/M60-before-TR12/`; el nuevo resultado está en `mutations/M60.json`, y los controles en `TR12-positive-bash{5,32}.*`.
+- **T069, tercera brecha del oráculo (16-11-2026, M62)**: TU10 detectaba la copia bruta de SQLite, pero TS14 solo ejercía el subcomando `sqlite-snapshot`, que evita la selección mutada dentro de `capture()`. Hallazgo presentado antes de editar. TS14 ahora también invoca `digest` sobre la base abierta en WAL, con escrituras sin confirmar, y exige una captura con las 100 filas confirmadas. No cambia el producto ni el número de pruebas.
+  - **ROJO**: TS14 cae contra M62 en `captured_rows 100`; TU10 también cae por la tabla ausente en la copia bruta. Ambas detectan la fila en ambos bash, sin timeout. Evidencia anterior conservada en `mutations/revisions/M62-before-TS14/`; controles sin mutar en `TS14-positive-bash{5,32}.*`. La secuencia continúa desde M63 solo después de los dos controles verdes.
+- **T069, cuarta brecha del oráculo (16-11-2026, M132)**: sobrevivió en ambos bash. La mutación quitaba el fallo de la columna `status`, pero TB04 buscaba `push-failed` en toda la fila; la columna separada `last result` ya satisfacía esa afirmación. Se presentó el hallazgo antes de editar y se agregó la comparación de la frase final completa `ok, last attempt push-failed`, sin cambio de producto. TB04 cayó por esa afirmación contra M132 en ambos bash. Evidencia anterior conservada en `mutations/revisions/M132-before-TB04/`; nuevo resultado en `mutations/M132.json`. El corredor exige los controles verdes `TB04-positive-bash{5,32}.*` antes de retomar desde M133.
+- **T069 cerrada (16-11-2026)**: 167 de 167 mutaciones detectadas en bash 5.3.15 y 3.2.57; las 124 pruebas del host caen al menos una vez. Se exigió que cayeran TODAS las pruebas nombradas en cada fila, sin timeout ni resultados incompletos. La tabla de T069 lleva ahora el resultado y los segundos de cada bash, incluida M0.
+  - **M0 final**: repetida después de endurecer TU22, TR12, TS14 y TB04; exactamente 116 fallas y las ocho verdes previstas en ambos bash. La versión anterior se preservó en `mutations/revisions/M0-before-final-oracles/`.
+  - **Cuatro sobrevivientes iniciales corregidos en el oráculo**: M15, M60, M62 y M132. Cada hallazgo se presentó antes de editar; cada afirmación nueva cayó contra su mutante y pasó sin mutar en ambos bash. Sin cambios de producto y sin aumentar las 124 pruebas.
+  - **La captura de TU16 fue ejercida por M84**: identificó `memory`, la comparación del mensaje, esperado, recibido y `last_result`. Es una falla plantada; no explica ni cierra la falla espontánea original.
+  - **Evidencia consolidada**: `mutations-final.json` y `mutations/results-final.md` en el directorio de cierre, además de los 168 JSON y los 336 TAP por fila y bash. El consolidado verifica identificadores, resultados, integridad y cobertura, y guarda la huella de las seis suites finales. Continúa T070; no hubo commit ni push.
+- **T070 cerrada (16-11-2026)**: repositorio copiado por tar (sin bind mount), contenedores desechables `--rm`, `--user agent`, `cap_drop: ALL`, `no-new-privileges`, `CI=1` y temporales bajo `/work/tmp`.
+  - **Ubuntu 24.04, Linux arm64**: UID 1001, bash 5.2.21, Python 3.12.3, bats 1.11.0; 124 de 124, rc 0, sin saltadas, 113,199 s.
+  - **Alpine 3.24.1, Linux arm64**: UID 501, bash 5.3.9, Python 3.14.5, bats 1.11.0; las 40 de almacén y destino pasan, rc 0, sin saltadas, 13,792 s. TU02, con ciclos consecutivos y sin espera entre ellos, también pasa en 2,560 s: el segundo ciclo dice `no changes`, no `locked`.
+  - **BusyBox 1.37, git que ignora TERM**: la consulta autenticada real de `backup_dest_verify` recibió un `git` falso que ignora TERM, con una sonda privada reciente para aislar esa consulta. Límite 2 s y KILL a los 10 s; terminó en 12,132 s, una invocación de git, salida y registro `unreachable`, rc 0. La tolerancia de medición fue de 2 s adicionales por arranque y escritura de estado; no se contó un timeout del corredor como éxito.
+  - **Falla de preparación conservada**: la primera imagen de Alpine no traía `git-http-backend` ni `ssh-keygen`. `CI=1` rechazó esa ausencia antes de probar producto; se presentó el diagnóstico y se agregaron `git-daemon` y `openssh-keygen` solo a la imagen desechable. La repetición usó el mismo tar, cuyo SHA-256 y las seis suites se verificaron sin cambios. No se modificó el runtime del repositorio.
+  - **Evidencia**: `linux-source-sha256.json`, `ubuntu.{json,tap,err}`, `alpine.{json,tap,err}`, `alpine-lock.{json,tap,err}`, `alpine-ignore-term.{json,err}` y `linux-revisions/alpine-dependencies-missing/` en el directorio de cierre. Los stderr de las suites contienen solo la línea de versiones que agrega el corredor.
+- **T071 y primera parte de T072, DOCKER_E2E de 046 (16-11-2026)**: 8 de 8, rc 0, sin saltadas, stderr vacío, 55,829 s (01:42:10 a 01:43:06, Santiago). Se ejecutaron los cinco respaldos, idempotencia, clon de trabajo, credencial errónea, sensibilidad, cron, restauración y estado. Autorización de T072 ya registrada en el traspaso; no hubo commit ni operaciones sobre agentes reales.
+  - **ROJOS del arnés presentados antes de corregir**: `setup_file` no tiene `BATS_TEST_TMPDIR` (intentaba `/seed-br-e2e`); el regenerate del host no habilitaba la costura de HTTP local; y `State.Running` precedía las escrituras de settings del supervisor. Se fijó el temporal de archivo en esa llamada, la costura solo en regenerate y la espera de la sesión tmux real. TE1 y TE2 pasaron después de la espera.
+  - **TE5, propiedad del caché**: el volcado solo al fallar mostró UID efectivo 501, raíz del repo 0:0 y `.git` 501:20. Una sonda sin producto reprodujo el cambio de propietario tras recrear el directorio y hacer `git init` en un bind mount de Docker Desktop; la misma secuencia en el filesystem nativo conservó 501:20. El override del test usa un volumen desechable para `/home/agent/.cache`, retirado con `compose down -v`. El compose del producto, sus capacidades y sus mounts no cambian. Evidencia: `ownership-probe.out` y `ownership-native.out`.
+  - **TE7, SQLite**: el esperado del host se calculaba con SQLite 3.51.0, frente a 3.53.4 del contenedor. Un diagnóstico separado confirmó que el digest calculado en el origen coincide exactamente con el archivo restaurado. TE7 calcula ahora la lista de capturas dentro del contenedor, con el mismo Python/SQLite que hizo el respaldo; conserva todas las comparaciones de tamaño y SHA-256. No se relajó la comparación.
+  - **Evidencia**: `e2e-046.{json,tap,err}`, `TE7-diagnosis.*` y los intentos anteriores en `e2e-revisions/`. La huella inicial está en `pre-e2e-hashes.json`; `validated-046-hashes.json` confirma que desde ella solo cambió `tests/docker-e2e-backup-repo.bats`. Runtime, seis suites del host y corredor de mutaciones permanecen idénticos. T072 sigue abierta hasta terminar los 62 casos de regresión.
+- **T072 cerrada con el rojo previo del smoke identificado (16-11-2026)**: la regresión completa ejecutó los 62 casos, 61 en verde y uno en rojo, sin saltadas, stderr vacío, rc 1 y 1.343,572 s (22 min 23,572 s; 01:43:37 a 02:06:00, Santiago). Los ocho de 046 volvieron a pasar dentro de esa corrida. `qmd real (016)` y `qmd real (041)` pasaron; esta última con sus ocho fases en orden y los modelos sin cambios.
+  - **Único rojo**: `E2E: scaffold + build + up + healthcheck`, `tests/docker-e2e-smoke.bats:79`, al no encontrar la sesión tmux tras 20 s. Es la excepción que T072 y el traspaso ya registraban; no se corrigió fuera de alcance.
+  - **Confirmación fresca en la base**: el mismo test dio rojo en la misma línea sobre `10f22a7`, en 30,971 s, sin saltadas y stderr vacío. `git diff 10f22a7 origin/main -- docker scripts modules setup.sh tests` está vacío: el runtime y las pruebas de esa base son idénticos a `origin/main=9608e4a`. No se atribuye el rojo a carga ni se declara corregido.
+  - **Evidencia**: `e2e-all.{json,tap,err}`, `baseline-smoke.{json,tap,err}` y `baseline-runtime-equivalence.json`. El informe completo conserva rc 1 y `valid: false`; el cierre de T072 es calificado por la excepción explícita de su tarea, no un 62 de 62 verde.
+  - **T074 iniciada**: un corredor secuencial hará la suite completa de 2104 en bash 5.3.15 y 3.2.57, las 124 nuevas con SIGPIPE ignorada en ambos, y cinco TU16 originales instrumentadas solo al fallar en bash 3.2, con parada ante la primera falla. Se mantienen las compuertas de commit, push y linus.
+- **T074, primera pasada completa (16-11-2026)**: bash 5.3.15, bats 1.13.0, plan `1..2104`, 2104 `ok`, 0 `not ok`, 69 saltadas (61 de la línea base más las ocho nuevas e2e), rc 0, stderr de 0 bytes, 1.624,412 s (27 min 4,412 s). TU16 pasó, sin activar su diagnóstico. La pasada de bash 3.2 comenzó después de terminar esta. Evidencia: `host-bash5.{json,tap,err}` en el directorio de cierre. T074 sigue abierta hasta las demás comprobaciones.
+- **T074, segunda pasada completa (16-11-2026)**: bash 3.2.57, bats 1.13.0, plan `1..2104`, 2104 `ok`, 0 `not ok`, 70 saltadas (62 de la línea base más ocho e2e nuevas), rc 0, stderr de 0 bytes, 1.644,377 s (27 min 24,377 s). TU16 pasó sin activar el diagnóstico. La única saltada adicional frente a bash 5 es la prueba de `read -t` del watcher de QMD, que requiere bash 4+. Evidencia: `host-bash32.{json,tap,err}` y `host-matrix-verified.json`. Las 124 con SIGPIPE ignorada comenzaron después de terminar esta pasada; T074 sigue abierta hasta concluirlas y verificar la huella final.
+- **T074 cerrada (16-11-2026; verificación final a las 03:15:39, Santiago)**: el verificador final volvió a leer los TAP, exigió plan y numeración completos, resultados, saltadas previstas y stderr vacío, y cruzó los informes con las huellas de código. No contó un `done` del corredor como evidencia suficiente.
+
+  | Comprobación | Resultado | Saltadas | Duración | Stderr |
+  | --- | --- | --- | --- | --- |
+  | Host, bash 5.3.15 | 2104 ok, 0 fallas | 69 previstas | 1.624,412 s | 0 bytes |
+  | Host, bash 3.2.57 | 2104 ok, 0 fallas | 70 previstas | 1.644,377 s | 0 bytes |
+  | Seis suites con SIGPIPE ignorada, bash 5.3.15 | 124 de 124 | 0 | 392,486 s | 0 bytes |
+  | Seis suites con SIGPIPE ignorada, bash 3.2.57 | 124 de 124 | 0 | 401,589 s | 0 bytes |
+  | TU16 sola, cinco veces seguidas en bash 3.2.57 | 5 de 5 | 0 | 14,576 s totales | 0 bytes |
+
+  - **TU16**: las cinco duraron 2,932 s, 2,775 s, 2,844 s, 3,191 s y 2,834 s. Ninguna activó `TU16_DIAG`. También pasó en ambas suites completas y ambas pasadas con SIGPIPE ignorada. Se cumple ahora la serie final de cinco verdes; la falla original de la serie de 4 de 5 permanece histórica, no reproducida y con causa desconocida. No se aplicó ni se declara un arreglo del producto para ella.
+  - **T066/T067 y alcance**: las estáticas, compilaciones, modos 100755, renders y crontabs ya registrados siguen aplicando: el runtime no cambió desde el WIP. La auditoría de bytes se repite sobre el texto final. Solo se modificaron el corredor, sus pruebas, los cuatro oráculos, la captura al fallar de TU16 y el arnés e2e, además del Registro y el traspaso.
+  - **Huella estable**: `23dfb736beb560fa6552da80e445479c4cd725b2e273e91e624e351d1fc21099`, sobre los archivos de `validated-046-hashes.json`. Las seis suites coinciden también con `mutations-final.json`. `git diff HEAD` sobre runtime, plantillas, workflow, `.gitignore`, VERSION y constitución está vacío. HEAD sigue en `3f113576d13d6c4edd5dfafe67d0cfbaceb37d2a`; no hubo commit, push ni intervención en linus.
+  - **Base temporal**: se comprobó limpia y se retiró con `git worktree remove`, sin `--force`, la copia propia `<directorio-de-cierre>/base` usada para M0, T067 y la confirmación del smoke. No se tocaron otros worktrees. Para repetir esas comprobaciones se recrea sobre `10f22a7`.
+  - **Evidencia**: `T074-verified.json`, `host-matrix-verified.json`, `host-bash{5,32}.*`, `sigpipe-bash{5,32}.*`, `TU16-final-{1,2,3,4,5}.*`, `host-runner.log` y `host-active.json` (complete), en el directorio de cierre. El resultado Docker sigue siendo el de T072: 8/8 de 046; regresión 61/62 con el mismo smoke fallando en la base, no un verde total.
+  - **Siguiente paso**: T075, con su COMPUERTA y respetando la instrucción de no hacer commit en esta invocación. Rehacer el WIP desde `0f41236` en los tres commits atómicos previstos. Después, por sus compuertas separadas, T076 (push), T077 a T080 (gate en linus antes del merge) y T081 (PR). El bloque local T068 a T074 está concluido; la feature completa y su despliegue siguen pendientes de esos pasos.
+  - **Auditoría final del texto**: `byte-audit-final.out` da `problems: 0` y `byte-audit-new-final.out` da 0 hallazgos. Se conserva el resultado de las nueve comprobaciones del host en `T074-verified.json`. La invocación termina con el árbol sin commit y T075 pendiente.
+- **T075, entrega en tres commits (16-11-2026)**: el operador autorizó los commits y pidió avanzar con la mayor autonomía posible mientras duerme. Se preservaron el diff y la copia del test auxiliar en `t075/` del directorio de cierre; `git reset --soft 0f41236` sustituyó el WIP sin borrar archivos.
+  - **Constitución**: `679b313`, `docs: enmienda la constitución para los respaldos por agente`. Runtime y tests idénticos a la base ya validada. La auditoría de archivo entero encontró tres símbolos históricos que también están en `0f41236`; no se reescribió historia. La auditoría de líneas nuevas dio `problems: 0`.
+  - **Implementación y pruebas**: `f30ad4c`, `feat: respalda el estado en el repositorio privado del agente`. Incluye las herramientas y sus diez pruebas auxiliares. Los dos scripts de credenciales están en modo 100755. Se verificó cada SHA-256 contra `validated-046-hashes.json`; huella de T074 conservada.
+  - **Dependencia de las guías**: el árbol del feat sin las guías rápidas cayó en su propia afirmación: falta `AGENT_REPO_URL` en ES. Las dos guías ES/EN van con el feat para evitar ese rojo intermedio; sobre una copia del árbol exacto del índice, `quickstart-doc` da 9/9 en bash 5.3.15 y 3.2.57, stderr vacío (0,888 s y 2,664 s). No se editó código ni se relajó la prueba. Las demás guías y VERSION van en el tercer commit.
+  - **Documentos**: el commit que contiene esta entrada actualiza las guías, VERSION 0.32.0, CHANGELOG, contratos corregidos durante la validación, CLAUDE.md, este Registro y el traspaso. Los SHA completos de los tres commits quedan en `t075/commits.json` después de crearlos, evitando un cuarto commit para registrar su propio SHA.
+  - **Excepción de whitespace**: el único aviso de `git diff --check` es la línea en blanco final de `claude-md-backups-section.golden`; se conserva porque el contrato lo compara byte a byte. No hay otros avisos.
+  - **Siguiente paso autorizado**: T076 y PR borrador para adelantar la CI mientras duerme el operador. Abrir el borrador no completa T081: falta el gate real en linus (FR-022). Preparar inventario con lecturas, sin asociar ni reiniciar el agente. Permanecen humanas la decisión de rutas adicionales, la revisión de archivos en claro, la posesión de la llave, la autorización separada de M5 y el merge.
+  - **Evidencia**: `t075/{before-reset.json,before-reset.patch,commit1.json,commit2.json,feat-final.json,split-red.tap,split-bash5.*,split-bash32.*,feat-byte-audit.txt,index-whitespace-check.json}`. Las suites largas de T074 no se repiten por cambios de metadata y documentación; su runtime y pruebas están verificados sin cambios.

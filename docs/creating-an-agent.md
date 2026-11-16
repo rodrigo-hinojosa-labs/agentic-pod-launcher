@@ -78,7 +78,8 @@ git checkout v0.17.0            # a tag, branch, or commit
 
 # Optional: a fork-less agent doesn't need git at all. Dropping .git avoids
 # tying the workspace to the launcher's remote. Keep git only if you plan to
-# enable fork backups (scaffold.fork.*).
+# enable fork backups (scaffold.fork.*). An agent repository (backup.repo.url,
+# Step 2) does not need it: its backups and work clone use their own clones.
 rm -rf .git
 ```
 
@@ -132,7 +133,18 @@ docker:
 
 scaffold:
   fork:
-    enabled: false                    # fork-less: no GitHub backup branches
+    enabled: false                    # fork-less: no fork backup branches
+
+backup:                               # 046, docker mode only. Leave url empty for
+  repo:                               # no agent repository (then: fork, or nothing).
+    url: ""                           # "https://github.com/<owner>/<name>" — a PRIVATE
+                                      # GitHub repo, created with an initial commit on
+                                      # main → needs GITHUB_PAT in .env (Step 4)
+    allow_unverified: false           # never set true for a public repo: it is refused anyway
+  sensitive: false                    # true: vault, auto memory and config (but agent.yml)
+                                      # also travel encrypted
+  extra_paths: []                     # workspace-relative paths of state the launcher
+                                      # does not know about; always encrypted
 
 notifications:
   channel: telegram                   # none | log | telegram
@@ -186,7 +198,14 @@ plugins:                              # EXTRA plugins only. Five defaults (teleg
 
 Auto-filled on the first render (you may omit them): the `meta` block
 (`launcher_version`, timestamps), `docker.*_version` toolchain pins,
-`deployment.session_name`, and `deployment.mode` if absent. The **four `docker.*`
+`deployment.session_name`, `deployment.mode` if absent, and the `backup.*`
+keys above with their defaults (an empty `url` keeps today's behaviour).
+The schema rejects a `backup.repo.url` that is not empty or
+`https://github.com/<owner>/<name>`, and a `backup.extra_paths` that is not a
+list of strings. With an agent repository the scaffold also adds
+`backup/memory` and `backup/history` (cron `40 3 * * *` and `50 3 * * *`,
+`features.memory_backup` / `features.history_backup`); see the README's
+_Backups_ section for what each branch holds. The **four `docker.*`
 leaves above are _not_ backfilled** — validation runs before the backfill, so they
 must be in the file you write.
 
@@ -259,7 +278,7 @@ ATLASSIAN_PERSONAL_JIRA_URL=https://your-domain.atlassian.net
 ATLASSIAN_PERSONAL_JIRA_USERNAME=jane@example.com
 ATLASSIAN_PERSONAL_TOKEN=
 
-# GitHub MCP.
+# GitHub MCP and/or the agent repository (backup.repo.url): one token for both.
 GITHUB_PAT=
 EOF
 chmod 600 .env
@@ -272,8 +291,13 @@ Notes:
   interactive `/login`.
 - **`.env.example` is a starting skeleton, not the full list.** The renderer (Step 5)
   writes `.env.example` covering `CLAUDE_CODE_OAUTH_TOKEN`, notifier, Atlassian, and
-  GitHub — but **not** the optional-MCP secrets (`FIRECRAWL_API_KEY`, AWS,
-  `GOOGLE_OAUTH_CREDENTIALS`). Add those to your real `.env` yourself.
+  `GITHUB_PAT` (when the GitHub MCP is on or an agent repository is set) — but **not**
+  the optional-MCP secrets (`FIRECRAWL_API_KEY`, AWS, `GOOGLE_OAUTH_CREDENTIALS`).
+  Add those to your real `.env` yourself.
+- **`GITHUB_PAT` with an agent repository** must be able to push to that repository:
+  the backups and the agent's work clone (`/workspace/agent-repo`) use it, besides the
+  GitHub MCP. `CLAUDE_CODE_OAUTH_TOKEN` matters for backups too: the `/login` login is
+  in no backup, so a restored agent comes back authenticated only through this token.
 - **Pre-filling `TELEGRAM_BOT_TOKEN`** lets the container skip the in-container token
   wizard and boot straight into the paired channel flow. Leave it blank to use the
   interactive wizard instead (see [`getting-started.md` §2](getting-started.md#2-enter-your-telegram-bot-token)).
@@ -379,6 +403,27 @@ docker exec -u agent john-doe qmd query "how should the assistant behave"
 
 ---
 
+## Step 11 — Set the backup encryption key (agent repository only)
+
+`--non-interactive` only renders, so nothing picks an encryption key for you, and
+`--regenerate` just warns (`backup.repo is set but there is no encryption key`).
+Until a key is set, `backup-identity` runs without the secrets and every unit with
+something to encrypt (`history` always) stops with `no-recipient`. Set the
+operator's ssh **public** key — as a string, or a path readable inside the
+container — and check that the fingerprint it prints belongs to a key whose private
+half you hold, or the encrypted backups can never be restored:
+
+```bash
+docker exec -u agent john-doe heartbeatctl backup-identity --configure-key "ssh-ed25519 AAAA... jane@laptop"
+#   backup-identity: key fingerprint SHA256:... (jane@laptop)
+for u in config identity vault memory history; do
+  docker exec -u agent john-doe heartbeatctl backup-$u
+done
+docker exec -u agent john-doe heartbeatctl backup-status
+```
+
+---
+
 ## Verification checklist
 
 - [ ] `docker ps` shows the container **Up / healthy**, `RestartCount` stable (not flapping).
@@ -390,6 +435,11 @@ docker exec -u agent john-doe qmd query "how should the assistant behave"
       `claude.ai`-scoped ones you haven't configured).
 - [ ] If QMD is on: `heartbeatctl qmd-reindex` reports `last_status: indexed`, and a
       `qmd query` returns ranked hits.
+- [ ] If `backup.repo.url` is set: `heartbeatctl backup-status` shows the destination
+      `private`, the credential `present`, the encryption key configured, and no
+      unit whose last attempt failed; the `backup/*` branches exist on GitHub next to
+      `main` (a unit with nothing to back up yet, such as `vault` without a vault,
+      has no branch).
 
 ---
 

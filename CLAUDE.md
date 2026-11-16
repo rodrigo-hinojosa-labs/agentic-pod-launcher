@@ -185,7 +185,9 @@ After PR #3 (2026-04-22) all agent state (OAuth login, Telegram pairing, session
 - `.state/` is gitignored at the template level and contains OAuth tokens — never commit it, never log its contents.
 - Migration is `rsync` / `cp -a` of the workspace directory.
 
-### Backup model: three orphan branches in the agent's fork
+### Backup model: orphan branches in the agent's repository or its fork
+
+Since 046 the destination rule is single-sourced in `docker/scripts/lib/backup_dest.sh::backup_dest_resolve`: the agent's associated private repository (`backup.repo.url`, docker mode, GitHub only), else its fork (`scaffold.fork.url`), else nothing. **With a fork or no destination every unit runs its pre-046 code, byte for byte** (TU19, TU20, TU21 and TR06 compare against golden files). With a repository there are five units: the three below plus `backup/memory` (auto memory, claude-mem, `backup.extra_paths`) and `backup/history` (transcripts). Each unit's repo path has its own git wrapper (`_<unit>_repo_git`: askpass from `GITHUB_PAT`, `GIT_CONFIG_GLOBAL=/dev/null`, `timeout -k 10`), its own `-repo` cache next to the fork's `-clone`, a per-unit `flock -n 9` with an explicit `flock -u 9`, an ownership mark `.agentic-pod-backup.json` per branch, and a privacy check (`backup_dest_verify`) before every push. Encrypted content goes through `docker/scripts/backup_store.py` (block store, one age data key per store, rotated when the operator key changes; a block is named by the SHA-256 of its encrypted file, never of its plaintext, and reuse goes through a local block map outside the committed tree). A restore runs on the operator's host with whatever the repository holds (`age` does not authenticate, and the agent can write its own repository), so it writes only what R9 of `contracts/restore.md` allows: no `.git` segment, nothing through a symlink, the closed list of `config`, markdown for the vault, and declared extra paths outside `memory_extra_path_reserved`. What the units may share is the closed list of constitution 1.1.0, Principle V: nothing shared stages a tree, commits or pushes. Contracts: `specs/046-agent-backup-repo/contracts/`.
 
 The non-regenerable subset of the workspace is replicated to the agent's own fork in three independent orphan branches:
 
@@ -247,9 +249,54 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 - **A generic "there is a warning" assertion is satisfied by any warning added later.** 040's push to Telegram prints `::warning::nightly-alert: empuje por Telegram omitido` on every night that moves the notice when the job has no secrets, so every older `_has "$output" '::warning::nightly-alert:'` kept passing while testing nothing: N12 and N16 had to name the warning of the call that fails (and mutations that silence that call must make them fall). Whenever a new message appears on a path that old tests already cross, grep the old assertions for the generic form.
 - **Oracles for secrets must look at VALUES and at nodes, not at names and text.** Checking that `TELEGRAM_BOT_TOKEN` is not in a child's environment passes `export TG_TOKEN`; counting the literal `secrets.` passes `toJSON(secrets)` and `secrets['X']`. Search the sentinel value in the environment of each fake child (`gh`, the spy `curl`) and count YAML string nodes that mention `secrets` (comments are not nodes). Keep the token off `argv` with `curl -K <0600 file>` (or `-K -` on stdin) and assert it with a spy that logs argv, the mode of the config file and a masked copy of its content at call time, because the file is gone when the script ends.
 - **A new tmux pane takes the PATH of the client that creates it, and `new-session -e PATH=` does not change it (045, measured on tmux 3.6b).** Neither the server's global environment nor `-e` wins: `tmux new-session -e PATH=B` from a client with PATH `A` gives a pane with `A`, while `PATH=C tmux new-session` gives `C`, and a later session from a plain client keeps its own. So whatever a supervisor exports never reaches a session that another process creates (the heartbeat tick, from cron), and a test of tmux behaviour must use DISTINCT values for the client's PATH and the one under test: the first measurement of 045 used the same value for both and "confirmed" `-e`. Relatedly, a busybox `crond` job inherits all of `crond`'s environment (root's) and `crond` only sets `HOME`, `USER`, `LOGNAME` and `SHELL`. The heartbeat's isolated config disables every plugin (`heartbeat.sh:125-172`), so no plugin hook runs on a tick.
+- **With `CLAUDE_CONFIG_DIR` set, Claude's live config file is `<config>/.claude.json`, not the one in the state dir**, and it is rewritten up to once a minute (046, M15). Never put it in a hash-idempotent backup unit: it would commit every cycle.
+- **A fixture that puts a file where production does not have it hides the defect.** The identity unit read the secrets file from the state dir, the fixtures put one there, and its tests passed for months while no real agent (all of them keep it at the workspace root) ever had it encrypted (046, M13). Build fixtures from the real layout of an agent, and probe the fleet read-only before trusting a path.
+- **A SQLite copy with the backup API is deterministic; a raw copy of a WAL-mode database loses data** (046, M18): the committed rows that are still only in the `-wal` are not in the main file. `backup_store.py` recognises a database by its 16-byte header, whatever its name.
+- **`age` asks for the passphrase of an ssh key on every invocation and cannot decrypt without a terminal** (046, M19): one encrypted piece = one prompt. That is why each block store has its own data key, opened with the operator key exactly once per unpack.
+- **`ask_validated` never returns at the end of its input**: a piped stream that runs out on an invalid value loops forever (046, M21). A prompt that must fail on bad input without a terminal reads with `ask` and checks `[ -t 0 ]` itself (`_wizard_ask_backup_repo_url`).
+- **The template engine leaves the newlines around a conditional block that does not render** (046, M21), and does not nest `{{#if}}`. To keep a section byte-identical when the block is off, glue the tags to the text (`{{#unless X}}## Heading ...{{/unless}}{{#if X}}...{{/if}}`), and pre-render nested content into a marker in bash (`BACKUP_REPO_NEXT_STEPS`).
+- **A tab is IFS whitespace: `IFS=$'\t' read -r a b c` collapses an empty field into its neighbour** (046, found by TB07: a unit never pushed shifted every field after it). Use a non-whitespace separator (`jq -r '... | join("|")'` and `IFS='|'`).
+- **macOS `dirname` reads a relative path that starts with `-` as an option** (046, found by the restore tests on `-workspace/...`). Take the parent of the absolute path instead: `mkdir -p "$(dirname "$dest/$rel")"`.
 - **A child that stalls is a failure too.** A `gh` that accepts the call and never answers left a red night with neither issue nor message, because the push was sequenced after every `gh` call and the step has its own 3-minute limit. Every external call on a notifier path needs its own limit (portable: poll `kill -0` with `sleep 0.05`, since macOS has no `timeout`) and a total budget, with a fake that hangs to prove it.
 
 <!-- SPECKIT START -->
+**046-agent-backup-repo SPEC + CLARIFY + PLAN + TASKS + ANALYZE + IMPLEMENT LOCAL VALIDADO (2026-11-13/16; rama
+`046-agent-backup-repo` en el worktree `.claude/worktrees/046-agent-backup-repo`, desde `origin/main` = `10f22a7`,
+rebasada sobre `9608e4a`; VERSION 0.31.0 -> **0.32.0**, MINOR; artefactos en `0f41236`, constitución en `679b313`
+e implementación en `f30ad4c`, más el commit de documentos que contiene este registro).** Un repositorio
+privado por agente (`backup.repo.url`, modo docker, solo GitHub), para su trabajo (clon en `/workspace/agent-repo`) y
+para su respaldo completo: cinco ramas `backup/*` con repositorio (las tres de hoy, `config` ampliada, y `memory` e
+`history` nuevas), un almacén cifrado por bloques con una llave de datos por almacén (`docker/scripts/backup_store.py`),
+la comprobación de privacidad antes de cada empuje, un candado por unidad, `backup-status`, el diagnóstico, el paso del
+wizard y la restauración con `--restore-from-repo`. Con fork o sin destino, todo es el código de `main`, comparado
+contra archivos dorados. **Decisiones del operador**: cobertura total, cifrado por agente y la credencial amplia
+`GITHUB_PAT` (13-11); el estado propio del agente adentro, el login de `/login` afuera, un solo PR (13-11); una llave de
+datos por almacén, la configuración cifrada en un agente sensible, la llave fijada con un paso explícito y SC-002
+acotado (14-11). **Medido**: M13 (la unidad de identidad nunca cifró el archivo de secretos real: los tres agentes lo
+tienen en la raíz del workspace), M14 a M21 en `research.md`; SC-007 con datos del tamaño de donna, 102,5 MB tras 30
+ciclos. **Hecho en local (14-11-2026)**: T001 a T060, test-first, con las seis suites nuevas (124 pruebas del host) en
+verde en los dos bash y las existentes sin editar. Hallazgo lateral para T086: en `main`, `_bi_run` del fork sale con 0
+aunque el empuje falle (`return $?` dentro de `if !`). **Revisión independiente (T073, 15-11-2026)**: 2 ALTAS, 3 MEDIAS y
+11 BAJAS, corregidas test-first salvo una que el operador dejó para un issue. Las ALTAS: el token del clon de trabajo iba
+en los argumentos de `env`, y la restauración podía escribir `.git/hooks` o `scripts/` en el host (regla R9 de
+`contracts/restore.md`). El operador decidió (15-11) que los nombres de bloque no delaten el contenido (D37: el SHA-256 del
+archivo cifrado y un mapa local; un HMAC con la llave de datos no es posible porque `pack` nunca tiene su parte privada),
+que con repositorio el supervisor respete `identity_backup.enabled: false`, y que el procesamiento por archivo sea un issue.
+El catálogo de mutaciones pasa de M138 a M167. **PR #134**, ya mergeado como `9608e4a`, subió el tope del job `bats`
+de 30 a 45 min (cierra #132), porque el brazo macOS ya se cancelaba en main y 046 le suma unos 6 min.
+**Cierre local (16-11-2026, T068 a T075):** 167 de 167 mutaciones detectadas en ambos bash, cobertura de 124/124 pruebas;
+Ubuntu 124/124, Alpine 40/40 y TERM/KILL de BusyBox medido; e2e de 046 8/8. Regresión Docker 61/62, con el mismo smoke
+en rojo confirmado en la base: no es un verde total. Gate host 2104 ok y 0 fallas en bash 5.3.15 y 3.2.57, stderr vacío,
+69/70 saltadas previstas; las 124 con SIGPIPE ignorada también pasan en ambos. TU16 pasó cinco veces seguidas en 3.2;
+su falla original sigue no reproducida y con causa desconocida, sin arreglo de producto. SC-007 repetido: 101,8 MiB tras
+30 ciclos, frente a 102,5 MiB de T039. Los tres commits de T075 sustituyen el WIP, conservando la huella validada
+`23dfb736beb560fa6552da80e445479c4cd725b2e273e91e624e351d1fc21099`. Las dos guías rápidas van con el feat porque
+sus pruebas las requieren: la separación se comprobó ROJO y VERDE en ambos bash. **Siguiente:** publicación y CI del PR
+borrador, sin proponer merge hasta el gate real de respaldo y restauración en linus (FR-022). El operador autorizó
+avanzar con autonomía el 16-11; siguen requiriendo su decisión el inventario de rutas, los archivos que viajan en claro,
+la posesión de la llave privada, M5 y el merge. Después del merge, despliegue en linus, donna y cbum.
+Artefactos y evidencia: `specs/046-agent-backup-repo/`, Registro de `tasks.md`.
+
 **045-plugin-launcher-path SPEC + CLARIFY + PLAN + TASKS + ANALYZE + IMPLEMENT + GATE EN CBUM + MERGE + DESPLIEGUE (2026-11-11/13; rama
 `045-plugin-launcher-path` en el worktree `.claude/worktrees/045-plugin-launcher-path`, desde `origin/main` = `c242c31`,
 VERSION 0.30.0 -> **0.31.0**, MINOR por defecto declarado; arreglo de producto en código horneado).** Origen: el alta de

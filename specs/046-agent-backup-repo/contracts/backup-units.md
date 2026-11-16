@@ -25,7 +25,7 @@ Cada comando `heartbeatctl backup-<unidad>` sigue estos pasos. Con el tipo `fork
 | 13 | Escribe el estado y suelta el candado | No aplica |
 
 - **Sin red hasta el paso 7**: los pasos 3 a 6 no tocan la red. Una falla de configuración termina sin ninguna conexión, y nada que deba ir cifrado se prepara sin llave.
-- **`--dry-run`**: el comando se detiene después del paso 6 y dice si el hash cambió, como hoy.
+- **`--dry-run`**: el comando se detiene después del paso 6 y dice si el hash cambió, como hoy. No registra nada: ni el estado de la unidad ni `backup-dest.json`, también cuando termina antes por falta de credencial (el supervisor y `backup-status` leen ese registro).
 - **El paso 7 corre en cada ciclo**, también cuando no hay cambios. Es lo que detecta una credencial que dejó de servir, una rama de respaldo borrada y un cambio de repositorio (D20 de [research.md](../research.md)).
 - **Un ciclo sin cambios** hace esa única consulta: no clona, no trae la rama y no empuja.
 - **Si la rama remota no existe**, la caché de la unidad se crea de nuevo, vacía, y la rama nace con un solo commit. Es lo que hace que borrar una rama remota sirva para recortar su historia (D35).
@@ -71,7 +71,7 @@ Los mensajes del camino `fork` y del camino `none` no cambian. `<u>` es el nombr
 | `other-agent` | 0 | `backup-<u>: branch backup/<u> belongs to another agent - refusing to write` |
 | `unreachable` | 2 | `backup-<u>: repository unreachable (credential, network or missing repository)` |
 | `push-failed` | 2 | `backup-<u>: push failed` (por stderr, como hoy) |
-| `error` | 2 | `backup-<u>: could not build the backup (<motivo>)` (por stderr) |
+| `error` | 2 | `backup-<u>: could not build the backup (<motivo>)` (por stderr), precedida de la línea de la herramienta del almacén cuando la causa está ahí (`backup_store: ...`, sin contenido: S4) |
 | Candado tomado | 0 | `backup-<u>: another run holds the lock - skipping` |
 | El almacén rotó su llave | No aplica | `backup-<u>: store key rotated (<motivo>) - full upload` |
 | Agente sensible con fork y sin repositorio | 0 | `backup-vault: this agent is marked as sensitive and has no agent repository - not pushing the vault in plaintext` |
@@ -91,6 +91,7 @@ Con un repositorio asociado, `_check_identity_backup` decide así en cada revisi
 
 | Situación | Dispara la unidad |
 | --- | --- |
+| `features.identity_backup.enabled` es `false` (solo con repositorio; con fork, la regla de `main`) | No |
 | El hash actual es el `hash` del estado | No |
 | El último intento no terminó en `ok` ni en `no-change`, su `attempt_hash` es el hash actual o está vacío, y pasaron menos de 900 segundos desde `last_attempt_epoch` | No |
 | Cualquier otro caso | Sí |
@@ -178,7 +179,7 @@ La librería del vault es compartida con el modo local (`scripts/lib/backup_vaul
 
 - Las cachés de clon siguen bajo `/home/agent/.cache/`, una por unidad, dentro de `.state/`. La del camino `repo` es distinta de la del camino `fork`.
 - La copia de una base, el archivo de cabezas, el archivo con la llave pública del operador y cualquier temporal van dentro de la caché de la unidad, fuera de su árbol. Nunca en `/tmp`, que es un tmpfs de 100 MB (M6 de [research.md](../research.md)).
-- `--gc`, en las tres unidades que ya lo tienen: con un repositorio asociado corre `git gc` sobre la caché del camino `repo`, si existe, y después la unidad. Con fork, hace lo de hoy.
+- `--gc`, en las tres unidades que ya lo tienen: con un repositorio asociado corre `git gc` sobre la caché del camino `repo`, si existe, **bajo el candado de la unidad** (un disparo del supervisor podría estar haciendo un commit ahí), y después la unidad. Con el candado tomado no corre el `gc`, y la corrida que sigue lo informa. Con fork, hace lo de hoy.
 - **Recorte de una rama** (D35): el operador borra la rama remota de la unidad. El ciclo siguiente la recrea con un solo commit, y su caché se crea de nuevo.
 
 ## U9. Invariantes

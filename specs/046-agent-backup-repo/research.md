@@ -294,15 +294,15 @@ En el Mac del operador no hay `timeout`, `gtimeout` ni `flock` (medido el 14-11-
 
 - **Decisión**: lo cifrado se guarda en un directorio `store/` de su rama, con este formato:
   - cada archivo se parte en bloques de 1 MiB;
-  - cada bloque se comprime con gzip, se cifra con `age` y se guarda con el nombre del SHA-256 de su contenido en claro;
+  - cada bloque se comprime con gzip, se cifra con `age` y se guarda con el nombre del SHA-256 del archivo cifrado (D37; hasta el 15-11-2026, del bloque en claro);
   - un manifiesto cifrado lista cada archivo con su tamaño, su hash y sus bloques;
   - un bloque que ya está en la rama no se vuelve a cifrar ni a subir.
 - **Razón**:
   - ningún archivo del repositorio supera 1 MiB, así que el límite de 100 MiB (M4) deja de importar aunque el historial crezca;
-  - `age` cifra distinto cada vez: sin nombres por contenido, cada ciclo subiría todo de nuevo;
+  - `age` cifra distinto cada vez: sin una forma de reconocer un bloque ya subido, cada ciclo subiría todo de nuevo (D37: un mapa local);
   - el historial solo crece por el final, así que un ciclo normal sube el último bloque y los nuevos.
 - **Costo estimado con los datos de donna**: la primera subida es de unos 55 MB (el historial comprimido, la carpeta de la sesión y la base). Cada ciclo diario sube como máximo 1 MiB del último bloque del historial, lo nuevo del día y los bloques de la base que cambiaron (4,2 MB si cambian todos). Treinta ciclos suman unos 200 MB en el peor caso, bajo el límite de 1 GB de SC-007.
-- **Riesgo aceptado**: los nombres de los bloques revelan el hash de su contenido. No permite leerlo; solo permitiría confirmar un contenido que el atacante ya tiene completo. La alternativa, un HMAC con una clave por agente, agrega otro secreto que respaldar.
+- **Riesgo aceptado, revocado el 15-11-2026 (D37)**: los nombres de los bloques revelaban el hash de su contenido. La revisión independiente mostró que alcanza con adivinar: un archivo de un solo bloque con pocos valores posibles se confirma probándolos, y eso es justo lo que protege la marca de datos sensibles.
 - **Riesgo a observar**: si Claude Code reescribe un historial en vez de agregarle líneas, sus bloques cambian todos y ese ciclo sube el archivo entero. Sigue siendo correcto, solo más caro. El gate mide cuántos bloques se reutilizan entre dos días.
 - **Alternativas descartadas**:
   - un archivo cifrado por cada archivo de origen: el historial de donna ya pesa 68,6 MiB y se volvería a subir entero cada día;
@@ -527,12 +527,23 @@ El detalle está en la sección 9 de [data-model.md](data-model.md).
 - **Temporal**: lo descifrado se arma en un directorio dentro del destino, con modo 0700, que se borra al terminar, también ante una interrupción.
 - **Qué llave**: la regla de hoy vale para toda pieza cifrada: la llave indicada y, si no, las dos llaves ssh por defecto del operador.
 
+### D37. Los bloques se nombran por el archivo cifrado (decisión del operador, 15-11-2026)
+
+- **Origen**: la revisión independiente de T073 objetó el riesgo aceptado de D8. El operador eligió "HMAC con la llave de datos".
+- **Por qué no es literalmente un HMAC**: `pack` nunca tiene la parte privada de la llave de datos. Solo la tiene `key.age`, cifrada para la llave del operador (S1), y el agente no puede abrirla. Una llave nueva de nombres guardada en el agente sería otro secreto que respaldar.
+- **Decisión**: el nombre de un bloque es el SHA-256 de su archivo cifrado, que no dice nada del contenido. `age` cifra distinto cada vez, así que para reutilizar un bloque la unidad lleva un mapa local (`<caché>/<unidad>-repo.blockmap`) del SHA-256 de cada bloque en claro al nombre de su archivo, válido solo para la llave de datos vigente y fuera de todo árbol que se commitea. El manifiesto, cifrado, guarda el SHA-256 de cada bloque en claro. Al restaurar, `unpack` verifica el nombre de cada archivo antes de descifrarlo, y el contenido descifrado contra el manifiesto.
+- **Lo que cumple de lo pedido**: los nombres no revelan el contenido; la deduplicación dentro de un almacén sigue igual mientras exista el mapa; no hace falta migrar nada, porque ningún agente tiene todavía un almacén.
+- **Costo**: si el mapa se pierde (una caché borrada, o la primera corrida tras una restauración en otro equipo), el ciclo siguiente cifra y sube todo de nuevo, y los bloques viejos se borran de la rama. Es el mismo costo de una rotación. **El operador lo aceptó el 15-11-2026**, frente a dos alternativas: guardar el mapa junto al estado de la unidad (sobrevive a perder la caché, no a una restauración, y exige que nunca se commitee) o una llave de nombres por agente respaldada con los secretos (sobrevive a todo, a costa de tocar el manejo de secretos). TU33 afirma esa subida única y el no-change que la sigue; TU40, que tras una rotación ningún nombre viejo queda.
+- **Lo que no cambia**: `age` sigue sin autenticar (S5 de [block-store.md](contracts/block-store.md)); quien escribe el repositorio puede reemplazar un respaldo. R9 de [restore.md](contracts/restore.md) acota lo que una restauración escribe.
+
 ## Hallazgos laterales, fuera de alcance
 
 - **El respaldo al fork tampoco puede empujar desde el contenedor** (inferido de M1): usa el mismo camino sin credencial. Hoy no afecta a nadie, porque ningún agente de la flota tiene fork.
 - **Con destino fork, la unidad de identidad tampoco cifra el archivo de secretos** (M13). El `README.md` dice que la restauración devuelve el login de `/login`, y ese archivo no está en la lista de la unidad (M14). Las dos cosas van a un issue.
 - **El wizard escribe un bloque `features.review` que nadie lee** (`setup.sh:1279`); el que vale es `features.heartbeat.review`. Ya se había visto al redactar la ficha de Doctor Milagro.
 - **`fetch_github_ssh_key` usa `printf ... | grep -m 1` bajo `pipefail`**: es la forma de carrera por SIGPIPE que documenta `CLAUDE.md`. Con la respuesta de `.keys`, de menos de 1 KB, no se dispara.
+- **`backup_store.py` carga en memoria todos los archivos de una unidad a la vez** (revisión de T073): en donna, el historial y claude-mem suman hoy unos 95 MB. Cabe con holgura, pero crece. El operador decidió (15-11-2026) dejarlo para un issue propio: procesar archivo por archivo.
+- **Con fork, el supervisor dispara `identity` aunque `features.identity_backup.enabled` sea `false`**: así es en `main`, donde `enabled` solo gobierna la línea de cron. Con repositorio, 046 lo respeta (decisión del operador, 15-11-2026); el camino del fork no cambia (FR-018).
 
 ## Riesgos
 
@@ -549,5 +560,5 @@ El detalle está en la sección 9 de [data-model.md](data-model.md).
 | El repositorio crece sin tope a lo largo de los meses | D35: una señal en el diagnóstico y un recorte que no exige empujes forzados |
 | GitHub deja una rama de respaldo como rama por defecto de un repositorio vacío | D34: el operador crea el repositorio con un commit en `main`. Sin medir |
 | Un archivo volátil de claude-mem que no está en la lista de exclusiones hace que `memory` cree un commit por ciclo | El gate en linus corre dos ciclos seguidos y exige 0 commits en el segundo |
-| Quien pueda escribir en el repositorio reemplaza un respaldo por otro contenido, y la restauración lo acepta | Riesgo aceptado: el cifrado da confidencialidad, no autenticidad. Es el mismo modelo del respaldo en claro de hoy, y depende del control de acceso del repositorio. La restauración avisa cuando trae un override de compose |
+| Quien pueda escribir en el repositorio reemplaza un respaldo por otro contenido, y la restauración lo acepta | Riesgo aceptado: el cifrado da confidencialidad, no autenticidad. Es el mismo modelo del respaldo en claro de hoy, y depende del control de acceso del repositorio. La restauración avisa cuando trae un override de compose, y solo escribe las rutas de su lista, nunca bajo `.git` ni a través de un enlace (R9) |
 | Una llave del operador con passphrase se pide varias veces al restaurar | D27 lo acota a una vez por pieza cifrada: tres en un agente sin marcar y hasta cinco en uno sensible (M19) |

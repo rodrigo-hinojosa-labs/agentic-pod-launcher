@@ -90,7 +90,7 @@ Al final, un resumen con las unidades restauradas, las omitidas y el motivo de c
 - **I3**: la restauración desde un fork con las tres ramas de hoy produce el mismo resultado y la misma salida que en `main`, con una diferencia buscada: el archivo de secretos descifrado queda con modo 0600.
 - **I4**: la restauración no arranca el agente ni contacta a Telegram.
 - **I5**: el valor de ningún secreto aparece en la salida.
-- **I6**: una ruta adicional se restaura solo dentro del directorio de destino. Una ruta lógica absoluta o con `..` se rechaza.
+- **I6**: una ruta adicional se restaura solo dentro del directorio de destino. Una ruta lógica absoluta, con `..` o con un segmento `.git` se rechaza (R9).
 - **I7**: al terminar, con éxito o sin él, no queda `<destino>/.restore-tmp/` ni ninguna copia en claro de una llave de datos.
 
 ## R7. Ensayo de restauración
@@ -109,4 +109,15 @@ Qué se espera de un agente restaurado y arrancado en otro host: si el original 
 
 ## R8. Modelo de confianza
 
-La restauración confía en el contenido del repositorio. El cifrado protege la confidencialidad de lo respaldado, no su autenticidad (S5 de [block-store.md](block-store.md)): quien pueda escribir en el repositorio puede hacer que una restauración traiga otro contenido. Es el mismo modelo del respaldo en claro de hoy.
+La restauración confía en el contenido del repositorio. El cifrado protege la confidencialidad de lo respaldado, no su autenticidad (S5 de [block-store.md](block-store.md)): quien pueda escribir en el repositorio puede hacer que una restauración traiga otro contenido. Es el mismo modelo del respaldo en claro de hoy. Lo que sí se acota es **dónde** escribe (R9): la restauración corre en el equipo del operador, y el agente mismo puede escribir su repositorio.
+
+## R9. Qué puede escribir una restauración (revisión de T073, 15-11-2026)
+
+La restauración corre después del `git init` y antes del primer commit del scaffold: un archivo bajo `.git/hooks` correría como el operador en ese commit, y uno de `scripts/` en el `--regenerate` que sigue. Por eso:
+
+- **Ninguna ruta** con un segmento vacío, `.`, `..` o `.git` (en mayúsculas o minúsculas). `unpack` rechaza el almacén entero (integridad); la restauración salta el archivo.
+- **Nada a través de un enlace**: un enlace simbólico de una rama nunca se copia, y no se escribe ningún archivo cuya ruta, bajo el destino, pase por un enlace.
+- **`config`**: `agent.yml` (que no sea un enlace) y su lista cerrada: `CLAUDE.md`, `docker-compose.override.yml`, `personas/`, y de `.claude/`, `settings.json`, `skills/`, `commands/`, `agents/`, `hooks/` y `output-styles/`. Vale igual para lo que viene en claro y para lo que viene del almacén.
+- **`vault`**: solo archivos `*.md`, en claro o del almacén. Un `vault.path` con `..` o `.git` no se sigue: la restauración usa `.state/.vault` y lo dice (`⚠ restore: vault.path '<ruta>' leaves the workspace — restoring into .state/.vault`). La línea `✓ restore: vault restored into` sale solo cuando se restauró algo.
+- **Rutas adicionales**: solo lo que está bajo una entrada de `backup.extra_paths` del `agent.yml` restaurado, que no sea una ruta reservada del launcher (`memory_extra_path_reserved`, la misma regla del respaldo) ni el archivo que deja el login de `/login`. Las que quedan fuera de `.state/` se agregan a `.git/info/exclude` del workspace (solo local), para que el primer commit del scaffold no las tome: viajaron cifradas.
+- **Lo que sigue confiando en el repositorio**: el contenido de la lista cerrada (un `docker-compose.override.yml` o un hook de `.claude/` hacen lo que dicen dentro del contenedor). Por eso la restauración avisa del override; los hooks del proyecto corren en el contenedor, no en el equipo.
