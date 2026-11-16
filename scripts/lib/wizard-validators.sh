@@ -221,3 +221,30 @@ validate_destination_path() {
   fi
   return 0
 }
+
+# validate_backup_repo_url VAL -> 0 if VAL follows the rule of backup.repo.url
+# (046, data-model.md section 1): empty, or https://github.com/<owner>/<name> with an
+# optional .git, no credentials and no spaces. BACKUP_DEST_ALLOW_HTTP=1 (tests only)
+# also admits http:// to a local server. The same rule lives in scripts/lib/schema.sh
+# and docker/scripts/lib/backup_dest.sh; tests/fixtures/backup-repo/url-cases.tsv is
+# the one table the three are checked against.
+validate_backup_repo_url() {
+  local v="$1" name
+  local re_gh='^https://github\.com/[A-Za-z0-9][A-Za-z0-9-]*/([A-Za-z0-9._-]+)$'
+  local re_local='^http://(127\.0\.0\.1|localhost|host\.docker\.internal)(:[0-9]+)?(/[^[:space:]]*)?$'
+  [ -z "$v" ] && return 0
+  case "$v" in
+    *[[:space:]]*|*@*)
+      echo "  ✗ The repository URL must be https://github.com/<owner>/<name> (optional .git), with no credentials or spaces" >&2
+      return 1 ;;
+  esac
+  if [[ "$v" =~ $re_gh ]]; then
+    name="${BASH_REMATCH[1]}"
+    name="${name%.git}"
+    case "$name" in ''|.|..) ;; *) return 0 ;; esac
+  elif [ "${BACKUP_DEST_ALLOW_HTTP:-}" = "1" ] && [[ "$v" =~ $re_local ]]; then
+    return 0
+  fi
+  echo "  ✗ The repository URL must be https://github.com/<owner>/<name> (optional .git), with no credentials or spaces" >&2
+  return 1
+}

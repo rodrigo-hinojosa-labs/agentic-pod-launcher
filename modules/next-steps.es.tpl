@@ -343,7 +343,7 @@ docker logs -f {{AGENT_NAME}}                                 # follow en vivo
 docker exec {{AGENT_NAME}} cat /workspace/claude.log          # captura del tmux
 docker exec {{AGENT_NAME}} cat /workspace/claude.cron.log     # log de crond
 docker exec -u agent {{AGENT_NAME}} heartbeatctl logs         # runs.jsonl
-```
+```{{BACKUP_REPO_NEXT_STEPS}}
 
 #### "N MCP servers failed" al arrancar
 

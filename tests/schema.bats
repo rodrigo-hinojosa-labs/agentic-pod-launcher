@@ -26,7 +26,7 @@ teardown() { teardown_tmp_dir; }
   local actual expected
   actual=$(yq 'keys | .[]' "$fixture" | sort)
   expected=$(printf '%s\n' \
-    agent claude deployment docker features mcps notifications plugins user vault version \
+    agent backup claude deployment docker features mcps notifications plugins user vault version \
     | sort)
   if [ "$actual" != "$expected" ]; then
     echo "schema drift in $fixture:" >&2
@@ -81,6 +81,8 @@ teardown() { teardown_tmp_dir; }
   # 034: closing phrase (nickname substituted, sanitized) + currency word — both
   # derived by setup.sh from the raw agent.yml values, never from the flatten.
   known_external="${known_external} VOICE_SIGNOFF VOICE_CURRENCY "
+  # 046: the agent repository markers, derived by setup.sh from agent.yml.
+  known_external="${known_external} BACKUP_REPO_ENABLED BACKUP_REPO_WORKDIR BACKUP_REPO_NEXT_STEPS GITHUB_PAT_NEEDED "
 
   # Capture the env shape produced by render_load_context with the fixture.
   local before_env after_env produced
@@ -137,6 +139,8 @@ teardown() { teardown_tmp_dir; }
   known_external="${known_external} MCPS_PLAYWRIGHT_ENABLED MCPS_TIME_ENABLED"
   known_external="${known_external} MCPS_FIRECRAWL_ENABLED MCPS_GOOGLE_CALENDAR_ENABLED MCPS_AWS_ENABLED"
   known_external="${known_external} MCPS_TREE_SITTER_ENABLED "
+  # 046: the agent repository markers, derived by setup.sh from agent.yml.
+  known_external="${known_external} BACKUP_REPO_ENABLED BACKUP_REPO_WORKDIR BACKUP_REPO_NEXT_STEPS GITHUB_PAT_NEEDED "
 
   local before_env after_env produced
   before_env=$(env | grep -E "^[A-Z][A-Z0-9_]*=" | cut -d= -f1 | sort -u)

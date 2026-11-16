@@ -85,6 +85,25 @@ elif [ -f "$(dirname "${BASH_SOURCE[0]}")/lib/agent_path.sh" ]; then
   source "$(dirname "${BASH_SOURCE[0]}")/lib/agent_path.sh"
 fi
 
+# 046: the destination rule (C1). With it, the identity trigger knows whether the
+# agent has an associated repository. Same cascade as agent_path.sh; a missing
+# file keeps the pre-046 fork-only behaviour.
+# shellcheck source=/dev/null
+if [ -f /opt/agent-admin/scripts/lib/backup_dest.sh ]; then
+  source /opt/agent-admin/scripts/lib/backup_dest.sh
+elif [ -f "$(dirname "${BASH_SOURCE[0]}")/lib/backup_dest.sh" ]; then
+  source "$(dirname "${BASH_SOURCE[0]}")/lib/backup_dest.sh"
+fi
+# Where backup_identity.sh lives when this file is sourced from the repo (tests).
+_SS_LIB_DIR="$(dirname "${BASH_SOURCE[0]}")/lib"
+# 046 (A4): the agent's work clone of its associated repository.
+# shellcheck source=/dev/null
+if [ -f /opt/agent-admin/scripts/lib/agent_repo.sh ]; then
+  source /opt/agent-admin/scripts/lib/agent_repo.sh
+elif [ -f "$(dirname "${BASH_SOURCE[0]}")/lib/agent_repo.sh" ]; then
+  source "$(dirname "${BASH_SOURCE[0]}")/lib/agent_repo.sh"
+fi
+
 # seed_vault_if_needed — at first boot, copy the skeleton into the per-agent
 # vault dir if vault.enabled + vault.seed_skeleton and the target is empty.
 # Honors vault.force_reseed: when true, the existing vault is moved aside to
@@ -379,17 +398,30 @@ ensure_all_plugins_installed() {
 # stall — this is the defense in depth. The pgrep guard avoids stacking
 # multiple concurrent triggers when watchdog ticks fire while a slow
 # clone is still finishing.
+# 046 (C6): with an associated repository the unit may need up to 240 s (two
+# queries, a fetch and a push), so the cap is `timeout -k 10 300`; with a fork it
+# stays 90 s. The log line names the previous attempt's result, if any.
 _trigger_identity_backup() {
   local reason="$1"
   command -v heartbeatctl >/dev/null 2>&1 || return 0
   if pgrep -f "heartbeatctl backup-identity" >/dev/null 2>&1; then
     return 0
   fi
+  local _ws="${IDENTITY_BACKUP_WORKSPACE_OVERRIDE:-/workspace}"
+  local _yml="${IDENTITY_BACKUP_AGENT_YML_OVERRIDE:-$_ws/agent.yml}"
+  local -a _cap=(90)
+  local _prev=""
+  if command -v backup_dest_resolve >/dev/null 2>&1; then
+    case "$(backup_dest_resolve "$_yml")" in
+      repo$'\t'*) _cap=(-k 10 300) ;;
+    esac
+  fi
+  _prev=$(jq -r '.last_result // ""' "$_ws/scripts/heartbeat/identity-backup.json" 2>/dev/null || true)
   (
-    if timeout 90 heartbeatctl backup-identity >/dev/null 2>&1; then
-      log "identity backup triggered ($reason)"
+    if timeout "${_cap[@]}" heartbeatctl backup-identity >/dev/null 2>&1; then
+      log "identity backup triggered ($reason${_prev:+, previous attempt: $_prev})"
     else
-      log "identity backup trigger failed ($reason) — non-fatal"
+      log "identity backup trigger failed ($reason${_prev:+, previous attempt: $_prev}) — non-fatal"
     fi
   ) &
 }
@@ -1121,7 +1153,15 @@ _check_auth_banner() {
 # fork-presence guard so a fork-less agent never attempts a backup. The
 # agent.yml path is overridable for host tests (cf. AUTH_BANNER_AGENT_YML_OVERRIDE).
 _identity_backup_fork_configured() {
-  local agent_yml="${IDENTITY_BACKUP_AGENT_YML_OVERRIDE:-/workspace/agent.yml}"
+  local agent_yml="${IDENTITY_BACKUP_AGENT_YML_OVERRIDE:-${IDENTITY_BACKUP_WORKSPACE_OVERRIDE:-/workspace}/agent.yml}"
+  # 046 (C1): "is there a destination" — an associated repository or a fork. The
+  # name stays; without backup_dest.sh, the pre-046 fork-only reading below.
+  if command -v backup_dest_resolve >/dev/null 2>&1; then
+    case "$(backup_dest_resolve "$agent_yml")" in
+      repo$'\t'*|fork$'\t'*) return 0 ;;
+    esac
+    return 1
+  fi
   local fork_url
   fork_url=$(yq '.scaffold.fork.url // ""' "$agent_yml" 2>/dev/null)
   [ "$fork_url" = "null" ] && fork_url=""
@@ -1144,27 +1184,76 @@ _check_identity_backup() {
   # must come before any hashing or _trigger_identity_backup call.
   _identity_backup_fork_configured || return 0
 
-  if [ -f /opt/agent-admin/scripts/lib/backup_identity.sh ]; then
-    # shellcheck source=/dev/null
-    source /opt/agent-admin/scripts/lib/backup_identity.sh
-  else
-    return 0
+  # 046: the guard is that identity_hash is defined, not that the baked path
+  # exists, so the host tests exercise this function for real (TU25).
+  if ! command -v identity_hash >/dev/null 2>&1; then
+    if [ -f /opt/agent-admin/scripts/lib/backup_identity.sh ]; then
+      # shellcheck source=/dev/null
+      source /opt/agent-admin/scripts/lib/backup_identity.sh
+    elif [ -f "$_SS_LIB_DIR/backup_identity.sh" ]; then
+      # shellcheck source=/dev/null
+      source "$_SS_LIB_DIR/backup_identity.sh"
+    fi
   fi
+  command -v identity_hash >/dev/null 2>&1 || return 0
 
-  local state_dir="/workspace/.state"
+  local ws="${IDENTITY_BACKUP_WORKSPACE_OVERRIDE:-/workspace}"
+  local agent_yml="${IDENTITY_BACKUP_AGENT_YML_OVERRIDE:-$ws/agent.yml}"
+  local state_dir="$ws/.state"
   [ -d "$state_dir" ] || return 0
 
-  local current last state_file recipient
-  state_file="/workspace/scripts/heartbeat/identity-backup.json"
-  recipient=$(yq '.backup.identity.recipient // ""' /workspace/agent.yml 2>/dev/null)
+  local current last state_file recipient dtype="fork"
+  state_file="$ws/scripts/heartbeat/identity-backup.json"
+  recipient=$(yq '.backup.identity.recipient // ""' "$agent_yml" 2>/dev/null || true)
   [ "$recipient" = "null" ] && recipient=""
-  current=$(identity_hash "$state_dir" "$recipient" 2>/dev/null || echo "")
+  if command -v backup_dest_resolve >/dev/null 2>&1; then
+    dtype=$(backup_dest_resolve "$agent_yml")
+    dtype="${dtype%%$'\t'*}"
+  fi
+  # 046: with an associated repository, identity_backup.enabled: false stops the
+  # supervisor's trigger too, as backup-status reports. Fork: the pre-046 rule.
+  if [ "$dtype" = "repo" ]; then
+    local bi_enabled
+    bi_enabled=$(yq '.features.identity_backup.enabled' "$agent_yml" 2>/dev/null || true)
+    [ "$bi_enabled" = "false" ] && return 0
+  fi
+  if [ "$dtype" = "repo" ] && command -v identity_secrets_file >/dev/null 2>&1; then
+    current=$(identity_hash "$state_dir" "$recipient" \
+                "$(identity_secrets_file repo "$ws" "$state_dir")" 2>/dev/null || echo "")
+  else
+    current=$(identity_hash "$state_dir" "$recipient" 2>/dev/null || echo "")
+  fi
   last=$(identity_last_hash "$state_file" 2>/dev/null || echo "")
 
   [ -z "$current" ] && return 0
-  if [ "$current" != "$last" ]; then
-    _trigger_identity_backup "watchdog-hash-change"
+  [ "$current" = "$last" ] && return 0
+
+  # 046 (U2, "the supervisor does not insist"): with an associated repository, a
+  # failed attempt on this same content (or one that ended before hashing) is not
+  # retried before IDENTITY_BACKUP_RETRY_S. An unreadable state counts as no
+  # previous attempt. Fork: the pre-046 rule.
+  if [ "$dtype" = "repo" ]; then
+    local lr ah le nowc retry
+    lr=$(jq -r '.last_result // ""' "$state_file" 2>/dev/null || true)
+    ah=$(jq -r '.attempt_hash // ""' "$state_file" 2>/dev/null || true)
+    le=$(jq -r '.last_attempt_epoch // "" | tostring' "$state_file" 2>/dev/null || true)
+    nowc="${BACKUP_DEST_NOW:-$now}"
+    retry="${IDENTITY_BACKUP_RETRY_S:-900}"
+    case "$retry" in ''|*[!0-9]*) retry=900 ;; esac
+    case "$nowc" in ''|*[!0-9]*) nowc="$now" ;; esac
+    case "$le" in
+      ''|*[!0-9]*) ;;
+      *)
+        if [ -n "$lr" ] && [ "$lr" != "ok" ] && [ "$lr" != "no-change" ] \
+           && { [ -z "$ah" ] || [ "$ah" = "$current" ]; } \
+           && [ $((nowc - le)) -lt "$retry" ]; then
+          return 0
+        fi
+        ;;
+    esac
   fi
+  _trigger_identity_backup "watchdog-hash-change"
+  return 0
 }
 
 # ── Auth-flip detection (Story A) ─────────────────────────
@@ -1383,6 +1472,12 @@ main() {
 
   # Start the QMD inotify watcher (no-op unless vault.qmd.enabled).
   qmd_watch_start
+
+  # 046 (A4): create or repair the agent's work clone, once per boot, in the
+  # background; never from _run_watchdog. A failure is logged and changes nothing.
+  if command -v agent_repo_ensure >/dev/null 2>&1; then
+    ( agent_repo_ensure "${WORKDIR:-/workspace}/agent.yml" || true ) >/dev/null 2>&1 &
+  fi
 
   _run_watchdog
 }

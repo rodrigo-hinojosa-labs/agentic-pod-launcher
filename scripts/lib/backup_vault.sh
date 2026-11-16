@@ -226,3 +226,104 @@ vault_write_state() {
     > "$tmp"
   mv "$tmp" "$state_file"
 }
+
+# ── 046: the repo path (an associated private repository, docker mode) ──────
+#
+# Contract: specs/046-agent-backup-repo/contracts/backup-units.md (U1, U4). Only
+# heartbeatctl calls these, and only when backup_dest_resolve answers `repo`;
+# local mode never reaches them. They keep this unit's own cache, tree, commit and
+# push (constitution, Principle V).
+
+_vault_repo_git() {
+  local secs="${BACKUP_GIT_TIMEOUT_S:-60}" askpass="/bin/true"
+  if command -v backup_dest_askpass > /dev/null 2>&1; then
+    askpass=$(backup_dest_askpass repo)
+  fi
+  if command -v timeout > /dev/null 2>&1; then
+    timeout -k 10 "$secs" env GIT_TERMINAL_PROMPT=0 GIT_ASKPASS="$askpass" \
+      GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 LC_ALL=C git "$@" 9>&-
+  else
+    env GIT_TERMINAL_PROMPT=0 GIT_ASKPASS="$askpass" \
+      GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 LC_ALL=C git "$@" 9>&-
+  fi
+}
+
+# vault_repo_prepare URL REMOTE_HEAD [KEEP_STORE] -> stdout: the cache dir. With
+# KEEP_STORE=1 the store/ directory survives the wipe of the tree (block reuse).
+vault_repo_prepare() {
+  local url="$1" remote_head="$2" keep_store="${3:-0}"
+  local base="${VAULT_BACKUP_CACHE_DIR:-/home/agent/.cache/agent-backup}"
+  local dir="$base/vault-repo"
+  mkdir -p "$base" || return 2
+  if [ -z "$remote_head" ] || [ ! -d "$dir/.git" ]; then
+    rm -rf "$dir"
+    mkdir -p "$dir" || return 2
+    _vault_repo_git -C "$dir" init -q > /dev/null 2>&1 || return 2
+    _vault_repo_git -C "$dir" symbolic-ref HEAD refs/heads/backup/vault || return 2
+    _vault_repo_git -C "$dir" remote add origin "$url" || return 2
+  else
+    _vault_repo_git -C "$dir" remote set-url origin "$url" > /dev/null 2>&1 \
+      || _vault_repo_git -C "$dir" remote add origin "$url" > /dev/null 2>&1 || return 2
+  fi
+  if [ -n "$remote_head" ]; then
+    _vault_repo_git -C "$dir" fetch -q --depth 1 origin \
+      "+refs/heads/backup/vault:refs/remotes/origin/backup/vault" > /dev/null 2>&1 || return 2
+    _vault_repo_git -C "$dir" checkout -q -f -B backup/vault \
+      refs/remotes/origin/backup/vault > /dev/null 2>&1 || return 2
+  fi
+  if [ "$keep_store" = "1" ]; then
+    find "$dir" -mindepth 1 -maxdepth 1 ! -name .git ! -name store -exec rm -rf {} + 2> /dev/null
+  else
+    find "$dir" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} + 2> /dev/null
+  fi
+  printf '%s\n' "$dir"
+}
+
+# vault_repo_stage_markdown DIR VAULT_DIR: copies the markdown subset, with its
+# structure, into the tree (the plaintext form of the unit).
+vault_repo_stage_markdown() {
+  local dir="$1" vault_dir="$2" path rel
+  while IFS= read -r -d '' path; do
+    rel="${path#"$vault_dir"/}"
+    mkdir -p "$(dirname "$dir/$rel")" || return 3
+    cp -a "$path" "$dir/$rel" || return 3
+  done < <(vault_list_markdown "$vault_dir")
+  return 0
+}
+
+# vault_repo_commit_and_push DIR AGENT -> "<sha>" or "-"; rc 2 push failed, 3 error.
+# The tree is already staged by the caller (markdown or store/).
+vault_repo_commit_and_push() {
+  local dir="$1" agent="$2" sha
+  backup_dest_mark_json "$agent" vault > "$dir/.agentic-pod-backup.json" || return 3
+  _vault_repo_git -C "$dir" add -A > /dev/null 2>&1 || return 3
+  if _vault_repo_git -C "$dir" rev-parse --verify -q HEAD > /dev/null 2>&1 \
+     && _vault_repo_git -C "$dir" diff --cached --quiet > /dev/null 2>&1; then
+    printf -- '-\n'
+    return 0
+  fi
+  _vault_repo_git -C "$dir" -c user.email=vault-backup@localhost -c user.name=vault-backup \
+    commit -q -m "vault snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ)" > /dev/null 2>&1 || return 3
+  _vault_repo_git -C "$dir" push -q origin HEAD:refs/heads/backup/vault > /dev/null 2>&1 || return 2
+  sha=$(_vault_repo_git -C "$dir" rev-parse HEAD 2> /dev/null) || return 3
+  printf '%s\n' "$sha"
+}
+
+# vault_repo_write_state FILE HASH COMMIT PUSH [STORE_RECIPIENT]: merges the unit
+# fields, keeping the record of the last attempt. Atomic.
+vault_repo_write_state() {
+  local f="$1" hash="$2" commit="$3" push="$4" recip="${5-__keep__}" dir tmp base='{}'
+  dir=$(dirname "$f")
+  mkdir -p "$dir"
+  if [ -s "$f" ] && jq -e 'type == "object"' "$f" > /dev/null 2>&1; then
+    base=$(cat "$f")
+  fi
+  tmp=$(mktemp "$dir/.vault-backup.json.XXXXXX")
+  if jq --arg hash "$hash" --arg commit "$commit" --arg push "$push" --arg recip "$recip" \
+        '. + {hash:$hash, last_commit:$commit, last_push:$push}
+         + (if $recip == "__keep__" then {} else {store_recipient:$recip} end)' <<< "$base" > "$tmp"; then
+    mv -f "$tmp" "$f"
+  else
+    rm -f "$tmp"
+  fi
+}

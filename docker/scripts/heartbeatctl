@@ -40,6 +40,16 @@ elif [ -f "$_HBCTL_RELOCATED_LIB/backup_vault.sh" ]; then
 fi
 # shellcheck source=/dev/null
 [ -f "$LIB_DIR/backup_config.sh" ]   && source "$LIB_DIR/backup_config.sh"
+# 046: the destination rule, the push credential, the privacy check and the unit
+# locks (shared, non-committing). Without it every unit keeps its pre-046 path.
+# shellcheck source=/dev/null
+[ -f "$LIB_DIR/backup_dest.sh" ]     && source "$LIB_DIR/backup_dest.sh"
+# shellcheck source=/dev/null
+[ -f "$LIB_DIR/backup_memory.sh" ]   && source "$LIB_DIR/backup_memory.sh"
+# shellcheck source=/dev/null
+[ -f "$LIB_DIR/backup_history.sh" ]  && source "$LIB_DIR/backup_history.sh"
+# shellcheck source=/dev/null
+[ -f "$LIB_DIR/agent_repo.sh" ]      && source "$LIB_DIR/agent_repo.sh"
 # shellcheck source=/dev/null
 [ -f "$LIB_DIR/token_health.sh" ]    && source "$LIB_DIR/token_health.sh"
 # shellcheck source=/dev/null
@@ -61,6 +71,15 @@ IDENTITY_STATE_DIR="${IDENTITY_STATE_DIR:-$WORKSPACE/.state}"
 IDENTITY_BACKUP_STATE_FILE="$HEARTBEAT_DIR/identity-backup.json"
 VAULT_BACKUP_STATE_FILE="$HEARTBEAT_DIR/vault-backup.json"
 CONFIG_BACKUP_STATE_FILE="$HEARTBEAT_DIR/config-backup.json"
+# 046: one heartbeat dir for the destination record, the unit state files and the
+# unit locks; backup_dest.sh derives all of them from BACKUP_DEST_STATE_FILE.
+MEMORY_BACKUP_STATE_FILE="$HEARTBEAT_DIR/memory-backup.json"
+HISTORY_BACKUP_STATE_FILE="$HEARTBEAT_DIR/history-backup.json"
+# The store tool (block-store.md). Host tests point it at the repo copy.
+BACKUP_STORE_PY="${BACKUP_STORE_PY:-/opt/agent-admin/scripts/backup_store.py}"
+BACKUP_DEST_STATE_FILE="$HEARTBEAT_DIR/backup-dest.json"
+BACKUP_DEST_AGENT_YML="$AGENT_YML"
+export BACKUP_DEST_STATE_FILE BACKUP_DEST_AGENT_YML
 TOKEN_HEALTH_DIR="$HEARTBEAT_DIR/token-health"
 # qmd_index.sh (sourced above) reads this for the reindex state file.
 QMD_INDEX_STATE_FILE="${QMD_INDEX_STATE_FILE:-$HEARTBEAT_DIR/qmd-index.json}"
@@ -96,20 +115,37 @@ Mutate (all atomic with rollback against agent.yml.prev):
 
 Backup:
   backup-identity [--configure-key <pubkey>] [--disable] [--dry-run] [--gc]
-                          Snapshot identity (login, pairing, plugin config,
-                          encrypted .env) to the 'backup/identity' branch
-                          on the agent's fork. Idempotent. See
+                          Snapshot identity (pairing, plugin config, settings,
+                          encrypted .env) to the 'backup/identity' branch on the
+                          agent's repository (046) or its fork. The /login login
+                          does not travel in any backup. Idempotent. See
                           docs/superpowers/specs/2026-04-22-identity-backup-design.md.
   backup-vault    [--dry-run] [--gc]
                           Snapshot the vault's markdown to the 'backup/vault'
                           branch. Excludes Obsidian per-device config (.obsidian/
                           workspace*.json, cache, .trash, sync-conflict files).
                           Idempotent via sha256 over content + filenames.
+  backup-memory   [--dry-run]
+                          (046) Snapshot the auto memory, claude-mem and the
+                          backup.extra_paths to 'backup/memory' on the agent's
+                          associated repository (encrypted where data-model
+                          section 5 says). Repository only: never a fork.
+  backup-history  [--dry-run]
+                          (046) Snapshot the conversation history, always
+                          encrypted, to 'backup/history'. Repository only.
+  backup-status   [--json]
+                          (046) Where each backup unit stands: destination,
+                          credential (present or missing, never its value), key,
+                          extra paths, caches and the work clone. Read-only.
   backup-config   [--dry-run] [--gc]
                           Snapshot agent.yml (plaintext config, no secrets) to
-                          the 'backup/config' branch. Restored first by
-                          setup.sh --restore-from-fork so the agent.yml is
-                          available before identity + vault are pulled.
+                          the 'backup/config' branch. On the agent's repository
+                          (046) it also carries CLAUDE.md, personas/, the compose
+                          override and the workspace .claude/ customizations
+                          (encrypted for a sensitive agent; agent.yml always in
+                          plaintext). Restored first by setup.sh
+                          --restore-from-fork so the agent.yml is available
+                          before the other units are pulled.
 
 Token health:
   token-check             Probe configured token endpoints (GitHub PAT, Telegram
@@ -244,6 +280,20 @@ _v_cron5() {
   _v_cron5_field "${f[4]}" 0 7 1
 }
 
+# 046: a five-field schedule where `*` and `*/N` are allowed in every field, the
+# minute included (U7), unlike _v_cron5 (the weekly review notice).
+_v_cron5_any() {
+  local sched="$1"
+  local -a f
+  IFS=' ' read -r -a f <<< "$sched"
+  [ "${#f[@]}" -eq 5 ] || return 1
+  _v_cron5_field "${f[0]}" 0 59 1 || return 1
+  _v_cron5_field "${f[1]}" 0 23 1 || return 1
+  _v_cron5_field "${f[2]}" 1 31 1 || return 1
+  _v_cron5_field "${f[3]}" 1 12 1 || return 1
+  _v_cron5_field "${f[4]}" 0 7 1
+}
+
 # 037: default weekly-review prompt text, localized (molde voice_signoff_default,
 # feature 034; mixed -> spanish). Placeholders {{VAULT_DIR}}/{{WORKSPACE}} are
 # substituted by the caller. No accented characters by design (heredoc -> yq ->
@@ -321,7 +371,19 @@ CONF
   local bi_enabled bi_schedule
   bi_enabled=$(_yq '.features.identity_backup.enabled')
   bi_schedule=$(_yq '.features.identity_backup.schedule // "30 3 * * *"')
-  if [ "$bi_enabled" = "true" ]; then
+  # 046 (U7, D20): with an associated repository the daily line exists unless the
+  # operator disabled it explicitly; with a fork or no destination, only when it
+  # is true, as before.
+  local bi_dest="none"
+  if command -v backup_dest_resolve > /dev/null 2>&1; then
+    bi_dest=$(backup_dest_resolve "$AGENT_YML")
+    bi_dest="${bi_dest%%$'\t'*}"
+  fi
+  if [ "$bi_dest" = "repo" ]; then
+    if [ "$bi_enabled" != "false" ]; then
+      backup_line="$bi_schedule /usr/local/bin/heartbeatctl backup-identity >> /workspace/scripts/heartbeat/logs/backup-identity.log 2>&1"
+    fi
+  elif [ "$bi_enabled" = "true" ]; then
     backup_line="$bi_schedule /usr/local/bin/heartbeatctl backup-identity >> /workspace/scripts/heartbeat/logs/backup-identity.log 2>&1"
   fi
 
@@ -424,6 +486,29 @@ CONF
     fi
   fi
 
+  # 046 (U7): the memory and history lines, only with an associated repository,
+  # an enabled unit and a valid five-field schedule (`*` and `*/N` allowed in every
+  # field, the minute included). Concatenated onto the last heredoc slot, like
+  # review_line, so a crontab without them does not gain even a blank line.
+  local repo_units_line=""
+  if [ "$bi_dest" = "repo" ]; then
+    local _ru _ru_en _ru_sched
+    for _ru in memory history; do
+      _ru_en=$(_yq ".features.${_ru}_backup.enabled")
+      [ "$_ru_en" = "false" ] && continue
+      if [ "$_ru" = "memory" ]; then
+        _ru_sched=$(_yq '.features.memory_backup.schedule // "40 3 * * *"')
+      else
+        _ru_sched=$(_yq '.features.history_backup.schedule // "50 3 * * *"')
+      fi
+      if _v_cron5_any "$_ru_sched"; then
+        repo_units_line="${repo_units_line}"$'\n'"$_ru_sched /usr/local/bin/heartbeatctl backup-$_ru >> /workspace/scripts/heartbeat/logs/backup-$_ru.log 2>&1"
+      else
+        echo "heartbeatctl: WARN invalid features.${_ru}_backup.schedule — backup-$_ru line omitted" >&2
+      fi
+    done
+  fi
+
   local tmp_crontab="${CRONTAB_FILE}.tmp"
   if ! cat > "$tmp_crontab" <<CT
 # Cron for in-container agent heartbeat + identity/vault/config backup + token-health + qmd reindex + wiki-graph. Managed by heartbeatctl.
@@ -433,7 +518,7 @@ ${vault_backup_line}
 ${config_backup_line}
 ${token_health_line}
 ${qmd_reindex_line}
-${wiki_graph_line}${review_line}
+${wiki_graph_line}${review_line}${repo_units_line}
 CT
   then
     rm -f "$tmp_crontab"
@@ -774,6 +859,14 @@ _bi_run() {
     return 0
   fi
 
+  # 046: with an associated repository, the repo path (U1). The rest of this
+  # function is the fork / no-destination path, unchanged.
+  local _dest_url
+  if _dest_url=$(_repo_dest_url); then
+    _bi_run_repo "$_dest_url" "$dry_run"
+    return $?
+  fi
+
   local fork_url recipient
   fork_url=$(_yq '.scaffold.fork.url')
   recipient=$(_yq '.backup.identity.recipient')
@@ -838,6 +931,16 @@ _bi_configure_key() {
   }
   echo "backup-identity: recipient updated"
 
+  # 046 (U2, D29): with an associated repository, the fingerprint the operator
+  # must recognise, and the consequence for the encrypted units.
+  if _repo_dest_url > /dev/null 2>&1; then
+    local _fp _comment
+    _fp=$(python3 "$BACKUP_STORE_PY" fingerprint "$key" 2> /dev/null) || _fp="unknown"
+    _comment=$(printf '%s\n' "$key" | awk '{ $1 = ""; $2 = ""; sub(/^  */, ""); print }')
+    echo "backup-identity: key fingerprint $_fp (${_comment:-no comment})"
+    echo "backup-identity: encrypted units re-encrypt for this key on their next run (full upload)"
+  fi
+
   _bi_run
 }
 _bi_disable() {
@@ -847,6 +950,13 @@ _bi_disable() {
 }
 
 _bi_gc_then_run() {
+  local _dest_url
+  if _dest_url=$(_repo_dest_url); then
+    local _c="${IDENTITY_BACKUP_CACHE_DIR:-/home/agent/.cache/identity-backup}/identity-repo"
+    _repo_gc_locked identity "$_c"
+    _bi_run
+    return $?
+  fi
   local fork_url
   fork_url=$(_yq '.scaffold.fork.url')
   [ -z "$fork_url" ] && { echo "backup-identity: no fork url"; return 0; }
@@ -913,6 +1023,19 @@ _bv_run() {
     return 0
   fi
 
+  # 046: with an associated repository, the repo path (U1, U4).
+  local _dest_url
+  if _dest_url=$(_repo_dest_url); then
+    _bv_run_repo "$_dest_url" "$dry_run" "$vault_dir"
+    return $?
+  fi
+  # 046 (U4, I13): a sensitive agent's vault never travels in plaintext, and a fork
+  # cannot carry it encrypted.
+  if [ "$(_yq '.backup.sensitive')" = "true" ] && [ -n "$(_yq '.scaffold.fork.url')" ]; then
+    echo "backup-vault: this agent is marked as sensitive and has no agent repository - not pushing the vault in plaintext"
+    return 0
+  fi
+
   local fork_url
   fork_url=$(_yq '.scaffold.fork.url')
 
@@ -953,6 +1076,13 @@ _bv_run() {
 }
 
 _bv_gc_then_run() {
+  local _dest_url
+  if _dest_url=$(_repo_dest_url); then
+    local _c="${VAULT_BACKUP_CACHE_DIR:-/home/agent/.cache/agent-backup}/vault-repo"
+    _repo_gc_locked vault "$_c"
+    _bv_run
+    return $?
+  fi
   local fork_url
   fork_url=$(_yq '.scaffold.fork.url')
   [ -z "$fork_url" ] && { echo "backup-vault: no fork url"; return 0; }
@@ -999,6 +1129,19 @@ _bc_run() {
     return 0
   fi
 
+  # 046: with an associated repository, the repo path (U1, U3). Then, whatever the
+  # result, the work clone is created or repaired (A4), without changing the
+  # unit's exit code or output.
+  local _dest_url
+  if _dest_url=$(_repo_dest_url); then
+    local _bc_rc=0
+    _bc_run_repo "$_dest_url" "$dry_run" || _bc_rc=$?
+    if [ "$dry_run" != "1" ] && command -v agent_repo_ensure > /dev/null 2>&1; then
+      agent_repo_ensure "$AGENT_YML" > /dev/null 2>&1 || true
+    fi
+    return "$_bc_rc"
+  fi
+
   local fork_url
   fork_url=$(_yq '.scaffold.fork.url')
 
@@ -1039,6 +1182,13 @@ _bc_run() {
 }
 
 _bc_gc_then_run() {
+  local _dest_url
+  if _dest_url=$(_repo_dest_url); then
+    local _c="${CONFIG_BACKUP_CACHE_DIR:-/home/agent/.cache/agent-backup}/config-repo"
+    _repo_gc_locked config "$_c"
+    _bc_run
+    return $?
+  fi
   local fork_url
   fork_url=$(_yq '.scaffold.fork.url')
   [ -z "$fork_url" ] && { echo "backup-config: no fork url"; return 0; }
@@ -1046,6 +1196,748 @@ _bc_gc_then_run() {
   clone_dir=$(config_prepare_clone "$fork_url")
   (cd "$clone_dir" && git gc --prune=now --aggressive >/dev/null 2>&1) || true
   _bc_run
+}
+
+# ── 046: the repo path of the backup units ─────────────────────────────────
+#
+# Contract: specs/046-agent-backup-repo/contracts/backup-units.md (U1). These
+# helpers never stage, commit or push: each unit's own library does that. They
+# take the unit lock, check the credential and the destination, print the U1
+# message and record the attempt (backup_dest_record).
+
+# _repo_dest_url -> stdout: the associated repository URL; rc 1 when the
+# destination is a fork, nothing, or backup_dest.sh did not load.
+_repo_dest_url() {
+  command -v backup_dest_resolve > /dev/null 2>&1 || return 1
+  local d
+  d=$(backup_dest_resolve "$AGENT_YML")
+  [ "${d%%$'\t'*}" = "repo" ] || return 1
+  printf '%s\n' "${d#*$'\t'}"
+}
+
+_REPO_RC=0
+
+# _repo_end: releases the unit lock.
+_repo_end() {
+  backup_dest_unlock
+}
+
+# _repo_gc_locked UNIT CACHE_DIR: git gc on a unit cache only while holding the unit
+# lock, since a concurrent run (the supervisor's trigger) could be committing there.
+# Silent when the lock is taken: the run that follows reports it.
+_repo_gc_locked() {
+  [ -d "$2/.git" ] || return 0
+  backup_dest_lock "$1" || return 0
+  if command -v timeout > /dev/null 2>&1; then
+    (cd "$2" && timeout -k 10 600 env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
+       git gc --prune=now --aggressive > /dev/null 2>&1 9>&-) || true
+  else
+    (cd "$2" && GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
+       git gc --prune=now --aggressive > /dev/null 2>&1 9>&-) || true
+  fi
+  backup_dest_unlock
+}
+
+# 1 while a --dry-run runs: _repo_fail then records nothing (the supervisor and
+# backup-status read that record).
+_REPO_DRY=0
+
+# _repo_fail UNIT RESULT [ATTEMPTED_HASH] [REASON]: the U1 message, the record of
+# the attempt, the lock released, and _REPO_RC set to the U1 exit code.
+_repo_fail() {
+  local unit="$1" result="$2" attempted="${3:-}" reason="${4:-}"
+  case "$result" in
+    no-credential)  echo "backup-$unit: no GITHUB_PAT in the environment - cannot push to the agent repository"; _REPO_RC=0 ;;
+    nothing-to-back-up) echo "backup-$unit: nothing to back up yet"; _REPO_RC=0 ;;
+    no-recipient)   echo "backup-$unit: no encryption key (backup.identity.recipient) - nothing pushed"; _REPO_RC=0 ;;
+    not-private)    echo "backup-$unit: the repository is public - refusing to push"; _REPO_RC=0 ;;
+    unverified)     echo "backup-$unit: could not verify that the repository is private - refusing to push"; _REPO_RC=0 ;;
+    foreign-branch) echo "backup-$unit: branch backup/$unit exists and is not a launcher backup - refusing to write"; _REPO_RC=0 ;;
+    other-agent)    echo "backup-$unit: branch backup/$unit belongs to another agent - refusing to write"; _REPO_RC=0 ;;
+    unreachable)    echo "backup-$unit: repository unreachable (credential, network or missing repository)"; _REPO_RC=2 ;;
+    push-failed)    echo "backup-$unit: push failed" >&2; _REPO_RC=2 ;;
+    *)              echo "backup-$unit: could not build the backup (${reason:-unknown})" >&2; result="error"; _REPO_RC=2 ;;
+  esac
+  [ "$_REPO_DRY" = "1" ] || backup_dest_record "$unit" "$result" "$attempted"
+  _repo_end
+}
+
+# _repo_begin UNIT [DRY_RUN]: steps 2 and 3 of U1 (the lock and the credential).
+# rc 0 to continue; rc 1 to stop, with _REPO_RC set.
+_repo_begin() {
+  local unit="$1"
+  _REPO_RC=0
+  _REPO_DRY="${2:-0}"
+  if ! backup_dest_lock "$unit"; then
+    echo "backup-$unit: another run holds the lock - skipping"
+    _REPO_RC=0
+    return 1
+  fi
+  if [ -z "${GITHUB_PAT:-}" ]; then
+    _repo_fail "$unit" no-credential
+    return 1
+  fi
+  return 0
+}
+
+# _repo_verify UNIT URL HASH HEADS_FILE: step 7 of U1 (privacy and the heads of
+# the repository). rc 0 with _REPO_REMOTE_HEAD set (empty when the unit's branch
+# does not exist); rc 1 to stop, with the attempt recorded.
+_REPO_REMOTE_HEAD=""
+_repo_verify() {
+  local unit="$1" url="$2" hash="$3" heads="$4" verdict
+  _REPO_REMOTE_HEAD=""
+  verdict=$(backup_dest_verify "$url" "$heads")
+  case "$verdict" in
+    private|unverified-allowed)
+      _REPO_REMOTE_HEAD=$(backup_dest_branch_head "$heads" "backup/$unit")
+      return 0 ;;
+    public)     _repo_fail "$unit" not-private "$hash" ;;
+    unverified) _repo_fail "$unit" unverified "$hash" ;;
+    *)          _repo_fail "$unit" unreachable "$hash" ;;
+  esac
+  return 1
+}
+
+# _repo_state_field FILE FIELD -> a field of a unit state file, empty if unreadable.
+_repo_state_field() {
+  [ -s "$1" ] || return 0
+  jq -r --arg k "$2" '.[$k] // "" | tostring' "$1" 2> /dev/null || true
+}
+
+# _repo_commit_iso DIR REV -> the commit date of REV in ISO 8601 UTC with Z.
+_repo_commit_iso() {
+  local e
+  e=$(GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C "$1" log -1 --format=%ct "$2" 2> /dev/null) || e=""
+  [ -n "$e" ] || e=$(date +%s)
+  date -u -d "@$e" +%Y-%m-%dT%H:%M:%SZ 2> /dev/null || date -u -r "$e" +%Y-%m-%dT%H:%M:%SZ
+}
+
+_repo_agent_name() {
+  local n
+  n=$(_yq '.agent.name' 2> /dev/null) || n=""
+  printf '%s\n' "${n:-agent}"
+}
+
+_repo_now_iso() {
+  date -u +"%Y-%m-%dT%H:%M:%SZ"
+}
+
+# _repo_owner_ok UNIT DIR HASH: step 10 of U1. rc 1 (attempt recorded) when the
+# remote branch is not this agent's.
+_repo_owner_ok() {
+  local unit="$1" dir="$2" hash="$3"
+  case "$(backup_dest_check_owner "$dir" "backup/$unit" "$(_repo_agent_name)" "$unit")" in
+    foreign)     _repo_fail "$unit" foreign-branch "$hash"; return 1 ;;
+    other-agent) _repo_fail "$unit" other-agent "$hash"; return 1 ;;
+  esac
+  return 0
+}
+
+# identity, repo path: the thirteen steps of U1 (U2).
+_bi_run_repo() {
+  local url="$1" dry_run="${2:-0}"
+  _repo_begin identity "$dry_run" || return "$_REPO_RC"
+
+  local recipient secrets current_hash last_hash last_commit base
+  recipient=$(_yq '.backup.identity.recipient')
+  [ "$recipient" = "null" ] && recipient=""
+  secrets=$(identity_secrets_file repo "$WORKSPACE" "$IDENTITY_STATE_DIR")
+  current_hash=$(identity_hash "$IDENTITY_STATE_DIR" "$recipient" "$secrets" 2> /dev/null) || current_hash=""
+  if [ -z "$current_hash" ]; then
+    _repo_fail identity error "" "hash"
+    return "$_REPO_RC"
+  fi
+  last_hash=$(_repo_state_field "$IDENTITY_BACKUP_STATE_FILE" hash)
+
+  if [ "$dry_run" = "1" ]; then
+    if [ -n "$last_hash" ] && [ "$current_hash" = "$last_hash" ]; then
+      echo "backup-identity: no changes since last backup (hash $last_hash)"
+    else
+      echo "backup-identity: dry-run (no push) — would change from ${last_hash:-<none>} to $current_hash"
+    fi
+    _repo_end
+    return 0
+  fi
+
+  base="${IDENTITY_BACKUP_CACHE_DIR:-/home/agent/.cache/identity-backup}"
+  mkdir -p "$base"
+  _repo_verify identity "$url" "$current_hash" "$base/identity-repo.heads" || return "$_REPO_RC"
+
+  last_commit=$(_repo_state_field "$IDENTITY_BACKUP_STATE_FILE" last_commit)
+  if [ -n "$last_hash" ] && [ "$current_hash" = "$last_hash" ] \
+     && [ -n "$_REPO_REMOTE_HEAD" ] && [ "$_REPO_REMOTE_HEAD" = "$last_commit" ]; then
+    echo "backup-identity: no changes since last backup (hash $last_hash)"
+    backup_dest_record identity no-change "$current_hash"
+    _repo_end
+    return 0
+  fi
+
+  local dir
+  if ! dir=$(identity_repo_prepare "$url" "$_REPO_REMOTE_HEAD"); then
+    _repo_fail identity unreachable "$current_hash"
+    return "$_REPO_RC"
+  fi
+  _repo_owner_ok identity "$dir" "$current_hash" || return "$_REPO_RC"
+
+  local result rc=0 sha mode push
+  result=$(identity_repo_commit_and_push "$dir" "$IDENTITY_STATE_DIR" "$recipient" "$secrets" \
+             "$(_repo_agent_name)") || rc=$?
+  case "$rc" in
+    0) ;;
+    2) _repo_fail identity push-failed "$current_hash"; return "$_REPO_RC" ;;
+    *) _repo_fail identity error "$current_hash" "staging"; return "$_REPO_RC" ;;
+  esac
+  sha="${result%% *}"
+  mode="${result##* }"
+  if [ "$sha" = "-" ]; then
+    push=$(_repo_state_field "$IDENTITY_BACKUP_STATE_FILE" last_push)
+    [ -n "$push" ] || push=$(_repo_commit_iso "$dir" "$_REPO_REMOTE_HEAD")
+    identity_repo_write_state "$IDENTITY_BACKUP_STATE_FILE" "$current_hash" "$mode" "$_REPO_REMOTE_HEAD" "$push"
+    echo "backup-identity: no changes after stage-diff (hash $current_hash)"
+    backup_dest_record identity no-change "$current_hash"
+    _repo_end
+    return 0
+  fi
+  identity_repo_write_state "$IDENTITY_BACKUP_STATE_FILE" "$current_hash" "$mode" "$sha" "$(_repo_now_iso)"
+  backup_dest_record identity ok "$current_hash"
+  printf 'backup-identity: %s pushed (%s)\n' "${sha:0:8}" "$mode"
+  _repo_end
+  return 0
+}
+
+# vault, repo path (U1, U4): the markdown in plaintext.
+_bv_run_repo() {
+  local url="$1" dry_run="${2:-0}" vault_dir="$3"
+  _repo_begin vault "$dry_run" || return "$_REPO_RC"
+
+  local n=0 _p
+  while IFS= read -r -d '' _p; do n=$((n + 1)); done < <(vault_list_markdown "$vault_dir")
+  if [ "$n" -eq 0 ]; then
+    _repo_fail vault nothing-to-back-up
+    return "$_REPO_RC"
+  fi
+
+  local current_hash last_hash last_commit base sensitive recipient
+  base="${VAULT_BACKUP_CACHE_DIR:-/home/agent/.cache/agent-backup}"
+  mkdir -p "$base"
+  sensitive=$(_repo_sensitive)
+  recipient=$(_yq '.backup.identity.recipient')
+  if [ "$sensitive" = "true" ]; then
+    # U4: the same files, all of them in store/.
+    : > "$base/vault-repo.map"
+    local _rel
+    while IFS= read -r -d '' _p; do
+      _rel="${_p#"$vault_dir"/}"
+      printf '%s\0%s\0' "$_rel" "$_p" >> "$base/vault-repo.map"
+    done < <(vault_list_markdown "$vault_dir")
+    if [ -z "$recipient" ]; then
+      _repo_fail vault no-recipient
+      return "$_REPO_RC"
+    fi
+    current_hash=$(_repo_store_digest "$base/vault-repo.map" "$base/vault-repo.snap" "$sensitive" "$recipient") || current_hash=""
+  else
+    current_hash=$(vault_hash "$vault_dir" 2> /dev/null) || current_hash=""
+  fi
+  if [ -z "$current_hash" ]; then
+    _repo_fail vault error "" "hash"
+    return "$_REPO_RC"
+  fi
+  last_hash=$(_repo_state_field "$VAULT_BACKUP_STATE_FILE" hash)
+
+  if [ "$dry_run" = "1" ]; then
+    if [ -n "$last_hash" ] && [ "$current_hash" = "$last_hash" ]; then
+      echo "backup-vault: no changes since last backup (hash $last_hash)"
+    else
+      echo "backup-vault: dry-run (no push) — would change from ${last_hash:-<none>} to $current_hash"
+    fi
+    _repo_end
+    return 0
+  fi
+
+  _repo_verify vault "$url" "$current_hash" "$base/vault-repo.heads" || return "$_REPO_RC"
+
+  last_commit=$(_repo_state_field "$VAULT_BACKUP_STATE_FILE" last_commit)
+  if [ -n "$last_hash" ] && [ "$current_hash" = "$last_hash" ] \
+     && [ -n "$_REPO_REMOTE_HEAD" ] && [ "$_REPO_REMOTE_HEAD" = "$last_commit" ]; then
+    echo "backup-vault: no changes since last backup (hash $last_hash)"
+    backup_dest_record vault no-change "$current_hash"
+    _repo_end
+    return 0
+  fi
+
+  local dir keep=0 store_recip="__keep__"
+  [ "$sensitive" = "true" ] && keep=1
+  if ! dir=$(vault_repo_prepare "$url" "$_REPO_REMOTE_HEAD" "$keep"); then
+    _repo_fail vault unreachable "$current_hash"
+    return "$_REPO_RC"
+  fi
+  _repo_owner_ok vault "$dir" "$current_hash" || return "$_REPO_RC"
+  if [ "$sensitive" = "true" ]; then
+    if ! store_recip=$(_repo_store_pack vault "$dir" "$base/vault-repo" "$base/vault-repo.map" \
+                         "$VAULT_BACKUP_STATE_FILE" "$recipient"); then
+      _repo_fail vault error "$current_hash" "store"
+      return "$_REPO_RC"
+    fi
+  elif ! vault_repo_stage_markdown "$dir" "$vault_dir"; then
+    _repo_fail vault error "$current_hash" "staging"
+    return "$_REPO_RC"
+  fi
+
+  local sha rc=0 push
+  sha=$(vault_repo_commit_and_push "$dir" "$(_repo_agent_name)") || rc=$?
+  case "$rc" in
+    0) ;;
+    2) _repo_fail vault push-failed "$current_hash"; return "$_REPO_RC" ;;
+    *) _repo_fail vault error "$current_hash" "commit"; return "$_REPO_RC" ;;
+  esac
+  if [ "$sha" = "-" ]; then
+    push=$(_repo_state_field "$VAULT_BACKUP_STATE_FILE" last_push)
+    [ -n "$push" ] || push=$(_repo_commit_iso "$dir" "$_REPO_REMOTE_HEAD")
+    vault_repo_write_state "$VAULT_BACKUP_STATE_FILE" "$current_hash" "$_REPO_REMOTE_HEAD" "$push" "$store_recip"
+    echo "backup-vault: no changes after stage-diff (hash $current_hash)"
+    backup_dest_record vault no-change "$current_hash"
+    _repo_end
+    return 0
+  fi
+  vault_repo_write_state "$VAULT_BACKUP_STATE_FILE" "$current_hash" "$sha" "$(_repo_now_iso)" "$store_recip"
+  backup_dest_record vault ok "$current_hash"
+  printf 'backup-vault: %s pushed\n' "${sha:0:8}"
+  _repo_end
+  return 0
+}
+
+# config, repo path (U1, U3): for now, agent.yml and the mark.
+_bc_run_repo() {
+  local url="$1" dry_run="${2:-0}"
+  _repo_begin config "$dry_run" || return "$_REPO_RC"
+
+  local current_hash last_hash last_commit base sensitive recipient
+  base="${CONFIG_BACKUP_CACHE_DIR:-/home/agent/.cache/agent-backup}"
+  mkdir -p "$base"
+  sensitive=$(_repo_sensitive)
+  recipient=$(_yq '.backup.identity.recipient')
+  config_build_maps "$WORKSPACE" "$AGENT_YML" "$sensitive" "$(_repo_agent_name)" \
+    "$base/config-repo.plain" "$base/config-repo.map" "$base/config-repo.all"
+  if [ "$sensitive" = "true" ] && [ -z "$recipient" ]; then
+    _repo_fail config no-recipient
+    return "$_REPO_RC"
+  fi
+  current_hash=$(_repo_store_digest "$base/config-repo.all" "$base/config-repo.snap" "$sensitive" "$recipient") || current_hash=""
+  if [ -z "$current_hash" ]; then
+    _repo_fail config error "" "hash"
+    return "$_REPO_RC"
+  fi
+  last_hash=$(_repo_state_field "$CONFIG_BACKUP_STATE_FILE" hash)
+
+  if [ "$dry_run" = "1" ]; then
+    if [ -n "$last_hash" ] && [ "$current_hash" = "$last_hash" ]; then
+      echo "backup-config: no changes since last backup (hash $last_hash)"
+    else
+      echo "backup-config: dry-run (no push) — would change from ${last_hash:-<none>} to $current_hash"
+    fi
+    _repo_end
+    return 0
+  fi
+
+  _repo_verify config "$url" "$current_hash" "$base/config-repo.heads" || return "$_REPO_RC"
+
+  last_commit=$(_repo_state_field "$CONFIG_BACKUP_STATE_FILE" last_commit)
+  if [ -n "$last_hash" ] && [ "$current_hash" = "$last_hash" ] \
+     && [ -n "$_REPO_REMOTE_HEAD" ] && [ "$_REPO_REMOTE_HEAD" = "$last_commit" ]; then
+    echo "backup-config: no changes since last backup (hash $last_hash)"
+    backup_dest_record config no-change "$current_hash"
+    _repo_end
+    return 0
+  fi
+
+  local dir keep=0 store_recip="__keep__"
+  [ "$sensitive" = "true" ] && keep=1
+  if ! dir=$(config_repo_prepare "$url" "$_REPO_REMOTE_HEAD" "$keep"); then
+    _repo_fail config unreachable "$current_hash"
+    return "$_REPO_RC"
+  fi
+  _repo_owner_ok config "$dir" "$current_hash" || return "$_REPO_RC"
+  if ! config_repo_stage_plain "$dir" "$base/config-repo.plain"; then
+    _repo_fail config error "$current_hash" "staging"
+    return "$_REPO_RC"
+  fi
+  if [ "$sensitive" = "true" ]; then
+    if ! store_recip=$(_repo_store_pack config "$dir" "$base/config-repo" "$base/config-repo.map" \
+                         "$CONFIG_BACKUP_STATE_FILE" "$recipient"); then
+      _repo_fail config error "$current_hash" "store"
+      return "$_REPO_RC"
+    fi
+  fi
+
+  local sha rc=0 push
+  sha=$(config_repo_commit_and_push "$dir" "$(_repo_agent_name)") || rc=$?
+  case "$rc" in
+    0) ;;
+    2) _repo_fail config push-failed "$current_hash"; return "$_REPO_RC" ;;
+    *) _repo_fail config error "$current_hash" "commit"; return "$_REPO_RC" ;;
+  esac
+  if [ "$sha" = "-" ]; then
+    push=$(_repo_state_field "$CONFIG_BACKUP_STATE_FILE" last_push)
+    [ -n "$push" ] || push=$(_repo_commit_iso "$dir" "$_REPO_REMOTE_HEAD")
+    config_repo_write_state "$CONFIG_BACKUP_STATE_FILE" "$current_hash" "$_REPO_REMOTE_HEAD" "$push" "$store_recip"
+    echo "backup-config: no changes after stage-diff (hash $current_hash)"
+    backup_dest_record config no-change "$current_hash"
+    _repo_end
+    return 0
+  fi
+  config_repo_write_state "$CONFIG_BACKUP_STATE_FILE" "$current_hash" "$sha" "$(_repo_now_iso)" "$store_recip"
+  backup_dest_record config ok "$current_hash"
+  printf 'backup-config: %s pushed\n' "${sha:0:8}"
+  _repo_end
+  return 0
+}
+
+# _repo_sensitive -> "true" or "false" (backup.sensitive, docker mode).
+_repo_sensitive() {
+  if [ "$(_yq '.backup.sensitive')" = "true" ]; then echo true; else echo false; fi
+}
+
+# _repo_store_digest MAP SNAPSHOT_DIR SENSITIVE RECIPIENT -> the unit hash (data-model
+# section 6): every file of the unit, plus the sensitive mark and the operator key.
+# The tool's stderr goes to the unit's log: its messages carry no content (S4).
+_repo_store_digest() {
+  python3 "$BACKUP_STORE_PY" digest --map "$1" --snapshot-dir "$2" \
+    --extra "sensitive=$3 $4"
+}
+
+# _repo_store_pack UNIT DIR CACHE_PREFIX STORE_MAP STATE_FILE RECIPIENT
+# Packs STORE_MAP into DIR/store (or removes store/ when the map is empty).
+# stdout: the store recipient to keep in the state; rc 1 on failure.
+_repo_store_pack() {
+  local unit="$1" dir="$2" prefix="$3" map="$4" state="$5" recipient="$6"
+  if [ ! -s "$map" ]; then
+    rm -rf "$dir/store"
+    printf '\n'
+    return 0
+  fi
+  printf '%s\n' "$recipient" > "$prefix.recipients" || return 1
+  local expect out rotated
+  expect=$(_repo_state_field "$state" store_recipient)
+  # The block map stays next to the cache, outside the committed tree.
+  local -a args=(pack --unit "$unit" --map "$map" --store "$dir/store" --recipients "$prefix.recipients"
+                 --snapshot-dir "$prefix.snap" --block-map "$prefix.blockmap")
+  [ -n "$expect" ] && args+=(--expect-recipient "$expect")
+  if [ -n "${BACKUP_STORE_BLOCK_SIZE:-}" ]; then args+=(--block-size "$BACKUP_STORE_BLOCK_SIZE"); fi
+  out=$(python3 "$BACKUP_STORE_PY" "${args[@]}") || return 1
+  rotated=$(jq -r '.rotated // ""' <<< "$out" 2> /dev/null) || rotated=""
+  if [ -n "$rotated" ] && [ "$rotated" != "new" ]; then
+    echo "backup-$unit: store key rotated ($rotated) - full upload" >&2
+  fi
+  jq -r '.recipient // ""' <<< "$out"
+}
+
+# Run the shared tail of a store unit (memory, history): steps 7 to 13 of U1.
+# _repo_store_unit UNIT URL HASH STATE_FILE BASE PLAIN_MAP STORE_MAP RECIPIENT
+_repo_store_unit() {
+  local unit="$1" url="$2" current_hash="$3" state="$4" base="$5" plain="$6" smap="$7" recipient="$8"
+  local last_hash last_commit dir sha rc=0 push store_recip
+  last_hash=$(_repo_state_field "$state" hash)
+  _repo_verify "$unit" "$url" "$current_hash" "$base/$unit-repo.heads" || return "$_REPO_RC"
+  last_commit=$(_repo_state_field "$state" last_commit)
+  if [ -n "$last_hash" ] && [ "$current_hash" = "$last_hash" ] \
+     && [ -n "$_REPO_REMOTE_HEAD" ] && [ "$_REPO_REMOTE_HEAD" = "$last_commit" ]; then
+    echo "backup-$unit: no changes since last backup (hash $last_hash)"
+    backup_dest_record "$unit" no-change "$current_hash"
+    _repo_end
+    return 0
+  fi
+  if ! dir=$("${unit}_repo_prepare" "$url" "$_REPO_REMOTE_HEAD"); then
+    _repo_fail "$unit" unreachable "$current_hash"
+    return "$_REPO_RC"
+  fi
+  _repo_owner_ok "$unit" "$dir" "$current_hash" || return "$_REPO_RC"
+  if [ -n "$plain" ] && ! memory_repo_stage_plain "$dir" "$plain"; then
+    _repo_fail "$unit" error "$current_hash" "staging"
+    return "$_REPO_RC"
+  fi
+  if ! store_recip=$(_repo_store_pack "$unit" "$dir" "$base/$unit-repo" "$smap" "$state" "$recipient"); then
+    _repo_fail "$unit" error "$current_hash" "store"
+    return "$_REPO_RC"
+  fi
+  sha=$("${unit}_repo_commit_and_push" "$dir" "$(_repo_agent_name)") || rc=$?
+  case "$rc" in
+    0) ;;
+    2) _repo_fail "$unit" push-failed "$current_hash"; return "$_REPO_RC" ;;
+    *) _repo_fail "$unit" error "$current_hash" "commit"; return "$_REPO_RC" ;;
+  esac
+  if [ "$sha" = "-" ]; then
+    push=$(_repo_state_field "$state" last_push)
+    [ -n "$push" ] || push=$(_repo_commit_iso "$dir" "$_REPO_REMOTE_HEAD")
+    "${unit}_repo_write_state" "$state" "$current_hash" "$_REPO_REMOTE_HEAD" "$push" "$store_recip"
+    echo "backup-$unit: no changes after stage-diff (hash $current_hash)"
+    backup_dest_record "$unit" no-change "$current_hash"
+    _repo_end
+    return 0
+  fi
+  "${unit}_repo_write_state" "$state" "$current_hash" "$sha" "$(_repo_now_iso)" "$store_recip"
+  backup_dest_record "$unit" ok "$current_hash"
+  printf 'backup-%s: %s pushed\n' "$unit" "${sha:0:8}"
+  _repo_end
+  return 0
+}
+
+# heartbeatctl backup-memory [--dry-run] (U5). Repository only.
+cmd_backup_memory() {
+  local dry_run=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dry-run) dry_run=1; shift ;;
+      -h|--help) echo "Usage: heartbeatctl backup-memory [--dry-run]"; return 0 ;;
+      *) echo "backup-memory: unknown flag: $1" >&2; return 1 ;;
+    esac
+  done
+  local url
+  if ! url=$(_repo_dest_url); then
+    echo "backup-memory: no agent repository in agent.yml (backup.repo.url) - nothing to back up to"
+    return 0
+  fi
+  command -v memory_build_maps > /dev/null 2>&1 || { echo "backup-memory: library missing" >&2; return 2; }
+  _repo_begin memory "$dry_run" || return "$_REPO_RC"
+  local base sensitive recipient h
+  base=$(memory_cache_base)
+  mkdir -p "$base"
+  sensitive=$(_repo_sensitive)
+  recipient=$(_yq '.backup.identity.recipient')
+  yq -r '(.backup.extra_paths // [])[]' "$AGENT_YML" > "$base/memory-repo.extra" 2> /dev/null || : > "$base/memory-repo.extra"
+  memory_build_maps "$IDENTITY_STATE_DIR" "$WORKSPACE" "$sensitive" "$base/memory-repo.extra" \
+    "$base/memory-repo.plain" "$base/memory-repo.map" "$base/memory-repo.all"
+  if [ ! -s "$base/memory-repo.all" ]; then
+    _repo_fail memory nothing-to-back-up
+    return "$_REPO_RC"
+  fi
+  if [ -s "$base/memory-repo.map" ] && [ -z "$recipient" ]; then
+    _repo_fail memory no-recipient
+    return "$_REPO_RC"
+  fi
+  h=$(_repo_store_digest "$base/memory-repo.all" "$base/memory-repo.snap" "$sensitive" "$recipient") || h=""
+  if [ -z "$h" ]; then
+    _repo_fail memory error "" "hash"
+    return "$_REPO_RC"
+  fi
+  if [ "$dry_run" = "1" ]; then
+    local last
+    last=$(_repo_state_field "$MEMORY_BACKUP_STATE_FILE" hash)
+    if [ -n "$last" ] && [ "$last" = "$h" ]; then
+      echo "backup-memory: no changes since last backup (hash $last)"
+    else
+      echo "backup-memory: dry-run (no push) — would change from ${last:-<none>} to $h"
+    fi
+    _repo_end
+    return 0
+  fi
+  _repo_store_unit memory "$url" "$h" "$MEMORY_BACKUP_STATE_FILE" "$base" "$base/memory-repo.plain" \
+    "$base/memory-repo.map" "$recipient"
+}
+
+# heartbeatctl backup-history [--dry-run] (U6). Repository only, always encrypted.
+cmd_backup_history() {
+  local dry_run=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dry-run) dry_run=1; shift ;;
+      -h|--help) echo "Usage: heartbeatctl backup-history [--dry-run]"; return 0 ;;
+      *) echo "backup-history: unknown flag: $1" >&2; return 1 ;;
+    esac
+  done
+  local url
+  if ! url=$(_repo_dest_url); then
+    echo "backup-history: no agent repository in agent.yml (backup.repo.url) - nothing to back up to"
+    return 0
+  fi
+  command -v history_build_map > /dev/null 2>&1 || { echo "backup-history: library missing" >&2; return 2; }
+  _repo_begin history "$dry_run" || return "$_REPO_RC"
+  local base sensitive recipient h
+  base=$(history_cache_base)
+  mkdir -p "$base"
+  sensitive=$(_repo_sensitive)
+  recipient=$(_yq '.backup.identity.recipient')
+  history_build_map "$IDENTITY_STATE_DIR" "$base/history-repo.map"
+  if [ ! -s "$base/history-repo.map" ]; then
+    _repo_fail history nothing-to-back-up
+    return "$_REPO_RC"
+  fi
+  if [ -z "$recipient" ]; then
+    _repo_fail history no-recipient
+    return "$_REPO_RC"
+  fi
+  h=$(_repo_store_digest "$base/history-repo.map" "$base/history-repo.snap" "$sensitive" "$recipient") || h=""
+  if [ -z "$h" ]; then
+    _repo_fail history error "" "hash"
+    return "$_REPO_RC"
+  fi
+  if [ "$dry_run" = "1" ]; then
+    local last
+    last=$(_repo_state_field "$HISTORY_BACKUP_STATE_FILE" hash)
+    if [ -n "$last" ] && [ "$last" = "$h" ]; then
+      echo "backup-history: no changes since last backup (hash $last)"
+    else
+      echo "backup-history: dry-run (no push) — would change from ${last:-<none>} to $h"
+    fi
+    _repo_end
+    return 0
+  fi
+  _repo_store_unit history "$url" "$h" "$HISTORY_BACKUP_STATE_FILE" "$base" "" \
+    "$base/history-repo.map" "$recipient"
+}
+
+# ── 046: heartbeatctl backup-status [--json] (A6) ──────────────────────────
+#
+# Reads the destination rule, the unit state files, backup-dest.json, the key, the
+# caches, the extra paths and the work clone. It never touches the network and never
+# modifies anything; it never prints the credential, only whether it is present.
+
+_bs_bytes() {  # PATH -> bytes on disk (du -sk * 1024), 0 when missing
+  local k
+  [ -e "$1" ] || { echo 0; return 0; }
+  k=$(du -sk "$1" 2> /dev/null | awk '{print $1}')
+  echo $(( ${k:-0} * 1024 ))
+}
+
+_bs_unit_json() {  # UNIT ENABLED MAX_HOURS STATE_FILE CACHE_DIR
+  local unit="$1" enabled="$2" max="$3" state="$4" cache="$5" base='{}'
+  if [ -s "$state" ] && jq -e 'type == "object"' "$state" > /dev/null 2>&1; then
+    base=$(cat "$state")
+  fi
+  jq -c --arg unit "$unit" --argjson enabled "$enabled" --argjson max "$max" \
+     --argjson cache "$(_bs_bytes "$cache")" \
+     '{unit:$unit, enabled:$enabled, last_push:(.last_push // ""), last_attempt:(.last_attempt // ""),
+       last_result:(.last_result // ""), max_age_hours:$max, cache_bytes:$cache}' <<< "$base"
+}
+
+_bs_flag() {  # YQ_PATH -> true unless explicitly false
+  if [ "$(_yq "$1")" = "false" ]; then echo false; else echo true; fi
+}
+
+cmd_backup_status() {
+  local as_json=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --json) as_json=1; shift ;;
+      -h|--help) echo "Usage: heartbeatctl backup-status [--json]"; return 0 ;;
+      *) echo "backup-status: unknown flag: $1" >&2; return 1 ;;
+    esac
+  done
+  local dest kind url
+  dest=$(backup_dest_resolve "$AGENT_YML" 2> /dev/null) || dest=$'none\t'
+  kind="${dest%%$'\t'*}"
+  url="${dest#*$'\t'}"
+  local icache="${IDENTITY_BACKUP_CACHE_DIR:-/home/agent/.cache/identity-backup}"
+  local vcache="${VAULT_BACKUP_CACHE_DIR:-/home/agent/.cache/agent-backup}"
+  local ccache="${CONFIG_BACKUP_CACHE_DIR:-/home/agent/.cache/agent-backup}"
+  local mcache="${MEMORY_BACKUP_CACHE_DIR:-/home/agent/.cache/agent-backup}"
+  local hcache="${HISTORY_BACKUP_CACHE_DIR:-/home/agent/.cache/agent-backup}"
+  local suffix="clone"
+  [ "$kind" = "repo" ] && suffix="repo"
+  local vault_on=false
+  [ "$(_yq '.vault.enabled')" = "true" ] && vault_on=true
+  local units
+  units=$(
+    if [ "$kind" = "repo" ]; then
+      _bs_unit_json identity "$(_bs_flag '.features.identity_backup.enabled')" 48 "$IDENTITY_BACKUP_STATE_FILE" "$icache/identity-repo"
+    else
+      _bs_unit_json identity "$([ "$(_yq '.features.identity_backup.enabled')" = "true" ] && echo true || echo false)" 48 "$IDENTITY_BACKUP_STATE_FILE" "$icache/clone"
+    fi
+    _bs_unit_json vault "$vault_on" 25 "$VAULT_BACKUP_STATE_FILE" "$vcache/vault-$suffix"
+    _bs_unit_json config "$(_bs_flag '.features.config_backup.enabled')" 192 "$CONFIG_BACKUP_STATE_FILE" "$ccache/config-$suffix"
+    if [ "$kind" = "repo" ]; then
+      _bs_unit_json memory "$(_bs_flag '.features.memory_backup.enabled')" 49 "$MEMORY_BACKUP_STATE_FILE" "$mcache/memory-repo"
+      _bs_unit_json history "$(_bs_flag '.features.history_backup.enabled')" 49 "$HISTORY_BACKUP_STATE_FILE" "$hcache/history-repo"
+    fi
+  )
+  local verdict="" checked=""
+  if [ -s "$BACKUP_DEST_STATE_FILE" ]; then
+    verdict=$(jq -r '.verdict // ""' "$BACKUP_DEST_STATE_FILE" 2> /dev/null) || verdict=""
+    checked=$(jq -r '.checked_at // ""' "$BACKUP_DEST_STATE_FILE" 2> /dev/null) || checked=""
+  fi
+  local json
+  json=$(jq -s --arg kind "$kind" --arg url "$url" --arg verdict "$verdict" --arg checked "$checked" \
+           '{destination:{kind:$kind, url:$url, verdict:$verdict, checked_at:$checked}, units:.}' <<< "$units")
+
+  if [ "$kind" = "repo" ]; then
+    local cred=missing sensitive=false recipient rtype="" rfp="" rcomment="" rconf=false
+    [ -n "${GITHUB_PAT:-}" ] && cred=present
+    [ "$(_yq '.backup.sensitive')" = "true" ] && sensitive=true
+    recipient=$(_yq '.backup.identity.recipient')
+    if [ -n "$recipient" ]; then
+      rconf=true
+      rtype="${recipient%% *}"
+      rfp=$(python3 "$BACKUP_STORE_PY" fingerprint "$recipient" 2> /dev/null) || rfp=""
+      rcomment=$(printf '%s\n' "$recipient" | awk '{ $1 = ""; $2 = ""; sub(/^  */, ""); print }')
+    fi
+    local declared=0 bytes=0 missing_json='[]' entry norm
+    while IFS= read -r entry || [ -n "$entry" ]; do
+      [ -n "$entry" ] || continue
+      declared=$((declared + 1))
+      if command -v memory_extra_path_check > /dev/null 2>&1 \
+         && norm=$(memory_extra_path_check "$WORKSPACE" "$entry"); then
+        bytes=$((bytes + $(_bs_bytes "$WORKSPACE/$norm")))
+      else
+        missing_json=$(jq -c --arg e "$entry" '. + [$e]' <<< "$missing_json")
+      fi
+    done < <(yq -r '(.backup.extra_paths // [])[]' "$AGENT_YML" 2> /dev/null)
+    local wdir present=false unpub=0 dirty=0
+    wdir=$(agent_repo_dir 2> /dev/null) || wdir="${WORKSPACE}/agent-repo"
+    if [ -d "$wdir/.git" ]; then
+      present=true
+      unpub=$(GIT_CONFIG_GLOBAL=/dev/null git -C "$wdir" rev-list --branches --not --remotes 2> /dev/null | wc -l | tr -d ' ') || unpub=0
+      dirty=$(GIT_CONFIG_GLOBAL=/dev/null git -C "$wdir" status --porcelain 2> /dev/null | wc -l | tr -d ' ') || dirty=0
+    fi
+    json=$(jq --arg cred "$cred" --argjson sensitive "$sensitive" --argjson rconf "$rconf" \
+              --arg rtype "$rtype" --arg rfp "$rfp" --arg rcomment "$rcomment" \
+              --argjson declared "$declared" --argjson missing "$missing_json" --argjson bytes "$bytes" \
+              --arg wdir "$wdir" --argjson present "$present" --argjson unpub "${unpub:-0}" --argjson dirty "${dirty:-0}" \
+       '. + {credential:$cred, sensitive:$sensitive,
+             recipient:{configured:$rconf, type:$rtype, fingerprint:$rfp, comment:$rcomment},
+             extra_paths:{declared:$declared, missing:$missing, bytes:$bytes},
+             cache_bytes_total:([.units[].cache_bytes] | add // 0),
+             work_clone:{path:$wdir, present:$present, unpublished_commits:$unpub, dirty_files:$dirty}}' <<< "$json")
+  fi
+
+  if [ "$as_json" = "1" ]; then
+    printf '%s\n' "$json"
+    return 0
+  fi
+  _bs_print "$json"
+}
+
+# _bs_print JSON: the readable table of the same data.
+_bs_print() {
+  local json="$1" now
+  now=$(date -u +%s)
+  jq -r '"destination: \(.destination.kind) \(.destination.url) (\(.destination.verdict // "" | if . == "" then "not checked yet" else . end)\(if .destination.checked_at != "" then ", checked " + .destination.checked_at else "" end))"' <<< "$json"
+  if [ "$(jq -r 'has("credential")' <<< "$json")" = "true" ]; then
+    jq -r '"credential: \(.credential)",
+           "sensitive: \(.sensitive)",
+           (if .recipient.configured then "encryption key: \(.recipient.type) \(.recipient.fingerprint) (\(.recipient.comment))" else "encryption key: not configured" end),
+           "extra paths: \(.extra_paths.declared) declared, \(.extra_paths.missing | length) missing\(if (.extra_paths.missing | length) > 0 then " (" + (.extra_paths.missing | join(", ")) + ")" else "" end)",
+           "work clone: \(.work_clone.path) (\(if .work_clone.present then "present, \(.work_clone.unpublished_commits) unpublished commits, \(.work_clone.dirty_files) uncommitted files" else "missing" end))",
+           "backup caches: \(.cache_bytes_total) bytes"' <<< "$json"
+  fi
+  printf '%-9s %-8s %-21s %-14s %s\n' unit enabled "last push" "last result" status
+  local line unit enabled push result max then status
+  # '|' and not a tab: a tab is IFS whitespace, and an empty field (a unit never
+  # pushed) would collapse with its neighbour.
+  while IFS='|' read -r unit enabled push result max; do
+    status="ok"
+    if [ "$enabled" != "true" ]; then
+      status="disabled"
+    elif [ -z "$push" ]; then
+      status="never pushed"
+    else
+      then=$(date -u -d "$push" +%s 2> /dev/null || date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$push" +%s 2> /dev/null || echo "")
+      if [ -n "$then" ] && [ $((now - then)) -gt $((max * 3600)) ]; then
+        status="stale (>${max}h)"
+      fi
+    fi
+    case "$result" in ''|ok|no-change) ;; *) status="$status, last attempt $result" ;; esac
+    printf '%-9s %-8s %-21s %-14s %s\n' "$unit" "$enabled" "${push:--}" "${result:--}" "$status"
+  done < <(jq -r '.units[] | [.unit, (.enabled | tostring), .last_push, .last_result, (.max_age_hours | tostring)] | join("|")' <<< "$json")
 }
 
 cmd_kick_channel() {
@@ -1251,6 +2143,9 @@ main() {
     backup-identity) cmd_backup_identity "$@" ;;
     backup-vault)    cmd_backup_vault "$@" ;;
     backup-config)   cmd_backup_config "$@" ;;
+    backup-memory)   cmd_backup_memory "$@" ;;
+    backup-history)  cmd_backup_history "$@" ;;
+    backup-status)   cmd_backup_status "$@" ;;
     qmd-reindex)     cmd_qmd_reindex "$@" ;;
     qmd-migrate)     cmd_qmd_migrate "$@" ;;
     wiki-graph)      cmd_wiki_graph "$@" ;;

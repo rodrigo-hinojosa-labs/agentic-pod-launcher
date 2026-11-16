@@ -42,7 +42,7 @@ Pins and versions below are as of v0.12.0.
 
 ## The wizard's prompt order (canonical, as of v0.12.0)
 
-The wizard asks up to 52 prompts. The table below mirrors the canonical order the test suite enforces (`tests/helper.bash::wizard_answers()`); conditional prompts list their trigger in "Asked when". Prompts marked "always" fire on every run. Piped stdin must answer exactly the prompts that fire, in this order — nothing more, nothing less.
+The wizard asks up to 56 prompts. The table below mirrors the canonical order the test suite enforces (`tests/helper.bash::wizard_answers()`); conditional prompts list their trigger in "Asked when". Prompts marked "always" fire on every run. Piped stdin must answer exactly the prompts that fire, in this order — nothing more, nothing less.
 
 **The deployment-mode prompt is FIRST, on all platforms** (feature 011, `setup.sh:451`). Any stdin recipe that starts with the agent name is desynced from line one: `ask_choice` loops until it reads a line that is exactly `docker` or `local`, so it would swallow `AGENT_NAME`, `DISPLAY_NAME`, … until one of them happened to match.
 
@@ -67,39 +67,43 @@ The wizard asks up to 52 prompts. The table below mirrors the canonical order th
 | 17 | Make the fork private? (recommended) | fork = y | y | A fork of a PUBLIC template cannot be private on GitHub. The wizard probes the template's visibility (`fork_resolve_visibility`, `scripts/lib/fork.sh`) and, on a public+private conflict, branches on the run mode: interactive (TTY) → it lets you pick `proceed-public` or `disable-fork`; **non-interactive (piped stdin — the agentic path) → it DISABLES the fork entirely** (notice on stderr, exit 0), unless you export `FORK_ACCEPT_PUBLIC=1`, which creates it public. This repo's default template **is public**: on the piped path answer `n` here, or answer `y` and export `FORK_ACCEPT_PUBLIC=1` — both yield a PUBLIC fork. A genuinely private fork requires `TEMPLATE_URL` to point at a private template. |
 | 18 | Template repo URL | fork = y | this repo's GitHub URL | Upstream used for fork creation and `--sync-template`. |
 | 19 | GitHub PAT for fork | fork = y | none (secret, no echo) | `repo` scope (+ `delete_repo` for `--delete-fork`). Fork-only; independent from the GitHub MCP PAT. |
-| 20 | Heartbeat notification channel | always | `none` | Choice among `none log telegram`. One-way status pings — NOT the two-way Telegram chat plugin. |
-| 21 | Heartbeat bot token (or skip) | channel = telegram | empty = skip (fill `NOTIFY_BOT_TOKEN` in `.env` later) | Non-empty input must pass the token format check; empty skips prompts 22-23 entirely. |
-| 22 | Auto-discover chat id by messaging the bot now? | telegram AND token non-empty | y | `y` waits for Enter then polls the Telegram API; piped runs should answer `n` (manual paste path). |
-| 23 | Chat ID (or skip) | telegram AND token non-empty AND (auto-discover = n OR discovery failed) | empty = skip (fill `NOTIFY_CHAT_ID` in `.env` later) | Manual chat-id paste. |
-| 24 | Install aws? | always (optional MCP 1/6, alphabetical catalog order) | n | No secret sub-prompt. |
-| 25 | Install firecrawl? | always (optional MCP 2/6) | n | If `y`, one secret sub-prompt follows: `FIRECRAWL_API_KEY (or skip)`. |
-| 26 | Install google-calendar? | always (optional MCP 3/6) | n | If `y`, one secret sub-prompt follows: `GOOGLE_OAUTH_CREDENTIALS (or skip)`. |
-| 27 | Install playwright? | always (optional MCP 4/6) | n | No secret. |
-| 28 | Install time? | always (optional MCP 5/6) | n | No secret. |
-| 29 | Install tree-sitter? | always (optional MCP 6/6) | n | No secret. |
-| 30 | Enable Atlassian MCP? | always | n | `y` enters a per-workspace loop of prompts 31-35. |
-| 31 | Workspace alias | atlassian = y (per workspace) | none — required | Unique id; uppercased into `ATLASSIAN_<ALIAS>_*` env var names. |
-| 32 | Atlassian URL | atlassian = y (per workspace) | none — URL-validated | Base site URL; `/wiki` is appended for Confluence vars. |
-| 33 | Email (Atlassian) | atlassian = y (per workspace) | your primary email | Confluence/Jira username for this workspace. |
-| 34 | API token (or skip) | atlassian = y (per workspace) | empty = skip (fill `ATLASSIAN_<ALIAS>_TOKEN` in `.env` later) | Workspace API token. |
-| 35 | Add another Atlassian workspace? | atlassian = y (after each workspace) | n | `n` exits the loop. |
-| 36 | Enable GitHub MCP? | always | n | `y` triggers prompts 37-38. Independent from the fork token. |
-| 37 | GitHub account email | github MCP = y | your primary email | Identity for the GitHub MCP. |
-| 38 | GitHub PAT for MCP (or skip) | github MCP = y | empty = skip (fill it in `.env` later) | The PAT the GitHub MCP server uses for API calls. |
-| 39 | Enable heartbeat (periodic auto-execution)? | always | y | `n` skips prompts 40-41. |
-| 40 | Default interval (Nm/Nh or 5-field cron) | heartbeat = y | `30m` | Validated interval/cron. |
-| 41 | Default prompt | heartbeat = y | `Status check — return a short plain-text report (uptime, notable issues). No tool use; your stdout is forwarded verbatim to the notifier.` | The prompt each heartbeat tick sends. |
-| 42 | Use default opinionated agent principles? (recommended) | always | y | Shipped principles block for CLAUDE.md. |
-| 43 | Enable knowledge vault? | always | y | Per-agent Obsidian-style vault at `.state/.vault/` (Karpathy three-layer pattern). `n` skips prompts 44-46. |
-| 44 | Seed initial vault structure? | vault = y | y | Scaffolds templates, schema, log. |
-| 45 | Register MCPVault server (@bitbonsai/mcpvault)? | vault = y | y | Registers the vault MCP in `.mcp.json`. |
-| 46 | Enable QMD hybrid search? | vault = y | n | BM25+vector+rerank; ~300MB embedding model downloaded on first use. |
-| 47 | Install code-simplifier? | always (optional plugin 1/5, alphabetical) | n | The 5 always-on plugins (telegram, claude-mem, context7, claude-md-management, security-guidance) are never asked about. |
-| 48 | Install commit-commands? | always (optional plugin 2/5) | n | |
-| 49 | Install github? | always (optional plugin 3/5) | n | Claude Code plugin — distinct from the GitHub MCP (prompt 36). |
-| 50 | Install skill-creator? | always (optional plugin 4/5) | n | |
-| 51 | Install superpowers? | always (optional plugin 5/5) | n | |
-| 52 | Action | always (after the summary screen) | `proceed` | Choice among `proceed edit abort`; `edit` asks "Edit which field number?" and re-shows the summary. Pipe the literal `proceed`. |
+| 20 | Associate a private repository with this agent? | docker mode only | n | The agent's private repository (046): the launcher backs up its full state there (`backup/*` branches) and the agent keeps its own work there. `n` skips prompts 21-22. In the recipe, an empty `AGENT_REPO_URL` answers `n`. |
+| 21 | Repository URL (https://github.com/<owner>/<name>) | repo = y | none — validated (`validate_backup_repo_url`) | Only `https://github.com/<owner>/<name>`, with an optional `.git`. Without a terminal, an invalid URL ends the wizard with exit 1. |
+| 22 | Does this agent handle sensitive data (health, finance, legal)? | repo = y | n | Sets `backup.sensitive` (`AGENT_REPO_SENSITIVE`): the vault, the auto memory and the configuration travel encrypted. |
+| 23 | Heartbeat notification channel | always | `none` | Choice among `none log telegram`. One-way status pings — NOT the two-way Telegram chat plugin. |
+| 24 | Heartbeat bot token (or skip) | channel = telegram | empty = skip (fill `NOTIFY_BOT_TOKEN` in `.env` later) | Non-empty input must pass the token format check; empty skips prompts 25-26 entirely. |
+| 25 | Auto-discover chat id by messaging the bot now? | telegram AND token non-empty | y | `y` waits for Enter then polls the Telegram API; piped runs should answer `n` (manual paste path). |
+| 26 | Chat ID (or skip) | telegram AND token non-empty AND (auto-discover = n OR discovery failed) | empty = skip (fill `NOTIFY_CHAT_ID` in `.env` later) | Manual chat-id paste. |
+| 27 | Install aws? | always (optional MCP 1/6, alphabetical catalog order) | n | No secret sub-prompt. |
+| 28 | Install firecrawl? | always (optional MCP 2/6) | n | If `y`, one secret sub-prompt follows: `FIRECRAWL_API_KEY (or skip)`. |
+| 29 | Install google-calendar? | always (optional MCP 3/6) | n | If `y`, one secret sub-prompt follows: `GOOGLE_OAUTH_CREDENTIALS (or skip)`. |
+| 30 | Install playwright? | always (optional MCP 4/6) | n | No secret. |
+| 31 | Install time? | always (optional MCP 5/6) | n | No secret. |
+| 32 | Install tree-sitter? | always (optional MCP 6/6) | n | No secret. |
+| 33 | Enable Atlassian MCP? | always | n | `y` enters a per-workspace loop of prompts 34-38. |
+| 34 | Workspace alias | atlassian = y (per workspace) | none — required | Unique id; uppercased into `ATLASSIAN_<ALIAS>_*` env var names. |
+| 35 | Atlassian URL | atlassian = y (per workspace) | none — URL-validated | Base site URL; `/wiki` is appended for Confluence vars. |
+| 36 | Email (Atlassian) | atlassian = y (per workspace) | your primary email | Confluence/Jira username for this workspace. |
+| 37 | API token (or skip) | atlassian = y (per workspace) | empty = skip (fill `ATLASSIAN_<ALIAS>_TOKEN` in `.env` later) | Workspace API token. |
+| 38 | Add another Atlassian workspace? | atlassian = y (after each workspace) | n | `n` exits the loop. |
+| 39 | Enable GitHub MCP? | always | n | `y` triggers prompts 40-41. Independent from the fork token. |
+| 40 | GitHub account email | github MCP = y | your primary email | Identity for the GitHub MCP. |
+| 41 | GitHub PAT for MCP (or skip) | github MCP = y | empty = skip (fill it in `.env` later) | The PAT the GitHub MCP server uses for API calls. |
+| 42 | GitHub Personal Access Token for the agent repository | repo = y AND github MCP = n | empty = skip (fill `GITHUB_PAT` in `.env` later) | The agent repository pushes with `GITHUB_PAT` (`AGENT_REPO_PAT`). With the GitHub MCP on, its PAT (prompt 41) also serves the repository and this prompt does not show. |
+| 43 | Enable heartbeat (periodic auto-execution)? | always | y | `n` skips prompts 44-45. |
+| 44 | Default interval (Nm/Nh or 5-field cron) | heartbeat = y | `30m` | Validated interval/cron. |
+| 45 | Default prompt | heartbeat = y | `Status check — return a short plain-text report (uptime, notable issues). No tool use; your stdout is forwarded verbatim to the notifier.` | The prompt each heartbeat tick sends. |
+| 46 | Use default opinionated agent principles? (recommended) | always | y | Shipped principles block for CLAUDE.md. |
+| 47 | Enable knowledge vault? | always | y | Per-agent Obsidian-style vault at `.state/.vault/` (Karpathy three-layer pattern). `n` skips prompts 48-50. |
+| 48 | Seed initial vault structure? | vault = y | y | Scaffolds templates, schema, log. |
+| 49 | Register MCPVault server (@bitbonsai/mcpvault)? | vault = y | y | Registers the vault MCP in `.mcp.json`. |
+| 50 | Enable QMD hybrid search? | vault = y | n | BM25+vector+rerank; ~300MB embedding model downloaded on first use. |
+| 51 | Install code-simplifier? | always (optional plugin 1/5, alphabetical) | n | The 5 always-on plugins (telegram, claude-mem, context7, claude-md-management, security-guidance) are never asked about. |
+| 52 | Install commit-commands? | always (optional plugin 2/5) | n | |
+| 53 | Install github? | always (optional plugin 3/5) | n | Claude Code plugin — distinct from the GitHub MCP (prompt 39). |
+| 54 | Install skill-creator? | always (optional plugin 4/5) | n | |
+| 55 | Install superpowers? | always (optional plugin 5/5) | n | |
+| 56 | Action | always (after the summary screen) | `proceed` | Choice among `proceed edit abort`; `edit` asks "Edit which field number?" and re-shows the summary. Pipe the literal `proceed`. |
 
 Counts as of v0.12.0: 6 optional catalog MCPs, 5 optional plugins — both lists are derived from `modules/mcps/*.yml` / `modules/plugins/*.yml` and sorted alphabetically, so adding a catalog file changes the count and order. The wizard renders through `gum` when stdin is a TTY, but piped stdin (the agentic path) always takes the plain-`read` fallback — order and semantics are identical.
 
@@ -141,6 +145,9 @@ FORK_ACCEPT_PUBLIC="0"                 # 1 = accept a PUBLIC fork when you asked
                                        # ENVIRONMENT variable exported to setup.sh, NOT a stdin line.
 TEMPLATE_URL="https://github.com/rodrigo-hinojosa-labs/agentic-pod-launcher"   # public
 FORK_PAT=""                            # ghp_... with repo scope (NEVER make this up)
+AGENT_REPO_URL=""                      # docker only; empty = no agent repository (046)
+AGENT_REPO_SENSITIVE="n"               # y | n — sensitive data (health, finance, legal)
+AGENT_REPO_PAT=""                      # with a repository and the GitHub MCP off (NEVER make this up)
 
 # ── Heartbeat — notifications ─────────────────────────
 NOTIFY_CHANNEL="none"                  # none | log | telegram
@@ -242,6 +249,9 @@ parity — not the line-by-line order):
   4. Fork (1 + 5 sub if y):         FORK_ENABLED [if y: FORK_OWNER, FORK_NAME
                                     (empty→<agent>-agent), FORK_PRIVATE,
                                     TEMPLATE_URL, FORK_PAT]
+  4b. Agent repo (docker only):      empty AGENT_REPO_URL → "n" | with a URL → "y",
+                                    AGENT_REPO_URL, AGENT_REPO_SENSITIVE
+                                    (+ AGENT_REPO_PAT after the GitHub MCP when that is n)
   5. Heartbeat notif (1 + sub):     NOTIFY_CHANNEL [if telegram: NOTIFY_BOT_TOKEN
                                     + auto-discover prompt = "n" + NOTIFY_CHAT_ID;
                                     an EMPTY token skips both follow-ups]
@@ -325,6 +335,7 @@ The wizard (both interactive and agentic) validates inputs before accepting them
 | `NOTIFY_BOT_TOKEN` (if non-empty) | `<digits>:<base64-like 25+>` | `123456789:AAEhBP0...` | `my-token`, `123:short` |
 | `*_URL` (Atlassian, fork) | http(s) only, no whitespace | `https://acme.atlassian.net` | `acme.atlassian.net`, `ftp://...` |
 | Atlassian workspace alias | Letters, digits, underscore only (interpolated into `ATLASSIAN_<ALIAS>_TOKEN`; a hyphen produces an invalid systemd variable name) | `work`, `cenco_corp` | `cenco-corp`, `my team` |
+| `AGENT_REPO_URL` (if non-empty) | Only `https://github.com/<owner>/<name>` with an optional `.git`, no credentials or spaces (`validate_backup_repo_url`). An invalid URL without a terminal ends the wizard with exit 1 | `https://github.com/acme/linus-agent` | `git@github.com:acme/linus.git`, `https://gitlab.com/acme/r` |
 | `UID`/`GID` | Non-negative integer (auto-detected, never asked) | `1000`, `501` | `-1`, `abc` |
 
 The same re-prompt-on-mismatch behavior applies to every choice prompt: `LANGUAGE` (`es`/`en`/`mixed`), `NOTIFY_CHANNEL` (`none`/`log`/`telegram`) and the final action (`proceed`/`edit`/`abort`).

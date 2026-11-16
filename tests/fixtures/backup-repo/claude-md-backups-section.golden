@@ -1,0 +1,14 @@
+## Backups (what actually survives)
+
+Backups exist only if `agent.yml` has a fork configured (`scaffold.fork.url`). Without one, nothing is pushed anywhere and this workspace is the only copy — say so plainly if the user asks how durable your state is. With a fork, three independent orphan branches are pushed to it (each is hash-idempotent: no change, no commit):
+
+| Branch | Content | Trigger |
+|---|---|---|
+| `backup/identity` | login, chat pairing, plugin config, encrypted `.env` | docker mode: the supervisor pushes it whenever the identity hash changes (checked every 60s) and after plugin installs; a daily cron line exists when `features.identity_backup.enabled` is true. Manual: `heartbeatctl backup-identity`. |
+| `backup/vault` | the vault's markdown (Obsidian per-device config, caches and sync-conflict files excluded) | docker mode: hourly cron by default (`vault.backup_schedule`). local mode: `agent-dockbot-vault-backup.timer`. Manual: `heartbeatctl backup-vault` / `./scripts/agentctl heartbeat backup-vault`. |
+| `backup/config` | `agent.yml` (plaintext config; secrets stay in `.env`, which travels in identity) | docker mode: daily 03:30 cron by default (`features.config_backup`). |
+
+local mode: only the **vault** backup is scheduled and reachable from your surface — identity and config backups are Docker-only today. A local agent that wants its login/config replicated must ask the operator.
+
+Restore is an operator action from a fresh clone of the launcher: `./setup.sh --restore-from-fork <url>`.
+
