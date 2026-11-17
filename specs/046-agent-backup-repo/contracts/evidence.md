@@ -2,7 +2,7 @@
 
 **Feature**: `046-agent-backup-repo` | Cubre FR-021, FR-022 y FR-023, y los criterios SC-001 a SC-010.
 
-La evidencia tiene tres niveles: la suite del host, la prueba de extremo a extremo en un contenedor real, y el gate en un agente real antes del merge. Los pasos para correr cada uno están en [quickstart.md](../quickstart.md).
+La evidencia tiene tres niveles: la suite del host, la prueba de extremo a extremo en un contenedor real, y el gate de integración contra GitHub privado real antes del merge. El operador sustituyó linus por el piloto aislado del M4 el 16-11-2026; sus límites están en [local-pilot.md](local-pilot.md). Los pasos están en [quickstart.md](../quickstart.md).
 
 ## V1. El doble de prueba: un servidor git con autenticación
 
@@ -233,33 +233,35 @@ Cada mutación se aplica sobre una copia, y debe hacer caer al menos una prueba 
 - El total del e2e pasa de 54 a 62 casos.
 - **El nightly**: TE7 descifra en el runner, y el workflow `docker-e2e` no instala `age` (M21 de [research.md](../research.md)). Gana un paso propio que lo instala, sin tocar el texto de los pasos que otras features congelaron. La primera nocturna posterior al merge debe decir `total=62 executed=62 skipped=0`.
 
-## V5. Gate previo al merge, en linus
+## V5. Gate previo al merge, piloto de consola en el M4
 
-Es un paso del operador, con compuerta. Lo que debe quedar registrado:
+Es un paso del operador, con compuerta, aprobado el 16-11-2026 en sustitución del objetivo linus. Se usa un agente aislado con datos sintéticos y el repositorio privado real `rodrigo-hinojosa/agentic-046-recovery-gate`; no se acredita el contenido vivo de ferrari. Aplican [P1 a P5](local-pilot.md). Lo que debe quedar registrado:
 
-1. el respaldo de la imagen actual, `agentic-pod:linus-pre046`, y de sus archivos de sistema;
+1. el workspace aislado, la imagen etiquetada aparte y sus hashes contra la fuente validada, sin sustituir imágenes o archivos de agentes existentes;
 2. las cabezas de `main` y de las demás ramas de trabajo en GitHub, anotadas **antes** de fijar `backup.repo.url`;
-3. la asociación de `linus-workspace-agent-admin`, y la llave pública fijada con `--configure-key`, con su huella confirmada por el operador;
+3. la asociación del repositorio del piloto y la llave pública M4 fijada con `--configure-key`, cuya privada ya abrió la prueba sintética del operador;
 4. el `CLAUDE.md` vivo del agente, con la sección `## Your repository`;
 5. un ciclo forzado de las cinco unidades, con el commit de cada rama en GitHub y la duración de cada empuje;
 6. las cabezas de las ramas de trabajo, iguales a las del punto 2;
 7. un segundo ciclo sin commits;
 8. el ensayo de restauración de R7 de [restore.md](restore.md), con sus dos comparaciones, incluido el archivo de secretos, sin mostrar su contenido;
-9. la medición pendiente de M5: si un historial restaurado se retoma con `claude -p --continue`;
+9. la medición de M5: si un historial restaurado se retoma con `claude -p --continue`, con autorización de cuota separada;
 10. cuántos bloques del historial se reutilizaron entre dos ciclos con conversación de por medio;
-11. el contenedor sano, con 0 reinicios, y el canal arriba;
-12. el inventario del estado que ninguna unidad cubre en linus, con la decisión de cada entrada: declararla en `backup.extra_paths` o dejarla fuera;
-13. la revisión de los archivos que viajan en claro (la lista de identidad y la configuración), para confirmar que ninguno lleva un valor sensible.
+11. el contenedor de consola activo, con 0 reinicios y sin escritores de mantenimiento; declarar que no tiene canal ni supervisor en ejecución;
+12. el inventario cerrado de datos de prueba y su extra path, con las decisiones de cobertura; los inventarios de agentes vivos quedan en V6;
+13. la revisión de los archivos sintéticos que viajan en claro. La revisión de la lista viva de identidad/configuración de cada agente se conserva en V6.
 
 Si el punto 9 falla, SC-002 se enmienda antes del merge. Si falla cualquiera de los demás, no se propone el merge.
 
 ## V6. Despliegue, después del merge
 
+Antes de ampliar a donna y cbum, linus completa el gate operacional que no cubre el piloto: respaldo de imagen `agentic-pod:linus-pre046` y archivos de sistema, cabezas remotas previas, inventario de FR-026 con decisión de cada entrada y del clon con trabajo sin publicar, revisión de archivos en claro, actualización y overlay, asociación, llave, ciclos y restauración comparada del estado real, salud del canal y doctor. Ante una falla se vuelve a la imagen y archivos guardados y se detiene la ampliación. No marcar estos puntos hechos por los datos sintéticos del M4.
+
 Un agente a la vez, con el procedimiento de actualización del `README.md` y el reinicio de la flota (stop, 150 s, up):
 
 | Agente | Repositorio | Marca de datos sensibles | Particularidad |
 | --- | --- | --- | --- |
-| linus | `linus-workspace-agent-admin` | No | Ya tiene el gate; su clon actual en `/workspace/linus-workspace-agent-admin` tiene un commit local posterior al remoto y se revisa a mano |
+| linus | `linus-workspace-agent-admin` | No | Gate operacional pendiente antes de ampliar a donna/cbum; su clon actual en `/workspace/linus-workspace-agent-admin` tiene un commit local posterior al remoto y se revisa a mano |
 | donna | `donna-workspace-agent-admin` | No | Su primer empuje de historial es el más grande; su clon actual en `~/donna-workspace-agent-admin` está atrasado; declara como rutas adicionales su overlay y la configuración de su feature de costos (M16 de [research.md](../research.md)); después de regenerar hay que volver a aplicar su overlay |
 | cbum | Uno nuevo, que crea el operador con un commit inicial en `main` | Sí | El operador ajusta la regla de su persona que prohíbe subir datos de salud a un repositorio |
 

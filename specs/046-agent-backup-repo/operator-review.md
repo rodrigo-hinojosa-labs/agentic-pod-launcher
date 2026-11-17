@@ -1,26 +1,42 @@
 # Revisión del operador para terminar 046
 
-Estado al 16-11-2026: implementación y gates automáticos validados, T075 en tres commits y rama publicada; [PR #135](https://github.com/rodrigo-hinojosa-labs/agentic-pod-launcher/pull/135) en borrador. La CI sobre `b3eb8c4` dio 2104/2104 por sistema y shellcheck correcto; el e2e amd64 dio 62/62 con el mismo runtime y archivo e2e. El último commit solo publica el Registro y la guía de retoma. El merge sigue condicionado al respaldo y restauración reales en linus (FR-022). El Registro de [tasks.md](tasks.md) conserva resultados y excepciones.
+Estado al 17-11-2026: implementación y gates automáticos validados; [PR #135](https://github.com/rodrigo-hinojosa-labs/agentic-pod-launcher/pull/135) sigue en borrador. La CI publicada de `d340eef` dio 2104/2104 por sistema y shellcheck correcto; el e2e amd64 dio 62/62 con runtime y archivo e2e idénticos.
 
-## 1. Restablecer el acceso a ferrari
+**Piloto M4 verificado**: cinco respaldos correctos, segundo ciclo sin commits, R7 11/11 exactos y M5_RETOMA_OK. El lector recuperó la misma sesión y marcador; el perfil vacío respondió UNKNOWN. Los lectores y temporales se retiraron. El intento original detenido y el cierre complementario se conservaron. Resultados y límites en [pilot-m4-results.md](pilot-m4-results.md); historial en el Registro de [tasks.md](tasks.md). No repetir run.command ni m5.command.
+
+El operador confirmó 0 prompts de passphrase en ambos auxiliares y autorizó por separado publicar el commit documental, su push y quitar el borrador tras CI en verde. T079/T080 cerradas; T081 espera la publicación y su CI. Esa autorización excluye merge y despliegue. La validación operacional de la flota sigue pendiente; no se midió recuperar el login ni un emparejamiento vivo de Telegram.
+
+## 1. Acceso a ferrari, pendiente para el despliegue
 
 La consulta de metadata por `ssh-ferrari` terminó con código 255 y `websocket: bad handshake`, antes de obtener la inspección del contenedor. Se intentó la renovación normal con `cloudflared access login --quiet --auto-close`: terminó con 0 y no imprimió el JWT, pero la siguiente consulta SSH volvió a fallar igual. La interfaz de navegador no estuvo disponible para inspeccionar más. No se cambió la configuración del host ni de linus. El error no demuestra que linus esté caído; la causa del fallo de transporte no está confirmada.
 
-El operador debe restablecer el acceso habitual y confirmar que SSH funciona. Después se podrá levantar el inventario de nombres y tamaños, verificar el estado del contenedor y preparar el respaldo previo al gate. No se leerán archivos de secretos ni llaves privadas.
+**Respuesta del operador (16-11-2026)**: está sin acceso remoto y necesita llegar a casa para reiniciar ferrari. El gate queda pendiente de que confirme la recuperación del acceso; no se siguen repitiendo consultas SSH mientras esa condición no cambie. Esto registra su próximo paso, sin atribuir una causa técnica confirmada al fallo.
+
+**Decisión posterior (16-11-2026)**: el acceso a ferrari ya no bloquea el piloto de integración previo al merge, aprobado en el M4. Sigue siendo necesario para validar y desplegar los agentes reales. No repetir consultas SSH sin confirmación del operador.
+
+Después se podrá levantar el inventario de nombres y tamaños, verificar el estado del contenedor y preparar el respaldo previo al gate. No se leerán archivos de secretos ni llaves privadas.
 
 ## 2. Confirmar la llave para restaurar
 
-Estas son las huellas de las cinco llaves **públicas** que GitHub entregó el 16-11-2026 para `rodrigo-hinojosa`. No se ha seleccionado ninguna ni se ha leído una llave privada.
+**Comprobación resuelta por el operador (16-11-2026)**: la privada del MacBook Pro M4 abrió la prueba sintética cifrada para la pública `150293570`, huella `SHA256:7bX6qKIYZWfxMLOvyLP7PbrX+j0oyoHVO8xDbFUcOAw`. El operador ejecutó age en su Terminal y reportó `LLAVE_M4_OK`. Queda confirmada su disponibilidad para esa comprobación de recuperación. El asistente no leyó la privada y todavía no se configuró ninguna llave en ferrari.
 
-| ID público de GitHub | Tipo | Huella |
-| --- | --- | --- |
-| 126881112 | RSA, 4096 bits | `SHA256:S5jCwTAt8qiYjOpumWdmqZYpsEDKl3yZOfp6xPDjiEE` |
-| 148280926 | ED25519 | `SHA256:UgjQgrCNyp7Q8/j69i5O2Vh+c6Yga3RwR6khwNmLkwM` |
-| 149670388 | ED25519 | `SHA256:h+B1iJ7ROGi6MUqOUj1g62xahHfFEhEMHu/4JGuhn/E` |
-| 150293570 | ED25519 | `SHA256:7bX6qKIYZWfxMLOvyLP7PbrX+j0oyoHVO8xDbFUcOAw` |
-| 155689556 | ED25519 | `SHA256:+8ehfqNcitKkzhNAj4mZ8Pr8I/iCCITt9ig4Sz0b4gE` |
+Estas son las cinco huellas **públicas** que GitHub entregó el 16-11-2026 para `rodrigo-hinojosa`; la verificada es la del M4:
 
-El operador confirma cuál corresponde a una parte privada disponible en el equipo donde hará la restauración. Solo se necesita la huella y esa confirmación, nunca el contenido ni la passphrase de la llave. La llave pública se fijará con `backup-identity --configure-key` después de preparar el agente.
+| ID público de GitHub | Equipo según su título | Tipo | Huella |
+| --- | --- | --- | --- |
+| 126881112 | MacBook Pro M1 | RSA, 4096 bits | `SHA256:S5jCwTAt8qiYjOpumWdmqZYpsEDKl3yZOfp6xPDjiEE` |
+| 148280926 | Ubuntu 25 | ED25519 | `SHA256:UgjQgrCNyp7Q8/j69i5O2Vh+c6Yga3RwR6khwNmLkwM` |
+| 149670388 | Ferrari RPi5 | ED25519 | `SHA256:h+B1iJ7ROGi6MUqOUj1g62xahHfFEhEMHu/4JGuhn/E` |
+| 150293570 | MacBook Pro M4 | ED25519 | `SHA256:7bX6qKIYZWfxMLOvyLP7PbrX+j0oyoHVO8xDbFUcOAw` |
+| 155689556 | McLaren RPi5 | ED25519 | `SHA256:+8ehfqNcitKkzhNAj4mZ8Pr8I/iCCITt9ig4Sz0b4gE` |
+
+Los equipos se identificaron por los títulos de las llaves públicas que devuelve `GET /user/keys`, consultado el 16-11-2026. Son etiquetas de GitHub, no prueba de que la parte privada siga en esos equipos. Las cinco huellas coinciden con la consulta pública anterior.
+
+La pública permite preparar el cifrado para el operador; la privada correspondiente permite recuperar la parte cifrada desde otro equipo. La huella identifica el par. Conviene conservar una copia segura de la privada independiente de ferrari. La pública se fijará con `backup-identity --configure-key` al preparar el agente, después de resolver las demás condiciones de T077.
+
+La prueba está en `/Users/rodrigo-hinojosa/.cache/agentic-046/key-check-m4-20261116/`: `challenge.age` (246 bytes), `manifest.json`, `instructions.md` y `operator-verification.json`. Contiene solo datos sintéticos. El primer intento con la ruta predeterminada de SSH falló; las huellas públicas aportadas por el operador localizaron después el archivo personalizado del M4 y su prueba de descifrado pasó. La secuencia completa se conserva en el Registro de `tasks.md`. `age` no usa el agente SSH (M19 de `research.md`).
+
+El resultado confirmó la llave y después se completaron los respaldos, R7 y M5 del piloto M4. El respaldo/restauración vivos de linus y su revisión de inventario y archivos en claro se conservan en T083. No se pidió ni se registró el contenido de una privada o su passphrase.
 
 Fuente: API pública `users/rodrigo-hinojosa/keys`; huellas calculadas con `ssh-keygen -lf` sobre temporales públicos. Se debe refrescar la lista antes de configurar si las llaves cambian.
 
@@ -44,20 +60,17 @@ El archivo de secretos de la raíz, claude-mem, las rutas adicionales y los tran
 
 Fuentes: `identity_whitelist` en `docker/scripts/lib/backup_identity.sh`, `config_build_maps` en `backup_config.sh`, FR-009 y T077. Esta tabla describe el código; no certifica contenidos del agente.
 
-## 4. Continuación después de esas confirmaciones
+## 4. Cierre documental y publicación
 
-El paquete local `publication/deployment-preparation/046-system-b3eb8c4.tar`, dentro del directorio de evidencia del Registro, contiene los 138 archivos de sistema rastreados que indica el procedimiento del README. Su SHA-256 es `03705882b2899ab9fa98464b8f6645592b7c5ede55481f350a1d6dfb828ae6a5`; `manifest.json` comprueba cada archivo contra el blob del commit `b3eb8c4`, sus modos y tamaños. Se creó con `git -c tar.umask=022 archive` para conservar los modos 0644/0755. No incluye configuración ni estado de un agente, y no se ha llevado a ferrari. Se debe extraer en un directorio de preparación y aplicar el procedimiento del README, que conserva el estado vivo bajo `scripts/`; el tar no es un instalador ni reemplaza las decisiones anteriores.
+El piloto M4 aprobado y M5 ya se ejecutaron. La secuencia de preparación, sus incidentes y las verificaciones están en [pilot-m4-results.md](pilot-m4-results.md) y en el Registro. Los documentos adecuados siguen locales; el runtime y las pruebas conservan las fuentes de la cabeza validada.
 
-1. Refrescar las cabezas remotas y la privacidad, guardar imagen y archivos de sistema, llevar el código y regenerar.
-2. Asociar linus, instalar la llave pública confirmada y ejecutar los cinco respaldos; verificar ramas y segundo ciclo sin commits nuevos.
-3. Restaurar en el equipo con la llave privada, sin arrancar el workspace restaurado, y comparar tamaños y hashes.
-4. Pedir autorización separada para M5 (`claude -p --continue`): consume cuota y sigue pendiente. Si no retoma, enmendar SC-002 con el operador.
-5. Completar T080/T081 y quitar el borrador solo con la evidencia requerida. El merge lo hace el operador.
+1. T079/T080 cerradas: el operador confirmó 0 solicitudes de passphrase en ambos auxiliares, sin repetir age ni leer su privada.
+2. Publicar el commit/push documental de D38 y del piloto, autorizado por separado el 17-11-2026.
+3. Comprobar la CI automática de esa nueva cabeza y, con autorización, quitar el borrador del PR. T081 no se cierra por los checks de la cabeza anterior.
+4. El merge lo hace el operador. Después se verifica main; el acceso a ferrari, el gate operacional de linus y la ampliación de flota conservan sus compuertas.
 
-Después del merge: despliegue secuencial linus, donna y cbum, con 24 horas de observación por agente. El alta del repositorio de cbum y el ajuste de su regla sobre datos de salud también corresponden al operador (T085).
-
-## Comando para retomar
+Para retomar:
 
 ```text
-$speckit-implement Retoma 046 desde handoff-codex.md, el Registro de tasks.md y operator-review.md. Continúa con T077 a T081 cuando el acceso y las decisiones humanas estén resueltos. Conserva la evidencia ya validada; no repitas suites completas sin un cambio que lo justifique. No hagas merge ni leas llaves privadas o archivos de secretos.
+$speckit-implement Retoma 046 desde handoff-codex.md, el Registro de tasks.md, operator-review.md y pilot-m4-results.md. Respaldo, R7 y M5 del M4 ya están verificados: no los repitas. Continúa el cierre documental/T081 respetando la autorización de publicación que conste en el Registro. El merge y la flota tienen compuertas separadas. No leas privadas o archivos reales de secretos ni repitas gates completos sin cambios de fuente que lo justifiquen.
 ```

@@ -322,6 +322,13 @@ runner. T072 conserva el 62/62 amd64, con fuentes sin cambios. El paquete de 138
 verificó contra Git, sin aplicarlo en ferrari. **Siguiente: T077**, tras restablecer SSH y resolver inventario,
 archivos en claro y llave con el operador. El PR sigue en borrador por FR-022. El último commit solo registra estos
 resultados; sus checks finales se recogen sin crear otro commit que registre su propio SHA.
+**Decisión posterior D38 (16-11):** el operador aprobó sustituir el gate previo al merge en linus por un piloto
+aislado de consola en Docker/M4 y el repositorio privado real `rodrigo-hinojosa/agentic-046-recovery-gate`.
+La privada M4 ya abrió la prueba sintética (`LLAVE_M4_OK`, informado por el operador). Se mantienen las cinco
+unidades y la restauración comparada antes del merge, con M5 autorizado por separado. Sin bots ni perfiles copiados;
+no se acredita el inventario o estado vivo de ferrari. Eso se conserva al desplegar, con linus y su reversión antes
+de ampliar a donna/cbum. Procedimiento en `contracts/local-pilot.md`, actualizado sin cambios de producto.
+**Piloto M4, 17-11:** T077/T078 completas y R7 11/11 exactos. La guarda final del intento original falló; se conserva stopped y se diagnosticó el arranque de prueba sin tini (zombies reproducidos). Solo se corrigió el auxiliar y el cierre complementario confirmó refs, capturas, consola y limpieza sin repetir respaldos/age. M5 pasó el 17-11 con tres invocaciones de un turno (claude-sonnet-4-6): misma sesión y marcador recuperados, frente a UNKNOWN en un perfil vacío; lectores y temporales retirados. El OAuth se proporcionó aparte y el piloto no contenía emparejamiento Telegram: no acredita login o canal vivo. Resultado en `pilot-m4-results.md`. Siguiente: cierre documental/T081 con autorización de commit/push; merge y despliegue conservan sus compuertas. No repetir m5.command. No repetir el primer comando ni pedir otra vez identificar la llave.
 Artefactos y evidencia: `specs/046-agent-backup-repo/`, Registro de `tasks.md`.
 
 **045-plugin-launcher-path SPEC + CLARIFY + PLAN + TASKS + ANALYZE + IMPLEMENT + GATE EN CBUM + MERGE + DESPLIEGUE (2026-11-11/13; rama

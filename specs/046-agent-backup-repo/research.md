@@ -536,6 +536,17 @@ El detalle está en la sección 9 de [data-model.md](data-model.md).
 - **Costo**: si el mapa se pierde (una caché borrada, o la primera corrida tras una restauración en otro equipo), el ciclo siguiente cifra y sube todo de nuevo, y los bloques viejos se borran de la rama. Es el mismo costo de una rotación. **El operador lo aceptó el 15-11-2026**, frente a dos alternativas: guardar el mapa junto al estado de la unidad (sobrevive a perder la caché, no a una restauración, y exige que nunca se commitee) o una llave de nombres por agente respaldada con los secretos (sobrevive a todo, a costa de tocar el manejo de secretos). TU33 afirma esa subida única y el no-change que la sigue; TU40, que tras una rotación ningún nombre viejo queda.
 - **Lo que no cambia**: `age` sigue sin autenticar (S5 de [block-store.md](contracts/block-store.md)); quien escribe el repositorio puede reemplazar un respaldo. R9 de [restore.md](contracts/restore.md) acota lo que una restauración escribe.
 
+### D38. El gate previo al merge se ejecuta en el M4 (decisión del operador, 16-11-2026)
+
+- **Contexto**: ferrari no está accesible; el operador necesita llegar a casa y reiniciarlo. Código y gates automatizados ya están validados y la privada M4 abrió su prueba sintética. La falta de acceso impide certificar el estado vivo de la flota.
+- **Decisión**: piloto aislado por consola en Docker del M4, con repositorio privado real nuevo `rodrigo-hinojosa/agentic-046-recovery-gate`. Se conservan las cinco unidades reales, la verificación de ramas/idempotencia y la restauración comparada antes del merge. M5 mantiene autorización separada.
+- **Límites**: datos sintéticos, sin bots ni perfiles copiados, sin supervisor o cron concurrente. No acredita el inventario, los archivos en claro o el canal de linus. Esas comprobaciones y la restauración con datos vivos pasan a la validación operacional de linus antes de ampliar a donna/cbum; FR-023, FR-026 y SC-010 siguen pendientes. El código del producto no cambia por esta elección.
+- **Procedimiento**: `contracts/local-pilot.md`, evidence V5 y quickstart sección 4. No omitir fallas ni aceptar rc 0 sin refs, estados y comparaciones completas. La privada se usa solo en la Terminal del operador.
+
+### Resultado posterior de M5 (17-11-2026)
+
+La medición que estaba pendiente al escribir M5/D18 se completó con el piloto M4 de D38, sin tocar el perfil del Mac. Claude Code 2.1.170 y el modelo efectivo `claude-sonnet-4-6` retomaron la misma sesión y devolvieron el marcador esperado desde un JSONL de 2.329 bytes restaurado por 046. El perfil vacío respondió UNKNOWN después de existir la conversación del productor. Se usaron tres invocaciones de un turno, con OAuth entregado aparte, sin herramientas/MCPs y con un lector que solo recibió el archivo recuperado. Se retiraron los lectores y temporales. Esto mide continuación del historial en ese caso; no recuperación del login o del canal vivo. Resultados y límites en [pilot-m4-results.md](pilot-m4-results.md). Las notas originales M5/D18 se conservan como investigación previa.
+
 ## Hallazgos laterales, fuera de alcance
 
 - **El respaldo al fork tampoco puede empujar desde el contenedor** (inferido de M1): usa el mismo camino sin credencial. Hoy no afecta a nadie, porque ningún agente de la flota tiene fork.

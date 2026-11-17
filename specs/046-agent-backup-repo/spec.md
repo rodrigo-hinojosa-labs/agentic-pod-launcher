@@ -95,7 +95,7 @@ Las tres dependen de `scaffold.fork.url`. Sin fork ninguna empuja nada: el watch
 | La plantilla le dice al agente que sin fork no hay respaldos | Leído en código | `modules/claude-md.tpl:234` |
 | La persona de CBum prohíbe subir datos de salud a un repositorio | Leído | Ficha de CBum, "Reglas de operación" y decisión D3 |
 | GitHub avisa sobre 50 MiB por archivo, bloquea sobre 100 MiB y recomienda repositorios bajo 1 GB | Leído en su documentación (13-11-2026) | `research.md`, M4 |
-| Restaurar el historial permite que el agente retome su última conversación | Documentado por Claude Code; sin medir: se mide en el gate previo al merge | `research.md`, M5 y D18 |
+| El historial recuperado permite retomar una conversación en el caso probado | Medido el 17-11-2026: Claude Code 2.1.170, Sonnet 4.6, perfil aislado en el M4; no acredita login o canal vivo | `pilot-m4-results.md`, M5 |
 | En los tres agentes, el archivo de secretos está en la raíz del workspace y no en el directorio de estado, que es donde lo busca la unidad de identidad | Medido (13-11-2026) y leído en código | `research.md`, M13 |
 | Los tres agentes llevan el token de Claude en su archivo de secretos | Medido (solo presencia) | `research.md`, M14 |
 | Claude Code reescribe su archivo de configuración vivo hasta una vez por minuto durante una conversación | Medido (donna) | `research.md`, M15 |
@@ -373,6 +373,7 @@ Antes del merge se demuestra el empuje autenticado contra un repositorio privado
 
 - **FR-021**: La feature se desarrolla con pruebas primero en la suite del host, en bash 3.2 y en 5.x, y con una prueba de extremo a extremo en un contenedor real que ejerza el empuje autenticado, que hoy no ejerce ninguna prueba.
 - **FR-022**: Antes del merge se demuestra el respaldo completo y un ensayo de restauración contra un repositorio privado real, en un agente con la imagen de la rama. Es un paso del operador, con compuerta.
+  - **Elección del operador (16-11-2026)**: el gate de integración se ejecuta en un piloto aislado por consola en Docker del MacBook Pro M4, con contenido de prueba y un repositorio privado real nuevo. No usa bots ni el estado de la flota. La comparación completa y M5 conservan su condición previa al merge; M5 requiere autorización separada. El inventario, los archivos en claro y la salud real de los agentes en ferrari se comprueban en su despliegue, antes de ampliar de linus a los demás. Alcance y límites en `contracts/local-pilot.md`.
 - **FR-023**: Después del merge, el operador despliega en donna, linus y cbum: donna y linus con sus repositorios actuales, y cbum con uno nuevo y marcado como de datos sensibles. Cada despliegue lleva su respaldo previo de la imagen y deja registrado el primer respaldo verificado.
 - **FR-024**: La feature actualiza `CHANGELOG.md`, `VERSION` y la documentación del launcher que describe los respaldos.
 
@@ -419,13 +420,13 @@ Antes del merge se demuestra el empuje autenticado contra un repositorio privado
 - El cambio agrega funcionalidad, así que el bump por defecto es MINOR (0.31.0 a 0.32.0), con su entrada en el CHANGELOG. Es un default declarado, reversible antes del PR.
 - El límite de 1 GB de SC-007 y el tamaño máximo por archivo salen de la documentación de GitHub, leída el 13-11-2026: avisa sobre 50 MiB por archivo, bloquea sobre 100 MiB y recomienda repositorios bajo 1 GB.
 - El tope de 3 minutos de SC-006 cubre la comprobación previa de cada unidad, que son dos consultas de 60 segundos como máximo. El empuje tiene su propio tope. El umbral de antigüedad del diagnóstico (FR-017) lo fija el plan según la cadencia de cada unidad.
-- El gate previo al merge se hace en linus, que es el agente con menos riesgo: su repositorio casi no tiene contenido y no maneja datos de salud. El plan puede proponer otro.
+- El gate de integración previo al merge se ejecuta en el piloto M4 aprobado el 16-11-2026 (D38), ya medido el 17-11. El gate operacional con datos, inventario, login y canal vivos de linus se conserva en T083, antes de ampliar a donna/cbum.
 - La prueba de extremo a extremo local corre en el Mac del operador, con compuerta, como en las features anteriores.
 - El merge es del operador.
 - El operador ajusta la regla de la persona de CBum en el mismo despliegue, para que permita el respaldo cifrado del launcher y nada más.
 - El historial de conversaciones se cifra en todos los agentes, también en los que no están marcados como sensibles: guarda en bruto todo lo que pasó por la conversación, y eso puede incluir secretos. Es un default declarado; el operador puede pedir que en los agentes sin marcar vaya en claro.
 - La credencial de GitHub es amplia: da acceso de escritura a todos los repositorios de la cuenta. La feature no cambia quién la tiene hoy, porque los tres agentes ya la tienen en su entorno, pero un agente nuevo que quiera respaldo la necesita.
-- Restaurar el historial permite retomar la conversación. Lo documenta Claude Code, pero no está medido: se mide en el gate previo al merge y, si no retoma, SC-002 se enmienda antes del merge.
+- La continuación con historial restaurado se midió el 17-11-2026 en el piloto M4: misma sesión y marcador con Claude Code 2.1.170 y Sonnet 4.6, frente a UNKNOWN en un perfil vacío. No generaliza a otros formatos/versiones ni acredita recuperar el login o el canal vivo. Evidencia en `pilot-m4-results.md`; las comprobaciones operacionales de la flota siguen pendientes.
 - La base de claude-mem también se cifra en todos los agentes: guarda observaciones de las mismas conversaciones y es un archivo binario, que en claro tampoco se podría leer en GitHub. Es un default declarado en el plan.
 - El camino de un agente marcado como sensible se ejerce en la prueba de extremo a extremo y en el despliegue de cbum.
 - La flota se autentica con el token de Claude de su archivo de secretos (medido el 13-11-2026 en los tres agentes). El login de `/login` no viaja en el respaldo, así que un agente que solo use `/login` necesita un inicio de sesión manual después de restaurar. Lo decidió el operador el 13-11-2026.

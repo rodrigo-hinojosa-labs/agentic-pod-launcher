@@ -28,7 +28,9 @@ El Principio V de la constitución fija tres ramas de respaldo, así que la feat
 
 **Storage**: el repositorio privado del agente en GitHub, con ramas huérfanas `backup/*`; archivos de estado JSON en `scripts/heartbeat/`; cachés de clon bajo `.state/.cache/`.
 
-**Testing**: `bats` en el host, en los dos bash, con un servidor git local con autenticación como doble de prueba; `DOCKER_E2E=1` para el contenedor real; un gate en linus antes del merge.
+**Testing**: `bats` en el host, en los dos bash, con un servidor git local con autenticación como doble de prueba; `DOCKER_E2E=1` para el contenedor real; y un gate de integración por consola en Docker del M4 contra un repositorio privado real antes del merge (sustitución de linus aprobada el 16-11-2026, `contracts/local-pilot.md`).
+
+**Alcance del piloto aprobado**: contenido de prueba, primitivas horneadas y GitHub reales, sin cron, supervisor ni canales conectados. Se comprueban las cinco unidades, idempotencia, ramas de trabajo y recuperación comparada. M5 fue autorizado por separado y pasó el 17-11-2026 con tres invocaciones de un turno; el resultado y sus límites están en `pilot-m4-results.md`. El contenido vivo, los inventarios, los archivos en claro y la salud de linus/donna/cbum se validan al desplegar; linus pasa primero, con reversión disponible, antes de ampliar a la flota. No cambia el contrato de datos ni el código del producto.
 
 **Target Platform**: agentes en modo docker (Alpine, aarch64 en ferrari y amd64 en la CI). El modo local no cambia.
 

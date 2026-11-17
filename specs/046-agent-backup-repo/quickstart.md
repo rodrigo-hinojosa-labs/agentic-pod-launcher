@@ -63,36 +63,40 @@ DOCKER_E2E=1 bats tests/docker-e2e-*.bats
 
 **Esperado**: TE1 a TE8 en verde, y el total del e2e en 62 casos. En este Mac, el caso de humo `tests/docker-e2e-smoke.bats:79` falla también en `origin/main` por su espera de 20 segundos; no es de esta feature.
 
-## 4. Gate en linus, antes del merge (con compuerta)
+## 4. Gate de integración en el M4, antes del merge (con compuerta)
 
-Cada paso lo autoriza el operador. El detalle de lo que se registra está en la sección V5 de [contracts/evidence.md](contracts/evidence.md).
+**Ejecución completada**: R7 y M5 se verificaron el 17-11-2026. Resultados, alcance y límites en [pilot-m4-results.md](pilot-m4-results.md); no repetir los comandos de esa ejecución. La secuencia siguiente conserva el procedimiento del ensayo.
 
-1. **Respaldo**: etiquetar la imagen actual como `agentic-pod:linus-pre046` y copiar los archivos de sistema del workspace.
+El operador aprobó el piloto local el 16-11-2026 para continuar sin ferrari. El alcance está en [contracts/local-pilot.md](contracts/local-pilot.md) y lo que se registra en V5 de [contracts/evidence.md](contracts/evidence.md). Se conserva el respaldo/restauración real contra GitHub privado antes del merge; los datos de la flota no se simulan como recuperados.
+
+1. **Aislamiento**: preparar workspace, estado y evidencia propios bajo el caché de 046, con imagen etiquetada aparte y hashes comparados con la rama. No tocar las imágenes ni workspaces existentes.
 2. **Cabezas de trabajo**: anotar las cabezas de las ramas de trabajo en GitHub. Va antes de asociar el repositorio: desde que se asocia, el cron puede empujar.
-3. **Código de la rama**: llevar al workspace los archivos de sistema de la rama, con el procedimiento de actualización del `README.md`. Correr `./setup.sh --regenerate` y después `custom-apply --no-regenerate`, como en el despliegue de 045.
-4. **Inventario**: listar el estado que ninguna unidad cubre y declarar en `backup.extra_paths` lo que corresponda.
-5. **Revisión de lo que viaja en claro**: mirar los nombres de los archivos de la lista de identidad y de la configuración, y confirmar que ninguno lleva un valor sensible. Va antes de asociar: desde el reinicio, el supervisor empuja la identidad.
-6. **Asociación**: fijar `backup.repo.url` en `agent.yml` con la URL de `linus-workspace-agent-admin` y regenerar. `--regenerate` avisa si falta la llave o `GITHUB_PAT`.
+3. **Código de la rama**: regenerar el workspace sintético con sus archivos de sistema y registrar la imagen construida. Mantener las librerías y herramientas horneadas sin overrides de pruebas.
+4. **Inventario**: sembrar identidad, vault, persona/configuración, auto-memoria, SQLite, extra path y JSONL de prueba. Declarar el extra path y `backup.sensitive: true`.
+5. **Revisión de lo que viaja en claro**: comprobar que toda identidad y configuración del piloto son sintéticas. El operador proporciona las credenciales por su Terminal o gestor, sin valores en chat, argumentos ni logs.
+6. **Asociación**: fijar `backup.repo.url` con `https://github.com/rodrigo-hinojosa/agentic-046-recovery-gate`, privado y creado con `main`, y regenerar. `--regenerate` avisa si falta la llave o la credencial.
 7. **Contexto del agente**: comprobar que el `CLAUDE.md` vivo ganó la sección `## Your repository`. Si no la tiene, es porque estaba editado y `--regenerate` lo preservó: se fuerza con `--force-claude-md`.
-8. **Reinicio**: build, stop, esperar 150 segundos y up.
-9. **Llave**: fijarla justo después del reinicio, con el paso explícito, y confirmar con el operador que la huella que imprime es la de una llave cuya parte privada tiene a mano. Hasta entonces `identity` corre sin los secretos y lo cifrado no corre:
+8. **Consola aislada**: arrancar el contenedor como `agent`, con el estado montado igual que en producción y un proceso inerte; sin cron, supervisor ni canales conectados. No copiar perfiles del Mac o de ferrari.
+9. **Llave**: fijar la pública M4 comprobada por el operador con la CLI real. Registrar que configurar la llave dispara identidad; hacerlo antes de congelar las entradas o contarlo en el primer ciclo. No repetirlo entre ciclos:
 
    ```bash
-   docker exec -u agent linus heartbeatctl backup-identity --configure-key "<llave pública>"
+   docker exec -u agent <contenedor-del-piloto> heartbeatctl backup-identity --configure-key "<llave pública>"
    ```
 
 10. **Primer ciclo**: correr las cinco unidades y `heartbeatctl backup-status`.
 11. **Verificación en GitHub**: las cinco ramas `backup/*` existen, y las ramas de trabajo tienen las cabezas del paso 2.
 12. **Segundo ciclo**: 0 commits nuevos.
 13. **Ensayo de restauración**: en el equipo que tiene la llave privada, restaurar en un directorio limpio y comparar como dice R7 de [contracts/restore.md](contracts/restore.md). El workspace restaurado no se arranca, y se borra al terminar.
-14. **Medición de M5**: dentro del agente, copiar el historial restaurado a un directorio de configuración temporal y correr `claude -p --continue` desde `/workspace`.
-15. **Estado final**: contenedor sano, 0 reinicios y canal arriba.
+14. **Medición de M5**: preparar una conversación real de prueba y, con autorización separada para consumir cuota, respaldarla y probar su historial recuperado en un perfil separado con `claude -p --continue` desde `/workspace`. Sin el resultado, SC-002 sigue pendiente.
+15. **Estado final**: contenedor de consola activo, 0 reinicios y límites del ensayo registrados. No se certifican cron, supervisor, canales ni datos vivos de la flota.
 
-**Si algo falla**: volver a `agentic-pod:linus-pre046` con los archivos respaldados y vaciar `backup.repo.url`. Las ramas `backup/*` que hayan quedado en el repositorio no afectan a las ramas de trabajo y se pueden borrar a mano.
+**Si algo falla**: detener el piloto, conservar diagnósticos y presentar el hallazgo antes de tocar código. No proponer merge con el gate incompleto ni borrar automáticamente el repositorio. El workspace y la evidencia quedan para revisión; registrar la retirada del destino de restauración y temporales descifrados al terminar su uso.
 
 ## 5. Despliegue, después del merge (con compuerta)
 
 Un agente a la vez: linus, después donna y al final cbum. La tabla con lo propio de cada uno está en la sección V6 de [contracts/evidence.md](contracts/evidence.md).
+
+Linus completa primero la validación operacional con sus datos reales, que el piloto M4 no acredita: inventario y revisión de archivos en claro, ciclos de respaldo, restauración comparada y salud del canal/doctor. Guardar la imagen `agentic-pod:linus-pre046` y archivos de sistema para reversión; si falla, volver a ellos y detener la ampliación.
 
 Para cada agente:
 
