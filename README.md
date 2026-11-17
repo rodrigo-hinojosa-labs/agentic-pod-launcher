@@ -1,6 +1,6 @@
 # agentic-pod-launcher
 
-A wizard that scaffolds persistent Claude Code agents — in a least-privilege Docker container or directly on a Linux host under systemd — with durable memory across restarts, an optional knowledge vault with hybrid (RAG) search, plugin auto-management, and backup/restore to the agent's own GitHub fork. Docker mode adds two-way Telegram chat and structured heartbeat observability.
+A wizard that scaffolds persistent Claude Code agents — in a least-privilege Docker container or directly on a Linux host under systemd — with durable memory across restarts, an optional knowledge vault with hybrid (RAG) search, plugin auto-management, and backup/restore to the agent's own private GitHub repository (docker mode) or its GitHub fork. Docker mode adds two-way Telegram chat and structured heartbeat observability.
 
 ## What this is
 
@@ -57,7 +57,7 @@ docker compose build
 
 `agentctl` is a thin host wrapper for the most common `docker exec -u agent NAME ...` patterns. It resolves the container name from `agent.yml`, applies `-u agent` automatically, and includes a retry-loop in `attach` for the post-`/login` window. Subcommands: `doctor` (full diagnostic), `attach`, `logs [-f]`, `status`, `heartbeat <sub>`, `mcp [list]`, `versions [--check|--upgrade]` (recorded toolchain versions vs upstream), `shell [--root]`, `up`, `stop`, `restart`, `ps`, `run <cmd…>`. Run `./scripts/agentctl --help` for the full list.
 
-When something looks off, the first move is **`./scripts/agentctl doctor`** — it checks Docker daemon, container status, healthcheck, agent.yml, .env, tmux, crond, the Telegram plugin, the heartbeat, the vault, the plugin patches, backup freshness (identity/vault/config), plugin-install failures, and token health in dependency order, and prints an actionable hint per failing subsystem. Exit codes are honest for scripting: 0 clean, 1 warnings, 2 failures.
+When something looks off, the first move is **`./scripts/agentctl doctor`** — it checks Docker daemon, container status, healthcheck, agent.yml, .env, tmux, crond, the Telegram plugin, the heartbeat, the vault, the plugin patches, backup freshness (identity/vault/config; with an agent repository also memory/history, the destination's privacy, the encryption key, the work clone and the backup size), plugin-install failures, and token health in dependency order, and prints an actionable hint per failing subsystem. Exit codes are honest for scripting: 0 clean, 1 warnings, 2 failures.
 
 ### Local mode
 
@@ -177,7 +177,10 @@ For the silent-stuck case where the bun process is alive but its MCP notificatio
 
 ./scripts/agentctl heartbeat backup-identity       # push an identity snapshot to backup/identity
 ./scripts/agentctl heartbeat backup-vault          # push a vault snapshot (supports --dry-run)
-./scripts/agentctl heartbeat backup-config         # push an agent.yml snapshot
+./scripts/agentctl heartbeat backup-config         # push an agent.yml snapshot (more with an agent repository)
+./scripts/agentctl heartbeat backup-memory         # agent repository only: auto memory, claude-mem, extra paths
+./scripts/agentctl heartbeat backup-history        # agent repository only: conversation transcripts, encrypted
+./scripts/agentctl heartbeat backup-status         # where each backup unit stands (also --json); read-only
 ./scripts/agentctl heartbeat qmd-reindex           # force a vault reindex (lexical + embeddings)
 ./scripts/agentctl heartbeat wiki-graph            # regenerate the derived wiki graph + lint
 ./scripts/agentctl heartbeat token-check           # probe OAuth/API token health
@@ -232,62 +235,135 @@ Full reference: [`docs/vault.md`](docs/vault.md) (vault layers, QMD setup, stora
 
 All agent state (OAuth login, Telegram pairing, sessions, plugin cache, channels state, heartbeat logs) lives under `<workspace>/.state/` via a bind-mount to `/home/agent` in the container. The workspace directory **is** the agent: portable via `rsync` / `cp -a`, immune to `docker compose down -v`, and removed only when the workspace itself is deleted. `.state/` is gitignored and contains OAuth tokens — never commit it.
 
-### Backup to the agent's own fork (three orphan branches)
+### Backups: the agent's own repository, or its fork
 
-The non-regenerable subset of the workspace is replicated to the agent's own GitHub fork as three orphan branches:
+The non-regenerable part of the agent is replicated to GitHub as independent orphan branches (`backup/<unit>`), each hash-idempotent: no change, no commit. Where they go is decided on every run by one rule, read from `agent.yml`:
 
-- `backup/identity` — OAuth login, Telegram pairing, plugin config, settings, age-encrypted `.env`. Triggered by `heartbeatctl backup-identity`, the watchdog (60s hash check), post-plugin-install hooks, and a daily 03:30 cron.
-- `backup/vault` — the vault's markdown subset, hourly by default. Excludes `.obsidian/workspace*.json`, cache, `.trash/`, and `*.sync-conflict-*` so Syncthing-induced churn doesn't pollute snapshots.
-- `backup/config` — `agent.yml` (plaintext, no secrets), daily.
+| Destination | When | Branches |
+| --- | --- | --- |
+| **Agent repository** (docker mode only, since 0.32.0) | `backup.repo.url` is set | five: `identity`, `vault`, `config`, `memory`, `history`, pushed with `GITHUB_PAT` |
+| **Fork** | no `backup.repo.url`, and `scaffold.fork.url` is set | three: `identity`, `vault`, `config`, exactly as before 0.32.0 |
+| Nothing | neither | none; each scheduled unit logs that it has no destination and exits 0 |
 
-Encryption uses your existing GitHub SSH key (no extra secret to manage), fetched from `github.com/<owner>.keys` at scaffold time. Restore on a new machine with `setup.sh --restore-from-fork <url>` — the agent rehydrates without re-`/login`, re-pairing, or re-installing plugins. Each branch is independently optional; partial forks rehydrate whatever's available. Full reference in [`docs/heartbeatctl.md`](docs/heartbeatctl.md#backup-commands).
+| Branch | What it holds | Encrypted | Default schedule |
+| --- | --- | --- | --- |
+| `backup/identity` | Telegram pairing (`access.json`), plugin config, `settings.json`, `.claude.json`, and the secrets file as `.env.age` | the secrets file (omitted when there is no key: *partial* mode) | the supervisor when its hash changes (checked every 60s) and after plugin installs; cron `30 3 * * *` (with a fork only if `features.identity_backup.enabled: true`; with a repository unless it is `false`) |
+| `backup/vault` | the vault's `*.md` (minus `.obsidian/workspace*.json`, cache, `.trash/` and `*.sync-conflict-*`) | when the agent is sensitive | cron `0 * * * *` (`vault.backup_schedule`) |
+| `backup/config` | `agent.yml`; with a repository also `CLAUDE.md`, `personas/` (no `*.bak*`), `docker-compose.override.yml` and the workspace `.claude/` project config (`settings.json`, `skills/`, `commands/`, `agents/`, `hooks/`, `output-styles/`) | everything but `agent.yml` when the agent is sensitive | cron `30 3 * * *` (`features.config_backup.*`) |
+| `backup/memory` (repository only) | auto memory, the claude-mem store, and the `backup.extra_paths` | claude-mem and extra paths always; auto memory when sensitive | cron `40 3 * * *` (`features.memory_backup.*`) |
+| `backup/history` (repository only) | conversation transcripts (`.claude/projects/**` minus `memory/`) | always | cron `50 3 * * *` (`features.history_backup.*`) |
 
-#### Restore walkthrough (Mac → Linux example)
+Any unit runs on demand with `heartbeatctl backup-<unit>`; `heartbeatctl backup-status` shows where each one stands (it never touches the network). `enabled: false` on a unit removes its cron line. Full reference, including every result and message: [`docs/heartbeatctl.md`](docs/heartbeatctl.md#backup-commands).
 
-You lost your laptop, or you're moving the agent to a Raspberry Pi. From the new host:
+**Sensitive agents.** `backup.sensitive: true` (the wizard's "sensitive data" question) also encrypts the vault, the auto memory and the config except `agent.yml`, which a restore needs in plaintext to start. A sensitive agent with a fork and no repository does **not** push its vault at all: a fork carries nothing encrypted, and that vault never travels in plaintext. Commits pushed in plaintext before an agent was marked stay in the branch history until you prune the branch (below). In local mode the mark is not honoured, and `--regenerate` says so.
 
-```bash
-# 1. Pre-requisites: gh, git, age (apk on Alpine; brew/apt elsewhere), plus
-#    docker if the restored agent is a docker-mode agent.
-#    The same SSH key registered with GitHub must be on the new host
-#    (`~/.ssh/id_ed25519`) — that's what decrypts .env.age.
+**Encryption.** Everything encrypted can be read only with the private half of the operator's ssh key, whose public half is `backup.identity.recipient` (`ssh-ed25519` or `ssh-rsa`). The secrets file is encrypted directly for that key with `age`. Everything else goes into an encrypted block store, `store/`, inside its branch: files are split into blocks of up to 1 MiB, compressed and encrypted with a data key of that store, and named by the hash of the encrypted block, so a name tells nothing about its content; a local block map (outside any committed tree) lets an unchanged block skip the upload, and losing it costs one full upload; the data key itself is kept encrypted for the operator key (`store/key.age`). Without the operator key, `identity` runs in partial mode and every unit with something to encrypt stops with `no-recipient`: nothing that must be encrypted is ever pushed in plaintext. **The encryption gives confidentiality, not authenticity**: `age` does not sign, so anyone who can write to the repository can make a restore bring other content. The backup relies on the repository's access control, as the plaintext branches always did.
 
-# 2. Clone the launcher.
-git clone https://github.com/rodrigo-hinojosa-labs/agentic-pod-launcher.git
-cd agentic-pod-launcher
+**Before every push** (also on a cycle with no changes) a unit checks the repository: an anonymous query must be refused for lack of a credential (re-checked at most once a day while the verdict stays `private`), and an authenticated one must succeed. A public repository is never written, not even with `backup.repo.allow_unverified: true`, which only lets a unit push when the anonymous check could not tell either way. Every branch carries an ownership mark (`.agentic-pod-backup.json`): a unit never writes a branch that lacks it or that names another agent.
 
-# 3. Restore. Pulls backup/{config,identity,vault} in order, copies files
-#    into <dest>, decrypts .env with your SSH key. The deployment mode comes
-#    back with agent.yml (backup/config), so the rest of the run re-renders
-#    the right derived set for that mode.
-./setup.sh \
-    --restore-from-fork git@github.com:<your-user>/<agent-fork>.git \
-    --destination ~/agentic-agents/<agent-name>
+#### Associating a repository
 
-# Expected output:
-#   ✓ restore: agent.yml restored from backup/config
-#   ✓ restore: decrypted .env with /home/<you>/.ssh/id_ed25519
-#   ✓ restore: identity restored into ~/agentic-agents/<agent-name>/.state/
-#   ✓ restore: vault restored into ~/agentic-agents/<agent-name>/.state/.vault/
+You need a **private GitHub repository** (`https://github.com/<owner>/<name>`, optional `.git`, no credentials or spaces; no other host is accepted), created **with an initial commit on `main`**, and a `GITHUB_PAT` in the workspace `.env` that can push to it. That token is then shared by the GitHub MCP (if enabled), the backups and the agent's work clone. The repository has a second role: the agent keeps its own work there, in a clone at `/workspace/agent-repo` (`<workspace>/agent-repo` on the host) that the container creates at boot and the daily `backup-config` run repairs. The `backup/*` branches belong to the launcher; the clone never fetches or checks them out, which is also why the repository should already have a work branch (`main`) before the first backup lands. Work the agent does not push is not backed up, and `--uninstall --nuke` warns when the clone holds unpublished commits or uncommitted files.
 
-# 4. Docker mode — build the image (slow on the first run: pulls Alpine,
-#    installs uv/bun, pre-installs Python MCPs). Subsequent rebuilds are fast.
-cd ~/agentic-agents/<agent-name>
-docker compose build
+**A new agent (docker mode).** The wizard asks right after the fork step:
 
-# 5. Docker mode — boot. The agent comes up authenticated and paired: no
-#    /login, no /telegram:access pair, no plugin re-install.
-./scripts/agentctl up
-./scripts/agentctl doctor   # all checks green if everything is right
+```text
+Associate a private repository with this agent? [y/N]
+Repository URL (https://github.com/<owner>/<name>):
+Does this agent handle sensitive data (health, finance, legal)? [y/N]
 ```
 
-Local mode: skip steps 4-5 — there is no image. The same `setup.sh` run renders `scripts/local/` and installs the systemd units (or stages them if it can't sudo). Verify with `./scripts/agentctl doctor`; if the session unit isn't active, re-run the guided `./setup.sh --login`.
+If the GitHub MCP is off, it then asks for the repository's token. At scaffold the launcher takes the encryption key from `github.com/<owner>.keys` (the fork's owner, else the repository's) and prints its fingerprint: confirm you hold the private half of that key, or set another one with `--configure-key` (below).
+
+**An existing agent (docker mode).** No re-scaffold:
+
+```bash
+# 1. Bring the workspace to 0.32.0 or later ("Upgrade an existing agent" below).
+#    Its --regenerate adds the new keys to agent.yml with their defaults.
+# 2. Edit agent.yml, and put GITHUB_PAT in .env (a token that can push there):
+#      backup:
+#        repo:
+#          url: "https://github.com/<owner>/<name>"
+#        sensitive: false        # true for health, finance or legal data
+#        extra_paths: []         # see "What no unit covers" below
+./setup.sh --regenerate                       # warns on stderr if the key or GITHUB_PAT is missing
+docker compose build && ./scripts/agentctl up # the backup code is image-baked; .env is read at creation
+
+# 3. Set the operator key (the public key string; a path is read inside the
+#    container) and check the fingerprint belongs to a key you hold.
+docker exec -u agent <agent> heartbeatctl backup-identity --configure-key "ssh-ed25519 AAAA... you@host"
+#   backup-identity: recipient updated
+#   backup-identity: key fingerprint SHA256:... (you@host)
+#   backup-identity: encrypted units re-encrypt for this key on their next run (full upload)
+
+# 4. First cycle, then the status.
+for u in config identity vault memory history; do
+  docker exec -u agent <agent> heartbeatctl backup-$u
+done
+docker exec -u agent <agent> heartbeatctl backup-status
+```
+
+The agent's `CLAUDE.md` gains a `## Your repository` section; if you edited it by hand, `--regenerate` keeps it as it is (see *What the upgrade leaves behind*).
+
+#### Restore
+
+You lost the host, or you are moving the agent. From the new host:
+
+```bash
+# Prerequisites: the launcher's host tools and docker, plus age and python3 >= 3.9
+# for anything encrypted, and the private half of the operator key.
+git clone https://github.com/rodrigo-hinojosa-labs/agentic-pod-launcher.git
+cd agentic-pod-launcher
+./setup.sh --restore-from-repo https://github.com/<owner>/<name> \
+    --identity-key ~/.ssh/id_ed25519 \
+    --destination ~/agents/<agent-name>
+
+cd ~/agents/<agent-name>
+docker compose build && ./scripts/agentctl up
+./scripts/agentctl doctor
+```
+
+- **It runs at the end of the scaffold**: you answer the wizard first, the restored `agent.yml` replaces the one the wizard wrote, and the rest of the run renders from it. `--restore-from-repo` is an alias of `--restore-from-fork`; both take a repository or a fork, and with a fork of three unmarked branches the output is the same as before 0.32.0.
+- **Order**: `config` (so `vault.path` is known), `identity`, `vault`, `memory`, `history`. A missing branch is skipped with a line; the others go on.
+- **Keys**: `--identity-key` first, then `~/.ssh/id_ed25519`, then `~/.ssh/id_rsa`; the first one that opens is used for every encrypted piece. Without a usable key, or without `age` or `python3` 3.9+, the encrypted pieces are skipped with a line and the plaintext ones are restored. An encrypted store comes back complete or not at all: if it fails its integrity check, nothing of that unit is written.
+- **Passphrase**: with a passphrase-protected key, `age` asks once per encrypted piece it opens (the secrets file, plus one per encrypted store: 3 times for an unmarked agent, up to 5 for a sensitive one), and once more for each key it tries first that does not open. It needs a terminal; passing the right key with `--identity-key` avoids the extra prompts.
+- **What it writes**: only what each branch is supposed to carry. Nothing under `.git` or through a symlink; for `config` its closed list; for the vault, markdown only (a `vault.path` that leaves the workspace falls back to `.state/.vault`); and extra paths only under an entry of `backup.extra_paths` that the launcher does not reserve. Extra paths restored outside `.state/` are added to the workspace's `.git/info/exclude`, so the scaffold's first commit does not take them.
+- **What it reports** (agent repository only): one line per branch and a summary of what was restored and what was skipped, and why. It warns when the restored secrets file has no `CLAUDE_CODE_OAUTH_TOKEN`, and when it restored a `docker-compose.override.yml`, which can change the container's mounts and privileges: review that file before the first boot.
+- **Login**: the login file `/login` leaves travels in no backup. An agent that authenticates with `CLAUDE_CODE_OAUTH_TOKEN` in `.env` comes back authenticated; one that only used `/login` needs `/login` again after the first boot. The Telegram pairing comes back; plugins reinstall themselves at boot. Do not boot a restored copy while the original runs: two processes with the same Claude token and the same Telegram bot step on each other.
+
+Local mode (fork backups only): skip the build and `up` — there is no image. The same `setup.sh` run renders `scripts/local/` and installs the systemd units (or stages them if it can't sudo). Verify with `./scripts/agentctl doctor`; if the session unit isn't active, re-run the guided `./setup.sh --login`.
+
+#### Size, pruning and changing the key
+
+- **Size**: `heartbeatctl backup-status` reports each unit's cache size, a good approximation of what its branch takes in the repository. `agentctl doctor` warns when the caches add up to more than 800 MB.
+- **Prune a branch**: delete `backup/<unit>` on GitHub. The next cycle recreates it with a single commit; the work branches are not touched. This is also how you remove what an agent pushed in plaintext before it was marked sensitive.
+- **Change the operator key**: `heartbeatctl backup-identity --configure-key <new key>`. Each encrypted unit generates a new data key and uploads everything again on its next run. Earlier commits stay encrypted for the old key until you prune the branch.
+
+#### What no unit covers
+
+"Recoverable" means what the five branches carry. The rest:
+
+| Data | Why it is left out | How it comes back |
+| --- | --- | --- |
+| Launcher system files (`scripts/`, `docker/`, `modules/`, `setup.sh`) | They come from the launcher | The restore runs from a launcher clone |
+| Derived files (`.mcp.json`, `docker-compose.yml`, `heartbeat.conf`, `NEXT_STEPS.md`) | Rendered from `agent.yml` | `./setup.sh --regenerate` |
+| The `CLAUDE.md` baseline that 038 keeps (`.state/launcher/`) | Rendered on regenerate | `./setup.sh --regenerate`; a restored `CLAUDE.md` with edits is preserved, as always |
+| Plugin cache, tool caches (`.cache`, `.bun`, `.npm`, `.local`), the qmd index and models | Regenerable | Reinstalled at boot |
+| Claude's live config file (`.claude/.claude.json`) | Rewritten up to once a minute | The boot seeds what the launcher needs; MCP servers added by hand with `claude mcp add` are lost |
+| The login file `/login` leaves | It would be one more credential off the host, and its refresh token rotates: a restored copy could invalidate the original's session | An agent that authenticates with `CLAUDE_CODE_OAUTH_TOKEN` in `.env` needs nothing; one that only uses `/login` logs in again |
+| History Claude Code already deleted (30-day retention) | The backup mirrors the current state | It stays in the branch history until the next prune |
+| Telegram attachments, logs, heartbeat state | Operational | Not recovered |
+| Other repositories cloned in the workspace | Each has its own remote | Clone them again |
+| State of an overlay, or of a feature the agent built, that nobody declared | The launcher does not know about it | Declare it in `backup.extra_paths` |
+
+`backup.extra_paths` lists paths relative to the workspace root (files or directories) for state the launcher does not know about. Entries are normalized (no leading `./`, no trailing `/`) and rejected when empty, `.`, absolute, with a `..` segment, equal to `.state`, under `.state/.cache` or `agent-repo`, with a `.git` component, a symlink, resolving outside the workspace, or a path the launcher owns (`setup.sh`, `VERSION`, `agent.yml`, `CLAUDE.md`, `NEXT_STEPS.md`, `.mcp.json`, `.gitignore`, the compose files, the secrets file, and anything under `scripts/`, `docker/`, `modules/`, `tests/`, `personas/` or `.github/`); `.git` subdirectories are not walked, and the file `/login` leaves never travels. Each accepted entry always travels encrypted in `backup/memory` and is restored to the same path. A rejected or missing entry is skipped with a line that names it, and `backup-status` and `agentctl doctor` list it.
 
 Common gotchas:
 
-- **No SSH key on the new host** → `.env.age` cannot be decrypted. Either copy the key over (`scp ~/.ssh/id_ed25519 newhost:~/.ssh/`) or point the launcher at the key with the `--identity-key` flag: `./setup.sh --restore-from-fork <url> --destination <dest> --identity-key /path/to/private-key`. (There is no `RESTORE_IDENTITY_KEY` env var — the variable is reset before argument parsing, so only the flag has any effect.) As a last resort, regenerate `.env` by re-running the wizard's secrets section: `./setup.sh --regenerate`, then paste the Telegram token by hand.
+- **No private key on the new host** → nothing encrypted can be opened. Copy the key over (`scp ~/.ssh/id_ed25519 newhost:~/.ssh/`) or point the restore at it with `--identity-key /path/to/private-key`. (There is no `RESTORE_IDENTITY_KEY` env var — the variable is reset before argument parsing, so only the flag has any effect.) As a last resort, write `.env` by hand from the rendered `.env.example`.
 - **Different host UID/GID** (docker mode) → the bind-mount needs the container's `agent` user to match the host UID. The wizard auto-detects via `id -u`/`id -g`, so a fresh `--regenerate` after restore re-bakes the right build args.
-- **Partial fork** (only some branches present) → restore continues with a `⚠ restore: no backup/X branch` notice for the missing ones. You can re-run `--restore-from-fork` later when the missing branch is populated.
+- **Partial backups** (only some branches present) → the restore continues with a `⚠ restore: no backup/X branch` notice for the missing ones. You can re-run it later when the missing branch is populated.
+- **A fork backup usually carries no `.env.age`** (docker mode): on the fork path the identity unit looks for the secrets file under `.state/`, while a docker agent keeps it at the workspace root. The repository path reads the workspace-root file.
 
 ### UID/GID matched at build
 
@@ -357,7 +433,8 @@ A scaffolded workspace is a **self-contained copy** of the launcher's system fil
 cd ~/agentic-pod-launcher && git pull        # now at the version you want to run
 
 # 2. Overwrite the system files in the workspace. Never touch agent.yml, .env,
-#    or .state/ — those carry your config, secrets, OAuth login and sessions.
+#    .state/ or agent-repo/ — those carry your config, secrets, OAuth login,
+#    sessions and the agent's own work clone.
 DEST=~/agents/my-agent
 cp setup.sh VERSION .gitignore LICENSE "$DEST/"
 
@@ -423,11 +500,12 @@ Caveats worth knowing:
 
 - **Back up first if you hand-edited system files in the workspace.** Step 2 wipes `modules/`/`docker/` wholesale and copies over `setup.sh`/`scripts/`; any local edits to launcher code there are lost (the state under `scripts/heartbeat/` and `scripts/vendor/bin/` is preserved, but code files are overwritten). Config lives in `agent.yml` (survives) — keep it that way.
 - **`VERSION` must ship with the swap.** `--regenerate` stamps `meta.launcher_version` from the workspace `VERSION`; copying it in step 2 keeps that honest.
-- **Moving hosts is different** — that's a `rsync`/`cp -a` of the whole workspace directory (see *Self-contained workspace* and *Restore from the fork*), not this in-place swap.
+- **Moving hosts is different** — that's a `rsync`/`cp -a` of the whole workspace directory (see *Self-contained workspace*) or a restore from the backups (see *Backups*), not this in-place swap.
+- **0.32.0 adds the agent repository but associates none by itself.** A workspace upgraded without setting `backup.repo.url` keeps exactly its previous backups (fork, or none). To adopt it, follow *Associating a repository* under *Backups*; the backup code is image-baked, so the docker rebuild above is required.
 
 ## Testing
 
-The test suite uses `bats-core` and runs entirely on the host (no Docker required for the default suite; `yq` v4+, `jq`, `git` and `tmux` are the other host deps, plus `perl` on a host without `flock`, such as macOS, for the lock-release tests). Coverage spans the render engine, YAML lib, interval-to-cron converter, state-lib helpers, notifier contracts, the heartbeat runner, the plugin and MCP catalogs, the Telegram patcher, the heartbeat config-dir isolation, every `heartbeatctl` subcommand, the deployment-mode branch (local render, bootstrap, systemd schedule conversion, kill switch, healthcheck), the QMD/RAG stack (index lib, embed-completion loop, sqlite-vec, wiki-graph), the three backup primitives, and token health.
+The test suite uses `bats-core` and runs entirely on the host (no Docker required for the default suite; `yq` v4+, `jq`, `git` and `tmux` are the other host deps, plus `perl` on a host without `flock`, such as macOS, for the lock-release tests). Coverage spans the render engine, YAML lib, interval-to-cron converter, state-lib helpers, notifier contracts, the heartbeat runner, the plugin and MCP catalogs, the Telegram patcher, the heartbeat config-dir isolation, every `heartbeatctl` subcommand, the deployment-mode branch (local render, bootstrap, systemd schedule conversion, kill switch, healthcheck), the QMD/RAG stack (index lib, embed-completion loop, sqlite-vec, wiki-graph), the backup units (the three fork primitives and the agent-repository path with its block store and restore), and token health.
 
 ```bash
 bats tests/                                       # full suite (1189 tests as of v0.16.0)
@@ -462,7 +540,7 @@ cd ~/agents/my-agent
 ./setup.sh --uninstall --nuke --yes               # also deletes the workspace directory
 ```
 
-`--uninstall` tears down whatever it finds, so it covers both modes. It runs `docker compose down` when `docker` is on `PATH` (state in `.state/` survives — with the bind-mount there is no volume to wipe), removes `docker-compose.yml` and the generated files (`CLAUDE.md`, `.mcp.json`, `.env.example`, `scripts/heartbeat/heartbeat.conf`, `scripts/heartbeat/logs/`), and — this is the local-mode half — disables and deletes every `agent-<name>` systemd unit that exists: the session service plus the healthcheck, qmd-reindex, qmd-watch, vault-backup and wiki-graph services/timers. Unit removal needs non-interactive `sudo`; without it, the uninstaller prints the units for you to remove by hand.
+`--uninstall` tears down whatever it finds, so it covers both modes. It runs `docker compose down` when `docker` is on `PATH` (state in `.state/` survives — with the bind-mount there is no volume to wipe), removes `docker-compose.yml` and the generated files (`CLAUDE.md`, `.mcp.json`, `.env.example`, `scripts/heartbeat/heartbeat.conf`, `scripts/heartbeat/logs/`), and — this is the local-mode half — disables and deletes every `agent-<name>` systemd unit that exists: the session service plus the healthcheck, qmd-reindex, qmd-watch, vault-backup and wiki-graph services/timers. Unit removal needs non-interactive `sudo`; without it, the uninstaller prints the units for you to remove by hand. Before `--nuke` deletes the workspace it warns if `agent-repo/` (the agent's work clone) holds commits on no remote branch or uncommitted files; with `--yes` it warns and goes on.
 
 ## License
 

@@ -73,7 +73,36 @@ _SCHEMA_BOOLEANS=(
   '.vault.qmd.enabled'
   '.vault.wiki_graph.enabled'
   '.features.heartbeat.review.enabled'
+  '.backup.repo.allow_unverified'
+  '.backup.sensitive'
+  '.features.memory_backup.enabled'
+  '.features.history_backup.enabled'
 )
+
+# 046: the rule for backup.repo.url (data-model.md, section 1). Empty means "no
+# associated repository". Otherwise it must be https://github.com/<owner>/<name>,
+# with an optional .git, and no credentials or spaces. BACKUP_DEST_ALLOW_HTTP=1
+# is a test seam that also admits http:// to a local server. The same rule lives
+# in docker/scripts/lib/backup_dest.sh (backup_dest_url_ok) and in
+# scripts/lib/wizard-validators.sh; tests/fixtures/backup-repo/url-cases.tsv is
+# the one table all of them are checked against (TA05, TD11).
+_schema_backup_repo_url_ok() {
+  local url="$1" name
+  local re_gh='^https://github\.com/[A-Za-z0-9][A-Za-z0-9-]*/([A-Za-z0-9._-]+)$'
+  local re_local='^http://(127\.0\.0\.1|localhost|host\.docker\.internal)(:[0-9]+)?(/[^[:space:]]*)?$'
+  [ -z "$url" ] && return 0
+  case "$url" in *[[:space:]]*|*@*) return 1 ;; esac
+  if [[ "$url" =~ $re_gh ]]; then
+    name="${BASH_REMATCH[1]}"
+    name="${name%.git}"
+    case "$name" in ''|.|..) return 1 ;; esac
+    return 0
+  fi
+  if [ "${BACKUP_DEST_ALLOW_HTTP:-}" = "1" ] && [[ "$url" =~ $re_local ]]; then
+    return 0
+  fi
+  return 1
+}
 
 # Optional string leaves: absent is fine (not required), but if the key is
 # present it must be a non-empty string. yq prints "null" for an absent path,
@@ -153,6 +182,26 @@ agent_yml_validate() {
       *)          errors+=("${bool_path} must be a YAML boolean (true|false), got: ${val}") ;;
     esac
   done
+
+  # 046: backup.repo.url follows the URL rule; backup.extra_paths, when present,
+  # is a list of strings (its per-entry path rule is applied by the memory unit,
+  # which skips and reports a bad entry instead of failing the whole file).
+  local repo_url
+  repo_url=$(_schema_get "$file" '.backup.repo.url')
+  if ! _schema_backup_repo_url_ok "$repo_url"; then
+    errors+=(".backup.repo.url must be empty or https://github.com/<owner>/<name> (no credentials, no spaces)")
+  fi
+  local extra_type
+  extra_type=$(yq -r '.backup.extra_paths | type' "$file" 2>/dev/null)
+  case "$extra_type" in
+    '!!null'|'') ;;
+    '!!seq')
+      if [ "$(yq -r '[.backup.extra_paths[] | select(type != "!!str")] | length' "$file" 2>/dev/null)" != "0" ]; then
+        errors+=(".backup.extra_paths must be a list of strings")
+      fi
+      ;;
+    *) errors+=(".backup.extra_paths must be a list of strings (got: ${extra_type#!!})") ;;
+  esac
 
   # Optional non-empty strings: read raw (not via _schema_get, whose `// ""`
   # collapses absent and empty). yq prints "null" for an absent path, so we

@@ -3,6 +3,46 @@
 ## [Unreleased]
 
 ### Added
+- **A private repository per agent, for its own work and its full backup — `046-agent-backup-repo`**
+  (VERSION 0.31.0 → 0.32.0; docker mode; the image must be rebuilt). An agent can now be associated
+  with a private GitHub repository (`backup.repo.url` in `agent.yml`, a new wizard step in docker mode).
+  The destination rule is: the associated repository, else the fork, else nothing.
+
+  - **Five backup branches with a repository.** `backup/identity`, `backup/vault` and `backup/config`
+    as today, plus `backup/memory` (the auto memory, the claude-mem store and the operator-declared
+    `backup.extra_paths`) and `backup/history` (the conversation transcripts). `backup/config` grows
+    to the persona, `CLAUDE.md`, the compose override and a closed list of the workspace `.claude/`.
+    Each branch carries an ownership mark; a branch the launcher did not write is never touched, and
+    the work branches of the repository are never read or written.
+  - **Encrypted where it must be.** The secrets file, the history, claude-mem and the extra paths
+    always travel in an encrypted block store (`store/`, 1 MiB blocks, gzip + age, one data key per
+    store encrypted for the operator's ssh public key, rotated when that key changes; a block is named
+    by the hash of its encrypted file, so a name tells nothing about the content). With
+    `backup.sensitive: true` the vault, the auto memory and the configuration (except `agent.yml`) too;
+    a sensitive agent with a fork and no repository does not push its vault. The encryption gives
+    confidentiality, not authenticity.
+  - **The credential and the checks.** Pushes use `GITHUB_PAT` through a baked askpass (never in a URL,
+    an argument or a git config), with the agent's `~/.gitconfig` ignored. Every cycle checks that the
+    repository is private and reachable before anything else; a public, unverifiable or unreachable
+    repository is refused. One lock per unit, bounded timeouts, and a supervisor that does not retry the
+    same content more than once every 15 minutes.
+  - **Operator surface.** `heartbeatctl backup-memory`, `backup-history` and `backup-status [--json]`;
+    `backup-identity --configure-key` prints the key fingerprint; `--regenerate` warns about a missing
+    key or `GITHUB_PAT` and never picks a key; `agentctl doctor` shows the five units, the key, the
+    extra paths, the work clone and a size warning above 800 MB.
+  - **The agent's work clone** at `/workspace/agent-repo`, with a credential helper for that server only
+    and the `backup/*` branches excluded from its fetch.
+  - **Restore.** `./setup.sh --restore-from-repo <url>` (an alias of `--restore-from-fork`) brings the
+    five branches back, decrypting with the operator's key (`--identity-key`, else the default ssh keys);
+    it needs `python3` 3.9+ and `age` on the host for what is encrypted, and leaves the restored secrets
+    file with mode 600. Since anyone who can write the repository (the agent included) can put anything
+    there, it writes only what each branch is meant to carry: nothing under `.git` or through a symlink,
+    the closed list of the config, markdown for the vault, and declared extra paths the launcher does not
+    reserve.
+  - **Unchanged**: an agent with a fork, an agent without a destination and local mode behave as today
+    (their crontab, messages, state files and restore output are compared against golden files).
+  - **Constitution 1.1.0**: Principle V now names five branches, the closed list of shared,
+    non-committing code and the closed list of what must travel encrypted.
 - **A red night of the nightly now reaches someone — `040-nightly-red-alert`** (no VERSION change: CI
   and tests only, no runtime code; the precedent of 019, 025 and 039). The `docker-e2e` nightly was red
   on 155 of the 158 scheduled nights measured (07-05-2026 to 12-10-2026) and nothing told anyone: the
@@ -245,6 +285,10 @@
   not touched here).
 
 ### Fixed
+- **The identity backup never encrypted the real secrets file** (046). It read the secrets file from the
+  state directory, where no agent has one: every real agent keeps it at the workspace root, so
+  `.env.age` was never produced. With an associated repository the unit reads the workspace-root file;
+  the fork path keeps its pre-046 behaviour (FR-018), and the defect remains there.
 - **Plugin launchers in `~/.local/bin` resolve in the agent's claude sessions — `045-plugin-launcher-path`**
   (VERSION 0.30.0 → 0.31.0). claude-mem 15.x declares its hooks in exec form (`"command": "claude-mem"`,
   no shell) and installs that launcher in `/home/agent/.local/bin`, a directory that was on no PATH in

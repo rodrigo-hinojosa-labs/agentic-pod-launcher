@@ -39,6 +39,7 @@ teardown() { teardown_tmp_dir; }
   #  9  user_lang           → en
   # 10  deploy_svc          → n  (Linux only; macOS skips this prompt)
   # 11  fork_enabled        → n
+  # 11b agent_repo          → n  (046; docker only: Agent repository (docker only))
   # 12  notify_channel      → none
   # 13-18  optional MCPs (alphabetical): aws, firecrawl, google-calendar,
   #                                       playwright, time, tree-sitter — all 'n'
@@ -58,7 +59,7 @@ teardown() { teardown_tmp_dir; }
   [ "$(uname -s)" = "Linux" ] && answers+=("n")
   # 6 optional MCPs ('n' each) between notify_channel and atlassian.
   answers+=(
-    "n" "none"
+    "n" "n" "none"
     "n" "n" "n" "n" "n" "n"
     "n" "n" "y" "30m" "Test prompt" "y" "proceed"
   )

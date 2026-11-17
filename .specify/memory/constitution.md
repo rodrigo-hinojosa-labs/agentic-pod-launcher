@@ -54,6 +54,29 @@ Templates requiring updates: none (no template references "bash 4+").
 Follow-up TODOs: none.
 -->
 
+<!--
+SYNC IMPACT REPORT (1.0.1 → 1.1.0)
+===================================
+Version change: 1.0.1 → 1.1.0
+Bump rationale: MINOR — materially expanded guidance in Principle V. Feature 046
+  associates a private repository with each agent and makes the agent
+  recoverable from it. That needs two more backup units (memory, history), a
+  closed list of what the units may share, and a closed list of what must travel
+  encrypted.
+
+Sections changed:
+  Principle V → the whitelisted-subset proviso on `.state/`; five orphan
+    branches; the closed list of shared, non-committing code; the extended
+    restore order; the encryption rule; the rationale no longer promises a
+    login-free restore.
+  Development Workflow & Quality Gates → "Scope discipline" no longer says
+    "three".
+
+Templates requiring updates: none (no template names the number of branches).
+
+Follow-up TODOs: none.
+-->
+
 # agentic-pod-launcher Constitution
 
 `agentic-pod-launcher` is a bash wizard that scaffolds self-contained, Dockerized
@@ -145,18 +168,34 @@ channels state, heartbeat logs, the vault — lives under the bind-mounted
 `<workspace>/.state/`. The workspace directory IS the agent.
 
 - `.state/` is gitignored, contains secrets/tokens, and MUST NEVER be committed
-  or logged.
+  or logged, other than the whitelisted subset the backup branches carry.
 - State MUST survive `docker compose down -v`, image rebuilds, and
   `setup.sh --uninstall` (non-`--purge`/`--nuke`).
-- Backups are three INDEPENDENT orphan branches (`backup/identity`,
-  `backup/vault`, `backup/config`) with sha256 content idempotency and per-branch
-  clone caches. They MUST NOT be merged into a shared primitive; each MUST be able
-  to be absent without breaking the others; changes MUST preserve
-  `setup.sh --restore-from-fork` (restore order: config → identity → vault).
+- Backups are five INDEPENDENT orphan branches (`backup/identity`,
+  `backup/vault`, `backup/config`, `backup/memory`, `backup/history`) with sha256
+  content idempotency and per-branch clone caches. They MUST NOT be merged into a
+  shared primitive: each unit keeps its own branch, clone cache, content hash,
+  staging and commit code, and each MUST be able to be absent without breaking
+  the others. What the units MAY share is limited to code that never stages a
+  tree, commits or pushes: the destination rule (the agent's associated
+  repository, else its fork, else nowhere), the push credential, the privacy
+  check and its record, the branch ownership mark, the per-unit run lock, the
+  record of the last attempt, and the encrypted block store. Changes MUST
+  preserve `setup.sh --restore-from-fork` (restore order: config → identity →
+  vault → memory → history).
+- The launcher's backup branches are its only sanctioned path for taking
+  whitelisted state out of `.state/`. The secrets file, conversation transcripts,
+  the claude-mem store and operator-declared extra paths MUST travel encrypted so
+  that only the holder of the operator's key can read them; for an agent marked
+  as sensitive, so MUST its vault, its auto memory and its configuration other
+  than `agent.yml`. None of these MAY be pushed in plaintext when that key is
+  missing or when the destination cannot carry them encrypted. The sensitive
+  mark is a docker-mode setting: in local mode the launcher MUST warn that it
+  is not honoured.
 
-**Rationale**: Portability (rsync the dir), disaster recovery (rehydrate from a
-fork without re-login), and a clean separation of threat models across backup
-branches.
+**Rationale**: Portability (rsync the dir), disaster recovery (rehydrate from
+the agent's repository or its fork), and a clean separation of threat models
+across backup branches.
 
 ### VI. Reproducible, Intentionally-Pinned Dependencies
 
@@ -210,7 +249,7 @@ between duplicated pins is a latent bug; a deliberate, single-sourced pin makes
   II before merge.
 - **Documentation gate**: user-facing changes update `CHANGELOG.md` and, when the
   launcher contract changes, the relevant `docs/` reference and `VERSION`.
-- **Scope discipline**: keep units small and single-purpose; the three backup
+- **Scope discipline**: keep units small and single-purpose; the backup
   primitives stay independent (Principle V); do not re-introduce reverted designs
   (e.g. the bridge watchdog) without first solving their documented failure mode.
 
@@ -234,4 +273,4 @@ in `modules/claude-md.tpl` and each agent's own `agent.yml`).
 - **Runtime guidance**: `CLAUDE.md` (repo root) remains the operational guide for
   working in this codebase and is read alongside this constitution.
 
-**Version**: 1.0.1 | **Ratified**: 2026-06-18 | **Last Amended**: 2026-07-26
+**Version**: 1.1.0 | **Ratified**: 2026-06-18 | **Last Amended**: 2026-11-14

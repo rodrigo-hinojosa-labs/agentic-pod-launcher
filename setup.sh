@@ -210,10 +210,18 @@ fetch_github_ssh_key() {
 # + warning when no key is available (Fallback A4 — partial backup mode).
 configure_identity_backup() {
   local agent_yml="$1"
-  local owner
+  local owner repo_url
   owner=$(yq '.scaffold.fork.owner // ""' "$agent_yml" 2>/dev/null)
+  [ "$owner" = "null" ] && owner=""
+  # 046 (A2): without a fork, the owner of the associated repository.
+  repo_url=$(yq -r '.backup.repo.url // ""' "$agent_yml" 2>/dev/null)
+  [ "$repo_url" = "null" ] && repo_url=""
+  if [ -z "$owner" ] && [ -n "$repo_url" ]; then
+    owner="${repo_url#https://github.com/}"
+    owner="${owner%%/*}"
+  fi
 
-  if [ -z "$owner" ] || [ "$owner" = "null" ]; then
+  if [ -z "$owner" ]; then
     echo "▸ Identity backup: skipping (no scaffold.fork.owner — fork-less agent)"
     return 0
   fi
@@ -221,11 +229,40 @@ configure_identity_backup() {
   local key
   if key=$(fetch_github_ssh_key "$owner"); then
     yq -i ".backup.identity.recipient = \"$key\"" "$agent_yml"
-    echo "  ✓ identity backup: using SSH key from github.com/$owner.keys"
+    if [ -n "$repo_url" ]; then
+      # The operator must recognise the key: without its private half the
+      # encrypted backups cannot be restored.
+      local _fp _cm
+      _fp=$(python3 "$SCRIPT_DIR/docker/scripts/backup_store.py" fingerprint "$key" 2>/dev/null) || _fp=""
+      _cm=$(printf '%s\n' "$key" | awk '{ $1 = ""; $2 = ""; sub(/^  */, ""); print }')
+      echo "  ✓ backup encryption: using SSH key from github.com/$owner.keys"
+      [ -n "$_fp" ] && echo "    $_fp  ${_cm:-(no comment)}"
+      echo "    Confirm you hold the private half of this key: without it the encrypted"
+      echo "    backups cannot be restored. To use another key:"
+      echo "      heartbeatctl backup-identity --configure-key <path|pubkey>"
+    else
+      echo "  ✓ identity backup: using SSH key from github.com/$owner.keys"
+    fi
   else
     echo "  ⚠ identity backup: no SSH key at github.com/$owner.keys — running in partial mode (plaintext-only, .env excluded)"
     echo "    Run 'heartbeatctl backup-identity --configure-key <path>' later to enable .env encryption."
   fi
+}
+
+# 046 (A1): the repository URL. Not ask_validated, which asks forever at the end of
+# the input (research M21): with a terminal it asks again, without one it names the
+# rule and fails, and the caller exits 1.
+_wizard_ask_backup_repo_url() {
+  local u
+  while true; do
+    u=$(ask "Repository URL (https://github.com/<owner>/<name>)" "")
+    if [ -n "$u" ] && validate_backup_repo_url "$u" 2> /dev/null; then
+      printf '%s\n' "$u"
+      return 0
+    fi
+    echo "  ✗ The repository URL must be https://github.com/<owner>/<name> (optional .git), with no credentials or spaces" >&2
+    [ -t 0 ] || return 1
+  done
 }
 
 # Ensure gum is available. Returns 0 if found or downloaded; 1 otherwise.
@@ -431,6 +468,13 @@ Options:
                        irreversible and affects other hosts cloned from it).
                        Needs a PAT with delete_repo scope in .env.
   --destination PATH   (wizard only) Use PATH instead of prompting for the destination.
+  --restore-from-fork URL
+                       (wizard only) After scaffolding, restore the agent's backup
+                       branches from URL (its fork or its associated repository).
+  --restore-from-repo URL
+                       Alias of --restore-from-fork.
+  --identity-key PATH  With a restore, the operator's private key for everything
+                       encrypted (default: the standard ssh keys in your home).
   --role-file PATH     (wizard only) Use a multi-line persona file as the agent role.
                        Copied into the workspace; injected verbatim into CLAUDE.md.
   --in-place           (wizard only) Skip scaffold — generate files in the current
@@ -463,6 +507,7 @@ parse_args() {
       --role-file) ROLE_FILE="$2"; shift 2 ;;
       --in-place) IN_PLACE=true; shift ;;
       --restore-from-fork) RESTORE_FORK_URL="$2"; shift 2 ;;
+      --restore-from-repo) RESTORE_FORK_URL="$2"; shift 2 ;;
       --identity-key) RESTORE_IDENTITY_KEY="$2"; shift 2 ;;
       --backup) MODE="backup"; shift ;;
       --version|-V) printf '%s\n' "$LAUNCHER_VERSION"; exit 0 ;;
@@ -658,6 +703,23 @@ run_wizard() {
   fi
   echo ""
 
+  # ── 3.6 Agent repository (046) — docker mode only ───
+  # A private repository that belongs to this agent: the launcher backs up its
+  # full state there (backup/* branches) and the agent keeps its own work there.
+  local backup_repo_url="" backup_sensitive="false"
+  if [ "$deploy_mode" = "docker" ]; then
+    echo "▸ Agent repository (private backup + the agent's own work)"
+    echo "  A private GitHub repository that belongs to this agent. The launcher backs"
+    echo "  up the agent's full state to it (backup/* branches) and the agent keeps its"
+    echo "  own work there. Create it with an initial commit on main."
+    echo ""
+    if [ "$(ask_yn "Associate a private repository with this agent?" "n")" = "true" ]; then
+      backup_repo_url=$(_wizard_ask_backup_repo_url) || exit 1
+      backup_sensitive=$(ask_yn "Does this agent handle sensitive data (health, finance, legal)?" "n")
+    fi
+    echo ""
+  fi
+
   # ── 4. Heartbeat notifications ──────────────────────
   echo "▸ Heartbeat notifications"
   echo "  When the heartbeat runs, where should it report status?"
@@ -836,6 +898,12 @@ ATLASSIAN_${upper}_TOKEN=${ws_token}
     echo "  independent from any fork token you may have given earlier."
     echo "  (Press Enter to skip — fill GITHUB_PAT in .env later.)"
     github_pat=$(ask_secret "GitHub Personal Access Token for MCP (or skip)")
+  elif [ -n "$backup_repo_url" ]; then
+    # 046 (A1): GITHUB_PAT is no longer only the MCP's — the agent repository
+    # pushes with it too.
+    echo "  The agent repository needs a GitHub token to push."
+    echo "  (Press Enter to skip — fill GITHUB_PAT in .env later.)"
+    github_pat=$(ask_secret "GitHub Personal Access Token for the agent repository")
   fi
   echo ""
 
@@ -989,6 +1057,11 @@ ATLASSIAN_${upper}_TOKEN=${ws_token}
       echo " 22) Template URL:      $template_url"
       echo " 23) Fork PAT:          $(_mask "$fork_token")"
     fi
+    if [ "$deploy_mode" = "docker" ]; then
+      echo " 24) Agent repository:  ${backup_repo_url:-(none)}"
+      echo " 25) Sensitive data:    $backup_sensitive"
+      echo " 26) Repository token:  $([ -n "$github_pat" ] && echo set || echo "not set")"
+    fi
     echo ""
     # Atlassian — full detail per workspace (URL, email, masked token).
     if [ -n "$atlassian_entries" ]; then
@@ -1101,6 +1174,16 @@ ATLASSIAN_${upper}_TOKEN=${ws_token}
           21) fork_private=$(ask_yn "Make the fork private?" "$([ "$fork_private" = true ] && echo y || echo n)") ;;
           22) template_url=$(ask "Template repo URL" "$template_url") ;;
           23) fork_token=$(ask_secret "GitHub Personal Access Token for fork") ;;
+          24) if [ "$(ask_yn "Associate a private repository with this agent?" "$([ -n "$backup_repo_url" ] && echo y || echo n)")" = "true" ]; then
+                backup_repo_url=$(_wizard_ask_backup_repo_url) || exit 1
+                if [ -z "$github_pat" ]; then
+                  github_pat=$(ask_secret "GitHub Personal Access Token for the agent repository")
+                fi
+              else
+                backup_repo_url=""
+              fi ;;
+          25) backup_sensitive=$(ask_yn "Does this agent handle sensitive data (health, finance, legal)?" "$([ "$backup_sensitive" = true ] && echo y || echo n)") ;;
+          26) github_pat=$(ask_secret "GitHub Personal Access Token for the agent repository") ;;
           *) echo "  Invalid field: $field" ;;
         esac
         ;;
@@ -1280,6 +1363,19 @@ features:
     enabled: false
     schedule: "7 9 * * 1"
     prompt: ""
+  memory_backup:
+    enabled: true
+    schedule: "40 3 * * *"
+  history_backup:
+    enabled: true
+    schedule: "50 3 * * *"
+
+backup:
+  repo:
+    url: "$backup_repo_url"
+    allow_unverified: false
+  sensitive: $backup_sensitive
+  extra_paths: []
 
 mcps:
   defaults:
@@ -1330,7 +1426,9 @@ NOTIFY_CHAT_ID=$notify_chat_id
 EOF
   fi
   [ -n "$atlassian_env_vars" ] && echo "$atlassian_env_vars" >> "$env_file"
-  [ "$github_enabled" = "true" ] && echo "GITHUB_PAT=$github_pat" >> "$env_file"
+  if [ "$github_enabled" = "true" ] || [ -n "$backup_repo_url" ]; then
+    echo "GITHUB_PAT=$github_pat" >> "$env_file"
+  fi
   [ "$fork_enabled" = "true" ] && [ -n "$fork_token" ] && echo "GITHUB_FORK_PAT=$fork_token" >> "$env_file"
   # Optional-MCP secrets collected during the wizard. Emit even when empty
   # so the variable name is visible in .env and the user can fill it later.
@@ -1477,6 +1575,63 @@ build_plugins_block() {
 # 027 US4: a second arg of "quiet" writes the file WITHOUT the interactive stdout
 # dump, so regenerate() can produce it for the declarative/non-interactive path
 # while the wizard keeps printing it (FR-013).
+# 046 (A3, A8): the markers the templates read for the agent repository. They are
+# derived, never stored in agent.yml (BACKUP_REPO_URL comes from the flatten).
+# BACKUP_REPO_NEXT_STEPS is pre-rendered here because the docker block of the
+# NEXT_STEPS templates is already a conditional and the engine does not nest them.
+_export_backup_repo_markers() {
+  local yml="$1" url mode lang name gh
+  url=$(yq -r '.backup.repo.url // ""' "$yml" 2>/dev/null)
+  [ "$url" = "null" ] && url=""
+  mode=$(yq -r '.deployment.mode // "docker"' "$yml" 2>/dev/null)
+  lang=$(yq -r '.user.language // "en"' "$yml" 2>/dev/null)
+  name=$(yq -r '.agent.name // "agent"' "$yml" 2>/dev/null)
+  gh=$(yq -r '.mcps.github.enabled // false' "$yml" 2>/dev/null)
+  export BACKUP_REPO_ENABLED=false BACKUP_REPO_WORKDIR=/workspace/agent-repo BACKUP_REPO_NEXT_STEPS=""
+  if [ -n "$url" ] && [ "$mode" != "local" ]; then
+    BACKUP_REPO_ENABLED=true
+    case "$lang" in
+      es|mixed)
+        BACKUP_REPO_NEXT_STEPS="
+
+#### El repositorio del agente
+
+Este agente respalda su estado completo en su repositorio privado, \`$url\`, en ramas \`backup/*\` que son del launcher, y guarda su propio trabajo en un clon en \`/workspace/agent-repo\`.
+
+\`\`\`bash
+docker exec -u agent $name heartbeatctl backup-status         # el estado de cada unidad
+docker exec -u agent $name heartbeatctl backup-memory         # auto-memoria, claude-mem y rutas adicionales
+docker exec -u agent $name heartbeatctl backup-history        # el historial de conversaciones (cifrado)
+docker exec -u agent $name heartbeatctl backup-identity --configure-key \"<llave publica>\"   # la llave del operador
+\`\`\`
+
+Para restaurarlo en otro equipo: \`./setup.sh --restore-from-repo $url --identity-key <llave privada>\`."
+        ;;
+      *)
+        BACKUP_REPO_NEXT_STEPS="
+
+#### The agent repository
+
+This agent backs up its full state to its private repository, \`$url\`, in \`backup/*\` branches that belong to the launcher, and keeps its own work in a clone at \`/workspace/agent-repo\`.
+
+\`\`\`bash
+docker exec -u agent $name heartbeatctl backup-status         # where each unit stands
+docker exec -u agent $name heartbeatctl backup-memory         # auto memory, claude-mem and extra paths
+docker exec -u agent $name heartbeatctl backup-history        # conversation transcripts (encrypted)
+docker exec -u agent $name heartbeatctl backup-identity --configure-key \"<public key>\"   # the operator key
+\`\`\`
+
+To restore it on another host: \`./setup.sh --restore-from-repo $url --identity-key <private key>\`."
+        ;;
+    esac
+  fi
+  if [ "$gh" = "true" ] || [ "$BACKUP_REPO_ENABLED" = "true" ]; then
+    export GITHUB_PAT_NEEDED=true
+  else
+    export GITHUB_PAT_NEEDED=false
+  fi
+}
+
 render_next_steps() {
   local dest="$1"
   local quiet="${2:-}"
@@ -1508,6 +1663,7 @@ render_next_steps() {
   fi
 
   render_load_context "$dest/agent.yml"
+  _export_backup_repo_markers "$dest/agent.yml"
   # Expand $HOME / ~ in the stored profile path for display
   if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
     export CLAUDE_CONFIG_DIR=$(eval echo "$CLAUDE_CONFIG_DIR")
@@ -1779,6 +1935,7 @@ _restore_decrypt_env() {
     [ -z "$idfile" ] && continue
     [ -f "$idfile" ] || continue
     if age -d -i "$idfile" -o "$env_out" "$age_in" 2>/dev/null; then
+      chmod 600 "$env_out" 2>/dev/null || true
       echo "  ✓ restore: decrypted .env with $idfile"
       return 0
     fi
@@ -1787,24 +1944,299 @@ _restore_decrypt_env() {
   return 0
 }
 
+# ── 046: restoring from the agent's repository (contracts/restore.md) ──────
+
+# The operator keys tried for every encrypted piece: the same rule as
+# _restore_decrypt_env (the one given, then the two standard ssh keys).
+_restore_key_candidates() {
+  local k
+  for k in "${RESTORE_IDENTITY_KEY:-}" "$HOME/.ssh/id_ed25519" "$HOME/.ssh/id_rsa"; do
+    [ -n "$k" ] && [ -f "$k" ] && printf '%s\n' "$k"
+  done
+  return 0
+}
+
+_restore_python_ok() {
+  command -v python3 > /dev/null 2>&1 \
+    && python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' > /dev/null 2>&1
+}
+
+# _restore_unpack_store STORE OUT WORK -> rc 0 unpacked into OUT; 10 no python3 or
+# age; 11 no key opens it; 12 integrity (nothing left in OUT).
+_restore_unpack_store() {
+  local store="$1" out="$2" work="$3" k rc
+  if ! _restore_python_ok || ! command -v age > /dev/null 2>&1; then
+    return 10
+  fi
+  while IFS= read -r k; do
+    rm -rf "$out"
+    mkdir -p "$out" "$work"
+    rc=0
+    python3 "$SCRIPT_DIR/docker/scripts/backup_store.py" unpack --store "$store" --dest "$out" \
+      --identity "$k" --work-dir "$work" > /dev/null 2>&1 || rc=$?
+    case "$rc" in
+      0) return 0 ;;
+      3|4) continue ;;
+      *) rm -rf "$out"; return 12 ;;
+    esac
+  done < <(_restore_key_candidates)
+  rm -rf "$out"
+  return 11
+}
+
+# _restore_store_line UNIT RC: the R3 line for an encrypted part that was not restored.
+_restore_store_line() {
+  case "$2" in
+    10) echo "  ⚠ restore: backup/$1 needs python3 and age on this host — skipped" ;;
+    11) echo "  ⚠ restore: backup/$1 is encrypted and no usable key was found (pass --identity-key <path>) — skipped" ;;
+    *)  echo "  ✗ restore: backup/$1 failed its integrity check — nothing was written for this unit" ;;
+  esac
+}
+
+# 046 (R9): what a restore may write. A restore writes on the operator's host with what
+# a repository holds, and anyone who can write that repository (the agent included)
+# can put anything there: age does not authenticate. So no path with an empty, ., ..
+# or .git segment (in any case: .GIT is .git on a case-insensitive file system), and
+# nothing through a symlink.
+_restore_rel_ok() {
+  local rest="$1" seg
+  [ -n "$rest" ] || return 1
+  case "$rest" in /*|*\\*) return 1 ;; esac
+  while :; do
+    seg="${rest%%/*}"
+    case "$seg" in ''|.|..|[.][gG][iI][tT]) return 1 ;; esac
+    case "$rest" in */*) rest="${rest#*/}" ;; *) break ;; esac
+  done
+  return 0
+}
+
+# _restore_no_link ROOT TARGET: rc 0 when TARGET is under ROOT and no existing
+# component of TARGET below ROOT is a symlink.
+_restore_no_link() {
+  local root="$1" target="$2" rest p seg
+  case "$target" in "$root"/*) ;; *) return 1 ;; esac
+  rest="${target#"$root"/}"
+  p="$root"
+  while :; do
+    seg="${rest%%/*}"
+    p="$p/$seg"
+    [ -L "$p" ] && return 1
+    case "$rest" in */*) rest="${rest#*/}" ;; *) break ;; esac
+  done
+  return 0
+}
+
+# The closed list of the extended config (data-model.md, section 5).
+_restore_config_allowed() {
+  case "$1" in
+    CLAUDE.md|docker-compose.override.yml|.claude/settings.json) return 0 ;;
+    personas/*|.claude/skills/*|.claude/commands/*|.claude/agents/*|.claude/hooks/*|.claude/output-styles/*) return 0 ;;
+  esac
+  return 1
+}
+
+# The vault backup carries markdown only, encrypted or not.
+_restore_vault_allowed() {
+  case "$1" in *.md) return 0 ;; esac
+  return 1
+}
+
+# _restore_extra_allowed REL: an extra path comes back only when it is under an entry
+# of backup.extra_paths of the restored agent.yml (_RESTORE_EXTRA_LIST), is not a path
+# the launcher reserves (memory_extra_path_reserved, the rule of the backup side) and
+# is not the login file /login leaves. Without the rule, nothing comes back.
+_restore_extra_allowed() {
+  local rel="$1" e
+  case "${rel##*/}" in .credentials.json) return 1 ;; esac
+  command -v memory_extra_path_reserved > /dev/null 2>&1 || return 1
+  memory_extra_path_reserved "$rel" && return 1
+  while IFS= read -r e; do
+    [ -n "$e" ] || continue
+    memory_extra_path_reserved "$e" && continue
+    case "$rel" in "$e"|"$e"/*) return 0 ;; esac
+  done <<< "$_RESTORE_EXTRA_LIST"
+  return 1
+}
+
+# _restore_move_tree SRC DEST [FILTER]: moves every regular file of SRC to the same
+# relative path under DEST (I6: never outside DEST). FILTER, when given, is a function
+# that gets the relative path and returns 0 to keep it. Symlinks in SRC are never
+# copied, and nothing is written through a symlink under the workspace root
+# (_RESTORE_ROOT). stdout: the number of files moved.
+_restore_move_tree() {
+  local src="$1" dest="$2" filter="${3:-}" f rel n=0 root="${_RESTORE_ROOT:-$2}"
+  [ -d "$src" ] || { echo 0; return 0; }
+  while IFS= read -r -d '' f; do
+    rel="${f#"$src"/}"
+    _restore_rel_ok "$rel" || continue
+    if [ -n "$filter" ] && ! "$filter" "$rel"; then continue; fi
+    _restore_no_link "$root" "$dest/$rel" || continue
+    mkdir -p "$(dirname "$dest/$rel")"
+    mv -f "$f" "$dest/$rel"
+    n=$((n + 1))
+  done < <(find "$src" -type f -print0)
+  echo "$n"
+}
+
+# _restore_memory_place OUT DEST: moves an unpacked memory store into its places
+# (data-model.md, section 8). stdout: the number of files.
+_restore_memory_place() {
+  local out="$1" dest="$2" n=0 d p
+  if [ -d "$out/auto-memory" ]; then
+    for d in "$out/auto-memory"/*/; do
+      [ -d "$d" ] || continue
+      p="${d%/}"
+      p="${p##*/}"
+      n=$((n + $(_restore_move_tree "$out/auto-memory/$p" "$dest/.state/.claude/projects/$p/memory")))
+    done
+  fi
+  n=$((n + $(_restore_move_tree "$out/claude-mem" "$dest/.state/.claude-mem")))
+  # The declared extra paths, normalized as on the backup side (no leading ./ and no
+  # trailing /).
+  local raw
+  _RESTORE_EXTRA_LIST=""
+  while IFS= read -r raw; do
+    while :; do
+      case "$raw" in ./*) raw="${raw#./}" ;; */) raw="${raw%/}" ;; *) break ;; esac
+    done
+    [ -n "$raw" ] && _RESTORE_EXTRA_LIST="${_RESTORE_EXTRA_LIST}${raw}"$'\n'
+  done < <(yq -r '(.backup.extra_paths // [])[]' "$dest/agent.yml" 2> /dev/null || true)
+  # An extra path outside .state/ travelled encrypted: it stays out of the workspace's
+  # git (.git/info/exclude, local only), so the scaffold's first commit does not take it.
+  local e exclude=""
+  while IFS= read -r e; do
+    [ -n "$e" ] || continue
+    case "$e" in .state|.state/*) continue ;; esac
+    [ -e "$out/extra/$e" ] || continue
+    _restore_extra_allowed "$e" || continue
+    exclude="${exclude}/${e}"$'\n'
+  done <<< "$_RESTORE_EXTRA_LIST"
+  n=$((n + $(_restore_move_tree "$out/extra" "$dest" _restore_extra_allowed)))
+  if [ -n "$exclude" ] && [ -d "$dest/.git" ] && [ ! -L "$dest/.git" ]; then
+    mkdir -p "$dest/.git/info"
+    while IFS= read -r e; do
+      [ -n "$e" ] || continue
+      grep -qxF -- "$e" "$dest/.git/info/exclude" 2> /dev/null || printf '%s\n' "$e" >> "$dest/.git/info/exclude"
+    done <<< "$exclude"
+  fi
+  echo "$n"
+}
+
+# Restores a memory or history branch (steps 4 and 5 of R2). Prints its line only
+# when the origin is an agent repository; records the outcome in _RESTORE_DONE /
+# _RESTORE_SKIPPED for the summary.
+_restore_store_unit() {
+  local unit="$1" url="$2" dest="$3" tmp="$4" btmp n=0 rc plain_n=0
+  if ! btmp=$(_restore_clone_branch "$url" "backup/$unit"); then
+    if [ "$_RESTORE_AGENT_REPO" = "1" ]; then
+      echo "  ⚠ restore: no backup/$unit branch at $url — skipping"
+      _RESTORE_SKIPPED="${_RESTORE_SKIPPED}${_RESTORE_SKIPPED:+, }$unit (no branch)"
+    fi
+    return 0
+  fi
+  [ -f "$btmp/.agentic-pod-backup.json" ] && _RESTORE_AGENT_REPO=1
+  rc=0
+  if [ -d "$btmp/store" ]; then
+    _restore_unpack_store "$btmp/store" "$tmp/$unit" "$tmp/work" || rc=$?
+  fi
+  if [ "$rc" = "12" ]; then
+    _restore_store_line "$unit" "$rc"
+    _RESTORE_SKIPPED="${_RESTORE_SKIPPED}${_RESTORE_SKIPPED:+, }$unit (integrity)"
+    rm -rf "$btmp" "$tmp/$unit"
+    return 0
+  fi
+  if [ "$unit" = "memory" ] && [ -d "$btmp/auto-memory" ]; then
+    local d p
+    for d in "$btmp/auto-memory"/*/; do
+      [ -d "$d" ] || continue
+      p="${d%/}"
+      p="${p##*/}"
+      plain_n=$((plain_n + $(_restore_move_tree "$btmp/auto-memory/$p" "$dest/.state/.claude/projects/$p/memory")))
+    done
+  fi
+  if [ "$rc" = "0" ] && [ -d "$tmp/$unit" ]; then
+    if [ "$unit" = "memory" ]; then
+      n=$(_restore_memory_place "$tmp/$unit" "$dest")
+    else
+      n=$(_restore_move_tree "$tmp/$unit/projects" "$dest/.state/.claude/projects")
+    fi
+  fi
+  n=$((n + plain_n))
+  if [ "$rc" != "0" ]; then
+    _restore_store_line "$unit" "$rc"
+    _RESTORE_SKIPPED="${_RESTORE_SKIPPED}${_RESTORE_SKIPPED:+, }$unit (encrypted part)"
+  fi
+  if [ "$n" -gt 0 ]; then
+    echo "  ✓ restore: $unit restored into $dest/.state/ ($n files)"
+    _RESTORE_DONE="${_RESTORE_DONE}${_RESTORE_DONE:+, }$unit"
+  fi
+  rm -rf "$btmp" "$tmp/$unit"
+  return 0
+}
+
 # Restore from the agent's fork by pulling the three backup branches in
 # order: config (agent.yml) first so vault.path is known, then identity
-# (login + pairing + plugins + .env.age), then vault (markdown). Each
+# (pairing + plugin config + settings + .env.age; the /login login never
+# travels in a backup), then vault (markdown). Each
 # branch is independently optional — missing branches log a clear notice
 # and continue, supporting partial-state forks too.
+#
+# 046: the same function restores an agent's associated repository (an
+# origin whose backup branches carry the ownership mark): the extended config,
+# an encrypted vault, and the memory and history branches. With a fork of three
+# unmarked branches its output is the pre-046 one (R3).
 restore_from_fork() {
   local fork_url="$1"
   local dest="$2"
 
   mkdir -p "$dest/.state/.claude"
 
+  # 046: the encrypted pieces are unpacked under <dest>/.restore-tmp (0700) and only
+  # moved into place once their unit verified; the dir is removed at the end, also
+  # on an interruption (R5).
+  _RESTORE_AGENT_REPO=0
+  _RESTORE_DONE=""
+  _RESTORE_SKIPPED=""
+  _RESTORE_ROOT="$dest"
+  # The rule of the reserved paths is the one of the backup side (single source).
+  if [ -f "$SCRIPT_DIR/docker/scripts/lib/backup_memory.sh" ]; then
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/docker/scripts/lib/backup_memory.sh"
+  fi
+  local _rtmp="$dest/.restore-tmp"
+  rm -rf "$_rtmp"
+  mkdir -p "$_rtmp"
+  chmod 700 "$_rtmp"
+  # On an interruption: remove the temporary dir and stop, like the default action.
+  trap 'rm -rf "'"$_rtmp"'"; exit 130' INT
+  trap 'rm -rf "'"$_rtmp"'"; exit 143' TERM
+
   # 1. Config — agent.yml lands at workspace root.
   local cfg_tmp
   if cfg_tmp=$(_restore_clone_branch "$fork_url" "backup/config"); then
-    if [ -f "$cfg_tmp/agent.yml" ]; then
+    [ -f "$cfg_tmp/.agentic-pod-backup.json" ] && _RESTORE_AGENT_REPO=1
+    if [ -f "$cfg_tmp/agent.yml" ] && [ ! -L "$cfg_tmp/agent.yml" ]; then
       cp -a "$cfg_tmp/agent.yml" "$dest/agent.yml"
       echo "  ✓ restore: agent.yml restored from backup/config"
     fi
+    # 046 (U3): the extended config, plaintext or from store/: its closed list only.
+    _restore_move_tree "$cfg_tmp" "$dest" _restore_config_allowed > /dev/null
+    if [ -d "$cfg_tmp/store" ]; then
+      local _crc=0
+      _restore_unpack_store "$cfg_tmp/store" "$_rtmp/config" "$_rtmp/work" || _crc=$?
+      case "$_crc" in
+        0)
+          rm -f "$_rtmp/config/agent.yml"
+          _restore_move_tree "$_rtmp/config" "$dest" _restore_config_allowed > /dev/null
+          ;;
+        11) echo "  ⚠ restore: backup/config is partly encrypted and no usable key was found — only agent.yml was restored"
+            _RESTORE_SKIPPED="${_RESTORE_SKIPPED}${_RESTORE_SKIPPED:+, }config (encrypted part)" ;;
+        *)  _restore_store_line config "$_crc"
+            _RESTORE_SKIPPED="${_RESTORE_SKIPPED}${_RESTORE_SKIPPED:+, }config (encrypted part)" ;;
+      esac
+      rm -rf "$_rtmp/config"
+    fi
+    [ "$_RESTORE_AGENT_REPO" = "1" ] && _RESTORE_DONE="config"
     rm -rf "$cfg_tmp"
   else
     echo "  ⚠ restore: no backup/config branch — keeping any existing agent.yml at $dest"
@@ -1813,12 +2245,21 @@ restore_from_fork() {
   # 2. Identity — .claude/* + optional .env.age decrypt.
   local id_tmp
   if id_tmp=$(_restore_clone_branch "$fork_url" "backup/identity"); then
-    [ -f "$id_tmp/.claude.json" ] && cp -a "$id_tmp/.claude.json" "$dest/.state/.claude.json"
-    if [ -d "$id_tmp/.claude" ]; then
-      cp -a "$id_tmp/.claude/." "$dest/.state/.claude/"
+    [ -f "$id_tmp/.agentic-pod-backup.json" ] && _RESTORE_AGENT_REPO=1
+    if [ -f "$id_tmp/.claude.json" ] && [ ! -L "$id_tmp/.claude.json" ]; then
+      cp -a "$id_tmp/.claude.json" "$dest/.state/.claude.json"
     fi
+    # Regular files only: a symlink from the branch is never planted under .state/.
+    _restore_move_tree "$id_tmp/.claude" "$dest/.state/.claude" > /dev/null
     _restore_decrypt_env "$id_tmp/.env.age" "$dest/.env"
     echo "  ✓ restore: identity restored into $dest/.state/"
+    if [ "$_RESTORE_AGENT_REPO" = "1" ]; then
+      _RESTORE_DONE="${_RESTORE_DONE}${_RESTORE_DONE:+, }identity"
+      # R3: the token notice looks only at whether a value exists, never prints it.
+      if [ -z "$(env_file_get CLAUDE_CODE_OAUTH_TOKEN "$dest/.env" 2>/dev/null || true)" ]; then
+        echo "  ⚠ restore: no Claude token in the restored secrets file — run /login after the first boot"
+      fi
+    fi
     rm -rf "$id_tmp"
   else
     echo "  ⚠ restore: no backup/identity branch at $fork_url — skipping (fresh install)"
@@ -1834,23 +2275,55 @@ restore_from_fork() {
       vault_path=".state/.vault"
     fi
     [ "$vault_path" = "null" ] && vault_path=".state/.vault"
-    mkdir -p "$dest/$vault_path"
-    # Copy the markdown tree without dot-files that don't exist in the
-    # branch anyway (the vault backup stages only *.md files).
-    if [ -n "$(ls -A "$vault_tmp" 2>/dev/null)" ]; then
-      ( cd "$vault_tmp" && find . -type f -name '*.md' -print0 \
-          | while IFS= read -r -d '' f; do
-              local rel="${f#./}"
-              mkdir -p "$dest/$vault_path/$(dirname "$rel")"
-              cp -a "$f" "$dest/$vault_path/$rel"
-            done
-      )
+    # 046 (R9): vault.path comes from a restored agent.yml; it is not followed out of
+    # the workspace. A leading / keeps the pre-046 meaning (under the workspace).
+    if ! _restore_rel_ok "${vault_path#/}" \
+       || ! _restore_no_link "$dest" "$dest/${vault_path#/}"; then
+      echo "  ⚠ restore: vault.path '$vault_path' leaves the workspace — restoring into .state/.vault"
+      vault_path=".state/.vault"
     fi
-    echo "  ✓ restore: vault restored into $dest/$vault_path/"
+    mkdir -p "$dest/$vault_path"
+    [ -f "$vault_tmp/.agentic-pod-backup.json" ] && _RESTORE_AGENT_REPO=1
+    # 046 (U4): an encrypted vault comes out of store/.
+    local _vn=0 _vok=1
+    if [ -d "$vault_tmp/store" ]; then
+      local _vrc=0
+      _restore_unpack_store "$vault_tmp/store" "$_rtmp/vault" "$_rtmp/work" || _vrc=$?
+      if [ "$_vrc" = "0" ]; then
+        _vn=$((_vn + $(_restore_move_tree "$_rtmp/vault" "$dest/$vault_path" _restore_vault_allowed)))
+      else
+        _vok=0
+        _restore_store_line vault "$_vrc"
+        _RESTORE_SKIPPED="${_RESTORE_SKIPPED}${_RESTORE_SKIPPED:+, }vault (encrypted)"
+      fi
+      rm -rf "$_rtmp/vault" "$vault_tmp/store"
+    fi
+    # The markdown tree (the vault backup stages only *.md files); never .git.
+    _vn=$((_vn + $(_restore_move_tree "$vault_tmp" "$dest/$vault_path" _restore_vault_allowed)))
+    # The line only when something came back: an encrypted vault that did not open
+    # is not "restored" (it is in the skipped list).
+    if [ "$_vok" = "1" ] || [ "$_vn" -gt 0 ]; then
+      echo "  ✓ restore: vault restored into $dest/$vault_path/"
+      [ "$_RESTORE_AGENT_REPO" = "1" ] && _RESTORE_DONE="${_RESTORE_DONE}${_RESTORE_DONE:+, }vault"
+    fi
     rm -rf "$vault_tmp"
   else
     echo "  ⚠ restore: no backup/vault branch — keeping any existing vault at $dest"
   fi
+
+  # 4 and 5 (046): memory and history, always attempted, silently on a fork.
+  _restore_store_unit memory "$fork_url" "$dest" "$_rtmp"
+  _restore_store_unit history "$fork_url" "$dest" "$_rtmp"
+
+  if [ "$_RESTORE_AGENT_REPO" = "1" ]; then
+    if [ -f "$dest/docker-compose.override.yml" ]; then
+      echo "  ⚠ restore: docker-compose.override.yml was restored — review it before the first boot"
+    fi
+    echo "  ✓ restore: summary — restored: ${_RESTORE_DONE:-nothing}; skipped: ${_RESTORE_SKIPPED:-nothing}"
+  fi
+  rm -rf "$_rtmp"
+  trap - INT TERM
+  return 0
 }
 
 # Copy system files to the destination, move agent.yml/.env, chdir, git init.
@@ -2540,6 +3013,62 @@ regenerate() {
       _cht_seed="$(channel_health_timeout_effective "$(channel_env_value "$SCRIPT_DIR/.env")")"
       yq -i ".docker.channel_health_timeout_s = $_cht_seed" "$agent_yml"
     fi
+
+    # 046: backfill the agent-repository keys (data-model.md, section 1) for a
+    # pre-046 workspace. One has() check per leaf, NEVER `//`: yq's `//` collapses
+    # an explicit `false` exactly like null, so a `//` backfill would silently undo
+    # an operator's `features.memory_backup.enabled: false` or flip
+    # `backup.sensitive` back. Only writes when absent, so a second pass is a
+    # no-op (TA04).
+    if [ "$(yq -r '(((.backup // {}).repo // {}) | has("url")) // false' "$agent_yml" 2>/dev/null)" != "true" ]; then
+      yq -i '.backup.repo.url = ""' "$agent_yml"
+    fi
+    if [ "$(yq -r '(((.backup // {}).repo // {}) | has("allow_unverified")) // false' "$agent_yml" 2>/dev/null)" != "true" ]; then
+      yq -i '.backup.repo.allow_unverified = false' "$agent_yml"
+    fi
+    if [ "$(yq -r '((.backup // {}) | has("sensitive")) // false' "$agent_yml" 2>/dev/null)" != "true" ]; then
+      yq -i '.backup.sensitive = false' "$agent_yml"
+    fi
+    if [ "$(yq -r '((.backup // {}) | has("extra_paths")) // false' "$agent_yml" 2>/dev/null)" != "true" ]; then
+      yq -i '.backup.extra_paths = []' "$agent_yml"
+    fi
+    if [ "$(yq -r '(((.features // {}).memory_backup // {}) | has("enabled")) // false' "$agent_yml" 2>/dev/null)" != "true" ]; then
+      yq -i '.features.memory_backup.enabled = true' "$agent_yml"
+    fi
+    if [ "$(yq -r '(((.features // {}).memory_backup // {}) | has("schedule")) // false' "$agent_yml" 2>/dev/null)" != "true" ]; then
+      yq -i '.features.memory_backup.schedule = "40 3 * * *"' "$agent_yml"
+    fi
+    if [ "$(yq -r '(((.features // {}).history_backup // {}) | has("enabled")) // false' "$agent_yml" 2>/dev/null)" != "true" ]; then
+      yq -i '.features.history_backup.enabled = true' "$agent_yml"
+    fi
+    if [ "$(yq -r '(((.features // {}).history_backup // {}) | has("schedule")) // false' "$agent_yml" 2>/dev/null)" != "true" ]; then
+      yq -i '.features.history_backup.schedule = "50 3 * * *"' "$agent_yml"
+    fi
+  fi
+
+  # 046 (A2): what the agent repository is missing, on stderr. It never picks a key
+  # and never writes a secret (D29); the credential check only looks at whether a
+  # value exists (env_file_get) and never prints it.
+  if [ -f "$agent_yml" ]; then
+    local _br_url _br_mode _br_sens _br_agent
+    _br_url=$(yq -r '.backup.repo.url // ""' "$agent_yml" 2>/dev/null)
+    [ "$_br_url" = "null" ] && _br_url=""
+    _br_mode=$(yq -r '.deployment.mode // "docker"' "$agent_yml" 2>/dev/null)
+    _br_sens=$(yq -r '.backup.sensitive // false' "$agent_yml" 2>/dev/null)
+    _br_agent=$(yq -r '.agent.name // "agent"' "$agent_yml" 2>/dev/null)
+    if [ "$_br_mode" = "local" ]; then
+      [ -n "$_br_url" ] && echo "WARN: backup.repo is docker-only - ignored in local mode" >&2
+      [ "$_br_sens" = "true" ] && echo "WARN: backup.sensitive is docker-only - the local vault backup stays in plaintext" >&2
+    elif [ -n "$_br_url" ]; then
+      if [ -z "$(yq -r '.backup.identity.recipient // ""' "$agent_yml" 2>/dev/null | sed 's/^null$//')" ]; then
+        echo "WARN: backup.repo is set but there is no encryption key - encrypted backups will not run. Set one with: docker exec -u agent $_br_agent heartbeatctl backup-identity --configure-key \"<public key>\"" >&2
+      fi
+      if [ -z "$(env_file_get GITHUB_PAT "$SCRIPT_DIR/.env" 2>/dev/null || true)" ]; then
+        echo "WARN: backup.repo is set but GITHUB_PAT is missing in .env - backups cannot push" >&2
+      fi
+    elif [ "$_br_sens" = "true" ]; then
+      echo "WARN: backup.sensitive is set but there is no agent repository - the vault will not be backed up" >&2
+    fi
   fi
 
   echo "▸ Loading context from agent.yml"
@@ -2611,6 +3140,7 @@ regenerate() {
   else
     export DEPLOYMENT_MODE_IS_DOCKER=true
   fi
+  _export_backup_repo_markers "$agent_yml"
 
   # feature 012: absolute vault dir in the workspace, for the local vault/qmd
   # entrypoints (US2/US3). Docker mode ignores it.
@@ -3310,6 +3840,18 @@ uninstall() {
     echo "  - its parent directory if left empty"
   fi
   echo ""
+
+  # 046 (A8): the agent's work clone may hold work that exists nowhere else. Say so
+  # before the workspace goes away; with --yes, say it and continue.
+  if [ "$UNINSTALL_NUKE" = true ] && [ -d "$SCRIPT_DIR/agent-repo/.git" ]; then
+    local _ar_c _ar_d
+    _ar_c=$(git -C "$SCRIPT_DIR/agent-repo" rev-list --branches --not --remotes 2>/dev/null | wc -l | tr -d ' ') || _ar_c=0
+    _ar_d=$(git -C "$SCRIPT_DIR/agent-repo" status --porcelain 2>/dev/null | wc -l | tr -d ' ') || _ar_d=0
+    if [ "${_ar_c:-0}" -gt 0 ] || [ "${_ar_d:-0}" -gt 0 ]; then
+      echo "WARN: agent-repo has ${_ar_c:-0} commit(s) not on any remote branch and ${_ar_d:-0} uncommitted file(s) - they are deleted with the workspace"
+      echo ""
+    fi
+  fi
 
   if [ "$UNINSTALL_YES" != true ]; then
     if [ "$(ask_yn 'Continue?' 'n')" != "true" ]; then

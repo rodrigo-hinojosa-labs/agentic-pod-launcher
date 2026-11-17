@@ -239,8 +239,8 @@ The pairing flow writes to `access.json` (and drops a sentinel into `approved/`)
 
 | Host | Container (docker mode) | What |
 |---|---|---|
-| `<workspace>/.state/.claude/.credentials.json` | `/home/agent/.claude/.credentials.json` | OAuth token (0600) |
-| `<workspace>/.state/.claude/.claude.json` | `/home/agent/.claude/.claude.json` | Global Claude config (known projects, prefs) |
+| `<workspace>/.state/.claude/.credentials.json` | `/home/agent/.claude/.credentials.json` | OAuth token (0600) left by `/login`; in no backup (an agent restored without `CLAUDE_CODE_OAUTH_TOKEN` in `.env` needs `/login` again) |
+| `<workspace>/.state/.claude/.claude.json` | `/home/agent/.claude/.claude.json` | Global Claude config (known projects, prefs); in no backup (MCP servers added by hand with `claude mcp add` are lost on a restore) |
 | `<workspace>/.state/.claude/settings.json` | `/home/agent/.claude/settings.json` | `enabledPlugins`, `permissions.defaultMode`, `extraKnownMarketplaces`, theme, effort level |
 | `<workspace>/.state/.claude/sessions/` | `/home/agent/.claude/sessions/` | Auth state / locks |
 | `<workspace>/.state/.claude/history.jsonl` | `/home/agent/.claude/history.jsonl` | Slash-command and prompt history |
@@ -273,19 +273,34 @@ The MCP server itself never uses `bunx` either — `.mcp.json`'s `{{QMD_MCP_COMM
 
 Docker mode also bakes a musl-compiled `sqlite-vec` extension at `/opt/agent-admin/sqlite-vec/vec0.so` (feature 017) and swaps it into the prefix at runtime; that artifact is image-baked, not state.
 
-## Fork-backup state (three orphan branches)
+## Backup state (five branches with an agent repository, three with a fork)
+
+The destination is the agent's associated repository (`backup.repo.url`, docker mode only, 046) when set, else its fork (`scaffold.fork.url`). With a repository there are five branches (`identity`, `vault`, `config`, `memory`, `history`), each with a repository-path clone cache of its own, distinct from the fork-path one; with a fork, the three of before.
 
 | Path | Mode | What |
 |---|---|---|
-| `<workspace>/scripts/heartbeat/identity-backup.json` | docker | last hash/commit/push for `backup/identity` |
+| `<workspace>/scripts/heartbeat/identity-backup.json` | docker | last hash/commit/push for `backup/identity` (with a repository also the record of the last attempt) |
 | `<workspace>/scripts/heartbeat/vault-backup.json` | docker + local | idem for `backup/vault` |
 | `<workspace>/scripts/heartbeat/config-backup.json` | docker | idem for `backup/config` |
-| `<workspace>/.state/.cache/identity-backup/clone/` | docker | clone cache for the identity branch |
-| `<workspace>/.state/.cache/agent-backup/vault-clone/` | docker | clone cache for the vault branch |
-| `<workspace>/.state/.cache/agent-backup/config-clone/` | docker | clone cache for the config branch |
+| `<workspace>/scripts/heartbeat/memory-backup.json`, `history-backup.json` | docker, repository only | idem for `backup/memory` and `backup/history` |
+| `<workspace>/scripts/heartbeat/backup-dest.json` | docker, repository only | the destination's last privacy verdict (`private`, `unverified-allowed`, `unverified`, `public`, `unreachable`) and when it was checked |
+| `<workspace>/scripts/heartbeat/.backup-<unit>.lock` | docker, repository only | per-unit run lock (`flock`) |
+| `<workspace>/.state/.cache/identity-backup/clone/` | docker | clone cache for the identity branch (fork) |
+| `<workspace>/.state/.cache/agent-backup/vault-clone/` | docker | clone cache for the vault branch (fork) |
+| `<workspace>/.state/.cache/agent-backup/config-clone/` | docker | clone cache for the config branch (fork) |
+| `<workspace>/.state/.cache/identity-backup/identity-repo/`, `<workspace>/.state/.cache/agent-backup/{vault,config,memory,history}-repo/` | docker, repository only | the repository-path clone caches; `heartbeatctl backup-status` reports their sizes (`agentctl doctor` warns above 800 MB in total). The unit's working files (heads list, maps, SQLite copies) sit next to each cache, never in `/tmp` |
+| `<workspace>/agent-repo/` | docker, repository only | the agent's work clone of its repository (gitignored); never holds `backup/*` branches |
 | `$HOME/.cache/agent-backup/vault-clone/` | local | vault clone cache — lives in the **operator's home, outside the workspace**; `--uninstall --purge` removes it explicitly |
 
-Local mode ships only the vault backup (a systemd timer). Identity and config backups are driven by `heartbeatctl backup-identity` / `backup-config` inside the container. Restore is `setup.sh --restore-from-fork <url>` during scaffold: it pulls `backup/config` first (so `vault.path` is known), then `backup/identity`, then `backup/vault`, skipping any branch that is absent.
+Local mode ships only the vault backup (a systemd timer), always to the fork; `backup.repo` and `backup.sensitive` are docker-only. Identity, config, memory and history backups are driven by `heartbeatctl backup-<unit>` inside the container. Restore is `setup.sh --restore-from-repo <url>` (an alias of `--restore-from-fork <url>`) during scaffold: it pulls `backup/config` first (so `vault.path` is known), then `backup/identity`, `backup/vault`, `backup/memory` and `backup/history`, skipping any branch that is absent. Encrypted pieces are unpacked under `<destination>/.restore-tmp/` (mode 0700) and moved into place once their unit verified; that directory is removed at the end. Where each restored path lands:
+
+| Branch | Lands in |
+|---|---|
+| `backup/config` | `agent.yml`, `CLAUDE.md`, `personas/`, `docker-compose.override.yml`, `.claude/` at the workspace root |
+| `backup/identity` | `.state/`, and the decrypted secrets at `<workspace>/.env` (0600) |
+| `backup/vault` | `vault.path` |
+| `backup/memory` | `auto-memory/<project>/` → `.state/.claude/projects/<project>/memory/`; `claude-mem/` → `.state/.claude-mem/`; `extra/<path>` → `<workspace>/<path>` |
+| `backup/history` | `projects/` → `.state/.claude/projects/` |
 
 ## Heartbeat — docker mode only
 
@@ -316,12 +331,14 @@ The empty `plugins/` plus `enabledPlugins:{}` together prevent `claude --print` 
 
 ### The crontab
 
-`/etc/crontabs/agent` is rendered by `heartbeatctl reload` into `<workspace>/scripts/heartbeat/.crontab.staging` and copied in by a root-owned sync loop. Up to **7 lines**, each gated by its own `agent.yml` key (`docker/scripts/heartbeatctl`):
+`/etc/crontabs/agent` is rendered by `heartbeatctl reload` into `<workspace>/scripts/heartbeat/.crontab.staging` and copied in by a root-owned sync loop. Up to **7 lines** with a fork or no backup destination, plus the review notice (037) and two more with an agent repository (046), each gated by its own `agent.yml` key (`docker/scripts/heartbeatctl`):
 
 | Line | Default schedule | Gate |
 |---|---|---|
 | heartbeat tick | from `features.heartbeat.interval` | `features.heartbeat.enabled` |
-| `backup-identity` | `30 3 * * *` | `features.identity_backup.enabled` |
+| `backup-identity` | `30 3 * * *` | `features.identity_backup.enabled`: with a fork or no destination only when `true`; with an agent repository unless it is `false` |
+| `backup-memory` | `40 3 * * *` | agent repository + `features.memory_backup.enabled != false` + a valid `features.memory_backup.schedule` |
+| `backup-history` | `50 3 * * *` | agent repository + `features.history_backup.enabled != false` + a valid `features.history_backup.schedule` |
 | `backup-vault` | `0 * * * *` | `vault.enabled` (`vault.backup_schedule`) |
 | `backup-config` | `30 3 * * *` | `features.config_backup.enabled` (default true) |
 | token-health probe | `0 * * * *` | `features.token_health.enabled` (default true) |
@@ -339,6 +356,7 @@ Everything the runners persist lives in `<workspace>/scripts/heartbeat/` (`/work
 | `.crontab.staging` | crontab rendered by `heartbeatctl reload` | docker |
 | `qmd-index.json`, `wiki-graph.json`, `vault-backup.json` | RAG + backup runner state | docker + local |
 | `identity-backup.json`, `config-backup.json` | backup runner state | docker |
+| `memory-backup.json`, `history-backup.json`, `backup-dest.json`, `.backup-<unit>.lock` | agent-repository backup state, destination verdict and unit locks (046) | docker, repository only |
 | `token-health/<id>.json`, `token-health/warnings.jsonl` | per-token probe state + history | docker |
 | `qmd-schedule.fallback`, `wiki-graph-schedule.fallback` | markers left when a cron schedule can't be converted to `OnCalendar` | local |
 | `logs/runs.jsonl` | one JSON line per heartbeat tick | docker |
@@ -346,6 +364,8 @@ Everything the runners persist lives in `<workspace>/scripts/heartbeat/` (`/work
 | `logs/cron.log` | crond stderr for the heartbeat line | docker |
 | `logs/telegram-mcp-stderr.log` | captured plugin stderr (typing-tick instrumentation) | docker |
 | `logs/backup-identity.log`, `logs/backup-vault.log`, `logs/backup-config.log`, `logs/token-health.log`, `logs/qmd-reindex.log`, `logs/wiki-graph.log` | one per cron line | docker |
+| `logs/backup-memory.log`, `logs/backup-history.log` | one per cron line, agent repository only (046) | docker |
+| `logs/agent-repo.log` | what the work-clone helper could not do (046) | docker |
 
 `runs.jsonl` is rotated at 10 MB → `.1`, `.2.gz`, `.3.gz` (max 3 generations). Per-run session logs in `logs/sessions/` are pruned to the last 20 by the heartbeat itself. `state.json` is rewritten atomically (temp + rename) at the end of every tick — see [`docs/architecture.md`](architecture.md) for the field contract, and [`docs/heartbeatctl.md`](heartbeatctl.md) for the subcommands that mutate it.
 
@@ -370,8 +390,9 @@ Gitignore status is from the `.gitignore` that `setup.sh` copies into every scaf
 
 | Host path | What | Persists? | Gitignored? |
 |---|---|---|---|
-| `<workspace>/agent.yml` | Single source of truth — wizard + `heartbeatctl set-*` write here | yes | **yes** — durability comes from the `backup/config` orphan branch, not from committing it |
-| `<workspace>/.env` | Secrets (TELEGRAM_BOT_TOKEN, MCP tokens), 0600 | yes | yes — replicated as an age-encrypted `.env.age` on `backup/identity` only when a recipient key is configured; without one the identity backup runs in partial mode and omits it |
+| `<workspace>/agent.yml` | Single source of truth — wizard + `heartbeatctl set-*` write here | yes | **yes** — durability comes from the `backup/config` orphan branch (plaintext, also for a sensitive agent), not from committing it |
+| `<workspace>/.env` | Secrets (TELEGRAM_BOT_TOKEN, `GITHUB_PAT`, MCP tokens), 0600 | yes | yes — replicated as an age-encrypted `.env.age` on `backup/identity` only when a recipient key is configured; without one the identity backup runs in partial mode and omits it. With an agent repository the unit reads this file; on the fork path it still reads `.state/.env`, which a docker agent does not have |
+| `<workspace>/agent-repo/` | The agent's work clone of its associated repository (046, docker mode) | yes | yes — its work is durable only once the agent pushes it; `--uninstall --nuke` warns about unpublished commits |
 | `<workspace>/.env.example` | Template with placeholders for `.env` | yes | no |
 | `<workspace>/CLAUDE.md` | Agent base memory; derived from `modules/claude-md.tpl` | yes | **yes** (regenerable: `setup.sh --regenerate --force-claude-md`) |
 | `<workspace>/.mcp.json` | MCP server config (rendered from `agent.yml`) | yes | **yes** (regenerable) |
@@ -383,7 +404,7 @@ Gitignore status is from the `.gitignore` that `setup.sh` copies into every scaf
 | `<workspace>/scripts/heartbeat/` | Workspace-templated heartbeat code | yes | code no; `logs/` + `heartbeat.conf` yes |
 | `<workspace>/scripts/local/` | Rendered local-mode helpers + staged units | yes | yes |
 
-Rule of thumb: a derived file being gitignored is not a durability problem — `setup.sh --regenerate` re-renders it from `agent.yml`, and `agent.yml` itself is replicated to the `backup/config` branch of the agent's fork.
+Rule of thumb: a derived file being gitignored is not a durability problem — `setup.sh --regenerate` re-renders it from `agent.yml`, and `agent.yml` itself is replicated to the `backup/config` branch of the agent's repository or fork.
 
 ## Other state under `.state/` (cache + runtime)
 
@@ -392,13 +413,13 @@ Rule of thumb: a derived file being gitignored is not a durability problem — `
 | `<workspace>/.state/.bun/` | bun's package install cache | yes |
 | `<workspace>/.state/.npm/` | npm's package install cache (used by `npx` for some MCPs) | yes |
 | `<workspace>/.state/.cache/qmd/` | qmd index, embedding model, managed prefix, scratch (see RAG section) | **no** — see below |
-| `<workspace>/.state/.cache/identity-backup/`, `.state/.cache/agent-backup/` | fork-backup clone caches | yes (re-cloned on next backup) |
+| `<workspace>/.state/.cache/identity-backup/`, `.state/.cache/agent-backup/` | backup clone caches (fork and repository paths) | yes (re-cloned on next backup; a repository-path cache with a store refetches the whole store) |
 | `<workspace>/.state/.local/` | XDG state dir for various tools | yes |
 | `<workspace>/.state/.config/` | XDG config dir (uv, qmd collections, …) | mostly — `.config/qmd` holds the collection registry, re-created by the next `qmd_setup_if_needed` |
 
 The 2026-era caveat: **`.cache/qmd` is not a throwaway cache.** Deleting it discards `index.sqlite` and the embedding model — the next boot re-downloads ~300 MB and must re-run a full `update` + multi-pass `embed`, which on a large vault is expensive (and is exactly the completion problem feature 018 exists to solve). Everything else in this table genuinely rebuilds itself.
 
-Note also `<workspace>/.state/.claude.json` (at the top level of `.state/`, not inside `.claude/`) — Claude Code writes a stripped copy here as well. Both copies are kept in sync by the CLI.
+Note also `<workspace>/.state/.claude.json` (at the top level of `.state/`, not inside `.claude/`) — Claude Code writes a stripped copy here as well. Both copies are kept in sync by the CLI. This top-level copy is the one in the `backup/identity` file list.
 
 ## What does NOT persist (docker mode)
 
@@ -430,7 +451,7 @@ Rough sizes for a fresh agent with the default plugin catalog, as of v0.12.0:
 | `docker compose build` | docker: rebuilds image; doesn't touch `.state/` |
 | `sudo systemctl restart agent-<name>.service` | local: restarts the Remote Control session; touches nothing on disk |
 | `setup.sh --regenerate` | Re-renders derived files from `agent.yml` (both modes); doesn't touch `.state/` |
-| `setup.sh --restore-from-fork <url>` | Scaffold-time: pulls `backup/config` → `backup/identity` → `backup/vault` into the new workspace, skipping absent branches |
+| `setup.sh --restore-from-repo <url>` (alias `--restore-from-fork`) | Scaffold-time: pulls `backup/config` → `backup/identity` → `backup/vault` → `backup/memory` → `backup/history` into the new workspace, skipping absent branches |
 | `setup.sh --backup` | docker: triggers an immediate identity backup (`heartbeatctl backup-identity` in the container) |
 | `setup.sh --uninstall --yes` | Stops the container / removes the systemd units, removes rendered files; preserves `agent.yml`, `.env`, `.state/` |
 | `setup.sh --uninstall --purge --yes` | Plus removes `agent.yml`, `.env`, `.state/` — and, in local mode, `~/.cache/agent-backup/vault-clone` |

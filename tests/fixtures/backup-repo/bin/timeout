@@ -1,0 +1,64 @@
+#!/usr/bin/env perl
+# Fake timeout(1) for a host without one (macOS), used by the 046 suites through
+# br_tools_path (tests/helper-backup-repo.bash). Unlike tests/fixtures/qmd-lock/timeout,
+# it APPLIES the limit: the 046 tests check that a stalled push or query ends on time.
+#
+#   timeout [-k KILL_AFTER] [-s SIGNAL] DURATION CMD [ARGS...]
+#
+# CMD runs in its own process group. When DURATION (seconds, optional "s" suffix) is
+# over, SIGNAL (TERM by default) goes to the whole group, so git and its
+# git-remote-http child stop together; after KILL_AFTER more seconds, KILL. The exit
+# status is 124 after a timeout (GNU), else CMD's own status (128+n when killed by n),
+# and 127 when CMD cannot be run.
+use strict;
+use warnings;
+use POSIX ":sys_wait_h";
+use Time::HiRes qw(time sleep);
+
+my ($kill_after, $sig) = (0, 'TERM');
+while (@ARGV && $ARGV[0] =~ /^-/) {
+    my $o = shift @ARGV;
+    if ($o eq '--') { last }
+    elsif ($o eq '-k') { $kill_after = shift @ARGV }
+    elsif ($o =~ /^-k(\d+(?:\.\d+)?)s?$/) { $kill_after = $1 }
+    elsif ($o eq '-s') { $sig = shift @ARGV }
+    else { print STDERR "timeout: unsupported option $o\n"; exit 125 }
+}
+my $dur = shift @ARGV;
+defined $dur or do { print STDERR "timeout: missing duration\n"; exit 125 };
+$dur =~ s/s$//;
+$kill_after =~ s/s$//;
+$sig =~ s/^SIG//;
+@ARGV or do { print STDERR "timeout: missing command\n"; exit 125 };
+
+my $pid = fork();
+defined $pid or exit 125;
+if ($pid == 0) {
+    setpgrp(0, 0);
+    { no warnings 'exec'; exec { $ARGV[0] } @ARGV; }
+    print STDERR "timeout: cannot run $ARGV[0]\n";
+    exit 127;
+}
+
+my $deadline = time() + $dur;
+my ($timed_out, $killed) = (0, 0);
+my $kill_deadline;
+for (;;) {
+    my $r = waitpid($pid, WNOHANG);
+    if ($r == $pid) {
+        my $st = $?;
+        exit 124 if $timed_out;
+        exit(($st & 127) ? 128 + ($st & 127) : $st >> 8);
+    }
+    if ($r == -1) { exit($timed_out ? 124 : 125) }
+    my $now = time();
+    if (!$timed_out && $now >= $deadline) {
+        $timed_out = 1;
+        kill $sig, -$pid;
+        $kill_deadline = $kill_after > 0 ? $now + $kill_after : undef;
+    } elsif ($timed_out && !$killed && defined $kill_deadline && $now >= $kill_deadline) {
+        $killed = 1;
+        kill 'KILL', -$pid;
+    }
+    sleep 0.05;
+}

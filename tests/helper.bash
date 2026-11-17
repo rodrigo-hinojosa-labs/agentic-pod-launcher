@@ -218,6 +218,10 @@ wizard_answers() {
   # the localized features.voice.{signoff,currency} defaults (031 lesson: the
   # heredoc and the --regenerate backfill are different call sites).
   local lang=en nick=Alice
+  # 046: the agent repository step (docker mode only). Empty repo answers "n";
+  # a URL answers "y", the URL, the sensitive-data question and, since the GitHub
+  # MCP stays off on this path, the repository token prompt.
+  local repo="" sensitive=off repo_pat=""
   local kv
   for kv in "$@"; do
     case "$kv" in
@@ -234,6 +238,9 @@ wizard_answers() {
       notify_bot=*)      notify_bot="${kv#notify_bot=}" ;;
       notify_chat=*)     notify_chat="${kv#notify_chat=}" ;;
       deployment_mode=*) deployment_mode="${kv#deployment_mode=}" ;;
+      repo=*)            repo="${kv#repo=}" ;;
+      sensitive=*)       sensitive="${kv#sensitive=}" ;;
+      repo_pat=*)        repo_pat="${kv#repo_pat=}" ;;
       *) echo "wizard_answers: unknown kv: $kv" >&2; return 1 ;;
     esac
   done
@@ -249,6 +256,15 @@ wizard_answers() {
   [ "$(uname -s)" = "Linux" ] && printf 'n\n'
   # GitHub fork
   printf 'n\n'
+  # Agent repository (docker only) — 046: asked right after the fork step.
+  if [ "$deployment_mode" = "docker" ]; then
+    if [ -n "$repo" ]; then
+      printf 'y\n%s\n' "$repo"
+      if [ "$sensitive" = "on" ]; then printf 'y\n'; else printf 'n\n'; fi
+    else
+      printf 'n\n'
+    fi
+  fi
   # Notify channel + telegram extras when applicable. Empty notify_bot
   # tells the wizard to skip the token/chat prompts and accept incomplete
   # credentials (the "Telegram credentials incomplete" warning path).
@@ -278,6 +294,10 @@ wizard_answers() {
   printf 'n\nn\nn\nn\nn\nn\n'
   # Atlassian + GitHub MCPs (both n; sub-prompts skipped)
   printf 'n\nn\n'
+  # 046: with an agent repository and the GitHub MCP off, the repository token.
+  if [ "$deployment_mode" = "docker" ] && [ -n "$repo" ]; then
+    printf '%s\n' "$repo_pat"
+  fi
   # Heartbeat: enabled, interval, prompt
   printf 'y\n30m\nok\n'
   # Use default principles

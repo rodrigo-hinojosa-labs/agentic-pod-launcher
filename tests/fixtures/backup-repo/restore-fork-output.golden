@@ -1,0 +1,3 @@
+  ✓ restore: agent.yml restored from backup/config
+  ✓ restore: identity restored into <DEST>/.state/
+  ✓ restore: vault restored into <DEST>/.state/notes/

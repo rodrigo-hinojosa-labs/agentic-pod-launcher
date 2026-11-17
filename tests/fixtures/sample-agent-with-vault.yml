@@ -61,6 +61,18 @@ features:
     enabled: false
     schedule: "7 9 * * 1"
     prompt: ""
+  memory_backup:
+    enabled: true
+    schedule: "40 3 * * *"
+  history_backup:
+    enabled: true
+    schedule: "50 3 * * *"
+backup:
+  repo:
+    url: ""
+    allow_unverified: false
+  sensitive: false
+  extra_paths: []
 mcps:
   defaults:
     - fetch

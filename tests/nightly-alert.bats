@@ -1428,7 +1428,7 @@ _reset_state() {
   # the ids the notice reports as "the step that failed", in the order of the job
   # (the trial step `simulate`, when present, sits between run_suite and collect:
   # N29 owns its position)
-  [ "$(yq '.jobs.e2e.steps | map(.id) | map(select(. != "simulate")) | join(",")' "$f")" = "mark_start,checkout,install_yq,install_bats,verify_deps,fetch_models,run_suite,collect" ]
+  [ "$(yq '.jobs.e2e.steps | map(.id) | map(select(. != "simulate")) | join(",")' "$f")" = "mark_start,checkout,install_yq,install_bats,install_age,verify_deps,fetch_models,run_suite,collect" ]
 }
 
 @test "N31 AW-9: el workflow referencia el script y el script existe, es ejecutable y empieza con el shebang" {

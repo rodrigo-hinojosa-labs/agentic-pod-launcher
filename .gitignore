@@ -47,3 +47,6 @@ node_modules/
 # commit these by accident.
 /obsidean-feature/
 /Agentic Pod Lanuncher/
+
+# 046: the agent's work clone of its associated repository (docker mode).
+/agent-repo/

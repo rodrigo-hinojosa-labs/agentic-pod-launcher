@@ -80,6 +80,17 @@ jobs:
           sudo /tmp/bats/install.sh /usr/local
           bats --version
 
+      # 046: the agent-repository e2e (tests/docker-e2e-backup-repo.bats) needs age
+      # and age-keygen on the runner to build and open the operator's test key.
+      - name: Install age
+        id: install_age
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y age
+          age --version
+          age-keygen --help >/dev/null
+
       # No pipe in this step: `docker info | head -10` under pipefail made head
       # close the pipe after 10 lines, docker took SIGPIPE and the step died
       # with 141 before the suite ever started (039-fix-nightly-e2e-sigpipe).

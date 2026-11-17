@@ -229,7 +229,7 @@ Read them instead of re-crawling the wiki when you need structure ("what links h
 An opt-in weekly heartbeat notice (`features.heartbeat.review.enabled` in `agent.yml`, default off) can nudge you to work this queue on a schedule — **docker mode only**: `heartbeatctl reload` wires the crontab line after you flip it on. local mode has no timer for this; the queue is still yours to check via the artifacts above or `./scripts/agentctl heartbeat wiki-graph`.
 {{/if}}
 
-## Backups (what actually survives)
+{{#unless BACKUP_REPO_ENABLED}}## Backups (what actually survives)
 
 Backups exist only if `agent.yml` has a fork configured (`scaffold.fork.url`). Without one, nothing is pushed anywhere and this workspace is the only copy — say so plainly if the user asks how durable your state is. With a fork, three independent orphan branches are pushed to it (each is hash-idempotent: no change, no commit):
 
@@ -241,7 +241,27 @@ Backups exist only if `agent.yml` has a fork configured (`scaffold.fork.url`). W
 
 local mode: only the **vault** backup is scheduled and reachable from your surface — identity and config backups are Docker-only today. A local agent that wants its login/config replicated must ask the operator.
 
-Restore is an operator action from a fresh clone of the launcher: `./setup.sh --restore-from-fork <url>`.
+Restore is an operator action from a fresh clone of the launcher: `./setup.sh --restore-from-fork <url>`.{{/unless}}{{#if BACKUP_REPO_ENABLED}}## Backups (what actually survives)
+
+Your state is backed up to your own private repository, `{{BACKUP_REPO_URL}}`, in independent orphan branches that belong to the launcher (each is hash-idempotent: no change, no commit):
+
+| Branch | Content | Trigger |
+|---|---|---|
+| `backup/identity` | chat pairing, plugin config, settings and the encrypted `.env` (which holds your Claude token) | the supervisor pushes it when the identity hash changes (checked every 60s) and after plugin installs; daily 03:30 cron by default. Manual: `heartbeatctl backup-identity`. |
+| `backup/vault` | the vault's markdown, encrypted when this agent is marked as sensitive | hourly cron by default (`vault.backup_schedule`). Manual: `heartbeatctl backup-vault`. |
+| `backup/config` | `agent.yml`, your persona, `CLAUDE.md` and the workspace's `.claude/` project config; everything but `agent.yml` is encrypted when this agent is marked as sensitive | daily 03:30 cron by default. Manual: `heartbeatctl backup-config`. |
+| `backup/memory` | your auto memory, the claude-mem store and any extra paths the operator declared (`backup.extra_paths`) | daily 03:40 cron by default. Manual: `heartbeatctl backup-memory`. |
+| `backup/history` | your conversation transcripts, always encrypted | daily 03:50 cron by default. Manual: `heartbeatctl backup-history`. |
+
+The operator can disable a unit or change its schedule in `agent.yml`. `heartbeatctl backup-status` shows which units are enabled and where each one stands. If the user asks how durable your state is, answer from that command, not from memory.
+
+## Your repository
+
+`{{BACKUP_REPO_URL}}` is yours, and it has two roles:
+
+- **Work**: a clone lives at `{{BACKUP_REPO_WORKDIR}}`. Features you build for yourself go there, on working branches (`main` and feature branches). Push them with plain `git push` from that clone: its credential is already configured. Work that is not pushed is not backed up.
+- **Backup**: the `backup/*` branches hold your recoverable state. They belong to the launcher. Never check them out, commit to them, rebase them or delete them, and do not fetch them into your clone.
+- **Not covered**: state you keep anywhere else is not backed up. If you start keeping state in a new place (a config directory for a tool you built, a credentials store), tell the operator so they can add it to `backup.extra_paths` in `agent.yml`.{{/if}}
 
 ## Permission Mode (self-service)
 

@@ -34,6 +34,7 @@ load helper
       HEARTBEAT_PROMPT \
       USE_DEFAULT_PRINCIPLES \
       FORK_PAT \
+      AGENT_REPO_URL \
       NOTIFY_CHANNEL \
       proceed \
       agentic-pod-launcher; do
@@ -85,6 +86,7 @@ load helper
       'User (5 prompts)' \
       'install_service' \
       'GitHub fork' \
+      'Agent repository (docker only)' \
       'Notify channel' \
       'Vault block' \
       'Optional plugins' \
@@ -171,7 +173,7 @@ load helper
       validate_email|validate_telegram_token|validate_timezone| \
       validate_cron_or_interval|validate_agent_name|validate_url| \
       validate_uid_gid|validate_workspace_path|validate_destination_path| \
-      validate_atlassian_alias) ;;
+      validate_atlassian_alias|validate_backup_repo_url) ;;
       *) echo "Unknown validator in lib (update test): $fn" >&2; return 1 ;;
     esac
   done < <(grep -oE '^validate_[a-z_]+' "$lib")

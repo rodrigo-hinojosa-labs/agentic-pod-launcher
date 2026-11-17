@@ -76,7 +76,8 @@ What the wizard does automatically from the descriptor
   leaves a blank placeholder to fill in later). Catalog MCP secrets never go
   through `modules/env-example.tpl` — the only MCP secrets that template
   carries are the bespoke Atlassian/GitHub blocks (alongside the headless-auth
-  token and the Telegram notifier vars).
+  token and the Telegram notifier vars; the GitHub one also covers the agent
+  repository's token, see [Secrets contract](#secrets-contract)).
 - Persists the selection in `agent.yml` under `mcps.defaults`, which is what
   `--regenerate` reads to re-derive the `MCPS_<ID>_ENABLED` gates without the
   wizard.
@@ -177,8 +178,10 @@ Also add render assertions for the new block to `tests/mcp-json.bats`
 When one y/n prompt is not enough — multiple accounts, several fields per
 instance — model it as an array in `agent.yml` and iterate with `{{#each}}`.
 The Atlassian MCP is the reference implementation. **Do not put secrets in
-the array**: `agent.yml` is replicated in plaintext to the fork's
-`backup/config` branch (see [architecture.md](architecture.md)).
+the array**: `agent.yml` is replicated in plaintext to the `backup/config`
+branch of the agent's repository or fork — even for an agent marked
+`backup.sensitive`, because a restore needs it to start (see
+[architecture.md](architecture.md#backup-destination-credential-and-encryption-046)).
 
 ```yaml
 # agent.yml — non-secret fields only
@@ -225,7 +228,16 @@ Notes:
 
 - Secrets live in the workspace `.env` (0600) and nowhere else. `agent.yml`
   goes to the `backup/config` orphan branch in plaintext; `.env` travels only
-  encrypted, as `.env.age` inside `backup/identity`.
+  encrypted, as `.env.age` inside `backup/identity` (and only when an
+  encryption key is configured).
+- **A secret can have more than one consumer.** `GITHUB_PAT` is no longer only
+  the GitHub MCP's (046): with an agent repository (`backup.repo.url`) the
+  backups push with it, through an image-baked askpass, and the agent's work
+  clone uses it through a git credential helper. The wizard writes it, and
+  `modules/env-example.tpl` lists it (gated on the derived
+  `GITHUB_PAT_NEEDED`), when either is on. So do not rename `GITHUB_PAT`, scope
+  it to the MCP only, or revoke it thinking only the MCP breaks: the token must
+  keep push access to the agent repository.
 - Docker mode: `docker-compose.yml` injects `.env` via `env_file`, so `${VAR}`
   references in `.mcp.json` resolve inside the container. Rotation: edit
   `.env`, then recreate the container —

@@ -1,0 +1,23 @@
+# 046: casos de la regla de backup.repo.url (data-model.md, seccion 1).
+# Columnas, separadas por un tabulador: costura BACKUP_DEST_ALLOW_HTTP (off|on),
+# URL (<empty> es la cadena vacia) y resultado esperado (accept|reject).
+# La recorren TD11 (tests/backup-dest.bats) y TA05 (tests/agent-repo-surface.bats),
+# para que la libreria horneada y los validadores del host no se separen.
+off	<empty>	accept
+off	https://github.com/o/r	accept
+off	https://github.com/o/r.git	accept
+off	https://github.com/rodrigo-hinojosa/linus-workspace-agent-admin	accept
+off	http://x/y	reject
+off	https://u:p@github.com/o/r	reject
+off	https://github.com/a b	reject
+off	git@github.com:o/r.git	reject
+off	https://gitlab.com/o/r	reject
+off	https://github.com/o	reject
+off	https://github.com/o/r/extra	reject
+off	http://127.0.0.1:1/r	reject
+on	http://127.0.0.1:1/r	accept
+on	http://localhost:8080/srv/repo.git	accept
+on	http://host.docker.internal:9/r	accept
+on	http://example.com/r	reject
+on	http://u:p@127.0.0.1:1/r	reject
+on	https://github.com/o/r	accept

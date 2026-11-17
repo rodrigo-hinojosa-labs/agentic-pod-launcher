@@ -20,7 +20,7 @@ ATLASSIAN_{{NAME}}_JIRA_USERNAME={{email}}
 ATLASSIAN_{{NAME}}_TOKEN=
 {{/each}}
 
-{{#if MCPS_GITHUB_ENABLED}}
+{{#if GITHUB_PAT_NEEDED}}
 # GitHub MCP
 GITHUB_PAT=
 {{/if}}

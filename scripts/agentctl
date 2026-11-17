@@ -198,6 +198,8 @@ _check_backup_freshness() {
     identity) label="Backup identity" ;;
     vault)    label="Backup vault" ;;
     config)   label="Backup config" ;;
+    memory)   label="Backup memory" ;;
+    history)  label="Backup history" ;;
     *)        label="Backup $name" ;;
   esac
 
@@ -240,6 +242,93 @@ _check_backup_freshness() {
   else
     _doctor_pass "$label: pushed ${human} ago${extra}"
   fi
+}
+
+# 046 (A7): the backup part of the doctor with an associated repository. The data
+# comes from `heartbeatctl backup-status --json` inside the container; if that
+# fails while the container runs, the five state files are read instead.
+_doctor_backup_repo() {
+  local agent="$1" json
+  if ! json=$(docker exec -u agent "$agent" heartbeatctl backup-status --json 2>/dev/null) \
+     || ! jq -e '.destination' <<< "$json" > /dev/null 2>&1; then
+    _check_backup_freshness "$agent" identity "${DOCTOR_IDENTITY_MAX_AGE_HOURS:-48}"
+    _check_backup_freshness "$agent" vault "${DOCTOR_VAULT_MAX_AGE_HOURS:-25}"
+    _check_backup_freshness "$agent" config "$(( ${DOCTOR_CONFIG_MAX_AGE_DAYS:-8} * 24 ))"
+    _check_backup_freshness "$agent" memory 49
+    _check_backup_freshness "$agent" history 49
+    return 0
+  fi
+  local now url verdict checked then human
+  now=$(date -u +%s)
+  url=$(jq -r '.destination.url' <<< "$json")
+  verdict=$(jq -r '.destination.verdict // ""' <<< "$json")
+  checked=$(jq -r '.destination.checked_at // ""' <<< "$json")
+  then=$(_epoch_from_iso "$checked")
+  human="never"
+  [ -n "$then" ] && human="$(_humanize_delta $((now - then))) ago"
+  case "$verdict" in
+    private|unverified-allowed) _doctor_pass "Backup destination: repo $url ($verdict, checked $human)" ;;
+    *) _doctor_warn "Backup destination: repo $url (${verdict:-not checked yet}, checked $human)" \
+         "the repository must be private and reachable with GITHUB_PAT" ;;
+  esac
+  local unit push result max label t
+  # '|' and not a tab: an empty field (never pushed) would collapse with a tab.
+  while IFS='|' read -r unit push result max; do
+    label="Backup $unit"
+    case "$result" in
+      ''|ok|no-change)
+        if [ -z "$push" ]; then
+          _doctor_warn "$label: never pushed yet" "agentctl heartbeat backup-$unit"
+        else
+          t=$(_epoch_from_iso "$push")
+          if [ -n "$t" ] && [ $((now - t)) -gt $((max * 3600)) ]; then
+            _doctor_warn "$label: pushed $(_humanize_delta $((now - t))) ago — stale (>${max}h)" "agentctl heartbeat backup-$unit"
+          else
+            _doctor_pass "$label: pushed $([ -n "$t" ] && _humanize_delta $((now - t)) || echo "?") ago"
+          fi
+        fi ;;
+      *)
+        if [ -n "$push" ]; then
+          t=$(_epoch_from_iso "$push")
+          _doctor_warn "$label: last attempt failed ($result); last good push $([ -n "$t" ] && _humanize_delta $((now - t)) || echo "?") ago" "agentctl heartbeat backup-$unit"
+        else
+          _doctor_warn "$label: last attempt failed ($result); never pushed yet" "agentctl heartbeat backup-$unit"
+        fi ;;
+    esac
+  done < <(jq -r '.units[] | select(.enabled) | [.unit, .last_push, .last_result, (.max_age_hours | tostring)] | join("|")' <<< "$json")
+  if [ "$(jq -r '.credential' <<< "$json")" != "present" ]; then
+    _doctor_warn "Backup credential: GITHUB_PAT is missing" "add GITHUB_PAT to .env and recreate the container"
+  fi
+  if [ "$(jq -r '.recipient.configured' <<< "$json")" = "true" ]; then
+    _doctor_pass "Backup encryption key: $(jq -r '"\(.recipient.type) \(.recipient.fingerprint) (\(.recipient.comment))"' <<< "$json")"
+  else
+    _doctor_warn "Backup encryption key: not configured — encrypted units do not run (identity runs without the secrets)" \
+      "docker exec -u agent $agent heartbeatctl backup-identity --configure-key \"<public key>\""
+  fi
+  local declared nmissing
+  declared=$(jq -r '.extra_paths.declared' <<< "$json")
+  nmissing=$(jq -r '.extra_paths.missing | length' <<< "$json")
+  if [ "${nmissing:-0}" -gt 0 ]; then
+    _doctor_warn "Backup extra paths: $nmissing of $declared declared paths is missing ($(jq -r '.extra_paths.missing | join(", ")' <<< "$json"))"
+  fi
+  local wpath unpub dirty
+  wpath=$(jq -r '.work_clone.path' <<< "$json")
+  if [ "$(jq -r '.work_clone.present' <<< "$json")" != "true" ]; then
+    _doctor_warn "Agent repository clone: missing at $wpath" "agentctl heartbeat backup-config (it creates the clone)"
+  else
+    unpub=$(jq -r '.work_clone.unpublished_commits' <<< "$json")
+    dirty=$(jq -r '.work_clone.dirty_files' <<< "$json")
+    if [ "${unpub:-0}" -gt 0 ] || [ "${dirty:-0}" -gt 0 ]; then
+      _doctor_warn "Agent repository clone: $unpub unpublished commits, $dirty uncommitted file$([ "$dirty" = 1 ] || echo s)"
+    fi
+  fi
+  local total max_mb
+  total=$(jq -r '.cache_bytes_total // 0' <<< "$json")
+  max_mb="${DOCTOR_BACKUP_CACHE_MAX_MB:-800}"
+  if [ "${total:-0}" -gt $((max_mb * 1048576)) ]; then
+    _doctor_warn "Backup size: $(awk -v b="$total" 'BEGIN { printf "%.1f", b / 1073741824 }') GB in the backup caches - prune a backup branch (see README)"
+  fi
+  return 0
 }
 
 # Doctor check for one token-health probe. Reads
@@ -782,9 +871,17 @@ EOF
     local vault_max="${DOCTOR_VAULT_MAX_AGE_HOURS:-25}"
     local config_max_days="${DOCTOR_CONFIG_MAX_AGE_DAYS:-8}"
     local config_max=$((config_max_days * 24))
-    _check_backup_freshness "$agent" identity "$id_max"
-    _check_backup_freshness "$agent" vault "$vault_max"
-    _check_backup_freshness "$agent" config "$config_max"
+    local _repo_url=""
+    [ -f "$WORKSPACE/agent.yml" ] && _repo_url=$(yq -r '.backup.repo.url // ""' "$WORKSPACE/agent.yml" 2>/dev/null)
+    [ "$_repo_url" = "null" ] && _repo_url=""
+    if [ -n "$_repo_url" ]; then
+      # 046 (A7): with an associated repository, the five units and the rest.
+      _doctor_backup_repo "$agent"
+    else
+      _check_backup_freshness "$agent" identity "$id_max"
+      _check_backup_freshness "$agent" vault "$vault_max"
+      _check_backup_freshness "$agent" config "$config_max"
+    fi
   fi
 
   # 15b. Plugin install failures (Story C) — surface any plugin the supervisor

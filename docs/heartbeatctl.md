@@ -2,7 +2,7 @@
 
 CLI for inspecting, controlling, and mutating the in-container heartbeat. Image-baked at `/opt/agent-admin/scripts/heartbeatctl`, symlinked to `/usr/local/bin/heartbeatctl`.
 
-Full subcommand list (as of v0.27.0, matches `docker/scripts/heartbeatctl` dispatch): `status`, `logs`, `show`, `test`, `pause`, `resume`, `reload`, `kick-channel`, `drop-plugin`, `set-interval`, `set-prompt`, `set-notifier`, `set-timeout`, `set-retries`, `backup-identity`, `backup-vault`, `backup-config`, `token-check`, `qmd-reindex`, `qmd-migrate`, `wiki-graph`, `help`.
+Full subcommand list (as of v0.27.0, matches `docker/scripts/heartbeatctl` dispatch): `status`, `logs`, `show`, `test`, `pause`, `resume`, `reload`, `kick-channel`, `drop-plugin`, `set-interval`, `set-prompt`, `set-notifier`, `set-timeout`, `set-retries`, `backup-identity`, `backup-vault`, `backup-config`, `token-check`, `qmd-reindex`, `qmd-migrate`, `wiki-graph`, `help`. Since 0.32.0 (046) also `backup-memory`, `backup-history` and `backup-status`.
 
 ## Invocation
 
@@ -196,7 +196,8 @@ Heartbeat core:
 
 Per-primitive state files (same directory):
 
-- `identity-backup.json`, `vault-backup.json`, `config-backup.json` — hash + `last_commit` + `last_push` per backup branch.
+- `identity-backup.json`, `vault-backup.json`, `config-backup.json` — hash + `last_commit` + `last_push` per backup branch. With an agent repository (046) also `memory-backup.json` and `history-backup.json`, every one of the five gains the record of its last attempt (see "State after each run" below), and `backup-dest.json` records the destination's privacy verdict.
+- `.backup-<unit>.lock` (046) — the per-unit run lock of the agent-repository path.
 - `token-health/<id>.json` — one per probed token, plus `token-health/warnings.jsonl` (warning audit trail).
 - `qmd-index.json` — reindex state, schema `{hash, last_run, last_status, runs[, pending]}` (see "Vault RAG" below).
 - `wiki-graph.json` + `.wiki-graph.lock` — wiki-graph freshness/counts state and its flock file.
@@ -208,33 +209,146 @@ Per-primitive state files (same directory):
 
 Per-primitive cron logs (docker mode; the cron lines written by `reload` redirect here):
 
-- `logs/backup-identity.log`, `logs/backup-vault.log`, `logs/backup-config.log`, `logs/token-health.log`, `logs/qmd-reindex.log`, `logs/wiki-graph.log`, `logs/review.log` (037, only when the review notice is enabled).
+- `logs/backup-identity.log`, `logs/backup-vault.log`, `logs/backup-config.log`, `logs/token-health.log`, `logs/qmd-reindex.log`, `logs/wiki-graph.log`, `logs/review.log` (037, only when the review notice is enabled), `logs/backup-memory.log` and `logs/backup-history.log` (046, only with an agent repository).
+- `logs/agent-repo.log` (046) — what the work-clone helper could not do (no `GITHUB_PAT`, a non-git directory in the way, a failed creation). Not a cron log.
 
 The qmd reindex lock is the exception to the "all under `scripts/heartbeat/`" rule: it lives at `<qmd cache root>/.reindex.lock`, shared with the first-boot setup so setup and reindex never overlap. The cache root is `$QMD_CACHE_HOME`, falling back to `~/.cache/qmd` — docker mode: `HOME=/home/agent`, which is the `.state/` bind-mount; local mode: the rendered entrypoints export `QMD_CACHE_HOME=<workspace>/.state/.cache/qmd`. Either way it persists under `.state/`.
 
 ## Backup commands
 
-The agent's persistent state is sliced into three orphan branches on the
-agent's own fork (`backup/identity`, `backup/vault`, `backup/config`).
-Each primitive is idempotent, hash-based, and pushes nothing when its
-input hasn't changed since the last commit. Restore happens via
-`setup.sh --restore-from-fork <url>`, which pulls all three in order.
+The agent's persistent state is sliced into independent orphan branches.
+Where they go is resolved on every run by one rule
+(`backup_dest_resolve`, `docker/scripts/lib/backup_dest.sh`):
+
+- **an associated repository** (`backup.repo.url`, docker mode only, 046): five
+  branches, `backup/identity`, `backup/vault`, `backup/config`,
+  `backup/memory` and `backup/history`;
+- **else the agent's fork** (`scaffold.fork.url`): the three branches of
+  before (identity, vault, config), on the pre-046 code path, with its
+  messages, exit codes and state files unchanged;
+- **else nothing**: each unit says so and exits `0`.
+
+Each unit is idempotent, hash-based, and pushes nothing when its input
+hasn't changed since the last commit. Restore happens via
+`setup.sh --restore-from-repo <url>` (an alias of `--restore-from-fork`),
+which pulls them in order: config, identity, vault, memory, history.
 
 | Branch | Cadence (docker mode: cron lines written by `reload`) | What it stores |
 |---|---|---|
-| `backup/identity` | watchdog 60s + post-plugin-install + cron `30 3 * * *` (override via `features.identity_backup.schedule`) | OAuth login, Telegram pairing, plugin config, settings, age-encrypted `.env` |
-| `backup/vault` | cron `0 * * * *` (override via `vault.backup_schedule`) | Markdown subset of the vault. Excludes `.obsidian/workspace*.json`, cache, `.trash/`, `*.sync-conflict-*` |
-| `backup/config` | cron `30 3 * * *` (toggle via `features.config_backup.enabled`) | `agent.yml` (plaintext, no secrets) |
+| `backup/identity` | watchdog 60s + post-plugin-install + cron `30 3 * * *` (override via `features.identity_backup.schedule`; with a fork the line exists only when `features.identity_backup.enabled` is `true`, with a repository unless it is `false`) | Telegram pairing, plugin config, settings, `.claude.json`, age-encrypted `.env`. The `/login` credentials file is not in the list |
+| `backup/vault` | cron `0 * * * *` (override via `vault.backup_schedule`) | Markdown subset of the vault. Excludes `.obsidian/workspace*.json`, cache, `.trash/`, `*.sync-conflict-*`. Inside `store/` when `backup.sensitive: true` (repository only) |
+| `backup/config` | cron `30 3 * * *` (toggle via `features.config_backup.enabled`) | `agent.yml` (plaintext, no secrets). With a repository also `CLAUDE.md`, `personas/` (no `*.bak*`), `docker-compose.override.yml` and the workspace `.claude/` list (`settings.json`, `skills/`, `commands/`, `agents/`, `hooks/`, `output-styles/`); all but `agent.yml` in `store/` when sensitive |
+| `backup/memory` (repository only) | cron `40 3 * * *` (`features.memory_backup.{enabled,schedule}`) | auto memory (plaintext, or `store/` when sensitive), the claude-mem store and the `backup.extra_paths` (always `store/`) |
+| `backup/history` (repository only) | cron `50 3 * * *` (`features.history_backup.{enabled,schedule}`) | `/home/agent/.claude/projects/**` minus the `memory/` dirs, always in `store/` |
 
-Local mode: only the **vault** backup is scheduled — as a systemd timer (`agent-<name>-vault-backup.timer`, `OnCalendar` converted from `vault.backup_schedule`). Identity and config backups have no local scheduler (no `local-*` unit templates exist for them); run them from a docker deployment or not at all.
+`store/` is the encrypted block store (one `age` data key per store, kept
+encrypted for the operator key `backup.identity.recipient`); see
+[`docs/architecture.md`](architecture.md#backup-destination-credential-and-encryption-046).
+The memory and history cron lines are written only with an associated
+repository, an enabled unit and a valid five-field schedule (`*` and `*/N`
+are allowed in every field, the minute included, unlike the review notice);
+an invalid one is omitted with
+`heartbeatctl: WARN invalid features.<unit>_backup.schedule — backup-<unit> line omitted`.
+With a fork or no destination the crontab is the same as before 046.
 
-> **Freshness check**: `agentctl doctor` verifies that each backup pushed within its expected cadence × 2 (identity 48h, vault 25h, config 8d — local mode checks vault only) and prints a humanized delta (`pushed 12h ago`); a stale or never-pushed backup is a warning (exit `1`), not a failure. Docker mode: override the thresholds for one-off runs via `DOCTOR_IDENTITY_MAX_AGE_HOURS`, `DOCTOR_VAULT_MAX_AGE_HOURS`, `DOCTOR_CONFIG_MAX_AGE_DAYS`. Local mode ignores those env vars — its vault check passes a fixed 25h. See "agentctl doctor exit contract" below. `heartbeatctl status` prints the same `last_push` timestamps for all three branches under their respective sections.
+Local mode: only the **vault** backup is scheduled — as a systemd timer (`agent-<name>-vault-backup.timer`, `OnCalendar` converted from `vault.backup_schedule`). Identity and config backups have no local scheduler (no `local-*` unit templates exist for them); run them from a docker deployment or not at all. The agent repository is docker-only: in local mode `--regenerate` warns that `backup.repo` and `backup.sensitive` are ignored, and the local vault backup keeps pushing plaintext markdown to the fork.
+
+> **Freshness check**: `agentctl doctor` verifies that each backup pushed within its expected cadence × 2 (identity 48h, vault 25h, config 8d — local mode checks vault only) and prints a humanized delta (`pushed 12h ago`); a stale or never-pushed backup is a warning (exit `1`), not a failure. Docker mode: override the thresholds for one-off runs via `DOCTOR_IDENTITY_MAX_AGE_HOURS`, `DOCTOR_VAULT_MAX_AGE_HOURS`, `DOCTOR_CONFIG_MAX_AGE_DAYS`. Local mode ignores those env vars — its vault check passes a fixed 25h. See "agentctl doctor exit contract" below. `heartbeatctl status` prints the same `last_push` timestamps for the identity, vault and config branches under their respective sections; with an agent repository, `backup-status` (below) covers all five.
+
+### With an associated repository (046)
+
+Every `backup-<unit>` command follows the same steps when the destination
+is a repository; with a fork or no destination it runs the code of before.
+
+1. Takes the unit's lock (`scripts/heartbeat/.backup-<unit>.lock`,
+   `flock -n`). If another run holds it, the command says so, exits `0` and
+   records nothing.
+2. Checks that `GITHUB_PAT` is in the environment.
+3. Builds the unit's list of sources and, if something must be encrypted,
+   checks for the operator key (`backup.identity.recipient`).
+4. Computes the unit's hash. `--dry-run` stops here and says whether it
+   changed, and records nothing (also when it stops earlier, without a
+   credential). Steps 2 to 4 never touch the network.
+5. Checks the repository's privacy and reads its heads (below). This runs
+   on every cycle, also with no changes, so a credential that stopped
+   working or a deleted backup branch shows up on the next cycle.
+6. If the hash and the remote head of its branch are the ones in the state,
+   it ends with `no-change` without cloning, fetching or pushing.
+7. Prepares its own clone cache (a branch missing on the remote starts from
+   an empty cache and is born with one commit), checks the ownership mark
+   `.agentic-pod-backup.json` (`{schema, agent, unit}`), builds the tree
+   (plaintext files copied, encrypted ones packed into `store/`, the mark
+   written), commits and pushes `refs/heads/backup/<unit>` only.
+8. Writes its state, merging fields, and releases the lock.
+
+**Privacy check.** An anonymous `git ls-remote` must be refused for lack of
+a credential (it is not repeated while the verdict for the same URL stays
+`private` and less than 24 hours have passed since the last anonymous
+probe) and an authenticated one, with `GITHUB_PAT` through the image-baked
+askpass, must succeed. The verdict lands in
+`scripts/heartbeat/backup-dest.json` (`url`, `verdict`, `checked_at`,
+`anon_checked_at` and their epoch twins):
+
+| Verdict | Meaning | Pushes |
+|---|---|---|
+| `private` | the anonymous probe was refused for lack of a credential, the authenticated query works | yes |
+| `unverified-allowed` | the anonymous probe failed for another reason, the authenticated query works, `backup.repo.allow_unverified: true` | yes |
+| `unverified` | the same, without `allow_unverified` | no |
+| `public` | the anonymous probe worked | no, not even with `allow_unverified` |
+| `unreachable` | the authenticated query failed (credential, network, missing repository) or the URL is not `https://github.com/<owner>/<name>` | no |
+
+**Results and messages** (`<u>` is the unit; `last_result` in the state file):
+
+| Result | Exit | Message |
+|---|---|---|
+| `ok` | 0 | `backup-<u>: <8 hex> pushed`; identity appends its mode, `(full)` or `(partial)` |
+| `no-change` | 0 | `backup-<u>: no changes since last backup (hash <hash>)`, or `... no changes after stage-diff (hash <hash>)` when the built tree equals the remote head |
+| `nothing-to-back-up` | 0 | `backup-<u>: nothing to back up yet` |
+| `no-credential` | 0 | `backup-<u>: no GITHUB_PAT in the environment - cannot push to the agent repository` |
+| `no-recipient` | 0 | `backup-<u>: no encryption key (backup.identity.recipient) - nothing pushed` |
+| `not-private` | 0 | `backup-<u>: the repository is public - refusing to push` |
+| `unverified` | 0 | `backup-<u>: could not verify that the repository is private - refusing to push` |
+| `foreign-branch` | 0 | `backup-<u>: branch backup/<u> exists and is not a launcher backup - refusing to write` |
+| `other-agent` | 0 | `backup-<u>: branch backup/<u> belongs to another agent - refusing to write` |
+| `unreachable` | 2 | `backup-<u>: repository unreachable (credential, network or missing repository)` |
+| `push-failed` | 2 | `backup-<u>: push failed` (stderr) |
+| `error` | 2 | `backup-<u>: could not build the backup (<reason>)` (stderr) |
+| lock held | 0 | `backup-<u>: another run holds the lock - skipping` (no result recorded) |
+
+Policy refusals exit `0` so cron does not treat them as errors; they stay
+visible in the state file, in `backup-status` and in `agentctl doctor`.
+Transient failures exit `2`, like the push failure of the fork path. Two
+more lines can appear without being a result: `backup-<u>: store key
+rotated (<reason>) - full upload` (stderr) when a store changes its data
+key, and `backup-memory: skipping extra path '<path>' (<reason>)`. The
+pre-046 early exits (`no identity files yet`, `vault not enabled`, `vault
+dir ... does not exist yet`, `agent.yml missing`) keep their message and
+exit `0` with any destination. A foreign or unmarked branch is fixed by
+deleting it on GitHub: the next cycle recreates it.
+
+**State after each run.** With a repository the state file gains
+`last_attempt`, `last_attempt_epoch`, `last_result`, `attempt_hash` (empty
+when the run ended before hashing) and, for units with a store,
+`store_recipient`. `hash`, `last_commit` and `last_push` (ISO 8601 UTC,
+ending in `Z`) change only on `ok`, or on a tree identical to the remote
+head. A unit with something encrypted makes a small commit every time it
+packs (`age` encrypts differently each time), so a freshly restored agent's
+first cycle commits once without new blocks.
+
+**Time limits** (inside the container, `timeout -k 10`): 60 s for each
+privacy query (`BACKUP_PROBE_TIMEOUT_S`); 60 s for each fetch and push of
+identity, vault and config (`BACKUP_GIT_TIMEOUT_S`); 900 s for those of
+memory and history (`BACKUP_PUSH_TIMEOUT_S`), because after a restore they
+pull the whole store. The supervisor caps its identity trigger at 300 s
+with a repository (90 s with a fork) and, after a failed attempt on the same
+content, waits `IDENTITY_BACKUP_RETRY_S` (900 s) before trying again; new
+content triggers at once.
 
 ### `backup-identity`
 
-Snapshot the agent's identity subset (login, pairing, plugin config,
-settings, optionally age-encrypted `.env`) to the `backup/identity`
-orphan branch on the fork.
+Snapshot the agent's identity subset (pairing, plugin config, settings,
+`.claude.json`, optionally age-encrypted `.env`) to the `backup/identity`
+orphan branch. The `/login` credentials file is not part of it.
 
 ```
 heartbeatctl backup-identity                       # default: run
@@ -245,10 +359,35 @@ heartbeatctl backup-identity --gc                  # git gc before push
 ```
 
 Encryption uses an SSH-key recipient fetched from `github.com/<owner>.keys`
-at scaffold time. Without a configured recipient, the primitive falls
-back to **partial mode** — plaintext files committed, `.env.age` omitted,
-visible in `heartbeatctl status`. Full spec at
+at scaffold time (the fork's owner, else the associated repository's).
+Without a configured recipient, the primitive falls back to **partial
+mode** — plaintext files committed, `.env.age` omitted, visible in
+`heartbeatctl status`; identity therefore never ends in `no-recipient`.
+With a repository it encrypts the secrets file at the workspace root
+(`/workspace/.env`); with a fork it still reads `<state dir>/.env`, where a
+docker agent does not keep one. Full spec at
 `docs/superpowers/specs/2026-04-22-identity-backup-design.md`.
+
+`--configure-key <path|pubkey>` takes an `ssh-ed25519` or `ssh-rsa` public
+key, as a string or as a path readable **inside the container**, writes it
+to `backup.identity.recipient` and runs the unit. With an associated
+repository it also prints, after `recipient updated`:
+
+```text
+backup-identity: key fingerprint SHA256:<fingerprint> (<comment>)
+backup-identity: encrypted units re-encrypt for this key on their next run (full upload)
+```
+
+This is how an existing agent sets its key: `--regenerate` only warns that
+it is missing. Check that the fingerprint belongs to a key whose private
+half you hold, or the encrypted backups cannot be restored. Changing the key
+later makes every unit with a store rotate its data key and upload
+everything again on its next run. With a fork or no destination the output
+is the same as before 046.
+
+`--gc` with a repository runs `git gc` on the repository-path cache under
+the unit's lock (a supervisor-triggered run could be committing there), then
+the unit. With the lock taken, the `gc` is skipped and the run reports the lock.
 
 ### `backup-vault`
 
@@ -269,11 +408,20 @@ is also synced to other devices.
 
 Deletes propagate: the staged tree is wiped before each commit, so a
 removed note drops out of the next `backup/vault` commit instead of
-lingering forever.
+lingering forever. (With a store, `store/` is kept between commits so its
+blocks can be reused.)
+
+Sensitive agents (`backup.sensitive: true`): with a repository the same
+files go into `store/` and the tree holds no plaintext `.md`; with a fork and
+no repository the command pushes nothing and says
+`backup-vault: this agent is marked as sensitive and has no agent repository - not pushing the vault in plaintext`
+(exit `0`). Marking an agent sensitive removes the plaintext files from the
+next commit, not from the branch history: prune the branch for that.
 
 ### `backup-config`
 
-Snapshot `agent.yml` to `backup/config`.
+Snapshot `agent.yml` to `backup/config` (with a repository, also the files
+listed in the table above).
 
 ```
 heartbeatctl backup-config              # default: run
@@ -281,10 +429,96 @@ heartbeatctl backup-config --dry-run    # stage + hash, no push
 heartbeatctl backup-config --gc         # git gc before push
 ```
 
-This branch is what `setup.sh --restore-from-fork` reads first during a
-restore — `vault.path` and other rendered-file inputs all live in
-`agent.yml`. Disable scheduled config backups via
+This branch is what `setup.sh --restore-from-repo` / `--restore-from-fork`
+reads first during a restore — `vault.path` and other rendered-file inputs
+all live in `agent.yml`, which therefore stays in plaintext even for a
+sensitive agent. Disable scheduled config backups via
 `features.config_backup.enabled=false` in `agent.yml`.
+
+With a repository, every run (whatever its result, except `--dry-run`) also
+creates or repairs the agent's work clone at `/workspace/agent-repo`, so a
+clone that could not be created at boot is retried daily. That step never
+changes the unit's result or exit code; what it could not do goes to
+`logs/agent-repo.log`.
+
+### `backup-memory` (046)
+
+Snapshot the auto memory, the claude-mem store and the
+`backup.extra_paths` to `backup/memory`. Repository only: with a fork or no
+destination it prints
+`backup-memory: no agent repository in agent.yml (backup.repo.url) - nothing to back up to`
+and exits `0`.
+
+```
+heartbeatctl backup-memory              # default: run
+heartbeatctl backup-memory --dry-run    # hash only, no network, no push
+```
+
+- **Sources**: `/home/agent/.claude/projects/<project>/memory/**`
+  (`auto-memory/<project>/...`, plaintext unless sensitive), everything
+  under `/home/agent/.claude-mem/` except `logs/`, `backups/`, `run/`,
+  `*.pid`, `telemetry*.json`, `*heartbeat*.json`, `*health*.json` and
+  `supervisor.json` (`claude-mem/...`, always encrypted), and each
+  `backup.extra_paths` entry read under `/workspace/` (`extra/<path>`, always
+  encrypted). `*-wal`, `*-shm` and `*-journal` files are skipped everywhere.
+- **SQLite**: every database is recognized by its header and backed up as a
+  consistent copy made with SQLite's backup API, never the live file; an
+  unchanged database produces no new backup.
+- **Extra paths** that break the rule of `backup.extra_paths` (see the
+  README) or do not exist are skipped with
+  `backup-memory: skipping extra path '<path>' (<reason>)`, reason
+  `not relative`, `not allowed`, `outside the workspace` or `missing`; the
+  unit goes on.
+- With no auto memory, no claude-mem directory and no extra path it ends in
+  `nothing-to-back-up`. Without the operator key and with something to
+  encrypt, in `no-recipient`.
+
+### `backup-history` (046)
+
+Snapshot the conversation transcripts, `/home/agent/.claude/projects/**`
+minus the `memory/` directories, to `backup/history`, always encrypted.
+The heartbeat's isolated config dir is not included. Repository only, with
+the same message as `backup-memory` otherwise.
+
+```
+heartbeatctl backup-history             # default: run
+heartbeatctl backup-history --dry-run   # hash only, no network, no push
+```
+
+Each `.jsonl` is read up to its last newline, so a line being written is
+left for the next cycle. The branch mirrors the current state: what Claude
+Code deletes under its 30-day retention also leaves the head of the branch
+and stays only in its history. Without the operator key it ends in
+`no-recipient`; with no transcripts, in `nothing-to-back-up`.
+
+### `backup-status [--json]` (046)
+
+Where each backup unit stands. Read-only: it never touches the network,
+never modifies anything, and never prints the credential, only whether it
+is present.
+
+```
+heartbeatctl backup-status              # readable summary + one row per unit
+heartbeatctl backup-status --json
+```
+
+With an associated repository the JSON carries `destination` (`kind`,
+`url`, `verdict`, `checked_at`, from `backup-dest.json`), `credential`
+(`present` or `missing`), `sensitive`, `recipient` (`configured`, `type`,
+`fingerprint`, `comment`), `extra_paths` (`declared`, `missing[]`,
+`bytes`), `units[]` (`unit`, `enabled`, `last_push`, `last_attempt`,
+`last_result`, `max_age_hours`, `cache_bytes`), `cache_bytes_total` and
+`work_clone` (`path`, `present`, `unpublished_commits`, `dirty_files`). The
+thresholds are identity 48 h, vault 25 h, config 192 h, memory 49 h and
+history 49 h. `cache_bytes` is the size of the unit's clone cache, a good
+approximation of what its branch takes in the repository. With a fork or no
+destination it reports the destination and the three units of before, read
+from their state files.
+
+The readable form prints the same data, then a row per unit with its last
+push, last result and a status: `ok`, `disabled`, `never pushed`,
+`stale (>Nh)`, plus `last attempt <result>` when the last attempt did not
+end in `ok` or `no-change`. `agentctl doctor` reads this JSON (see below).
 
 ## Token health
 
@@ -588,6 +822,7 @@ Checks over this CLI's surface:
 | Check | Degrades to | Mode |
 |---|---|---|
 | Backup never pushed / stale (identity 48h, vault 25h, config 8d) | warn | docker (vault only in local) |
+| With an agent repository (046): a unit never pushed, stale (memory and history 49h) or whose last attempt failed; a verdict other than `private` / `unverified-allowed`; `GITHUB_PAT` missing; no encryption key; an extra path missing; the work clone missing or with unpublished commits / uncommitted files; backup caches above 800 MB (`DOCTOR_BACKUP_CACHE_MAX_MB`) | warn | docker |
 | Token probe `auth_fail` (incl. claude_oauth expired or expiring <30 min) | fail | docker |
 | Token probe `network` failure, missing or stale probe file | warn | docker |
 | QMD index not built yet | warn | local |
@@ -621,7 +856,14 @@ inspect the pointer and the recorded exit cause instead of the network.
 
 The QMD and wiki-graph rows are checked by the local-mode doctor only: as of
 v0.12.0 the docker-mode doctor has no qmd/wiki-graph checks (its RAG-adjacent
-coverage is the vault-skeleton check plus the three backup-freshness checks).
+coverage is the vault-skeleton check plus the backup-freshness checks: three
+with a fork, five with an agent repository).
+
+With an agent repository the docker doctor takes its backup data from
+`docker exec -u agent <agent> heartbeatctl backup-status --json`; if that
+command fails while the container runs, it falls back to reading the five
+state files. Without a repository its backup output is the same as before
+046.
 `last_status: partial` / `stalled` do not degrade the exit code in either mode —
 only `error` does.
 

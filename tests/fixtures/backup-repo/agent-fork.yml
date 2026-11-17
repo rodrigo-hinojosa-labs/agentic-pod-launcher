@@ -1,0 +1,73 @@
+version: 1
+agent:
+  name: fork-bot
+  display_name: "Fork Bot"
+  role: "r"
+  vibe: "v"
+  use_default_principles: true
+user:
+  name: "A"
+  nickname: "A"
+  timezone: "UTC"
+  email: "a@b.com"
+  language: "en"
+deployment:
+  host: "h"
+  workspace: "/workspace"
+  install_service: false
+  mode: docker
+docker:
+  image_tag: "agent-admin:latest"
+  uid: 1000
+  gid: 1000
+  base_image: "alpine:3.24.1"
+claude:
+  config_dir: "/home/agent/.claude"
+  profile_new: true
+scaffold:
+  template_url: "https://github.com/example/agentic-pod-launcher"
+  fork:
+    enabled: true
+    owner: "example"
+    name: "fork-bot"
+    private: false
+    url: "https://github.com/example/fork-bot.git"
+notifications:
+  channel: none
+features:
+  heartbeat:
+    enabled: true
+    interval: "30m"
+    timeout: 300
+    retries: 1
+    default_prompt: "ok"
+  identity_backup:
+    enabled: true
+    schedule: "30 3 * * *"
+  config_backup:
+    enabled: true
+    schedule: "30 3 * * *"
+  memory_backup:
+    enabled: true
+    schedule: "40 3 * * *"
+  history_backup:
+    enabled: true
+    schedule: "50 3 * * *"
+backup:
+  identity:
+    recipient: null
+  repo:
+    url: ""
+    allow_unverified: false
+  sensitive: false
+  extra_paths: []
+vault:
+  enabled: true
+  path: .state/.vault
+  backup_schedule: "0 * * * *"
+mcps:
+  atlassian: []
+  github:
+    enabled: false
+plugins:
+  - telegram@claude-plugins-official
