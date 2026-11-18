@@ -124,6 +124,8 @@ Los escenarios de aceptación del contrato no fijan todavía un número físico 
 
 ## Complexity Tracking
 
+**Enmienda operativa de implement,18-11-2026:** el job BATS compartido agotó45min en macOS después de1872/2196 resultados sin fallos de aserción, con los92 nuevos completados. T060 amplía solo ese presupuesto exterior a60min y actualiza CI04701, con RED/GREEN dual previo en copia temporal. Es una excepción medida a la preservación inicial de T048; conserva los runners, ambos Bash, permisos, inventario y todos los topes del producto/pruebas. Linux mantiene10min. Los resultados finales y el margen se acreditan en el Registro, no por esta enmienda.
+
 Vacío: ninguna violación nueva. JSON y funciones de shell mantienen las dependencias actuales. La separación CLI/biblioteca y el fixture Linux son necesarios para probar la composición que no cubre una simulación.
 
 ## Riesgos y cierre

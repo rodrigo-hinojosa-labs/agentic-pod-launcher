@@ -51,7 +51,7 @@ teardown() { teardown_tmp_dir; }
     any($j.steps[]; (.run // "" | contains(".github/scripts/local-healthcheck-integration.sh"))) and
     any($j.steps[]; .if=="always()") and
     (.on|has("pull_request_target")|not) and
-    .jobs.bats["timeout-minutes"]==45 and
+    .jobs.bats["timeout-minutes"]==60 and
     [.jobs.bats.strategy.matrix.include[].os]==["ubuntu-latest","macos-latest"] and
     any(.jobs.bats.steps[]; .run=="PATH=\"/bin:$PATH\" bats --print-output-on-failure tests/")
   ' "$TMP_TEST_DIR/workflow.json" >/dev/null

@@ -55,7 +55,11 @@ jobs:
     # 25m42s on 13-11-2026 and was CANCELLED at 30m on 10-11 and 12-11-2026, while
     # ubuntu took 11m36s to 15m00s. Feature 046 adds six suites that take about
     # 6 minutes per bash on a Mac. The cap only bounds a hung job.
-    timeout-minutes: 45
+    # 60 (047): the hosted macOS leg reached 1872/2196 without a failed
+    # assertion when the 45-minute job budget cancelled it on 18-11-2026.
+    # All 92 new tests had completed; the remaining regression still needs
+    # to run. Only this outer job budget grows, not any test or healthcheck cap.
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v6

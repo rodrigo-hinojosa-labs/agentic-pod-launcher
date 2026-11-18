@@ -1,8 +1,15 @@
 # Propuesta de publicación de 047
 
-**Estado:** publicación autorizada el 18-11-2026, en ejecución. T058/T059 de
-[tasks.md](tasks.md) registrarán commit, push y PR al observar sus resultados. El merge
-sigue reservado al operador.
+**Estado:** publicación autorizada y ejecutada el 18-11-2026: commit `8bc7baa`, rama
+publicada y [PR #136](https://github.com/rodrigo-hinojosa-labs/agentic-pod-launcher/pull/136)
+abierto como borrador. CI automática en curso; evidencia en [tasks.md](tasks.md).
+El merge sigue reservado al operador.
+
+El seguimiento de T060 encontró un corte real del job macOS a45min, después de1872/2196
+resultados sin aserciones fallidas entre los terminados. El ajuste acotado amplía el
+presupuesto exterior compartido a60min y su guarda, conservando runners/Bash/permisos,
+inventario y topes del producto. Se publica con el registro de evidencia y requiere una
+nueva CI completa; la decisión del agente y el RED/GREEN se identifican en el Registro.
 
 ## Commit propuesto
 
@@ -27,8 +34,8 @@ cambiado y que la base/versionado sigan siendo compatibles.
 **Destino:** main. Crear como borrador; quitar el borrador solo con autoridad vigente y
 todos los checks de la misma cabeza en verde. No lanzar workflow_dispatch ni hacer merge.
 
-El cuerpo canónico está en [pr-body.md](pr-body.md), preparado para pasarlo como argumento
-estructurado o archivo. Incluye el gate host final y distingue la integración Linux pendiente;
+El borrador base del cuerpo está en [pr-body.md](pr-body.md), preparado para pasarlo como argumento
+estructurado o archivo. Incluye el gate host, Linux real y los límites de la CI parcial;
 no publicar el borrador antes de la autorización T058/T059.
 
 Después de la CI, incorporar al PR los conteos/URLs de esa cabeza. Después del merge que

@@ -260,7 +260,7 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 - **A child that stalls is a failure too.** A `gh` that accepts the call and never answers left a red night with neither issue nor message, because the push was sequenced after every `gh` call and the step has its own 3-minute limit. Every external call on a notifier path needs its own limit (portable: poll `kill -0` with `sleep 0.05`, since macOS has no `timeout`) and a total budget, with a fake that hangs to prove it.
 
 <!-- SPECKIT START -->
-**047-local-healthcheck IMPLEMENT LOCAL VALIDADO, PUBLICACIÓN PENDIENTE (18-11-2026; rama `047-local-healthcheck`, worktree
+**047-local-healthcheck IMPLEMENT PUBLICADO, CI EN CURSO (18-11-2026; rama `047-local-healthcheck`, worktree
 `.claude/worktrees/047-local-healthcheck`, base `main` = `3afae74`; VERSION 0.32.0 -> 0.33.0).**
 Origen #111. La renovación se evalúa exclusivamente desde el perfil completo `claudeAiOauth` y
 `refreshTokenExpiresAt`, WARN a siete días; el acceso vencido no demuestra pérdida del login.
@@ -283,11 +283,15 @@ Gate host2196/2196 en bash5.3.15 y3.2.57, secuenciales, stderr0 y las mismas69/7
 ejecutados2127/2126 casos. Inventario2196=base2104+92; los21 casos previos y8 SIGPIPE se conservan.
 Control121/121 con SIGPIPE ignorada en ambos bash y48 mutaciones,96/96 detectadas sin sobrevivientes.
 Revisión independiente con RED/GREEN; resultados y huellas vigentes en el Registro de
-`specs/047-local-healthcheck/tasks.md`. El receptor auxiliar tuvo HTTP real en loopback del M4;
-**no acredita integración Linux**. El job preparado `local-healthcheck-integration` debe ejecutar
-L01–L10 sobre systemd/cgroups reales, con datos ficticios y cleanup confirmado, antes del merge.
-T058+ son compuertas: sin commit/push/PR/merge ni despliegue por preparar el código. No reutilizar
-autorizaciones Git o consumo de cuota de046. No ejecutar agent-context: reemplaza este historial.
+`specs/047-local-healthcheck/tasks.md`. Commit8bc7baa publicado y PR#136 borrador, con autorización
+específica de047. El job `local-healthcheck-integration` del run44304997727 acreditó L01–L10 reales,
+14 probes como UID1001, datos ficticios y cleanup:true;47s de job y553s de margen. Ubuntu completó
+2196 sin fallas. macOS alcanzó1872/2196, incluidos los92 nuevos, sin aserciones fallidas entre
+los terminados antes del corte del job a45min. T060 amplía solo el presupuesto exterior BATS
+a60min, con RED/GREEN dual; no cambia topes de producto/pruebas. La nueva cabeza requiere CI
+completa y el PR solo se deja listo con todos sus checks verdes.
+El receptor auxiliar del M4 se registra aparte. Merge y despliegue siguen reservados al operador;
+no reutilizar autorizaciones Git o consumo de cuota de046. No ejecutar agent-context: reemplaza este historial.
 
 **046-agent-backup-repo SPEC + CLARIFY + PLAN + TASKS + ANALYZE + IMPLEMENT LOCAL VALIDADO (2026-11-13/16; rama
 `046-agent-backup-repo` en el worktree `.claude/worktrees/046-agent-backup-repo`, desde `origin/main` = `10f22a7`,

@@ -57,6 +57,8 @@ Un mutante sobreviviente se diagnostica antes de tocar el producto; el oracle nu
 
 Job nuevo `local-healthcheck-integration` del workflow test, en `ubuntu-24.04`, timeout de 10 min, permissions contents:read, checkout con persist-credentials:false, sin secrets ni pull_request_target. Instalar el yq del mismo pin del workflow, sin introducir otro literal de versión. La matriz host existente sigue sin sudo/servicios en sus comandos BATS.
 
+Enmienda medida en T060,18-11-2026: el presupuesto exterior del job BATS compartido pasa de45 a60min tras el corte real de macOS con1872/2196 resultados y cero aserciones fallidas entre los casos terminados. No cambia el presupuesto de10min de este gate ni los límites de observación/avisos/global del CLI,25/30/60s. La matriz conserva runners y ambos Bash; una nueva CI debe completar los2196 casos y acreditar sus saltadas/margen. La versión efectiva de las herramientas se registra aunque el PATH del runner resuelva una distinta de la descarga declarada.
+
 Prerrequisitos obligatorios: systemd como PID1 y bus de sistema; cgroup v2; systemd-run/systemctl/ss/ip/python3/jq/curl, flock de util-linux y GNU sync/timeout; sudo -n para el arnés; permiso del UID runner para observar sus fixtures. Si falta alguno, el gate falla. Ningún escenario se salta ni se sustituye por respuestas ficticias.
 
 El script explícito `.github/scripts/local-healthcheck-integration.sh` prepara un workspace único, con agent.name normalizado, claude_cli ficticio e install_service:false. Renderiza el CLI y helper reales. No copia perfiles ni archivos de usuario. Su configuración de login/avisos es enteramente sintética.
