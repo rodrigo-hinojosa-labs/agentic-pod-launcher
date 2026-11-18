@@ -1,0 +1,17 @@
+#!/usr/bin/env python3
+"""Redirect the test endpoint only; real curl owns request, response and status."""
+import re
+import subprocess
+import sys
+
+args = sys.argv[1:]
+if not args or args[0] != "-q" or "--config" not in args or args[args.index("--config")+1] != "-":
+    sys.exit(97)
+config = sys.stdin.read()
+config, replacements = re.subn(
+    r'^url = "https://api[.]telegram[.]org/[^\r\n]*"$',
+    'url = "http://127.0.0.1:8080/notify"', config, flags=re.MULTILINE)
+if replacements != 1:
+    sys.exit(97)
+# Preserve the product's already-unlinked response handles, never its lock.
+sys.exit(subprocess.run(["/usr/bin/curl", *args], input=config.encode(), pass_fds=(7,8)).returncode)

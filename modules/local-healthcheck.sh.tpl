@@ -1,140 +1,61 @@
 #!/usr/bin/env bash
-# Healthcheck for the local Remote Control session — distinguishes "process
-# alive" from "connected and controllable" from "login expired".
-# Rendered from modules/local-healthcheck.sh.tpl — do not hand-edit.
-# Exit: 0=OK, 1=WARN, 2=DEGRADED. Never crashes (degrades gracefully).
-set -uo pipefail   # deliberately NOT -e: evaluate every check, then report.
+# Rendered local healthcheck. Exit 0=OK, 1=WARN, 2=DEGRADED.
+# Main captures uptime before loading libraries or notification configuration.
+_HC_CLI_DIR="${BASH_SOURCE[0]%/*}"
 
-AGENT_NAME="{{AGENT_NAME}}"
-WORKSPACE="{{DEPLOYMENT_WORKSPACE}}"
-UNIT="agent-${AGENT_NAME}.service"
-CONFIG_DIR="${WORKSPACE}/.state/.claude"
-CREDS="${CONFIG_DIR}/.credentials.json"
-# Optional notify config (NOTIFY_BOT_TOKEN, NOTIFY_CHAT_ID). Never versioned.
-# 021 (local secret delivery): the source of truth is the workspace .env —
-# this unit has no EnvironmentFile of its own (least privilege), so it reads
-# the value itself via the shared parser (never sourced: .env can arrive from
-# a REMOTE fork restore, so `source`-ing it would be remote code execution).
-# NOTIFY_LEGACY_ENV is a COMPATIBILITY OVERRIDE for an already-hand-made file:
-# honored when present so a pre-021 agent keeps alerting exactly as before; a
-# fresh scaffold never creates it — .env is the only source going forward.
-NOTIFY_LEGACY_ENV="${WORKSPACE}/.state/healthcheck-notify.env"
-NOTIFY_ENV_FILE="${WORKSPACE}/.env"
-# shellcheck source=/dev/null
-. "${WORKSPACE}/scripts/lib/env_file.sh"
-EXPIRY_WARN_MS=$((24 * 60 * 60 * 1000))   # warn when <24h of login remains
-
-status="OK"
-reason=""
-_demote() {   # _demote LEVEL MESSAGE — keep the worst level seen
-  case "$1" in
-    DEGRADED) status="DEGRADED" ;;
-    WARN) [ "$status" = "OK" ] && status="WARN" ;;
-  esac
-  reason="${reason:+$reason; }$2"
+_hc_fallback() {
+  local name="$1" unit="$2" reason="$3" rc health=WARN
+  if command -v timeout >/dev/null 2>&1; then
+    timeout -k 1 3 systemctl is-active --quiet "$unit" >/dev/null 2>&1
+    rc=$?
+    if [ "$rc" -eq 3 ]; then health=DEGRADED; reason="unit not active; $reason"; fi
+  fi
+  printf 'agent-%s healthcheck: %s (%s)\n' "$name" "$health" "$reason"
+  case "$health" in DEGRADED) return 2 ;; *) return 1 ;; esac
 }
 
-# 1. Process alive?
-if ! systemctl is-active --quiet "$UNIT"; then
-  _demote DEGRADED "unit not active"
-fi
-
-# 2. Journal auth-failure signal (last 10 min). Absence is fine (a healthy
-#    session is silent); only a PRESENT 401 / "please run /login" is actionable.
-#    Bounded at the source (-n) and matched WITHOUT a pipeline. Both halves
-#    matter, and the second is the one that was actually broken:
-#
-#    `printf '%s\n' "$journal" | grep -qE …` loses a race whenever the journal
-#    exceeds the 64 KiB pipe buffer. grep -q exits on the first match, printf
-#    still has bytes to push, takes EPIPE and dies with 141, and `pipefail`
-#    (line 6) makes the `if` FALSE — so a live 401 silently fails to demote,
-#    the unit reports OK, and the operator's alert never fires. A down agent
-#    that does not say so. Measured 2026-09-21: clean at 64,883 B, 261/300
-#    failing at 65,573 B under bash 5.3.15; 29/300 at 66,263 B on Linux.
-#
-#    A here-string has no second process to signal, so the category is gone
-#    rather than made less likely. The -n cap is belt and braces: an unbounded
-#    capture is a memory cost on every tick even when it is not a correctness
-#    problem.
-journal=$(journalctl -u "$UNIT" --since "-10 min" -n 2000 --no-pager 2>/dev/null || true)
-if grep -qE 'API Error: 401|Please run /login' <<< "$journal"; then
-  _demote DEGRADED "auth error in journal (401 / please run /login)"
-fi
-
-# 2b. Connection signal: does the session process hold a LIVE ESTABLISHED TCP
-#     connection to the Remote Control relay (:443)? A healthy --spawn=session is
-#     SILENT in the journal, so grepping it for 'session url|connected|polling'
-#     false-WARNed on every tick even when connected (validated on mclaren). The
-#     live socket owned by the unit's MainPID is the real signal. Degrade to WARN
-#     (never DEGRADED) if ss is unavailable or the PID can't be resolved.
-main_pid=$(systemctl show "$UNIT" -p MainPID --value 2>/dev/null || echo "")
-if command -v ss >/dev/null 2>&1 && printf '%s' "${main_pid:-}" | grep -qE '^[0-9]+$' && [ "${main_pid:-0}" -gt 0 ]; then
-  if ss -tnpH state established 2>/dev/null | grep "pid=${main_pid}," | grep -q ':443'; then
-    :   # live relay connection present — the session is controllable
-  else
-    _demote WARN "no live relay connection (session process has no ESTABLISHED :443)"
+hc_main() {
+  local name="$1" workspace="$2" hc_proc_root="${3:-/proc}" hc_cgroup_root="${4:-/sys/fs/cgroup}"
+  local raw rest start global_deadline helper parser _hc_env_ok=false
+  local snapshot health=OK reasons='' code message unit="agent-${1}.service" ttl duration
+  local hc_last_snapshot=''
+  unset NOTIFY_BOT_TOKEN NOTIFY_CHAT_ID
+  { IFS=' ' read -r raw rest < "$hc_proc_root/uptime"; } 2>/dev/null || raw=''
+  helper="$_HC_CLI_DIR/agent-healthcheck-lib.sh"
+  if [ ! -f "$helper" ] || [ ! -r "$helper" ]; then
+    _hc_fallback "$name" "$unit" 'healthcheck library unavailable'
+    return $?
   fi
-else
-  _demote WARN "cannot verify connection (ss unavailable or MainPID unknown)"
-fi
-
-# 2c. QMD watcher liveness (013 FR-011). Only meaningful when the watcher unit is
-#     installed (qmd enabled). A `failed` watcher means reindex-on-change is dead —
-#     but the reindex timer is the backstop, so this is a WARN, never DEGRADED. The
-#     supervised loop (FR-007) keeps the unit `active` through transient hiccups, so
-#     `failed` here signals a real anomaly worth the operator's attention.
-WATCH_UNIT="agent-${AGENT_NAME}-qmd-watch.service"
-# is-failed is non-zero for an absent/inactive unit (a non-qmd agent), so this is
-# self-gating: only a genuinely `failed` watcher warns — no /etc path check needed.
-if command -v systemctl >/dev/null 2>&1 && systemctl is-failed --quiet "$WATCH_UNIT"; then
-  _demote WARN "qmd watcher failed (start-limit? reindex-on-change down — timer still backstops)"
-fi
-
-# 2d. wiki-graph runner (014/FR-014): WARN (not DEGRADED) if the derive+lint unit
-#     is `failed`. The last graph stays usable and the manual action refreshes it,
-#     so it's an anomaly worth attention, not a session outage. Same self-gating
-#     is-failed pattern: absent/inactive → no-op on non-vault agents.
-WG_UNIT="agent-${AGENT_NAME}-wiki-graph.service"
-if command -v systemctl >/dev/null 2>&1 && systemctl is-failed --quiet "$WG_UNIT"; then
-  _demote WARN "wiki-graph runner failed (graph derive+lint down — last .graph/ still usable)"
-fi
-
-# 3. Credential expiry — needs jq + readable creds; degrade gracefully if not.
-if command -v jq >/dev/null 2>&1 && [ -r "$CREDS" ]; then
-  now_ms=$(( $(date +%s) * 1000 ))
-  exp=$(jq -r '[.. | .expiresAt? // empty] | first // empty' "$CREDS" 2>/dev/null)
-  if printf '%s' "$exp" | grep -qE '^[0-9]+$'; then
-    if [ "$exp" -le "$now_ms" ]; then
-      _demote DEGRADED "login expired"
-    elif [ "$((exp - now_ms))" -le "$EXPIRY_WARN_MS" ]; then
-      _demote WARN "login expiring within 24h"
-    fi
-  else
-    _demote WARN "could not read expiresAt from credentials"
+  # shellcheck source=/dev/null
+  . "$helper"
+  start=$(exec 9>&-; hc_uptime_ms "$raw") || {
+    _hc_fallback "$name" "$unit" 'cannot verify monotonic clock'
+    return $?
+  }
+  global_deadline=$((start+60000))
+  parser="$workspace/scripts/lib/env_file.sh"
+  if [ -f "$parser" ] && [ -r "$parser" ]; then
+    # shellcheck source=/dev/null
+    . "$parser" && _hc_env_ok=true
   fi
-else
-  _demote WARN "jq or credentials unavailable — expiry not checked"
-fi
-
-echo "agent-${AGENT_NAME} healthcheck: ${status}${reason:+ (${reason})}"
-
-# 4. Optional notify on DEGRADED. Token NEVER on argv/journal: curl reads the
-#    request (URL + token + body) from stdin via --config -. Source: the
-#    legacy file if present (compatibility override), else the workspace .env.
-if [ "$status" = "DEGRADED" ]; then
-  notify_src="$NOTIFY_ENV_FILE"
-  [ -r "$NOTIFY_LEGACY_ENV" ] && notify_src="$NOTIFY_LEGACY_ENV"
-  notify_bot_token=$(env_file_get NOTIFY_BOT_TOKEN "$notify_src")
-  notify_chat_id=$(env_file_get NOTIFY_CHAT_ID "$notify_src")
-  if [ -n "$notify_bot_token" ] && [ -n "$notify_chat_id" ] && command -v curl >/dev/null 2>&1; then
-    printf 'url = "https://api.telegram.org/bot%s/sendMessage"\ndata-urlencode = "chat_id=%s"\ndata-urlencode = "text=agent-%s DEGRADED: %s"\n' \
-      "$notify_bot_token" "$notify_chat_id" "$AGENT_NAME" "$reason" \
-      | curl -s --config - >/dev/null 2>&1 || true
+  hc_notice_run "$workspace" "$unit" "$global_deadline" >/dev/null
+  snapshot=$hc_last_snapshot
+  case "$snapshot" in
+    *'"health":"DEGRADED"'*) health=DEGRADED ;;
+    *'"health":"WARN"'*) health=WARN ;;
+    *'"health":"OK"'*) health=OK ;;
+    *) health=WARN; reasons='observation unavailable' ;;
+  esac
+  reasons=$(_hc_reason_text "$snapshot")
+  if [ "$_hc_env_ok" != true ]; then
+    [ "$health" != OK ] || health=WARN
+    reasons="${reasons:+$reasons; }env file parser unavailable"
   fi
-fi
+  printf 'agent-%s healthcheck: %s%s\n' "$name" "$health" "${reasons:+ ($reasons)}"
+  case "$health" in OK) return 0 ;; WARN) return 1 ;; *) return 2 ;; esac
+}
 
-case "$status" in
-  OK)       exit 0 ;;
-  WARN)     exit 1 ;;
-  DEGRADED) exit 2 ;;
-esac
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  set -uo pipefail
+  hc_main "{{AGENT_NAME}}" "{{DEPLOYMENT_WORKSPACE}}" /proc /sys/fs/cgroup
+fi

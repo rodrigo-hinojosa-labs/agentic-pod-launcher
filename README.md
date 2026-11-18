@@ -81,6 +81,13 @@ journalctl -u agent-my-agent.service -f      # logs (a healthy --spawn=session r
 
 In local mode `agentctl` degrades explicitly: docker-only subcommands (`up`, `attach`, `shell`, `logs`, `mcp`, ...) refuse with an explanation, `status`/`doctor` read systemd, and `heartbeat` supports only `qmd-reindex`, `backup-vault`, and `wiki-graph` (executed directly as the operator, no `systemctl`/polkit needed). Permission prompts stay enabled — local mode intentionally does not apply the docker-mode auto-permission settings. The kill switch is `./scripts/local/agent-killswitch.sh` — it stops the session unit (with `Restart=always`, an explicit `systemctl stop` does not relaunch it) plus every auxiliary unit: qmd-reindex timer, qmd-watch, vault-backup timer, healthcheck timer, wiki-graph timer.
 
+The local healthcheck evaluates login renewal with a seven-day warning and looks for an
+ESTABLISHED remote-port-443 socket owned by the session unit, including its descendants.
+Optional Telegram notices follow alarm/recovery transitions and retry pending delivery every
+thirty minutes, backed by a private durable ledger. A TCP connection is a transport signal;
+it does not prove that a conversation can answer. Details, dependencies and delivery limits:
+[`Local healthcheck`](docs/getting-started.md#healthcheck).
+
 The full step-by-step (with troubleshooting) lives in [`docs/getting-started.md`](docs/getting-started.md). Each scaffolded agent also gets a `NEXT_STEPS.md` with concrete commands using the agent's name, paths, and deployment mode.
 
 Prefer a reproducible, hand-written definition over the wizard — for scripted provisioning or standing up a second agent alongside an existing one? [`docs/creating-an-agent.md`](docs/creating-an-agent.md) walks the **declarative** method (author `agent.yml` + persona + `.env`, then `./setup.sh --non-interactive`) end-to-end, with a worked `john-doe` example and the docker-mode gotchas.
@@ -508,7 +515,7 @@ Caveats worth knowing:
 The test suite uses `bats-core` and runs entirely on the host (no Docker required for the default suite; `yq` v4+, `jq`, `git` and `tmux` are the other host deps, plus `perl` on a host without `flock`, such as macOS, for the lock-release tests). Coverage spans the render engine, YAML lib, interval-to-cron converter, state-lib helpers, notifier contracts, the heartbeat runner, the plugin and MCP catalogs, the Telegram patcher, the heartbeat config-dir isolation, every `heartbeatctl` subcommand, the deployment-mode branch (local render, bootstrap, systemd schedule conversion, kill switch, healthcheck), the QMD/RAG stack (index lib, embed-completion loop, sqlite-vec, wiki-graph), the backup units (the three fork primitives and the agent-repository path with its block store and restore), and token health.
 
 ```bash
-bats tests/                                       # full suite (1189 tests as of v0.16.0)
+bats tests/                                       # full suite (2196 cases in v0.33.0; includes gated skips)
 bats tests/heartbeatctl.bats                      # single file
 bats tests/render.bats -f "substitutes"           # single test by name fragment
 

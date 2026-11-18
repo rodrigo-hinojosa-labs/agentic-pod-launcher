@@ -61,6 +61,48 @@ EOF
 
 teardown() { teardown_tmp_dir; }
 
+@test "047 RG01: local regenerate installs an executable CLI/helper pair reproducibly" {
+  cd "$TMP_TEST_DIR"
+  yq -i '.deployment.mode="local"' agent.yml
+  # install_claude_stub returns a shell variable; explicitly supply it to yq.
+  CLAUDE_STUB="$CLAUDE_STUB" yq -i '.deployment.claude_cli=strenv(CLAUDE_STUB)' agent.yml
+  run bash -c "printf 'n\n' | ./setup.sh --regenerate"
+  [ "$status" -eq 0 ]
+  [ -x scripts/local/agent-healthcheck.sh ]
+  [ -x scripts/local/agent-healthcheck-lib.sh ]
+  cp scripts/local/agent-healthcheck.sh "$TMP_TEST_DIR/cli.first"
+  cp scripts/local/agent-healthcheck-lib.sh "$TMP_TEST_DIR/lib.first"
+  load_lib render
+  render_load_context agent.yml >/dev/null
+  export OPERATOR_USER=synthetic
+  render_to_file modules/local-healthcheck.service.tpl "$TMP_TEST_DIR/unit.first"
+  render_to_file modules/local-healthcheck.timer.tpl "$TMP_TEST_DIR/timer.first"
+  run bash -c "printf 'n\n' | ./setup.sh --regenerate"
+  [ "$status" -eq 0 ]
+  cmp scripts/local/agent-healthcheck.sh "$TMP_TEST_DIR/cli.first"
+  cmp scripts/local/agent-healthcheck-lib.sh "$TMP_TEST_DIR/lib.first"
+  render_load_context agent.yml >/dev/null
+  render_to_file modules/local-healthcheck.service.tpl "$TMP_TEST_DIR/unit.second"
+  render_to_file modules/local-healthcheck.timer.tpl "$TMP_TEST_DIR/timer.second"
+  cmp "$TMP_TEST_DIR/unit.second" "$TMP_TEST_DIR/unit.first"
+  cmp "$TMP_TEST_DIR/timer.second" "$TMP_TEST_DIR/timer.first"
+  grep -q '^User=synthetic$' "$TMP_TEST_DIR/unit.second"
+  grep -q '^SuccessExitStatus=1 2$' "$TMP_TEST_DIR/unit.second"
+  grep -q '^OnUnitActiveSec=5min$' "$TMP_TEST_DIR/timer.second"
+}
+
+@test "047 RG02: fresh Docker regenerate emits no local healthcheck runtime" {
+  cd "$TMP_TEST_DIR"
+  yq -i '.deployment.mode="docker"' agent.yml
+  run bash -c "printf 'n\n' | ./setup.sh --regenerate"
+  [ "$status" -eq 0 ]
+  [ ! -e scripts/local/agent-healthcheck.sh ]
+  [ ! -e scripts/local/agent-healthcheck-lib.sh ]
+  [ -f modules/local-healthcheck-lib.sh.tpl ]
+  # Build context and healthcheck privilege contract stay unchanged.
+  grep -q 'context: ./docker' docker-compose.yml
+}
+
 @test "--regenerate produces expected files" {
   cd "$TMP_TEST_DIR"
   # Pipe 'n' to the plugin prompt so we skip actual plugin install

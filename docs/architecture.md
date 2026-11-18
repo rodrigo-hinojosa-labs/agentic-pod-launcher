@@ -18,6 +18,47 @@ The config base (`CLAUDE.md`, `.mcp.json`, `scripts/heartbeat/*`, vault, RAG) is
 
 > **Principle II trade-off (local mode).** Local mode is a deliberate, opt-in violation of the least-privilege container model: there is no container, so no `cap_drop`/`no-new-privileges`, and the agent runs as the operator's login user — inheriting their files, SSH keys, and tokens. It exists because Claude Code Remote Control **requires** a full-scope interactive login that ephemeral pods cannot provide. Mitigations: opt-in with an explicit wizard warning; docker mode untouched; never `--dangerously-skip-permissions` (live confirmations stay on); MFA mandatory; secrets confined to gitignored `.state/`. Remote Control persistence (login, trust, unit, healthcheck, kill-switch) is detailed in [`specs/011-local-standalone-mode/`](../specs/011-local-standalone-mode/). Heartbeat scheduling and plugin auto-install are **not** ported to systemd; the RAG/backup automation (qmd reindex timer + watcher, vault backup, wiki-graph) *is* — as per-agent systemd units since 012/014, described in the local-mode paragraphs of the [Vault layer](#vault-layer-karpathy-llm-wiki-opt-in) section. Local-mode hardening (`015-local-mode-hardening`): the remote-control unit's `ExecStart` uses an absolute CLI path — `resolve_claude_bin` resolves it at scaffold time, persists it to `agent.yml`, and the render fails loud if it is still unresolvable at unit-emit time (a bare `claude` under systemd's minimal `PATH` was a 203/EXEC) — and the local bootstrap's `_libc_variant` probes glibc vs musl to install the matching bun build.
 
+## Local healthcheck (047)
+
+`setup.sh` renders a define-only helper and the executable CLI into `scripts/local/` only
+for local mode. The existing oneshot service, `User`, success-exit policy and five-minute
+timer remain intact. No Docker mirror or image-baked consumer is added. Regenerate updates
+the pair under its existing service-installation policy: with `deployment.install_service:true`
+and available sudo, it can reinstall units and enable timers. Validation uses a disposable
+workspace with service installation disabled.
+
+Observation combines a complete `claudeAiOauth` profile, a bounded per-event journal
+classification and a cgroup-v2 socket inventory. Renewal WARN starts at seven days before
+`refreshTokenExpiresAt`; expired access alone is not lost login. Process directories are
+pinned while start time, cgroup membership and FD socket inodes are checked against the
+same unit invocation. ESTABLISHED remote-port-443 ownership is a transport signal, not proof
+of conversation responsiveness. Unknown evidence yields WARN; observed DEGRADED dominates.
+
+The optional notice controller owns `.state/.local-healthcheck.lock` in its parent process;
+children close that descriptor. Contenders observe health but never mutate the notice state.
+Schema-1 `.state/local-healthcheck.json` is a bounded mode-0600 ledger with closed fields,
+event versions, confirmation and retry accounting; it contains no tokens, messages or raw logs.
+A same-directory private temporary is validated, synchronized, renamed and followed by a
+directory synchronization. Existing checkpoints cross a file/directory adoption barrier.
+Unavailable persistence suspends notices while leaving the health result intact.
+
+Transitions into renewal WARN, DEGRADED and eligible recovery produce at most one delivery
+attempt per evaluation. A failed pending notice retries after thirty minutes, with a persisted
+wall-clock high-water mark that avoids double credit after backward time adjustments.
+Recovery requires a confirmed alarm in the episode; superseded unconfirmed alarms are cancelled.
+Curl receives quoted configuration on stdin with unexported secrets and uses a private unlinked
+response capture. API acknowledgement plus a durable commit confirm delivery. Lost responses
+or uncertain storage can cause duplicates on retry; exactly-once delivery is not promised.
+
+All phases use the original monotonic deadline: at most 25 s for observation, at most 30 s
+for notices after observation, and 60 s for the invocation, including TERM/KILL and cleanup.
+The CI Linux integration job exercises isolated non-root systemd services, cgroups and real
+loopback HTTP with fictional data. Its ten scenarios and confirmed cleanup are required
+before merge; host fixture tests alone do not establish that integration.
+
+Operator details and dependencies: [getting started](getting-started.md#healthcheck).
+Contracts and evidence: [`specs/047-local-healthcheck/`](../specs/047-local-healthcheck/).
+
 ## Host / Container / Volume Layout
 
 ```

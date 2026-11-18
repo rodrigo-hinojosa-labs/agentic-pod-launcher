@@ -54,7 +54,51 @@ YML
   export CLAUDE_BIN="/usr/local/bin/claude"
 }
 
-teardown() { teardown_tmp_dir; }
+teardown() {
+  if [ -n "${HC_FIX:-}" ]; then hc_fixture_teardown; fi
+  teardown_tmp_dir
+}
+
+@test "047 LC01: local CLI/helper render together and helper source has no I/O" {
+  [ -f "$REPO_ROOT/modules/local-healthcheck-lib.sh.tpl" ]
+  mkdir -p "$TMP_TEST_DIR/local"
+  render_to_file "$REPO_ROOT/modules/local-healthcheck.sh.tpl" "$TMP_TEST_DIR/local/agent-healthcheck.sh"
+  render_to_file "$REPO_ROOT/modules/local-healthcheck-lib.sh.tpl" "$TMP_TEST_DIR/local/agent-healthcheck-lib.sh"
+  mkdir "$TMP_TEST_DIR/empty-path" "$TMP_TEST_DIR/source-cwd"
+  # Source definitions with no external tools, in an otherwise empty directory.
+  # This also checks library interfaces without invoking any service.
+  run bash -c '
+    cd "$1" || exit
+    PATH="$2"
+    source "$3" || exit
+    for fn in hc_auth_snapshot hc_journal_snapshot hc_connection_snapshot hc_observe hc_notice_reduce hc_state_commit hc_notice_run; do
+      declare -F "$fn" >/dev/null || exit 91
+    done
+  ' _ "$TMP_TEST_DIR/source-cwd" "$TMP_TEST_DIR/empty-path" "$TMP_TEST_DIR/local/agent-healthcheck-lib.sh"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [ -z "$(ls -A "$TMP_TEST_DIR/source-cwd")" ]
+}
+
+@test "047 LC02: absent libraries report WARN without a bash 3.2 source abort" {
+  load helper-local-healthcheck
+  hc_fixture_setup
+  rm -f "$HC_WS/scripts/local/agent-healthcheck-lib.sh"
+  run hc_fixture_cli
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"healthcheck library unavailable"* ]] || return 1
+  render_to_file "$REPO_ROOT/modules/local-healthcheck-lib.sh.tpl" "$HC_WS/scripts/local/agent-healthcheck-lib.sh"
+  rm "$HC_WS/scripts/lib/env_file.sh"
+  run hc_fixture_cli
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"env file parser unavailable"* ]] || return 1
+  # A verified inactive unit remains DEGRADED even when the helper is missing.
+  printf '%s\n' '{"ActiveState":"inactive","ControlGroup":"/agent-test.service","InvocationID":"one","MainPID":"0"}' > "$HC_FIX/unit.json"
+  run hc_fixture_cli
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"unit not active"* ]] || return 1
+  hc_fixture_teardown
+}
 
 @test "systemd unit: User is the resolved operator (never root by default)" {
   render_to_file "$REPO_ROOT/modules/systemd-remote-control.service.tpl" "$TMP_TEST_DIR/unit"
