@@ -10,7 +10,31 @@ fire in **docker mode only**. Local mode has no heartbeat scheduler — there is
 `local-heartbeat` unit template in `modules/` and no heartbeat entry in
 `scripts/lib/local_schedule.sh` (local mode's own systemd units cover qmd reindex,
 vault backup, wiki-graph and healthcheck; the healthcheck pings Telegram directly from
-`modules/local-healthcheck.sh.tpl`, bypassing this notifier contract entirely).
+`modules/local-healthcheck*.tpl`, bypassing this notifier contract entirely).
+
+## Local healthcheck notices (047)
+
+This separate path accepts only `NOTIFY_BOT_TOKEN` and `NOTIFY_CHAT_ID`, parsed as data
+from the workspace `.env`; a readable legacy `.state/healthcheck-notify.env` wins. Files
+are never sourced. Adding a heartbeat driver below does not register a local healthcheck
+channel. Secrets are unexported before transport, sent through curl configuration on stdin
+and excluded from argv, diagnostics, the ledger and child environments.
+
+Local notices follow transitions into renewal WARN (seven days), DEGRADED and eligible
+recovery. Confirmed notices are not sent again on each tick; pending failures retry after
+thirty minutes. If an alarm resolves before any confirmed delivery, its pending notice is
+cancelled without a recovery notice. A recovery can retain other WARN reasons.
+
+The parent holds a non-blocking lock and persists intent before sending. Confirmation needs
+curl success, HTTP 200, JSON `ok:true` and a durable state commit. GNU sync synchronizes
+the private temporary/file and parent directory around atomic rename. If state cannot be
+saved or tools are missing, delivery is suspended while the health verdict stays visible.
+An ambiguous acknowledgement or storage failure after acceptance can cause a duplicate on
+retry. This is API confirmation, not a human receipt. The complete invocation has a 60 s
+budget, including observation and a notice phase of at most 30 s after observation.
+
+The existing heartbeat envelope below remains independent. Operational details, state paths
+and dependency fallbacks: [Local healthcheck](getting-started.md#healthcheck).
 
 ## The contract
 

@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Local healthcheck false alarms and repeated notices — `047-local-healthcheck`, #111**
+  (VERSION 0.32.0 → 0.33.0; local mode). Login renewal is assessed from the complete
+  `claudeAiOauth` profile and `refreshTokenExpiresAt`, with a seven-day warning;
+  an expired access token alone does not mean the login is lost. Journal evidence is
+  classified per event, and an observed failure survives an exhausted observation budget.
+  Connection checks cover the session unit's cgroup, including descendants, and match exact
+  ESTABLISHED remote-port-443 socket inodes against pinned process handles.
+  Optional Telegram notices follow transitions into renewal WARN, DEGRADED and recovery,
+  with a private durable ledger, non-blocking lock and pending retries every thirty minutes.
+  Unavailable persistence suspends delivery without changing the health verdict; uncertain
+  acknowledgements or storage failures can still cause a duplicate on retry.
+  Observation is capped at 25 seconds, notices at 30 seconds after observation, and the
+  complete invocation at 60 seconds. Regenerate installs the CLI/helper pair; unit/timer
+  policy and Docker runtime are unchanged. A new isolated Linux integration job must pass
+  before merge; host fixtures do not substitute for that gate.
+
 ### Added
 - **A private repository per agent, for its own work and its full backup — `046-agent-backup-repo`**
   (VERSION 0.31.0 → 0.32.0; docker mode; the image must be rebuilt). An agent can now be associated

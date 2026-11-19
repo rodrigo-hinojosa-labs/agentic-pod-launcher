@@ -3438,6 +3438,7 @@ regenerate() {
     render_to_file "$modules_dir/local-login.sh.tpl"       "$SCRIPT_DIR/scripts/local/agent-login.sh"
     render_to_file "$modules_dir/local-killswitch.sh.tpl"  "$SCRIPT_DIR/scripts/local/agent-killswitch.sh"
     render_to_file "$modules_dir/local-healthcheck.sh.tpl" "$SCRIPT_DIR/scripts/local/agent-healthcheck.sh"
+    render_to_file "$modules_dir/local-healthcheck-lib.sh.tpl" "$SCRIPT_DIR/scripts/local/agent-healthcheck-lib.sh"
     render_to_file "$modules_dir/local-secret-check.sh.tpl" "$SCRIPT_DIR/scripts/local/agent-secret-check.sh"
     # 022 (US1): the session-pointer hygiene pair. agent-session-exit.sh runs as
     # ExecStopPost and records WHY the process stopped; agent-session-check.sh

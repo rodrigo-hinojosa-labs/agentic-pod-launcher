@@ -109,11 +109,48 @@ Besides the session unit, `--login` installs and enables the units your feature 
 
 The healthcheck timer fires 2 minutes after boot and every 5 minutes thereafter, and reports one of three states via exit code: `OK` (0), `WARN` (1), `DEGRADED` (2).
 
-- `DEGRADED` — unit not active, auth error in the journal (401 / "please run /login"), or login expired.
-- `WARN` — no live relay connection, login expiring within 24h, a failed qmd-watch or wiki-graph unit, or a check it could not perform (no `ss`, no `jq`, unknown MainPID). It degrades gracefully rather than crying failure.
-- **Connection check:** it asks whether the session process holds an ESTABLISHED `:443` socket (`ss -tnpH state established`, matched against the unit's `MainPID`) — not whether the journal says "connected".
+- `DEGRADED` — session unit inactive, exact cleared-login signature, verified renewal expiry,
+  terminal login request in the journal, or an unclassified authentication 401. A 401 does not
+  by itself establish revocation. The known access-token-expiry event is classified separately;
+  it cannot hide another terminal event. A failure already observed survives a later deadline.
+- `WARN` — renewal expires in seven days or less, no verified live connection, incomplete
+  login data, a failed qmd-watch/wiki-graph unit, or a check that could not be completed.
+  Renewal uses `claudeAiOauth.refreshTokenExpiresAt` only when both tokens and both dates
+  form a complete valid profile. Access-token expiry alone does not establish lost login.
+  Remaining renewal time is rounded up in days/hours, or shown as `<1h`.
+- **Connection check:** inventory the unit's cgroup-v2 processes, recursively including children
+  and subgroups. Pin each process directory, revalidate identity/membership and match exact
+  socket inodes with `ss` ESTABLISHED connections to **remote port 443**. Listeners, local
+  port 443, remote port 4430 and a socket owned only by another unit do not qualify. One retry
+  handles an unstable inventory; unverifiable evidence produces WARN. This confirms a TCP
+  transport signal, not relay identity or a successful model response.
 
-It can notify on `DEGRADED` via optional `NOTIFY_BOT_TOKEN`/`NOTIFY_CHAT_ID` — read from the workspace `.env` (021), or from the legacy `<workspace>/.state/healthcheck-notify.env` if that file is present (a compatibility override for agents that had one before 021; a fresh scaffold never creates it). The token is fed to `curl` via a config file on stdin, so it never appears on argv or in the journal.
+**Optional notices:** `NOTIFY_BOT_TOKEN`/`NOTIFY_CHAT_ID` are parsed from the workspace `.env`;
+a readable legacy `.state/healthcheck-notify.env` takes precedence (021). A fresh scaffold does
+not create that override. Entering renewal WARN or DEGRADED creates one pending notice;
+confirmed delivery is not repeated each tick. Failed delivery retries after thirty minutes of
+accounted time, surviving restarts and backward wall-clock adjustments. Recovery is sent only
+if some notice of that episode was confirmed; an unconfirmed obsolete alarm is cancelled.
+Other WARN reasons stay visible without creating an alarm notice, including on partial recovery.
+
+The private `.state/local-healthcheck.json` (schema 1, mode 0600, maximum 16 KiB) stores only
+closed diagnostic/state fields, never credentials or payloads. `.state/.local-healthcheck.lock`
+is a stable non-blocking lock: a concurrent invocation still diagnoses health but does not send
+or modify the ledger. Delivery requires a durable precommit and confirmation requires curl
+success, HTTP 200, JSON `ok:true` and a durable final commit. Missing tools, an unwritable ledger
+or failed synchronization suspend notices and report why, preserving the health exit code.
+An ambiguous API response or failure after remote acceptance can produce a duplicate on retry;
+confirmation does not establish that a person read the message.
+
+**Dependencies and budgets:** Linux/systemd, cgroup v2 and readable procfs; bash, jq,
+GNU `timeout`, iproute2 `ss`, util-linux `flock`, GNU `sync` for the durable notice path,
+and `curl` for optional Telegram transport.
+Missing observation tools produce WARN; missing persistence/transport tools suspend notices.
+The observation phase has at most 25 s; notices get at most 30 s after observation, always
+clipped by the invocation's original 60 s monotonic deadline. The healthcheck never logs in,
+restarts a service or repairs configuration. `./setup.sh --regenerate` updates both
+`scripts/local/agent-healthcheck.sh` and its sibling `agent-healthcheck-lib.sh`; it needs
+no image rebuild and changes neither the healthcheck unit nor its timer policy.
 
 Operate and verify:
 
@@ -123,9 +160,15 @@ journalctl -u     agent-<name>.service -f       # startup + errors only (see not
 ./scripts/local/agent-killswitch.sh             # stop session + ALL companion units
 ./scripts/agentctl status                       # systemd-aware status
 ./scripts/agentctl doctor                       # full local diagnostic (exit 0/1/2)
+./scripts/local/agent-healthcheck.sh             # evaluate now; may send an eligible notice
 ```
 
-**Note on the journal:** a healthy connected `--spawn=session` is **silent** after startup — do not wait for `connected` / `session url` lines to confirm health. Only the **healthcheck** uses the authoritative signal (the live ESTABLISHED `:443` socket). `agentctl status` and `agentctl doctor` still derive their "connection signal" line from a 10-minute journal grep, so on a healthy quiet session they print `no recent connection signal` (and `doctor` warns, exiting 1). Treat that line as advisory: cross-check with `systemctl is-active` plus the healthcheck's exit code before concluding the session is down.
+**Note on the journal:** a healthy connected `--spawn=session` can be silent after startup.
+Do not wait for `connected` / `session url` lines. The connection line in `agentctl status`
+remains journal-based and advisory; `agentctl doctor` checks session lifecycle/pointer state
+and no longer uses that old journal grep. Use the healthcheck for the unit-owned TCP signal.
+The premerge Linux gate uses isolated real services with fictional data; it does not deploy
+the change to an existing agent. Validation procedure: [047 quickstart](../specs/047-local-healthcheck/quickstart.md).
 
 **Kill switch scope:** `scripts/local/agent-killswitch.sh` (`sudo systemctl stop` under the hood) stops the session **and every companion unit** — qmd-reindex timer, qmd-watch, vault-backup timer, wiki-graph timer, healthcheck timer — best-effort, so a host missing any of them never errors out. This matters: stopping only the session would leave the backup timer pushing to the fork with your credentials and the healthcheck still notifying, hours after you thought the agent was off. Because the unit has `Restart=always`, an explicit `systemctl stop` does NOT relaunch it; pass `--disable` to also prevent start at boot. The remote equivalent is toggling Remote Control OFF for the session identity (`<hostname>-<agent>`) in claude.ai/code.
 

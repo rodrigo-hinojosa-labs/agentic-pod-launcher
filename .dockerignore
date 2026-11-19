@@ -1,0 +1,11 @@
+# Defensive root-context exclusions. Agent builds use ./docker as their context.
+.git/
+node_modules/
+.state/
+.env*
+*.log*
+coverage/
+Dockerfile*
+.dockerignore
+.claude/worktrees/
+.worktrees/

@@ -9,6 +9,9 @@ on:
 permissions:
   contents: read
 
+env:
+  YQ_VERSION: v4.44.3
+
 concurrency:
   group: tests-${{ github.ref }}
   cancel-in-progress: true
@@ -52,7 +55,11 @@ jobs:
     # 25m42s on 13-11-2026 and was CANCELLED at 30m on 10-11 and 12-11-2026, while
     # ubuntu took 11m36s to 15m00s. Feature 046 adds six suites that take about
     # 6 minutes per bash on a Mac. The cap only bounds a hung job.
-    timeout-minutes: 45
+    # 60 (047): the hosted macOS leg reached 1872/2196 without a failed
+    # assertion when the 45-minute job budget cancelled it on 18-11-2026.
+    # All 92 new tests had completed; the remaining regression still needs
+    # to run. Only this outer job budget grows, not any test or healthcheck cap.
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -62,7 +69,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo curl -fsSL -o /usr/local/bin/yq \
-            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+            "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
           sudo chmod +x /usr/local/bin/yq
           yq --version
 
@@ -78,7 +85,7 @@ jobs:
             *) echo "unsupported macOS arch: $(uname -m)" >&2; exit 1 ;;
           esac
           sudo curl -fsSL -o /usr/local/bin/yq \
-            "https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_darwin_${yq_arch}"
+            "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_darwin_${yq_arch}"
           sudo chmod +x /usr/local/bin/yq
           yq --version
 
@@ -140,3 +147,32 @@ jobs:
       - name: Run bats suite (bash 3.2, forced via PATH)
         if: runner.os == 'macOS'
         run: PATH="/bin:$PATH" bats --print-output-on-failure tests/
+
+  local-healthcheck-integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install isolated gate dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y iproute2 python3 jq curl util-linux coreutils
+          sudo curl -fsSL -o /usr/local/bin/yq \
+            "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
+      - name: Run isolated Linux healthcheck gate
+        run: .github/scripts/local-healthcheck-integration.sh
+      - name: Preserve synthetic report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: local-healthcheck-integration
+          path: ${{ runner.temp }}/apl047-evidence.*/report.json
+          if-no-files-found: warn

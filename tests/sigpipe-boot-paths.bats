@@ -25,7 +25,10 @@
 load helper
 
 setup() { setup_tmp_dir; }
-teardown() { teardown_tmp_dir; }
+teardown() {
+  if [ -n "${HC_FIX:-}" ]; then hc_fixture_teardown; fi
+  teardown_tmp_dir
+}
 
 # ══ (a) modules/local-healthcheck.sh.tpl — a dead agent that does not say so ══
 #
@@ -41,17 +44,15 @@ teardown() { teardown_tmp_dir; }
 # Linux (bookworm, GNU grep 3.8) 29/300 at 66,263 B and 35/300 at 110,423 B.
 
 _render_healthcheck() {
-  # shellcheck source=/dev/null
-  source "$REPO_ROOT/scripts/lib/render.sh"
-  render_load_context "$REPO_ROOT/tests/fixtures/sample-agent.yml"
-  render_to_file "$REPO_ROOT/modules/local-healthcheck.sh.tpl" "$TMP_TEST_DIR/healthcheck.sh"
+  source "$REPO_ROOT/tests/helper-local-healthcheck.bash"
+  hc_fixture_setup
 }
 
 # Drive ONLY the auth-detection stanza of the rendered script, with a journal of
 # a chosen size, and report which branch it took. Keeps the harness independent
 # of systemd, ss and everything else the real script touches.
 _auth_branch() {
-  local bytes="$1" shell="${2:-bash}"
+  local bytes="$1"
   # A 401 on the FIRST line, then filler: that is the shape that makes the
   # reader close early while the producer still has bytes to push.
   #
@@ -62,18 +63,15 @@ _auth_branch() {
   # macOS and E2BIG ("Argument list too long") on Linux. Measured in CI, on the
   # ubuntu arm, which is exactly what the two-arm matrix is for.
   head -c "$bytes" < /dev/zero | tr '\0' 'x' > "$TMP_TEST_DIR/pad.txt"
-  # Unquoted heredoc so the pad PATH is baked in now; the `\$(cat …)` stays
-  # literal and runs inside the probe. Same idiom as the (b) probe below.
-  cat > "$TMP_TEST_DIR/probe.sh" <<PROBE
-set -uo pipefail
-journal="API Error: 401
-\$(cat "$TMP_TEST_DIR/pad.txt")"
-PROBE
-  # Extract the real line from the rendered template, so this test tracks the
-  # implementation instead of restating it.
-  grep -n "Please run /login" "$TMP_TEST_DIR/healthcheck.sh" | head -1 | cut -d: -f2- >> "$TMP_TEST_DIR/probe.sh"
-  printf '  echo DEGRADED\nfi\necho DONE\n' >> "$TMP_TEST_DIR/probe.sh"
-  "$shell" "$TMP_TEST_DIR/probe.sh"
+  { printf 'API Error: 401\n'; cat "$TMP_TEST_DIR/pad.txt"; } > "$HC_FIX/journal"
+  _classify_auth_journal
+}
+
+_classify_auth_journal() {
+  local result
+  result=$(hc_fixture_call hc_journal_snapshot agent-test.service renewable "$HC_FIX/capture" 1025000) || return
+  case "$result" in *'"unclassified_401"'*|*'"terminal"'*) printf 'DEGRADED\n' ;; esac
+  printf 'DONE\n'
 }
 
 @test "036 US5(a): the healthcheck detects a 401 in a journal far past the pipe buffer" {
@@ -99,13 +97,8 @@ PROBE
   # Same size, no 401 anywhere: the branch must NOT be taken.
   # Through a file, for the MAX_ARG_STRLEN reason documented on _auth_branch.
   head -c 204800 < /dev/zero | tr '\0' 'x' > "$TMP_TEST_DIR/pad.txt"
-  cat > "$TMP_TEST_DIR/probe.sh" <<PROBE
-set -uo pipefail
-journal="\$(cat "$TMP_TEST_DIR/pad.txt")"
-PROBE
-  grep -n "Please run /login" "$TMP_TEST_DIR/healthcheck.sh" | head -1 | cut -d: -f2- >> "$TMP_TEST_DIR/probe.sh"
-  printf '  echo DEGRADED\nfi\necho DONE\n' >> "$TMP_TEST_DIR/probe.sh"
-  run bash "$TMP_TEST_DIR/probe.sh"
+  cp "$TMP_TEST_DIR/pad.txt" "$HC_FIX/journal"
+  run _classify_auth_journal
   [ "$status" -eq 0 ]
   run bash -c "printf '%s\n' \"\$1\" | grep -cF 'DEGRADED'" _ "$output"
   [ "$output" = "0" ]
@@ -115,8 +108,10 @@ PROBE
   # Belt and braces: the consumer no longer closes early, AND the producer is
   # capped, because an unbounded capture is a memory cost on every tick even
   # when it is not a correctness problem.
-  run bash -c "LC_ALL=C grep -cE 'journalctl -u \"\\\$UNIT\".*-n [0-9]+' '$REPO_ROOT/modules/local-healthcheck.sh.tpl'"
-  [ "$output" = "1" ]
+  _render_healthcheck
+  run _auth_branch 1024
+  [ "$status" -eq 0 ]
+  jq -e -s '[.[]|select(.tool=="journalctl" and .source=="product")]|length==1 and all(.[]; .args[(.args|index("-n"))+1]=="2000")' "$HC_FIX/calls.jsonl" >/dev/null
 }
 
 # ══ (b) docker/scripts/wizard-container.sh — the wizard that never comes back ══
@@ -208,7 +203,7 @@ PROBE
   # fail a bats test, it just evaluates (documented repo gotcha). Comment lines
   # are stripped first, because both fixes quote the forbidden shape in their
   # docstrings so the next reader knows exactly what not to write.
-  run bash -c "sed 's/[[:space:]]*#.*//' '$REPO_ROOT/modules/local-healthcheck.sh.tpl' | grep -cE '\\\$journal\" *\\| *grep'"
+  run bash -c "sed 's/[[:space:]]*#.*//' '$REPO_ROOT/modules/local-healthcheck.sh.tpl' '$REPO_ROOT/modules/local-healthcheck-lib.sh.tpl' | grep -cE '\\\$journal\" *\\| *grep'"
   [ "$output" = "0" ]
   run bash -c "sed 's/[[:space:]]*#.*//' '$REPO_ROOT/docker/scripts/wizard-container.sh' | grep -cE '\| *head -'"
   [ "$output" = "0" ]

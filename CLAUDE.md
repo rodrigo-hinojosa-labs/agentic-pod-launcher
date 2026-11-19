@@ -260,6 +260,40 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 - **A child that stalls is a failure too.** A `gh` that accepts the call and never answers left a red night with neither issue nor message, because the push was sequenced after every `gh` call and the step has its own 3-minute limit. Every external call on a notifier path needs its own limit (portable: poll `kill -0` with `sleep 0.05`, since macOS has no `timeout`) and a total budget, with a fake that hangs to prove it.
 
 <!-- SPECKIT START -->
+**047-local-healthcheck IMPLEMENT PUBLICADO Y VALIDADO EN CI, MERGE DEL OPERADOR PENDIENTE (18-11-2026; rama `047-local-healthcheck`, worktree
+`.claude/worktrees/047-local-healthcheck`, base `main` = `3afae74`; VERSION 0.32.0 -> 0.33.0).**
+Origen #111. La renovación se evalúa exclusivamente desde el perfil completo `claudeAiOauth` y
+`refreshTokenExpiresAt`, WARN a siete días; el acceso vencido no demuestra pérdida del login.
+Journal por evento con catálogo cerrado; DEGRADED observado prevalece aunque venza el plazo al leer
+la cola. Conexión por cgroup-v2 recursivo y socket inode exacto a puerto remoto443, con directorio
+proc fijado y revalidación de identidad/InvocationID. Es señal TCP, no prueba de respuesta del modelo.
+
+El par renderizado `scripts/local/agent-healthcheck{,-lib}.sh` conserva unidad/timer. El controller
+mantiene en el padre el lock estable `.state/.local-healthcheck.lock`; hijos cierran FD9. El ledger
+`.state/local-healthcheck.json` es schema1, 0600 y <=16KiB, sin secretos/payload. Intento precedido por
+commit durable (temporal+sync+rename+sync directorio); confirmación exige curl0/HTTP200/JSONoktrue y
+commit final. GNU sync no disponible o persistencia fallida suspende envíos sin cambiar salud. Avisos
+por entrada a WARN de renovación, DEGRADED y recuperación elegible; pendiente reintenta cada30min,
+confirmado no se repite; sin alarma confirmada no hay recuperación. ACK/commit incierto puede duplicar.
+Configuración021 se parsea, no sourcea; override legacy legible gana. Secretos por stdin, fuera del env
+del transporte y argv. Plazos monotónicos: observación25s, avisos30s tras observar, global60s incluyendo
+TERM/KILL/cleanup. No modifica login, servicios vivos, Docker ni política de privilegios.
+
+Gate host2196/2196 en bash5.3.15 y3.2.57, secuenciales, stderr0 y las mismas69/70 saltadas de la base;
+ejecutados2127/2126 casos. Inventario2196=base2104+92; los21 casos previos y8 SIGPIPE se conservan.
+Control121/121 con SIGPIPE ignorada en ambos bash y48 mutaciones,96/96 detectadas sin sobrevivientes.
+Revisión independiente con RED/GREEN; resultados y huellas vigentes en el Registro de
+`specs/047-local-healthcheck/tasks.md`. Commits8bc7baa y17fcd6b publicados, PR#136 con autorización
+específica de047. CI completa de17fcd6b:2196ok/0fallas en Ubuntu5.3.9 y macOS3.2.57, con64/72 saltadas
+clasificadas; los92 nuevos ejecutados sin skip en ambos. Linux real L01–L10,14 probes UID1001 y
+cleanup:true en24s, margen576s; shellcheck verde. El presupuesto exterior BATS60min se midió necesario:
+macOS terminó en54min03s, margen5min57s, después del corte anterior a45min. No cambian los topes del
+producto/pruebas. Fuentes y puente de hashes en el Registro; el cierre documental conserva d81d962d y la cabeza propuesta
+debe tener sus cuatro checks verdes antes de dejar PR#136 listo. T001–T061 acreditadas; T062–T064
+esperan revisión/merge del operador y verificación posterior. Estado vigente en PR#136/checks.
+El receptor auxiliar del M4 se registra aparte. Merge y despliegue siguen reservados al operador;
+no reutilizar autorizaciones Git o consumo de cuota de046. No ejecutar agent-context: reemplaza este historial.
+
 **046-agent-backup-repo SPEC + CLARIFY + PLAN + TASKS + ANALYZE + IMPLEMENT LOCAL VALIDADO (2026-11-13/16; rama
 `046-agent-backup-repo` en el worktree `.claude/worktrees/046-agent-backup-repo`, desde `origin/main` = `10f22a7`,
 rebasada sobre `9608e4a`; VERSION 0.31.0 -> **0.32.0**, MINOR; artefactos en `0f41236`, constitución en `679b313`

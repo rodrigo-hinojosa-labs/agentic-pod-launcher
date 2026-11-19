@@ -1,0 +1,711 @@
+[
+  {
+    "catchers": [
+      "A09"
+    ],
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "new": "      else (([.. | objects | .expiresAt? // empty][0])-$now) as $ttl |",
+        "old": "      else ($o.refreshTokenExpiresAt-$now) as $ttl |"
+      }
+    ],
+    "id": "M01",
+    "note": ""
+  },
+  {
+    "catchers": [
+      "A02",
+      "A14"
+    ],
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "new": "      else ($o.expiresAt-$now) as $ttl |",
+        "old": "      else ($o.refreshTokenExpiresAt-$now) as $ttl |"
+      }
+    ],
+    "id": "M02",
+    "note": ""
+  },
+  {
+    "catchers": [
+      "A04",
+      "A05",
+      "A12"
+    ],
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "new": "    def unknown($why): {auth_class:\"login_lost\",cause:$why,renewal_remaining_ms:null};",
+        "old": "    def unknown($why): {auth_class:\"incomplete\",cause:$why,renewal_remaining_ms:null};"
+      }
+    ],
+    "id": "M03",
+    "note": ""
+  },
+  {
+    "catchers": [
+      "J08",
+      "J09"
+    ],
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "old": "      *'Authentication failed (401): OAuth access token has expired'*) known=true ;;",
+        "new": "      *'Authentication failed (401): OAuth access token has expired'*) known=true; if [ \"$auth_class\" = renewable ]; then exec 6<&-; printf '%s\\n' '{\"journal_class\":\"clear\",\"reason_codes\":[]}'; return; fi ;;"
+      }
+    ],
+    "id": "M04",
+    "note": ""
+  },
+  {
+    "catchers": [
+      "C02",
+      "C03"
+    ],
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "new": "    pids=${before##*|}",
+        "old": "    pids=$(exec 9>&-; _hc_candidates \"$cgroup_root\" \"$group\" \"$deadline\")"
+      }
+    ],
+    "id": "M05",
+    "note": ""
+  },
+  {
+    "catchers": [
+      "C06"
+    ],
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "new": "  case \"$1\" in \"$2\"*) return 0 ;; *) return 1 ;; esac",
+        "old": "  case \"$1\" in \"$2\"|\"$2\"/*) return 0 ;; *) return 1 ;; esac"
+      }
+    ],
+    "id": "M06",
+    "note": ""
+  },
+  {
+    "catchers": [
+      "C07"
+    ],
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "new": "    sockets=$(exec 9>&-;\n      rows=$(hc_bound \"$deadline\" 3000 ss -H -t -n -e state established 2>/dev/null) || exit $?\n      printf '%s\\n' \"$rows\" | hc_bound \"$deadline\" 1000 awk '/:443/'\n    ) || {\n      printf 'INCOMPLETE|%s\\n' \"$pid\"; return;\n    }",
+        "old": "    sockets=$(exec 9>&-; hc_bound \"$deadline\" 3000 ss -H -t -n -e state established '( dport = :443 )' 2>/dev/null) || {\n      printf 'INCOMPLETE|%s\\n' \"$pid\"; return;\n    }"
+      }
+    ],
+    "id": "M07",
+    "note": ""
+  },
+  {
+    "catchers": [
+      "C12"
+    ],
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "old": "    while IFS= read -r line; do\n      _hc_before \"$deadline\" || { printf 'BUDGET|%s\\n' \"$pid\"; return; }\n      for token in $line;",
+        "new": "    cd \"$root/$pid\" 2>/dev/null || { printf 'INCOMPLETE|%s\\n' \"$pid\"; return; }\n    while IFS= read -r line; do\n      _hc_before \"$deadline\" || { printf 'BUDGET|%s\\n' \"$pid\"; return; }\n      for token in $line;"
+      }
+    ],
+    "id": "M08",
+    "note": ""
+  },
+  {
+    "catchers": [
+      "C15"
+    ],
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "new": "    [ \"${before%|*|*}\" = \"${after%|*|*}\" ] || changed=true",
+        "old": "    [ \"${before%|*}\" = \"${after%|*}\" ] || changed=true"
+      }
+    ],
+    "id": "M09",
+    "note": ""
+  },
+  {
+    "catchers": [
+      "C16"
+    ],
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "new": "      final_pids=$pids",
+        "old": "      final_pids=$(exec 9>&-; _hc_candidates \"$cgroup_root\" \"$group\" \"$deadline\")"
+      }
+    ],
+    "id": "M10",
+    "note": ""
+  },
+  {
+    "catchers": [
+      "N23"
+    ],
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "new": "        if true; then lock_ready=true",
+        "old": "        if _hc_flock \"$global_deadline\" -n 2>/dev/null; then lock_ready=true"
+      }
+    ],
+    "id": "M11",
+    "note": ""
+  },
+  {
+    "catchers": [
+      "N18"
+    ],
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "new": "    hc_state_commit \"$state_path\" \"$deadline\" <<< \"$candidate\" || _hc_notify_diag state_failure",
+        "old": "    hc_state_commit \"$state_path\" \"$deadline\" <<< \"$candidate\" || { _hc_notify_diag state_failure; return; }"
+      }
+    ],
+    "id": "M12",
+    "note": ""
+  },
+  {
+    "catchers": [
+      "N20"
+    ],
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "new": "     { hc_bound \"$_hc_json_deadline\" 2000 sync \"$dir\" 2>/dev/null || true; }; then rc=0; fi",
+        "old": "     hc_bound \"$_hc_json_deadline\" 2000 sync \"$dir\" 2>/dev/null; then rc=0; fi"
+      }
+    ],
+    "id": "M13",
+    "note": ""
+  },
+  {
+    "catchers": [
+      "N26"
+    ],
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "new": "  if [ \"$http\" = 200 ]; then exec 8<&-; return 0; fi\n  if [ \"$rc\" -ne 0 ]; then\n    exec 8<&-",
+        "old": "  if [ \"$rc\" -ne 0 ]; then\n    exec 8<&-"
+      }
+    ],
+    "id": "M14",
+    "note": ""
+  },
+  {
+    "catchers": [
+      "N26"
+    ],
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "new": "if type==\"object\" then (.ok==true or .ok==false) else false end",
+        "old": "if type==\"object\" then .ok==true else false end"
+      }
+    ],
+    "id": "M15",
+    "note": ""
+  },
+  {
+    "catchers": [
+      "N14"
+    ],
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "new": ".pending.retry_remaining_s=1799 else . end",
+        "old": ".pending.retry_remaining_s=1800 else . end"
+      }
+    ],
+    "id": "M16",
+    "note": ""
+  },
+  {
+    "catchers": [
+      "N16"
+    ],
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "new": "      state=$(exec 9>&-; hc_bound \"$deadline\" 2000 jq -c 'if .pending!=null then .pending.retry_remaining_s=0 else . end' \"$state_path\" 2>/dev/null) || { _hc_notify_diag state_unavailable; return; }",
+        "old": "      state=$(exec 9>&-; hc_bound \"$deadline\" 2000 cat \"$state_path\" 2>/dev/null) || { _hc_notify_diag state_unavailable; return; }"
+      }
+    ],
+    "id": "M17",
+    "note": ""
+  },
+  {
+    "catchers": [
+      "N15"
+    ],
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "new": "          .pending.clock_seen_s=$now",
+        "old": "          .pending.clock_seen_s=([.pending.clock_seen_s,$now]|max)"
+      }
+    ],
+    "id": "M18",
+    "note": ""
+  },
+  {
+    "catchers": [
+      "N07",
+      "N10"
+    ],
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "old": "  if _hc_notify_send \"$workspace\" \"$deadline\" \"$kind\" \"$health\" \"$version\" \"$snapshot\"; then",
+        "new": "  if [ \"$kind\" = DEGRADED ] && [ -f \"$workspace/.state/.local-healthcheck.degraded-ever\" ]; then return; fi\n  if _hc_notify_send \"$workspace\" \"$deadline\" \"$kind\" \"$health\" \"$version\" \"$snapshot\"; then"
+      },
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "old": "    if hc_state_commit \"$state_path\" \"$deadline\" <<< \"$candidate\"; then _hc_notify_diag confirmed",
+        "new": "    if hc_state_commit \"$state_path\" \"$deadline\" <<< \"$candidate\"; then\n      if [ \"$kind\" = DEGRADED ]; then (umask 077; : > \"$workspace/.state/.local-healthcheck.degraded-ever\") 9>&-; fi\n      _hc_notify_diag confirmed"
+      }
+    ],
+    "id": "M19",
+    "note": "One incorrect lifetime dedup policy: a durable marker is written only after confirmed DEGRADED, and is never cleared after recovery. No schema relaxation; both edits belong to the same faulty policy."
+  },
+  {
+    "catchers": [
+      "N12"
+    ],
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "new": "            .episode={id:.event_version,notified:false} |",
+        "old": "            .episode=(.episode // {id:.event_version,notified:false}) |"
+      }
+    ],
+    "id": "M20",
+    "note": ""
+  },
+  {
+    "catchers": [
+      "N11"
+    ],
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "new": "            if .episode!=null then .pending=ready(\"RECOVERY\";$now) else .episode=null end",
+        "old": "            if .episode.notified==true then .pending=ready(\"RECOVERY\";$now) else .episode=null end"
+      }
+    ],
+    "id": "M21",
+    "note": ""
+  },
+  {
+    "catchers": [
+      "N29"
+    ],
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "new": "curl -q --url \"https://api.telegram.org/bot$notify_bot_token/sendMessage\" --config - --connect-timeout",
+        "old": "curl -q --config - --connect-timeout"
+      }
+    ],
+    "id": "M22",
+    "note": ""
+  },
+  {
+    "catchers": [
+      "N29"
+    ],
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "new": "  export notify_bot_token notify_chat_id",
+        "old": "  export -n notify_bot_token notify_chat_id"
+      }
+    ],
+    "id": "M23",
+    "note": ""
+  },
+  {
+    "catchers": [
+      "RG01"
+    ],
+    "changes": [
+      {
+        "file": "setup.sh",
+        "new": "",
+        "old": "    render_to_file \"$modules_dir/local-healthcheck-lib.sh.tpl\" \"$SCRIPT_DIR/scripts/local/agent-healthcheck-lib.sh\"\n"
+      }
+    ],
+    "id": "M24",
+    "note": ""
+  },
+  {
+    "catchers": [
+      "RG02"
+    ],
+    "changes": [
+      {
+        "file": "setup.sh",
+        "new": "  if [ \"$DEPLOYMENT_MODE_IS_DOCKER\" = true ]; then\n    mkdir -p \"$SCRIPT_DIR/scripts/local\"\n    render_to_file \"$modules_dir/local-healthcheck-lib.sh.tpl\" \"$SCRIPT_DIR/scripts/local/agent-healthcheck-lib.sh\"\n  fi\n  # Local-mode artifacts (011): rendered ONLY when mode=local. The systemd unit\n",
+        "old": "  # Local-mode artifacts (011): rendered ONLY when mode=local. The systemd unit\n"
+      }
+    ],
+    "id": "M25",
+    "note": ""
+  },
+  {
+    "catchers": [
+      "N30"
+    ],
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "new": "  timeout -k 3600 \"$term_s\" \"$@\"",
+        "old": "  timeout -k \"$grace_s\" \"$term_s\" \"$@\""
+      }
+    ],
+    "id": "M26",
+    "note": ""
+  },
+  {
+    "catchers": [
+      "CI04702"
+    ],
+    "changes": [
+      {
+        "file": ".github/scripts/local-healthcheck-integration.sh",
+        "new": "    pass",
+        "old": "    assert [r['id'] for r in rows]==[f'L{i:02}' for i in range(1,11)]"
+      }
+    ],
+    "id": "M27",
+    "note": ""
+  },
+  {
+    "catchers": [
+      "N33"
+    ],
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "new": "    [ ! -e \"$workspace/.state/healthcheck-notify.env\" ] || src=\"$workspace/.state/healthcheck-notify.env\"",
+        "old": "    [ ! -r \"$workspace/.state/healthcheck-notify.env\" ] || src=\"$workspace/.state/healthcheck-notify.env\""
+      }
+    ],
+    "id": "M28",
+    "note": ""
+  },
+  {
+    "catchers": [
+      "N02"
+    ],
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "new": "        (if true then true elif .identity==\"NONE\" then",
+        "old": "        (if .identity==\"NONE\" then"
+      }
+    ],
+    "id": "M29",
+    "note": ""
+  },
+  {
+    "catchers": [
+      "N22"
+    ],
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "new": "",
+        "old": "      _hc_adopt \"$state_path\" \"$deadline\" || { _hc_notify_diag state_failure; return; }\n"
+      }
+    ],
+    "id": "M30",
+    "note": ""
+  },
+  {
+    "catchers": [
+      "N25"
+    ],
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "new": "hc_bound() ( exec 3>&- 4>&-; _hc_timeout \"$@\"; )",
+        "old": "hc_bound() ( exec 9>&- 3>&- 4>&-; _hc_timeout \"$@\"; )"
+      },
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "new": "  http=$(\n",
+        "old": "  http=$(exec 9>&-;\n"
+      }
+    ],
+    "id": "M31",
+    "note": ""
+  },
+  {
+    "id": "M32",
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "old": "        4|10) ;; # Invalid JSON/schema only; tool failures are not corruption.",
+        "new": "        *) ;; # Treat every validation failure as corruption."
+      },
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "old": "        *) _hc_notify_diag state_unavailable; return ;;\n      esac",
+        "new": "      esac"
+      }
+    ],
+    "catchers": [
+      "N17"
+    ],
+    "note": "One defect: reset on transient validator failure."
+  },
+  {
+    "id": "M33",
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "old": "4000 jq -Rcse --arg op",
+        "new": "4000 jq -cse --arg op"
+      },
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "old": "    (try fromjson catch null) |\n    if $op==\"validate\"",
+        "new": "    .[0] |\n    if $op==\"validate\""
+      }
+    ],
+    "catchers": [
+      "N01"
+    ],
+    "note": "One defect: adopt first document of a JSON stream."
+  },
+  {
+    "id": "M34",
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "old": "  detail=$(exec 9>&-; _hc_reason_text \"$snapshot\")",
+        "new": "  detail=''"
+      }
+    ],
+    "catchers": [
+      "N06"
+    ],
+    "note": "Recovery omits remaining warning details."
+  },
+  {
+    "id": "M35",
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "old": "  _hc_json_deadline=$((cleanup_deadline-1000))",
+        "new": "  _hc_json_deadline=$cleanup_deadline"
+      }
+    ],
+    "catchers": [
+      "N31"
+    ],
+    "note": "No cleanup reserve after a bounded flush timeout."
+  },
+  {
+    "id": "M36",
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "old": "    case \"$sync_version\" in 'sync (GNU coreutils) '*) ;; *) _hc_notify_diag state_unavailable; configured=false ;; esac",
+        "new": "    :"
+      }
+    ],
+    "catchers": [
+      "N24"
+    ],
+    "note": "Accept a sync provider without the required file flush semantics."
+  },
+  {
+    "id": "M37",
+    "catchers": [
+      "N02"
+    ],
+    "note": "A new transition reaching the event counter limit still sends.",
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "old": "  case \"$candidate\" in *'\"event_version\":9007199254740990'*) _hc_notify_diag state_unavailable; return ;; esac",
+        "new": "  :"
+      }
+    ]
+  },
+  {
+    "id": "M38",
+    "catchers": [
+      "N31"
+    ],
+    "note": "One defect: defer journal unlink until after its producer.",
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "old": "  if ! hc_bound \"$deadline\" 1000 rm -f \"$capture\" 2>/dev/null; then\n    exec 5>&- 6<&-\n    _hc_journal_unknown\n    return\n  fi",
+        "new": "  : # Delay capture cleanup until after the producer."
+      },
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "old": "  exec 5>&-\n  if ! _hc_before \"$deadline\";",
+        "new": "  exec 5>&-\n  rm -f \"$capture\" 2>/dev/null\n  if ! _hc_before \"$deadline\";"
+      }
+    ]
+  },
+  {
+    "id": "M39",
+    "catchers": [
+      "A06"
+    ],
+    "note": "One defect: permit a stream of OAuth documents.",
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "old": "4000 jq -Rsc --argjson now",
+        "new": "4000 jq -c --argjson now"
+      },
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "old": "    (try fromjson catch null) |\n    if type!=\"object\"",
+        "new": "    if type!=\"object\""
+      }
+    ]
+  },
+  {
+    "id": "M40",
+    "catchers": [
+      "C19"
+    ],
+    "note": "Parse the entire ss capture without time checks.",
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "old": "      _hc_before \"$deadline\" || { printf 'BUDGET|%s\\n' \"$pid\"; return; }\n      for token in $line;",
+        "new": "      for token in $line;"
+      }
+    ]
+  },
+  {
+    "id": "M41",
+    "catchers": [],
+    "pattern": "^healthcheck WARN: a failed wiki-graph unit",
+    "note": "Suppress a specific legacy warning while preserving severity; guarded assertion must fail in both bash versions.",
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "old": "message='wiki-graph runner failed (last graph still usable)'",
+        "new": "message='graph runner unavailable'"
+      }
+    ]
+  },
+  {
+    "id": "M42",
+    "catchers": [
+      "J08",
+      "J09"
+    ],
+    "note": "Discard already observed DEGRADED when the journal parser deadline expires.",
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "old": "    if ! _hc_before \"$deadline\"; then\n      incomplete=true\n      break\n    fi",
+        "new": "    _hc_before \"$deadline\" || { exec 6<&-; _hc_journal_unknown; return; }"
+      }
+    ]
+  },
+  {
+    "id": "M43",
+    "catchers": [
+      "J08",
+      "J09"
+    ],
+    "note": "Keep severity but discard incomplete-journal diagnostic in the composed snapshot.",
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "old": "  case \"$journal\" in\n    *'\"journal_unknown\"'*)\n      case \"$codes\" in *'\"journal_unknown\"'*) ;; *) codes=\"${codes:+$codes,}\\\"journal_unknown\\\"\" ;; esac ;;\n  esac",
+        "new": "  :"
+      }
+    ]
+  },
+  {
+    "id": "M44",
+    "catchers": [
+      "N36"
+    ],
+    "note": "A failed field extraction suspends delivery without a diagnostic.",
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "old": "  candidate=$(exec 9>&-; hc_bound \"$deadline\" 1000 jq -c .state <<< \"$reduced\") || { _hc_notify_diag state_unavailable; return; }",
+        "new": "  candidate=$(exec 9>&-; hc_bound \"$deadline\" 1000 jq -c .state <<< \"$reduced\") || return"
+      }
+    ]
+  },
+  {
+    "id": "M45",
+    "catchers": [
+      "N36"
+    ],
+    "note": "A failed response-capture allocation returns silently.",
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "old": "  response=$(exec 9>&-; umask 077; hc_bound \"$deadline\" 1000 mktemp \"$workspace/.state/.healthcheck-response.XXXXXX\" 2>/dev/null) || { _hc_notify_diag state_unavailable; return 1; }",
+        "new": "  response=$(exec 9>&-; umask 077; hc_bound \"$deadline\" 1000 mktemp \"$workspace/.state/.healthcheck-response.XXXXXX\" 2>/dev/null) || return 1"
+      }
+    ]
+  },
+  {
+    "id": "M46",
+    "catchers": [
+      "N36"
+    ],
+    "note": "A failed response-capture unlink returns silently.",
+    "changes": [
+      {
+        "file": "modules/local-healthcheck-lib.sh.tpl",
+        "old": "  if ! hc_bound \"$deadline\" 1000 rm -f \"$response\" 2>/dev/null; then exec 7>&- 8<&-; _hc_notify_diag state_unavailable; return 1; fi",
+        "new": "  if ! hc_bound \"$deadline\" 1000 rm -f \"$response\" 2>/dev/null; then exec 7>&- 8<&-; return 1; fi"
+      }
+    ]
+  },
+  {
+    "id": "M47",
+    "catchers": [
+      "N30"
+    ],
+    "note": "Private fake-command interpreter falls back to the macOS Xcode selector.",
+    "changes": [
+      {
+        "file": "tests/helper-local-healthcheck.bash",
+        "old": "    if [ \"$tool\" = python3 ]; then target=$HC_PYTHON_REAL; fi",
+        "new": "    :"
+      }
+    ]
+  },
+  {
+    "id": "M48",
+    "catchers": [
+      "N30"
+    ],
+    "note": "Timeout fixture uses adjustable wall time instead of monotonic duration.",
+    "changes": [
+      {
+        "file": "tests/fixtures/local-healthcheck/timeout",
+        "old": "sub _timeout_clock { clock_gettime(CLOCK_MONOTONIC) }",
+        "new": "sub _timeout_clock { Time::HiRes::time() }"
+      }
+    ]
+  }
+]

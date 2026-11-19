@@ -41,6 +41,53 @@ setup() {
 }
 teardown() { teardown_tmp_dir; }
 
+@test "047 CI04701: isolated Linux gate and one shared yq pin preserve the bash matrix" {
+  yq -o=json '.' "$WF/test.yml" > "$TMP_TEST_DIR/workflow.json"
+  jq -e '
+    .jobs["local-healthcheck-integration"] as $j |
+    $j["runs-on"]=="ubuntu-24.04" and $j["timeout-minutes"]==10 and
+    $j.permissions=={contents:"read"} and
+    any($j.steps[]; (.uses // "" | startswith("actions/checkout@")) and .with["persist-credentials"]==false) and
+    any($j.steps[]; (.run // "" | contains(".github/scripts/local-healthcheck-integration.sh"))) and
+    any($j.steps[]; .if=="always()") and
+    (.on|has("pull_request_target")|not) and
+    .jobs.bats["timeout-minutes"]==60 and
+    [.jobs.bats.strategy.matrix.include[].os]==["ubuntu-latest","macos-latest"] and
+    any(.jobs.bats.steps[]; .run=="PATH=\"/bin:$PATH\" bats --print-output-on-failure tests/")
+  ' "$TMP_TEST_DIR/workflow.json" >/dev/null
+  [ "$(grep -c 'v4\.44\.3' "$WF/test.yml")" -eq 1 ]
+  if grep -F 'secrets' "$WF/test.yml"; then return 1; fi
+  [ -x "$REPO_ROOT/.github/scripts/local-healthcheck-integration.sh" ]
+}
+
+@test "047 CI04702: real report validator rejects incomplete skipped failed or unclean gates" {
+  local script="$REPO_ROOT/.github/scripts/local-healthcheck-integration.sh"
+  [ -f "$script" ]
+  mkdir "$TMP_TEST_DIR/empty-path"
+  run bash -c 'PATH="$1"; source "$2"' _ "$TMP_TEST_DIR/empty-path" "$script"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  python3 - "$TMP_TEST_DIR/report.json" <<'PY'
+import json,sys
+source={k:"synthetic" for k in ("head","hash","ImageOS","ImageVersion","kernel","systemd","ss","flock","sync","timeout")}
+scenarios=[]
+for i in range(1,11):
+ variants=([] if i not in (6,8) else (["listener","remote4430"] if i==6 else ["disappear","birth"]))
+ scenarios.append({"id":f"L{i:02}","status":"pass","probes":[{"uid":1000,"rc":0,"health":"OK","tag":tag} for tag in (variants or ["synthetic"])],"variants":variants})
+json.dump({"schema":1,"source":source,"probe_uid":1000,"scenarios":scenarios,"cleanup":True},open(sys.argv[1],"w"))
+PY
+  run bash -c 'source "$1"; hc_integration_validate_report "$2"' _ "$script" "$TMP_TEST_DIR/report.json"
+  [ "$status" -eq 0 ]
+  [ "$output" = '047 integration summary: total=10 executed=10 skipped=0 failed=0' ]
+  local edit
+  for edit in '.scenarios|=.[0:9]' '.scenarios[0].status="skip"' '.scenarios[0].status="fail"' '.scenarios[9].id="L09"' '.scenarios[5].variants=[]' '.scenarios[7].variants=["birth"]' '.scenarios[0].probes=[]' '.scenarios[0].probes[0].uid=0' '.scenarios[0].probes[0].health="invalid"' '.scenarios[0].probes[0].rc=127' '.cleanup=false' '.probe_uid=0' 'del(.source.hash)'; do
+    jq "$edit" "$TMP_TEST_DIR/report.json" > "$TMP_TEST_DIR/invalid.json"
+    run bash -c 'source "$1"; hc_integration_validate_report "$2"' _ "$script" "$TMP_TEST_DIR/invalid.json"
+    [ "$status" -ne 0 ] || return
+    [[ "$output" != *'failed=0'* ]] || return 1
+  done
+}
+
 # ── harness ──────────────────────────────────────────────────────────────────
 
 # _has TEXT NEEDLE / _lacks TEXT NEEDLE: substring assertions with no pipe.
