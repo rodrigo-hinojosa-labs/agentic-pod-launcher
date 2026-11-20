@@ -260,7 +260,7 @@ The patcher runs an upgrade cascade on every boot: `v1 → v2 → v3 → v4` (`:
 - **A child that stalls is a failure too.** A `gh` that accepts the call and never answers left a red night with neither issue nor message, because the push was sequenced after every `gh` call and the step has its own 3-minute limit. Every external call on a notifier path needs its own limit (portable: poll `kill -0` with `sleep 0.05`, since macOS has no `timeout`) and a total budget, with a fake that hangs to prove it.
 
 <!-- SPECKIT START -->
-**047-local-healthcheck IMPLEMENT PUBLICADO Y VALIDADO EN CI, MERGE DEL OPERADOR PENDIENTE (18-11-2026; rama `047-local-healthcheck`, worktree
+**047-local-healthcheck MERGEADA Y VERIFICADA, 64/64 TAREAS (19-11-2026; rama `047-local-healthcheck`, worktree
 `.claude/worktrees/047-local-healthcheck`, base `main` = `3afae74`; VERSION 0.32.0 -> 0.33.0).**
 Origen #111. La renovación se evalúa exclusivamente desde el perfil completo `claudeAiOauth` y
 `refreshTokenExpiresAt`, WARN a siete días; el acceso vencido no demuestra pérdida del login.
@@ -283,16 +283,20 @@ Gate host2196/2196 en bash5.3.15 y3.2.57, secuenciales, stderr0 y las mismas69/7
 ejecutados2127/2126 casos. Inventario2196=base2104+92; los21 casos previos y8 SIGPIPE se conservan.
 Control121/121 con SIGPIPE ignorada en ambos bash y48 mutaciones,96/96 detectadas sin sobrevivientes.
 Revisión independiente con RED/GREEN; resultados y huellas vigentes en el Registro de
-`specs/047-local-healthcheck/tasks.md`. Commits8bc7baa y17fcd6b publicados, PR#136 con autorización
-específica de047. CI completa de17fcd6b:2196ok/0fallas en Ubuntu5.3.9 y macOS3.2.57, con64/72 saltadas
-clasificadas; los92 nuevos ejecutados sin skip en ambos. Linux real L01–L10,14 probes UID1001 y
-cleanup:true en24s, margen576s; shellcheck verde. El presupuesto exterior BATS60min se midió necesario:
-macOS terminó en54min03s, margen5min57s, después del corte anterior a45min. No cambian los topes del
-producto/pruebas. Fuentes y puente de hashes en el Registro; el cierre documental conserva d81d962d y la cabeza propuesta
-debe tener sus cuatro checks verdes antes de dejar PR#136 listo. T001–T061 acreditadas; T062–T064
-esperan revisión/merge del operador y verificación posterior. Estado vigente en PR#136/checks.
-El receptor auxiliar del M4 se registra aparte. Merge y despliegue siguen reservados al operador;
-no reutilizar autorizaciones Git o consumo de cuota de046. No ejecutar agent-context: reemplaza este historial.
+`specs/047-local-healthcheck/tasks.md`. Publicados 8bc7baa, 17fcd6b y el cierre documental 40fb79b;
+los cuatro checks de la cabeza final estaban verdes antes de dejar PR #136 listo. El operador lo
+mergeó el 19-11-2026 a las 14:29:49 de Santiago, squash **961ef94**, y cerró #111. VERSION 0.33.0;
+árbol **931aa0532b17df181087ba853f4f7510f5f7d783** idéntico al de 40fb79b, fuente **d81d962d**.
+CI del merge completa: 2.196 resultados y cero fallas por bash, 62/70 saltadas clasificadas y los
+92 nuevos ejecutados sin skip. Ubuntu 28 min 28 s; macOS 43 min 30 s, margen 16 min 30 s frente a
+60 min. Linux real L01–L10, 14 sondeos UID1001 y cleanup:true en 37 s, margen 9 min 23 s;
+shellcheck verde. El presupuesto exterior de 60 min se justificó antes por el corte a 45 min y
+una corrida de macOS de 54 min 03 s; los topes del producto/pruebas no cambiaron. Runs del merge:
+tests 44577791935 y shellcheck 44577791973. T001–T064 acreditadas; pendientes despliegue y observación
+en un agente local real y limpieza del operador. Nocturna docker-e2e sobre 961ef94 (20-11-2026,
+run 44748525430): 62/62 ejecutados, sin saltos ni fallas. El cierre posterior al merge se publica
+en la rama `docs/047-post-merge`, con aprobación propia del operador y no con la de PR #136. No mover el checkout principal con AGENTS.md ajeno ni ejecutar agent-context, que
+reemplaza este historial. El receptor auxiliar del M4 y las autorizaciones de 046 se registran aparte.
 
 **046-agent-backup-repo SPEC + CLARIFY + PLAN + TASKS + ANALYZE + IMPLEMENT LOCAL VALIDADO (2026-11-13/16; rama
 `046-agent-backup-repo` en el worktree `.claude/worktrees/046-agent-backup-repo`, desde `origin/main` = `10f22a7`,
