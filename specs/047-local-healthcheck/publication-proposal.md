@@ -1,9 +1,16 @@
-# Publicación y aceptación de 047
+# Publicación, aceptación y cierre de 047
 
-**Estado:** publicación autorizada y ejecutada el 18-11-2026: commits `8bc7baa` y `17fcd6b`,
-con cuatro checks verdes sobre la segunda cabeza. [PR #136](https://github.com/rodrigo-hinojosa-labs/agentic-pod-launcher/pull/136)
-fue habilitado tras verificar esa CI y devuelto a borrador para publicar el cierre documental.
-Evidencia y recibo en [tasks.md](tasks.md). El merge sigue reservado al operador.
+**Estado al 19-11-2026:** el operador mergeó el [PR #136](https://github.com/rodrigo-hinojosa-labs/agentic-pod-launcher/pull/136)
+como `961ef94`, VERSION 0.33.0; #111 cerrado. Árbol idéntico al de la cabeza final `40fb79b`,
+con sus cuatro checks verdes antes del merge. La CI del merge también terminó verde: plan
+2.196 y cero fallas por bash, Linux L01–L10 y shellcheck. T001–T064 cerradas en [tasks.md](tasks.md).
+Despliegue, observación en un agente local real y limpieza permanecen pendientes del operador.
+La actualización posterior del cierre se publica en un PR de documentos desde la rama
+`docs/047-post-merge`, con aprobación específica del operador del 20-11-2026; no reutiliza
+la autoridad de publicación del PR #136 ni autoriza merge, despliegue o limpieza.
+
+Las secciones siguientes conservan la propuesta de publicación ejecutada. El resultado de la
+cabeza final `40fb79b` y del merge `961ef94`, con fuentes, conteos y URLs, está en el Registro.
 
 El seguimiento de T060 encontró un corte real del job macOS a45min, después de1872/2196
 resultados sin aserciones fallidas entre los terminados. El ajuste acotado amplía el
@@ -21,6 +28,8 @@ fix: corrige los falsos avisos del healthcheck local
 
 Commit `8bc7baa951a480bd9293857a3c3148e878d90216`. El ajuste de CI y su registro se publicaron
 en `17fcd6b3ff51b4746ed618138f6539d6f841b25d`, `fix: amplía el presupuesto de BATS tras medir la CI de 047`.
+El cierre de cuatro documentos se publicó en `40fb79bb5877847a33a38d85fc2010227df62315`,
+`docs: registra la aceptación y la CI de 047`, con CI completa propia antes de habilitar el PR.
 
 Alcance: 45 archivos de 047; artefactos Spec Kit y su selector; VERSION 0.33.0/CHANGELOG; par de plantillas
 del healthcheck local y su render; oráculos/fixtures sintéticos; job de integración Linux;
