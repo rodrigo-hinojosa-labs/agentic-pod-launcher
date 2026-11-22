@@ -194,7 +194,7 @@ _e2e_dump() {
   tail -n 30 "$BR_SRV_LOG" >&2
 }
 
-@test "TE1: a forced cycle leaves the five branches with their mark, and identity carries the encrypted secrets" {
+@test "TE1: a forced cycle leaves the five units (048: .agent-backup/ of main) with their mark, and identity carries the encrypted secrets" {
   local u
   for u in identity vault config memory history; do
     run _e2e_unit "$u"
@@ -231,7 +231,35 @@ _e2e_dump() {
   grep -qF 'refs/heads/e2e-work' <<< "$heads"
   printf 'changed\n' >> "$DEST/.state/.vault/wiki/concepts/page.md"
   _e2e_unit vault > /dev/null
-  [ "$(br_work_heads br-e2e)" = "$heads" ]
+  # 048: main receives the backup commits, so only the other work heads stay put; the
+  # old main stays an ancestor.
+  local ref sha
+  while read -r ref sha; do
+    if [ "$ref" = "refs/heads/main" ]; then
+      br_is_ancestor br-e2e "$sha"
+    else
+      [ "$(_br_git -C "$(br_bare br-e2e)" rev-parse "$ref")" = "$sha" ]
+    fi
+  done <<< "$heads"
+  # The work clone leaves .agent-backup/ out of its tree and has the launcher's hook.
+  _e2e_exec sh -c 'cd /workspace/agent-repo && git pull -q --ff-only origin main 2>/dev/null || git fetch -q origin'
+  if _e2e_exec test -e /workspace/agent-repo/.agent-backup; then false; fi
+  _e2e_exec grep -qF '# agentic-pod-launcher: agent-backup guard' /workspace/agent-repo/.git/hooks/pre-commit
+}
+
+@test "EM01 (048): in the container the five units and the README live in .agent-backup/ of main, and no backup/* branch exists" {
+  [ "$(_br_git -C "$(br_bare br-e2e)" ls-tree --name-only refs/heads/main:.agent-backup | tr '\n' ' ')" = "README.md config history identity memory vault " ]
+  [ -z "$(br_backup_refs br-e2e)" ]
+  [ "$(br_force_count br-e2e)" -eq 0 ]
+}
+
+@test "EM03 (048): a marked legacy branch is deleted by the container's unit after main holds its tree" {
+  br_seed_branch br-e2e backup/vault '{"schema":1,"agent":"br-e2e","unit":"vault"}' legacy.md "old"
+  printf 'changed again\n' >> "$DEST/.state/.vault/wiki/concepts/page.md"
+  run _e2e_unit vault
+  [ "$status" -eq 0 ] || { echo "$output" >&2; _e2e_dump; false; }
+  grep -qF 'legacy branch backup/vault deleted (its backup is in main)' <<< "$output"
+  if _br_git -C "$(br_bare br-e2e)" rev-parse --verify -q refs/heads/backup/vault > /dev/null; then false; fi
 }
 
 @test "TE4: with a wrong credential the units end within their limit and the container stays healthy, without restarts" {

@@ -59,7 +59,12 @@ jobs:
     # assertion when the 45-minute job budget cancelled it on 18-11-2026.
     # All 92 new tests had completed; the remaining regression still needs
     # to run. Only this outer job budget grows, not any test or healthcheck cap.
-    timeout-minutes: 60
+    # 90 (048): the macOS leg of PR #138 reached 980/2267 without a failed
+    # assertion when the 60-minute budget cancelled it on 22-11-2026. The
+    # git-heavy backup suites of 048 run about 7 times slower there than on
+    # ubuntu (TM15 took 868 s against 127 s); TM15 drops from 100 to 25
+    # deterministic cycles and the estimate is about 63 minutes.
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@v6

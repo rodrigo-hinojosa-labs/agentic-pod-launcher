@@ -248,11 +248,13 @@ The non-regenerable part of the agent is replicated to GitHub as independent orp
 
 | Destination | When | Branches |
 | --- | --- | --- |
-| **Agent repository** (docker mode only, since 0.32.0) | `backup.repo.url` is set | five: `identity`, `vault`, `config`, `memory`, `history`, pushed with `GITHUB_PAT` |
+| **Agent repository** (docker mode only, since 0.32.0) | `backup.repo.url` is set | five units, `identity`, `vault`, `config`, `memory`, `history`, pushed with `GITHUB_PAT`; since 0.34.0 each one is a directory `.agent-backup/<unit>/` of the repository's `main` branch, not a `backup/<unit>` branch |
 | **Fork** | no `backup.repo.url`, and `scaffold.fork.url` is set | three: `identity`, `vault`, `config`, exactly as before 0.32.0 |
 | Nothing | neither | none; each scheduled unit logs that it has no destination and exits 0 |
 
-| Branch | What it holds | Encrypted | Default schedule |
+With a fork each unit below is a `backup/<unit>` branch; with an agent repository it is `.agent-backup/<unit>/` of `main` (same content and format).
+
+| Unit | What it holds | Encrypted | Default schedule |
 | --- | --- | --- | --- |
 | `backup/identity` | Telegram pairing (`access.json`), plugin config, `settings.json`, `.claude.json`, and the secrets file as `.env.age` | the secrets file (omitted when there is no key: *partial* mode) | the supervisor when its hash changes (checked every 60s) and after plugin installs; cron `30 3 * * *` (with a fork only if `features.identity_backup.enabled: true`; with a repository unless it is `false`) |
 | `backup/vault` | the vault's `*.md` (minus `.obsidian/workspace*.json`, cache, `.trash/` and `*.sync-conflict-*`) | when the agent is sensitive | cron `0 * * * *` (`vault.backup_schedule`) |
@@ -267,6 +269,24 @@ Any unit runs on demand with `heartbeatctl backup-<unit>`; `heartbeatctl backup-
 **Encryption.** Everything encrypted can be read only with the private half of the operator's ssh key, whose public half is `backup.identity.recipient` (`ssh-ed25519` or `ssh-rsa`). The secrets file is encrypted directly for that key with `age`. Everything else goes into an encrypted block store, `store/`, inside its branch: files are split into blocks of up to 1 MiB, compressed and encrypted with a data key of that store, and named by the hash of the encrypted block, so a name tells nothing about its content; a local block map (outside any committed tree) lets an unchanged block skip the upload, and losing it costs one full upload; the data key itself is kept encrypted for the operator key (`store/key.age`). Without the operator key, `identity` runs in partial mode and every unit with something to encrypt stops with `no-recipient`: nothing that must be encrypted is ever pushed in plaintext. **The encryption gives confidentiality, not authenticity**: `age` does not sign, so anyone who can write to the repository can make a restore bring other content. The backup relies on the repository's access control, as the plaintext branches always did.
 
 **Before every push** (also on a cycle with no changes) a unit checks the repository: an anonymous query must be refused for lack of a credential (re-checked at most once a day while the verdict stays `private`), and an authenticated one must succeed. A public repository is never written, not even with `backup.repo.allow_unverified: true`, which only lets a unit push when the anonymous check could not tell either way. Every branch carries an ownership mark (`.agentic-pod-backup.json`): a unit never writes a branch that lacks it or that names another agent.
+
+#### Backups in `main` (0.34.0)
+
+With an agent repository the five units write their directories under `.agent-backup/` of `main`, next to the agent's and your own work. What that means:
+
+- **Nothing outside `.agent-backup/<unit>/` is ever touched** by a backup commit (the `config` unit also owns `.agent-backup/README.md`). A unit never force-pushes or rewrites `main`: when `main` moved, it rebuilds its commit on the new tip and retries (up to 5 times; then `main kept moving - nothing pushed, retrying next cycle`, exit 2).
+- **Backup commits are the launcher's**: author `agentic-pod-backup <backup@agentic-pod.invalid>`, subject `backup(<unit>): <agent> <date> [skip ci]` (GitHub Actions skips push and pull-request workflows for it) and the trailer `Agentic-Pod-Backup: <agent>/<unit>`. Filter them out with `git log --invert-grep --grep 'Agentic-Pod-Backup:'`.
+- **A change by someone else inside a unit's directory is overwritten** on that unit's next run, with a line on stderr; a directory without the launcher's mark, or with another agent's, is never written (`foreign-dir`, `other-agent`).
+- **The agent's work clone** (`/workspace/agent-repo`) leaves `.agent-backup/` out of its tree (sparse checkout), downloads no blob it does not check out (`blob:none`), and a launcher `pre-commit` hook refuses a commit that stages a path under it. **Your own clones download the whole history** of `main`, encrypted blobs included; to keep one light:
+
+  ```bash
+  git clone --filter=blob:none --no-checkout <url> && cd <dir>
+  git sparse-checkout set --no-cone '/*' '!/.agent-backup/' && git checkout main
+  ```
+
+- **`main` protected** (a paid plan or a public repository): the unit pushes its commit to a temporary `agent-backup-pr/<unit>-<epoch>` branch, opens a pull request and merges it with `GITHUB_PAT`; if GitHub does not allow the merge it closes it, deletes the branch and fails (`main-protected`, exit 2).
+- **Migration from 0.32.0/0.33.0**: the first cycle of each unit after the upgrade writes its directory into `main` (a full upload of its encrypted store) and then, once it verified on the remote that `main` holds exactly that tree, deletes its old `backup/<unit>` branch, but only when that branch carries this agent's mark; `backup-status` shows `legacy` per unit (`deleted <date>`, `kept: no-mark`, `kept: other-agent`, `kept: not-verified`, `kept: delete-failed`).
+- **The cost you accept**: the history of `main` keeps every backup commit and grows with the encrypted blobs. It cannot be pruned by deleting a branch any more; only by rewriting the history of `main` (force push), which the launcher never does. `agentctl doctor` warns when the repository passes 1 GB (`DOCTOR_REPO_SIZE_MAX_KB`), from the size GitHub reports, refreshed at most once a day by the `config` unit.
 
 #### Associating a repository
 
@@ -342,8 +362,8 @@ Local mode (fork backups only): skip the build and `up` — there is no image. T
 
 #### Size, pruning and changing the key
 
-- **Size**: `heartbeatctl backup-status` reports each unit's cache size, a good approximation of what its branch takes in the repository. `agentctl doctor` warns when the caches add up to more than 800 MB.
-- **Prune a branch**: delete `backup/<unit>` on GitHub. The next cycle recreates it with a single commit; the work branches are not touched. This is also how you remove what an agent pushed in plaintext before it was marked sensitive.
+- **Size**: `heartbeatctl backup-status` reports each unit's cache size and, with a repository, its location (`main:.agent-backup/<unit>` or `branch:backup/<unit>`), its legacy branch and the repository size GitHub reports. `agentctl doctor` warns when the caches add up to more than 800 MB and when the repository passes 1 GB.
+- **Prune a branch** (fork): delete `backup/<unit>` on GitHub. The next cycle recreates it with a single commit; the work branches are not touched. This is also how you remove what an agent pushed in plaintext before it was marked sensitive. With an agent repository (0.34.0) the backups live in `main`, so there is no branch to prune: removing old content means rewriting the history of `main`, an operator decision the launcher never takes.
 - **Change the operator key**: `heartbeatctl backup-identity --configure-key <new key>`. Each encrypted unit generates a new data key and uploads everything again on its next run. Earlier commits stay encrypted for the old key until you prune the branch.
 
 #### What no unit covers

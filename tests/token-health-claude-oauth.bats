@@ -11,6 +11,9 @@ setup() {
   CRED_DIR="$BATS_TEST_TMPDIR/.claude"
   CRED="$CRED_DIR/.credentials.json"
   mkdir -p "$CRED_DIR"
+  # 048: the probe now honours CLAUDE_CODE_OAUTH_TOKEN; keep the file-based tests
+  # hermetic against a token exported in the developer's shell.
+  unset CLAUDE_CODE_OAUTH_TOKEN
 }
 
 # Helper: write a cred file with an explicit expiresAt (ms epoch).
@@ -111,3 +114,29 @@ _write_cred() {
   # Should NOT mention setup.sh --regenerate (that's for env-based tokens)
   ! echo "$output" | grep -q "setup.sh --regenerate"
 }
+
+# ── 048: login by environment token ─────────────────────────────────
+
+@test "TD08 probe_claude_oauth: CLAUDE_CODE_OAUTH_TOKEN set -> skipped, expiry not observable" {
+  _write_cred $(( ($(date -u +%s) - 3600) * 1000 ))
+  CLAUDE_CODE_OAUTH_TOKEN="sk-ant-oat01-fake" run probe_claude_oauth "$CRED"
+  [ "$status" -eq 0 ]
+  [ "$output" = "skipped 000 0 login by environment token (expiry not observable)" ]
+}
+
+@test "TD09 probe_claude_oauth: with the env token an unreadable login file does not change the output" {
+  echo "not json at all" > "$CRED"
+  chmod 000 "$CRED"
+  CLAUDE_CODE_OAUTH_TOKEN="sk-ant-oat01-fake" run probe_claude_oauth "$CRED"
+  chmod 600 "$CRED"
+  [ "$output" = "skipped 000 0 login by environment token (expiry not observable)" ]
+  CLAUDE_CODE_OAUTH_TOKEN="sk-ant-oat01-fake" run probe_claude_oauth "$BATS_TEST_TMPDIR/absent.json"
+  [ "$output" = "skipped 000 0 login by environment token (expiry not observable)" ]
+}
+
+@test "TD08b probe_claude_oauth: an empty CLAUDE_CODE_OAUTH_TOKEN behaves as before" {
+  _write_cred $(( ($(date -u +%s) - 3600) * 1000 ))
+  CLAUDE_CODE_OAUTH_TOKEN="" run probe_claude_oauth "$CRED"
+  echo "$output" | grep -q '^auth_fail 000 0 expired'
+}
+

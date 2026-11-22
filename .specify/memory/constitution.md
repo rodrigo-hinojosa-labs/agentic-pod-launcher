@@ -77,6 +77,29 @@ Templates requiring updates: none (no template names the number of branches).
 Follow-up TODOs: none.
 -->
 
+<!--
+SYNC IMPACT REPORT (1.1.0 → 1.2.0)
+===================================
+Version change: 1.1.0 → 1.2.0
+Bump rationale: MINOR — materially expanded guidance in Principle V. Feature 048
+  (operator decision, 2026-11-21) moves the backups of an agent with an associated
+  repository from five orphan branches into five directories of that
+  repository's `main` branch. The fork path, the encryption rule and the
+  independence of the units (cache, hash, staging, commit) do not change.
+
+Sections changed:
+  Principle V → backups are five independent units; with a repository each one
+    writes `.agent-backup/<unit>/` of `main`, never force-pushes, rebuilds its
+    commit on the tip; with a fork, orphan branches as before; two more shared
+    pieces (commit construction over the tip, verified deletion of the legacy
+    branch); the restore reads `main` first, then the branch.
+
+Templates requiring updates: none (`grep -rn 'orphan\|backup/' .specify/templates`
+  finds nothing, 2026-11-21).
+
+Follow-up TODOs: none.
+-->
+
 # agentic-pod-launcher Constitution
 
 `agentic-pod-launcher` is a bash wizard that scaffolds self-contained, Dockerized
@@ -171,19 +194,27 @@ channels state, heartbeat logs, the vault — lives under the bind-mounted
   or logged, other than the whitelisted subset the backup branches carry.
 - State MUST survive `docker compose down -v`, image rebuilds, and
   `setup.sh --uninstall` (non-`--purge`/`--nuke`).
-- Backups are five INDEPENDENT orphan branches (`backup/identity`,
-  `backup/vault`, `backup/config`, `backup/memory`, `backup/history`) with sha256
-  content idempotency and per-branch clone caches. They MUST NOT be merged into a
-  shared primitive: each unit keeps its own branch, clone cache, content hash,
-  staging and commit code, and each MUST be able to be absent without breaking
-  the others. What the units MAY share is limited to code that never stages a
-  tree, commits or pushes: the destination rule (the agent's associated
+- Backups are five INDEPENDENT units (`identity`, `vault`, `config`, `memory`,
+  `history`) with sha256 content idempotency and per-unit clone caches. With the
+  agent's associated repository, each unit backs up into its own directory
+  `.agent-backup/<unit>/` of the repository's `main` branch, changes nothing
+  outside that directory (the `config` unit also owns `.agent-backup/README.md`),
+  never force-pushes or rewrites the history of `main`, and integrates with
+  concurrent commits by rebuilding its own commit on the current tip. With a fork,
+  each unit keeps its own orphan branch (`backup/<unit>`) as before. The units
+  MUST NOT be merged into a shared primitive: each unit keeps its own clone cache,
+  content hash, staging and commit code, and each MUST be able to be absent
+  without breaking the others. What the units MAY share is limited to code that
+  never stages a unit's tree: the destination rule (the agent's associated
   repository, else its fork, else nowhere), the push credential, the privacy
-  check and its record, the branch ownership mark, the per-unit run lock, the
-  record of the last attempt, and the encrypted block store. Changes MUST
-  preserve `setup.sh --restore-from-fork` (restore order: config → identity →
-  vault → memory → history).
-- The launcher's backup branches are its only sanctioned path for taking
+  check and its record, the ownership mark, the per-unit run lock, the record of
+  the last attempt, the encrypted block store, the construction of a commit over
+  the tip of `main` from a unit's already-staged tree, and the verified deletion
+  of a unit's legacy `backup/<unit>` branch. Changes MUST preserve
+  `setup.sh --restore-from-fork` (restore order: config → identity → vault →
+  memory → history), reading each unit from `main` when present and from its
+  branch otherwise.
+- The launcher's backups are its only sanctioned path for taking
   whitelisted state out of `.state/`. The secrets file, conversation transcripts,
   the claude-mem store and operator-declared extra paths MUST travel encrypted so
   that only the holder of the operator's key can read them; for an agent marked
@@ -195,7 +226,7 @@ channels state, heartbeat logs, the vault — lives under the bind-mounted
 
 **Rationale**: Portability (rsync the dir), disaster recovery (rehydrate from
 the agent's repository or its fork), and a clean separation of threat models
-across backup branches.
+across backup units.
 
 ### VI. Reproducible, Intentionally-Pinned Dependencies
 
@@ -273,4 +304,4 @@ in `modules/claude-md.tpl` and each agent's own `agent.yml`).
 - **Runtime guidance**: `CLAUDE.md` (repo root) remains the operational guide for
   working in this codebase and is read alongside this constitution.
 
-**Version**: 1.1.0 | **Ratified**: 2026-06-18 | **Last Amended**: 2026-11-14
+**Version**: 1.2.0 | **Ratified**: 2026-06-18 | **Last Amended**: 2026-11-21

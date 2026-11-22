@@ -37,6 +37,8 @@ NOTIFIER
 
   ORIG_PATH="$PATH"
   export NOTIFY_OUT="$TMP_TEST_DIR/notify.log"
+  # 048: hermetic against a CLAUDE_CODE_OAUTH_TOKEN exported in the developer's shell.
+  unset CLAUDE_CODE_OAUTH_TOKEN
 
   # Default: yq is needed to read agent.yml. If the host has it, great;
   # otherwise the runner falls back to channel="none" which still allows
@@ -273,3 +275,13 @@ NOTIFIER
   # State file was still written despite notifier failure.
   jq -e '.status == "auth_fail"' "$TH/github.json"
 }
+
+@test "TD10 runner: CLAUDE_CODE_OAUTH_TOKEN alone (no login file) -> claude_oauth state skipped, no warn" {
+  CLAUDE_CODE_OAUTH_TOKEN="sk-ant-oat01-fake" \
+    TH_CLAUDE_CRED_OVERRIDE="$TMP_TEST_DIR/nonexistent.json" _run_runner
+  [ "$status" -eq 0 ]
+  [ -f "$TH/claude_oauth.json" ]
+  jq -e '.status == "skipped"' "$TH/claude_oauth.json"
+  if grep -q 'token-health-claude_oauth warn' "$NOTIFY_OUT" 2>/dev/null; then false; fi
+}
+

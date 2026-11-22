@@ -243,15 +243,15 @@ local mode: only the **vault** backup is scheduled and reachable from your surfa
 
 Restore is an operator action from a fresh clone of the launcher: `./setup.sh --restore-from-fork <url>`.{{/unless}}{{#if BACKUP_REPO_ENABLED}}## Backups (what actually survives)
 
-Your state is backed up to your own private repository, `{{BACKUP_REPO_URL}}`, in independent orphan branches that belong to the launcher (each is hash-idempotent: no change, no commit):
+Your state is backed up to your own private repository, `{{BACKUP_REPO_URL}}`, in the `main` branch: one directory per backup unit under `.agent-backup/`, written only by the launcher (each unit is hash-idempotent: no change, no commit; its commits say `[skip ci]`):
 
-| Branch | Content | Trigger |
+| Directory | Content | Trigger |
 |---|---|---|
-| `backup/identity` | chat pairing, plugin config, settings and the encrypted `.env` (which holds your Claude token) | the supervisor pushes it when the identity hash changes (checked every 60s) and after plugin installs; daily 03:30 cron by default. Manual: `heartbeatctl backup-identity`. |
-| `backup/vault` | the vault's markdown, encrypted when this agent is marked as sensitive | hourly cron by default (`vault.backup_schedule`). Manual: `heartbeatctl backup-vault`. |
-| `backup/config` | `agent.yml`, your persona, `CLAUDE.md` and the workspace's `.claude/` project config; everything but `agent.yml` is encrypted when this agent is marked as sensitive | daily 03:30 cron by default. Manual: `heartbeatctl backup-config`. |
-| `backup/memory` | your auto memory, the claude-mem store and any extra paths the operator declared (`backup.extra_paths`) | daily 03:40 cron by default. Manual: `heartbeatctl backup-memory`. |
-| `backup/history` | your conversation transcripts, always encrypted | daily 03:50 cron by default. Manual: `heartbeatctl backup-history`. |
+| `.agent-backup/identity/` | chat pairing, plugin config, settings and the encrypted `.env` (which holds your Claude token) | the supervisor pushes it when the identity hash changes (checked every 60s) and after plugin installs; daily 03:30 cron by default. Manual: `heartbeatctl backup-identity`. |
+| `.agent-backup/vault/` | the vault's markdown, encrypted when this agent is marked as sensitive | hourly cron by default (`vault.backup_schedule`). Manual: `heartbeatctl backup-vault`. |
+| `.agent-backup/config/` | `agent.yml`, your persona, `CLAUDE.md` and the workspace's `.claude/` project config; everything but `agent.yml` is encrypted when this agent is marked as sensitive | daily 03:30 cron by default. Manual: `heartbeatctl backup-config`. |
+| `.agent-backup/memory/` | your auto memory, the claude-mem store and any extra paths the operator declared (`backup.extra_paths`) | daily 03:40 cron by default. Manual: `heartbeatctl backup-memory`. |
+| `.agent-backup/history/` | your conversation transcripts, always encrypted | daily 03:50 cron by default. Manual: `heartbeatctl backup-history`. |
 
 The operator can disable a unit or change its schedule in `agent.yml`. `heartbeatctl backup-status` shows which units are enabled and where each one stands. If the user asks how durable your state is, answer from that command, not from memory.
 
@@ -260,7 +260,7 @@ The operator can disable a unit or change its schedule in `agent.yml`. `heartbea
 `{{BACKUP_REPO_URL}}` is yours, and it has two roles:
 
 - **Work**: a clone lives at `{{BACKUP_REPO_WORKDIR}}`. Features you build for yourself go there, on working branches (`main` and feature branches). Push them with plain `git push` from that clone: its credential is already configured. Work that is not pushed is not backed up.
-- **Backup**: the `backup/*` branches hold your recoverable state. They belong to the launcher. Never check them out, commit to them, rebase them or delete them, and do not fetch them into your clone.
+- **Backup**: `.agent-backup/` in `main` holds your recoverable state. It belongs to the launcher: your clone leaves it out of its tree, and a hook refuses a commit that stages a path under it. Never edit, move or delete it, and never rewrite the history of `main` (no force push). Old `backup/*` branches, if any, also belong to the launcher, which deletes them once their content is in `main`.
 - **Not covered**: state you keep anywhere else is not backed up. If you start keeping state in a new place (a config directory for a tool you built, a credentials store), tell the operator so they can add it to `backup.extra_paths` in `agent.yml`.{{/if}}
 
 ## Permission Mode (self-service)

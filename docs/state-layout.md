@@ -275,7 +275,7 @@ Docker mode also bakes a musl-compiled `sqlite-vec` extension at `/opt/agent-adm
 
 ## Backup state (five branches with an agent repository, three with a fork)
 
-The destination is the agent's associated repository (`backup.repo.url`, docker mode only, 046) when set, else its fork (`scaffold.fork.url`). With a repository there are five branches (`identity`, `vault`, `config`, `memory`, `history`), each with a repository-path clone cache of its own, distinct from the fork-path one; with a fork, the three of before.
+The destination is the agent's associated repository (`backup.repo.url`, docker mode only, 046) when set, else its fork (`scaffold.fork.url`). With a repository there are five units (`identity`, `vault`, `config`, `memory`, `history`); since 0.34.0 (048) each one writes `.agent-backup/<unit>/` of `main`. Each unit keeps a local cache of its own (`<unit>-repo`, where it stages and commits) and a bare publishing clone (`<unit>-main`, `blob:none`, depth 1, with an alternate to that cache) next to it; their state files gain `location`, `last_tree`, `main_tip` and `legacy_branch`, and `scripts/heartbeat/backup-repo-size.json` holds the repository size (refreshed at most once a day by `config`). With a fork, the three branches of before.
 
 | Path | Mode | What |
 |---|---|---|

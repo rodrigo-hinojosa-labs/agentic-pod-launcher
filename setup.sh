@@ -1596,7 +1596,7 @@ _export_backup_repo_markers() {
 
 #### El repositorio del agente
 
-Este agente respalda su estado completo en su repositorio privado, \`$url\`, en ramas \`backup/*\` que son del launcher, y guarda su propio trabajo en un clon en \`/workspace/agent-repo\`.
+Este agente respalda su estado completo en su repositorio privado, \`$url\`, en el directorio \`.agent-backup/\` de la rama \`main\` (lo escribe solo el launcher, con commits \`[skip ci]\`), y guarda su propio trabajo en un clon en \`/workspace/agent-repo\`, que deja ese directorio fuera de su árbol.
 
 \`\`\`bash
 docker exec -u agent $name heartbeatctl backup-status         # el estado de cada unidad
@@ -1612,7 +1612,7 @@ Para restaurarlo en otro equipo: \`./setup.sh --restore-from-repo $url --identit
 
 #### The agent repository
 
-This agent backs up its full state to its private repository, \`$url\`, in \`backup/*\` branches that belong to the launcher, and keeps its own work in a clone at \`/workspace/agent-repo\`.
+This agent backs up its full state to its private repository, \`$url\`, in the \`.agent-backup/\` directory of the \`main\` branch (written only by the launcher, in \`[skip ci]\` commits), and keeps its own work in a clone at \`/workspace/agent-repo\`, which leaves that directory out of its tree.
 
 \`\`\`bash
 docker exec -u agent $name heartbeatctl backup-status         # where each unit stands
@@ -1905,6 +1905,47 @@ mirror_catalog_to_docker() {
   fi
 }
 
+# 048: a unit's backup, from .agent-backup/<unit>/ of main when it is there with a
+# valid mark, else from its backup/<unit> branch (046, and every fork). STDOUT:
+# "main <dir>" or "branch <dir>"; rc 1 when neither exists. A directory in main
+# without a valid mark falls back to the branch with a line that says so.
+_restore_clone_unit() {
+  local url="$1" unit="$2" tmp out mark_unit
+  tmp=$(mktemp -d)
+  if ! git clone --quiet --depth 1 --filter=blob:none --no-checkout --branch main \
+       "$url" "$tmp/main" > /dev/null 2>&1; then
+    # Not the same as "not in main": after the migration the branches are gone, so
+    # say it, once per unit, instead of letting it read as "no backup".
+    # ls-remote --exit-code answers 2 only when the remote replied and has no main
+    # (a fork or an empty repository): anything else is a failure worth naming.
+    local lrc=0
+    git ls-remote --exit-code --heads "$url" main > /dev/null 2>&1 || lrc=$?
+    if [ "$lrc" != "2" ]; then
+      echo "  ⚠ restore: could not read main of $url — trying backup/$unit" >&2
+    fi
+  elif git -C "$tmp/main" rev-parse --verify -q "HEAD:.agent-backup/$unit" > /dev/null 2>&1; then
+    if git -C "$tmp/main" sparse-checkout set --no-cone "/.agent-backup/$unit/" > /dev/null 2>&1 \
+       && git -C "$tmp/main" checkout -q > /dev/null 2>&1; then
+      mark_unit=$(jq -r '.unit // ""' "$tmp/main/.agent-backup/$unit/.agentic-pod-backup.json" 2> /dev/null) || mark_unit=""
+      if [ "$mark_unit" = "$unit" ] && [ ! -L "$tmp/main/.agent-backup/$unit" ]; then
+        out=$(mktemp -d)
+        rmdir "$out"
+        mv "$tmp/main/.agent-backup/$unit" "$out"
+        rm -rf "$tmp"
+        printf 'main %s\n' "$out"
+        return 0
+      fi
+    fi
+    echo "  ⚠ restore: .agent-backup/$unit in main has no valid mark — trying backup/$unit" >&2
+  fi
+  rm -rf "$tmp"
+  if out=$(_restore_clone_branch "$url" "backup/$unit"); then
+    printf 'branch %s\n' "$out"
+    return 0
+  fi
+  return 1
+}
+
 # Clone a single backup branch into a tmp dir. STDOUT: tmp dir path on
 # success, empty on missing-branch (treated as a normal "fresh install"
 # state by callers — they decide whether to warn).
@@ -2127,13 +2168,16 @@ _restore_memory_place() {
 # _RESTORE_SKIPPED for the summary.
 _restore_store_unit() {
   local unit="$1" url="$2" dest="$3" tmp="$4" btmp n=0 rc plain_n=0
-  if ! btmp=$(_restore_clone_branch "$url" "backup/$unit"); then
+  local src from=""
+  if ! src=$(_restore_clone_unit "$url" "$unit"); then
     if [ "$_RESTORE_AGENT_REPO" = "1" ]; then
       echo "  ⚠ restore: no backup/$unit branch at $url — skipping"
       _RESTORE_SKIPPED="${_RESTORE_SKIPPED}${_RESTORE_SKIPPED:+, }$unit (no branch)"
     fi
     return 0
   fi
+  btmp="${src#* }"
+  [ "${src%% *}" = "main" ] && from=" (from main)"
   [ -f "$btmp/.agentic-pod-backup.json" ] && _RESTORE_AGENT_REPO=1
   rc=0
   if [ -d "$btmp/store" ]; then
@@ -2167,7 +2211,7 @@ _restore_store_unit() {
     _RESTORE_SKIPPED="${_RESTORE_SKIPPED}${_RESTORE_SKIPPED:+, }$unit (encrypted part)"
   fi
   if [ "$n" -gt 0 ]; then
-    echo "  ✓ restore: $unit restored into $dest/.state/ ($n files)"
+    echo "  ✓ restore: $unit restored into $dest/.state/ ($n files)$from"
     _RESTORE_DONE="${_RESTORE_DONE}${_RESTORE_DONE:+, }$unit"
   fi
   rm -rf "$btmp" "$tmp/$unit"
@@ -2212,12 +2256,14 @@ restore_from_fork() {
   trap 'rm -rf "'"$_rtmp"'"; exit 143' TERM
 
   # 1. Config — agent.yml lands at workspace root.
-  local cfg_tmp
-  if cfg_tmp=$(_restore_clone_branch "$fork_url" "backup/config"); then
+  local cfg_tmp _src _from
+  if _src=$(_restore_clone_unit "$fork_url" config); then
+    cfg_tmp="${_src#* }"
+    _from=""; [ "${_src%% *}" = "main" ] && _from=" (from main)"
     [ -f "$cfg_tmp/.agentic-pod-backup.json" ] && _RESTORE_AGENT_REPO=1
     if [ -f "$cfg_tmp/agent.yml" ] && [ ! -L "$cfg_tmp/agent.yml" ]; then
       cp -a "$cfg_tmp/agent.yml" "$dest/agent.yml"
-      echo "  ✓ restore: agent.yml restored from backup/config"
+      echo "  ✓ restore: agent.yml restored from backup/config$_from"
     fi
     # 046 (U3): the extended config, plaintext or from store/: its closed list only.
     _restore_move_tree "$cfg_tmp" "$dest" _restore_config_allowed > /dev/null
@@ -2244,7 +2290,9 @@ restore_from_fork() {
 
   # 2. Identity — .claude/* + optional .env.age decrypt.
   local id_tmp
-  if id_tmp=$(_restore_clone_branch "$fork_url" "backup/identity"); then
+  if _src=$(_restore_clone_unit "$fork_url" identity); then
+    id_tmp="${_src#* }"
+    _from=""; [ "${_src%% *}" = "main" ] && _from=" (from main)"
     [ -f "$id_tmp/.agentic-pod-backup.json" ] && _RESTORE_AGENT_REPO=1
     if [ -f "$id_tmp/.claude.json" ] && [ ! -L "$id_tmp/.claude.json" ]; then
       cp -a "$id_tmp/.claude.json" "$dest/.state/.claude.json"
@@ -2252,7 +2300,7 @@ restore_from_fork() {
     # Regular files only: a symlink from the branch is never planted under .state/.
     _restore_move_tree "$id_tmp/.claude" "$dest/.state/.claude" > /dev/null
     _restore_decrypt_env "$id_tmp/.env.age" "$dest/.env"
-    echo "  ✓ restore: identity restored into $dest/.state/"
+    echo "  ✓ restore: identity restored into $dest/.state/$_from"
     if [ "$_RESTORE_AGENT_REPO" = "1" ]; then
       _RESTORE_DONE="${_RESTORE_DONE}${_RESTORE_DONE:+, }identity"
       # R3: the token notice looks only at whether a value exists, never prints it.
@@ -2268,7 +2316,9 @@ restore_from_fork() {
   # 3. Vault — markdown subset, target dir resolved from the freshly
   #    restored agent.yml's vault.path (default .state/.vault).
   local vault_tmp vault_path
-  if vault_tmp=$(_restore_clone_branch "$fork_url" "backup/vault"); then
+  if _src=$(_restore_clone_unit "$fork_url" vault); then
+    vault_tmp="${_src#* }"
+    _from=""; [ "${_src%% *}" = "main" ] && _from=" (from main)"
     if [ -f "$dest/agent.yml" ]; then
       vault_path=$(yq -r '.vault.path // ".state/.vault"' "$dest/agent.yml" 2>/dev/null)
     else
@@ -2303,7 +2353,7 @@ restore_from_fork() {
     # The line only when something came back: an encrypted vault that did not open
     # is not "restored" (it is in the skipped list).
     if [ "$_vok" = "1" ] || [ "$_vn" -gt 0 ]; then
-      echo "  ✓ restore: vault restored into $dest/$vault_path/"
+      echo "  ✓ restore: vault restored into $dest/$vault_path/$_from"
       [ "$_RESTORE_AGENT_REPO" = "1" ] && _RESTORE_DONE="${_RESTORE_DONE}${_RESTORE_DONE:+, }vault"
     fi
     rm -rf "$vault_tmp"

@@ -264,6 +264,8 @@ COPY scripts/lib/backup_identity.sh /opt/agent-admin/scripts/lib/backup_identity
 COPY scripts/lib/backup_vault.sh    /opt/agent-admin/scripts/lib/backup_vault.sh
 COPY scripts/lib/backup_config.sh   /opt/agent-admin/scripts/lib/backup_config.sh
 COPY scripts/lib/backup_dest.sh      /opt/agent-admin/scripts/lib/backup_dest.sh
+COPY scripts/lib/backup_main.sh      /opt/agent-admin/scripts/lib/backup_main.sh
+COPY scripts/lib/backup_pr.sh        /opt/agent-admin/scripts/lib/backup_pr.sh
 COPY scripts/lib/backup_memory.sh    /opt/agent-admin/scripts/lib/backup_memory.sh
 COPY scripts/lib/backup_history.sh   /opt/agent-admin/scripts/lib/backup_history.sh
 COPY scripts/lib/agent_repo.sh       /opt/agent-admin/scripts/lib/agent_repo.sh

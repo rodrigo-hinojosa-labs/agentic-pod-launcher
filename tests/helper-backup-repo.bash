@@ -159,6 +159,21 @@ br_new_repo() {
   rm -rf "$bare"
   _br_git init -q --bare "$bare"
   _br_git -C "$bare" symbolic-ref HEAD refs/heads/main
+  # 048: a reflog for br_force_count, and a pre-receive hook that is a no-op unless
+  # the server runs in protected-main mode (it then exports GIT_TEST_PROTECT_MAIN).
+  _br_git -C "$bare" config core.logAllRefUpdates always
+  cat > "$bare/hooks/pre-receive" <<'HOOK'
+#!/bin/sh
+[ "${GIT_TEST_PROTECT_MAIN:-}" = "1" ] || exit 0
+while read -r old new ref; do
+  if [ "$ref" = "refs/heads/main" ]; then
+    echo "error: GH006: Protected branch update failed for refs/heads/main." >&2
+    exit 1
+  fi
+done
+exit 0
+HOOK
+  chmod +x "$bare/hooks/pre-receive"
   if [ "$empty" != "--empty" ]; then
     local seed="$BATS_TEST_TMPDIR/seed-$name"
     rm -rf "$seed"
@@ -190,7 +205,24 @@ br_backup_refs() {
 
 # br_branch_head NOMBRE RAMA: el commit de refs/heads/RAMA, o vacio.
 br_branch_head() {
+  if _br_main_loc "$1" "$2"; then
+    _br_git -C "$(br_bare "$1")" rev-list -1 refs/heads/main -- ".agent-backup/$BR_LOC_UNIT" 2>/dev/null || true
+    return 0
+  fi
   _br_git -C "$(br_bare "$1")" rev-parse --verify --quiet "refs/heads/$2" 2>/dev/null || true
+}
+
+# 048: where a unit's backup lives. _br_main_loc NAME BRANCH: rc 0 (and BR_LOC_UNIT
+# set) when BRANCH is backup/<unit>, that branch does not exist in the repository and
+# so the unit's backup is .agent-backup/<unit>/ of main; rc 1 to read the branch
+# itself (the fork path, and a legacy branch that still exists).
+_br_main_loc() {
+  case "$2" in backup/*) ;; *) return 1 ;; esac
+  if _br_git -C "$(br_bare "$1")" rev-parse --verify --quiet "refs/heads/$2" > /dev/null 2>&1; then
+    return 1
+  fi
+  BR_LOC_UNIT="${2#backup/}"
+  return 0
 }
 
 # br_branch_commits NOMBRE RAMA: cuantos commits tiene la rama (0 si no existe).
@@ -199,16 +231,29 @@ br_branch_commits() {
     echo 0
     return 0
   fi
+  if _br_main_loc "$1" "$2"; then
+    _br_git -C "$(br_bare "$1")" rev-list --count refs/heads/main -- ".agent-backup/$BR_LOC_UNIT"
+    return 0
+  fi
   _br_git -C "$(br_bare "$1")" rev-list --count "refs/heads/$2"
 }
 
 # br_branch_files NOMBRE RAMA: los archivos del arbol de la cabeza de la rama.
 br_branch_files() {
+  if _br_main_loc "$1" "$2"; then
+    _br_git -C "$(br_bare "$1")" ls-tree -r --name-only refs/heads/main -- ".agent-backup/$BR_LOC_UNIT" 2>/dev/null \
+      | sed "s#^\.agent-backup/$BR_LOC_UNIT/##" || true
+    return 0
+  fi
   _br_git -C "$(br_bare "$1")" ls-tree -r --name-only "refs/heads/$2" 2>/dev/null || true
 }
 
 # br_branch_show NOMBRE RAMA RUTA: el contenido de un archivo en la cabeza.
 br_branch_show() {
+  if _br_main_loc "$1" "$2"; then
+    _br_git -C "$(br_bare "$1")" show "refs/heads/main:.agent-backup/$BR_LOC_UNIT/$3" 2>/dev/null
+    return
+  fi
   _br_git -C "$(br_bare "$1")" show "refs/heads/$2:$3" 2>/dev/null
 }
 
@@ -217,6 +262,14 @@ br_branch_show() {
 br_branch_has() {
   local bare commit
   bare="$(br_bare "$1")"
+  if _br_main_loc "$1" "$2"; then
+    for commit in $(_br_git -C "$bare" rev-list refs/heads/main -- ".agent-backup/$BR_LOC_UNIT"); do
+      if _br_git -C "$bare" grep -a -q -F -e "$3" "$commit" -- ".agent-backup/$BR_LOC_UNIT" 2>/dev/null; then
+        return 0
+      fi
+    done
+    return 1
+  fi
   _br_git -C "$bare" rev-parse --verify --quiet "refs/heads/$2" >/dev/null 2>&1 || return 1
   for commit in $(_br_git -C "$bare" rev-list "refs/heads/$2"); do
     if _br_git -C "$bare" grep -a -q -F -e "$3" "$commit" -- 2>/dev/null; then
@@ -230,6 +283,10 @@ br_branch_has() {
 br_head_has() {
   local bare
   bare="$(br_bare "$1")"
+  if _br_main_loc "$1" "$2"; then
+    _br_git -C "$bare" grep -a -q -F -e "$3" refs/heads/main -- ".agent-backup/$BR_LOC_UNIT" 2> /dev/null
+    return
+  fi
   _br_git -C "$bare" rev-parse --verify --quiet "refs/heads/$2" > /dev/null 2>&1 || return 1
   _br_git -C "$bare" grep -a -q -F -e "$3" "refs/heads/$2" -- 2> /dev/null
 }
@@ -237,6 +294,12 @@ br_head_has() {
 # br_clone_branch NOMBRE RAMA DIR: un clon de solo esa rama, para abrir su almacen.
 br_clone_branch() {
   rm -rf "$3"
+  if _br_main_loc "$1" "$2"; then
+    mkdir -p "$3"
+    _br_git -C "$(br_bare "$1")" archive refs/heads/main ".agent-backup/$BR_LOC_UNIT" 2> /dev/null \
+      | tar -x -C "$3" --strip-components 2 2> /dev/null
+    return 0
+  fi
   _br_git clone -q --single-branch --branch "$2" "$(br_bare "$1")" "$3" 2> /dev/null
 }
 
@@ -494,3 +557,78 @@ br_state() {
 br_dest_field() {
   jq -r ".$1 // \"\"" "$BR_WS/scripts/heartbeat/backup-dest.json" 2>/dev/null || true
 }
+
+# ── 048: respaldos en main ──────────────────────────────────────────────────
+
+# br_main_tree NOMBRE UNIDAD: el id del subarbol .agent-backup/<u> de main, o vacio.
+br_main_tree() {
+  _br_git -C "$(br_bare "$1")" rev-parse --verify -q "refs/heads/main:.agent-backup/$2" 2>/dev/null || true
+}
+
+# br_main_files NOMBRE UNIDAD: los archivos bajo .agent-backup/<u>/ de main, ordenados.
+br_main_files() {
+  _br_git -C "$(br_bare "$1")" ls-tree -r --name-only refs/heads/main -- ".agent-backup/$2" 2>/dev/null | LC_ALL=C sort
+}
+
+# br_main_show NOMBRE RUTA: el contenido de RUTA en main.
+br_main_show() {
+  _br_git -C "$(br_bare "$1")" show "refs/heads/main:$2"
+}
+
+# br_main_commits NOMBRE: una linea por commit de main, del mas nuevo al mas viejo:
+# "<sha> <ruta1>,<ruta2>,..." con las rutas que el commit cambia contra su padre.
+br_main_commits() {
+  local bare sha
+  bare=$(br_bare "$1")
+  for sha in $(_br_git -C "$bare" rev-list refs/heads/main); do
+    printf '%s %s\n' "$sha" "$(_br_git -C "$bare" diff-tree --no-commit-id --name-only -r --root "$sha" | paste -sd, -)"
+  done
+}
+
+# br_seed_work NOMBRE: agrega a main dos commits de trabajo (README-work.md, src/app.txt).
+br_seed_work() {
+  local bare seed
+  bare=$(br_bare "$1")
+  seed="$BATS_TEST_TMPDIR/work-$1"
+  rm -rf "$seed"
+  _br_git clone -q "$bare" "$seed"
+  # The first call writes the canonical content; later calls append, so every call
+  # adds two real commits.
+  if [ -f "$seed/README-work.md" ]; then
+    printf 'more notes %s\n' "$RANDOM$RANDOM" >> "$seed/README-work.md"
+  else
+    printf 'work notes\n' > "$seed/README-work.md"
+  fi
+  _br_git -C "$seed" add README-work.md
+  _br_git -C "$seed" commit -q -m "work: notes"
+  mkdir -p "$seed/src"
+  if [ -f "$seed/src/app.txt" ]; then
+    printf 'more app %s\n' "$RANDOM$RANDOM" >> "$seed/src/app.txt"
+  else
+    printf 'app\n' > "$seed/src/app.txt"
+  fi
+  _br_git -C "$seed" add src/app.txt
+  _br_git -C "$seed" commit -q -m "work: app"
+  _br_git -C "$seed" push -q origin HEAD:refs/heads/main
+  rm -rf "$seed"
+}
+
+# br_force_count NOMBRE: cuantas actualizaciones de main en el reflog del servidor no
+# fueron fast-forward (0 = nunca hubo un empuje forzado ni una reescritura).
+br_force_count() {
+  local bare n=0 old new
+  bare=$(br_bare "$1")
+  while read -r old new _; do
+    [ "$old" = "0000000000000000000000000000000000000000" ] && continue
+    if ! _br_git -C "$bare" merge-base --is-ancestor "$old" "$new" 2>/dev/null; then
+      n=$((n + 1))
+    fi
+  done < "$bare/logs/refs/heads/main"
+  printf '%s\n' "$n"
+}
+
+# br_is_ancestor NOMBRE SHA: rc 0 si SHA es ancestro de main.
+br_is_ancestor() {
+  _br_git -C "$(br_bare "$1")" merge-base --is-ancestor "$2" refs/heads/main
+}
+

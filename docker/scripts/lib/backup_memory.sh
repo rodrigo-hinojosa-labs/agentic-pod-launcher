@@ -168,7 +168,17 @@ memory_repo_prepare() {
   base=$(memory_cache_base)
   dir="$base/memory-repo"
   mkdir -p "$base" || return 2
-  if [ -z "$remote_head" ] || [ ! -d "$dir/.git" ]; then
+  # 048: with BACKUP_REPO_TARGET=main the cache is local only: it keeps its own
+  # history (its tree is what goes into main) and never fetches backup/memory.
+  if [ "${BACKUP_REPO_TARGET:-}" = "main" ] && [ -d "$dir/.git" ]; then
+    # 048: a fresh local history each run, so the cache never accumulates every past
+    # store (046 got the same by fetching the branch at depth 1). The worktree, with
+    # store/ and the block map next to it, is kept.
+    rm -rf "$dir/.git"
+    _memory_repo_git -C "$dir" init -q > /dev/null 2>&1 || return 2
+    _memory_repo_git -C "$dir" symbolic-ref HEAD refs/heads/backup/memory || return 2
+  fi
+  if [ ! -d "$dir/.git" ] || { [ -z "$remote_head" ] && [ "${BACKUP_REPO_TARGET:-}" != "main" ]; }; then
     rm -rf "$dir"
     mkdir -p "$dir" || return 2
     _memory_repo_git -C "$dir" init -q > /dev/null 2>&1 || return 2
@@ -178,7 +188,7 @@ memory_repo_prepare() {
     _memory_repo_git -C "$dir" remote set-url origin "$url" > /dev/null 2>&1 \
       || _memory_repo_git -C "$dir" remote add origin "$url" > /dev/null 2>&1 || return 2
   fi
-  if [ -n "$remote_head" ]; then
+  if [ -n "$remote_head" ] && [ "${BACKUP_REPO_TARGET:-}" != "main" ]; then
     _memory_repo_git -C "$dir" fetch -q --depth 1 origin \
       "+refs/heads/backup/memory:refs/remotes/origin/backup/memory" > /dev/null 2>&1 || return 2
     _memory_repo_git -C "$dir" checkout -q -f -B backup/memory \
@@ -211,7 +221,11 @@ memory_repo_commit_and_push() {
   fi
   _memory_repo_git -C "$dir" -c user.email=memory-backup@localhost -c user.name=memory-backup \
     commit -q -m "memory snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ)" > /dev/null 2>&1 || return 3
-  _memory_repo_git -C "$dir" push -q origin HEAD:refs/heads/backup/memory > /dev/null 2>&1 || return 2
+  # 048: with BACKUP_REPO_TARGET=main the commit stays local; heartbeatctl publishes
+  # its tree into main (backup_main.sh).
+  if [ "${BACKUP_REPO_TARGET:-}" != "main" ]; then
+    _memory_repo_git -C "$dir" push -q origin HEAD:refs/heads/backup/memory > /dev/null 2>&1 || return 2
+  fi
   sha=$(_memory_repo_git -C "$dir" rev-parse HEAD 2> /dev/null) || return 3
   printf '%s\n' "$sha"
 }

@@ -44,6 +44,8 @@ fi
 # locks (shared, non-committing). Without it every unit keeps its pre-046 path.
 # shellcheck source=/dev/null
 [ -f "$LIB_DIR/backup_dest.sh" ]     && source "$LIB_DIR/backup_dest.sh"
+[ -f "$LIB_DIR/backup_main.sh" ]     && source "$LIB_DIR/backup_main.sh"
+[ -f "$LIB_DIR/backup_pr.sh" ]       && source "$LIB_DIR/backup_pr.sh"
 # shellcheck source=/dev/null
 [ -f "$LIB_DIR/backup_memory.sh" ]   && source "$LIB_DIR/backup_memory.sh"
 # shellcheck source=/dev/null
@@ -1256,6 +1258,11 @@ _repo_fail() {
     other-agent)    echo "backup-$unit: branch backup/$unit belongs to another agent - refusing to write"; _REPO_RC=0 ;;
     unreachable)    echo "backup-$unit: repository unreachable (credential, network or missing repository)"; _REPO_RC=2 ;;
     push-failed)    echo "backup-$unit: push failed" >&2; _REPO_RC=2 ;;
+    no-main)        echo "backup-$unit: the repository has no main branch - nothing pushed"; _REPO_RC=0 ;;
+    main-busy)      echo "backup-$unit: main kept moving - nothing pushed, retrying next cycle"; _REPO_RC=2 ;;
+    main-protected) echo "backup-$unit: main is protected and the pull request could not be merged - nothing pushed"; _REPO_RC=2 ;;
+    foreign-dir)    echo "backup-$unit: .agent-backup/$unit exists in main and is not a launcher backup - refusing to write"; _REPO_RC=0 ;;
+    other-agent-dir) echo "backup-$unit: .agent-backup/$unit in main belongs to another agent - refusing to write"; result="other-agent"; _REPO_RC=0 ;;
     *)              echo "backup-$unit: could not build the backup (${reason:-unknown})" >&2; result="error"; _REPO_RC=2 ;;
   esac
   [ "$_REPO_DRY" = "1" ] || backup_dest_record "$unit" "$result" "$attempted"
@@ -1267,6 +1274,8 @@ _repo_fail() {
 _repo_begin() {
   local unit="$1"
   _REPO_RC=0
+  # 048: with a repository the unit caches are local; the tree goes into main.
+  export BACKUP_REPO_TARGET=main
   _REPO_DRY="${2:-0}"
   if ! backup_dest_lock "$unit"; then
     echo "backup-$unit: another run holds the lock - skipping"
@@ -1334,6 +1343,261 @@ _repo_owner_ok() {
   return 0
 }
 
+# ── 048: the main destination (contracts/main-backup.md) ────────────────────
+#
+# With a repository every unit stages and commits in its own cache, as in 046, but
+# that cache is local only (BACKUP_REPO_TARGET=main): its commit is not pushed to a
+# backup/<unit> branch. Its tree is published into .agent-backup/<unit>/ of main by
+# backup_main.sh, over the current tip, never forced.
+
+_REPO_MAIN_DIR=""
+_REPO_MAIN_TIP=""
+_REPO_MAIN_TREE=""
+_REPO_MAIN_UTREE=""
+_REPO_MAIN_COMMIT=""
+_REPO_MAIN_VERIFIED=0
+_REPO_MAIN_HEADS=""
+_REPO_MAIN_STATE=""
+_REPO_MAIN_FETCHED=0
+
+# _repo_main_begin UNIT URL UNIT_CACHE HASH HEADS_FILE: M2 steps 1 to 3. rc 1 to
+# stop, with the attempt recorded.
+_repo_main_begin() {
+  local unit="$1" url="$2" ucache="$3" hash="$4" heads="$5"
+  _REPO_MAIN_STATE="${6:-}"
+  _REPO_MAIN_TREE=""; _REPO_MAIN_TIP=""; _REPO_MAIN_COMMIT=""; _REPO_MAIN_UTREE=""
+  _REPO_MAIN_VERIFIED=0; _REPO_MAIN_HEADS="$heads"; _REPO_MAIN_FETCHED=0
+  if [ -z "$(backup_dest_branch_head "$heads" main)" ]; then
+    _repo_fail "$unit" no-main "$hash"
+    return 1
+  fi
+  if ! _REPO_MAIN_DIR=$(backup_main_prepare "$(dirname "$ucache")" "$unit" "$url" "$ucache"); then
+    _repo_fail "$unit" unreachable "$hash"
+    return 1
+  fi
+  # When main has not moved since this unit's last run, what it holds is what the
+  # state recorded: no fetch at all (the 046 cost of a cycle without changes).
+  local head state_tip state_tree
+  head=$(backup_dest_branch_head "$heads" main)
+  state_tip=$(_repo_state_field "$_REPO_MAIN_STATE" main_tip)
+  state_tree=$(_repo_state_field "$_REPO_MAIN_STATE" last_tree)
+  if [ -n "$state_tip" ] && [ "$head" = "$state_tip" ] && [ -n "$state_tree" ]; then
+    _REPO_MAIN_TIP="$head"
+    _REPO_MAIN_TREE="$state_tree"
+    _REPO_MAIN_FETCHED=0
+    return 0
+  fi
+  if ! _REPO_MAIN_TIP=$(backup_main_fetch "$_REPO_MAIN_DIR"); then
+    _repo_fail "$unit" unreachable "$hash"
+    return 1
+  fi
+  _REPO_MAIN_FETCHED=1
+  _REPO_MAIN_TREE=$(backup_main_tree "$_REPO_MAIN_DIR" "$unit")
+  case "$(backup_main_owner "$_REPO_MAIN_DIR" "$unit" "$(_repo_agent_name)")" in
+    foreign)     _repo_fail "$unit" foreign-dir "$hash"; return 1 ;;
+    other-agent) _repo_fail "$unit" other-agent-dir "$hash"; return 1 ;;
+    unreachable) _repo_fail "$unit" unreachable "$hash"; return 1 ;;
+  esac
+  return 0
+}
+
+# _repo_main_unchanged UNIT STATE HASH LAST_HASH: M2 step 4. rc 0 (and the run is
+# over: printed, recorded, legacy branch handled, lock released) when nothing changed.
+_repo_main_unchanged() {
+  local unit="$1" state="$2" hash="$3" last_hash="$4" last_tree
+  last_tree=$(_repo_state_field "$state" last_tree)
+  # config also owns .agent-backup/README.md: a README main lacks, or one of an older
+  # launcher, is a change (it is checked only once main was fetched).
+  if [ "$unit" = "config" ] && [ "$_REPO_MAIN_FETCHED" = "1" ] && command -v config_main_readme > /dev/null 2>&1; then
+    local want have
+    want=$(config_main_readme "$(_repo_agent_name)" | GIT_CONFIG_GLOBAL=/dev/null git hash-object --stdin 2> /dev/null) || want=""
+    have=$(GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C "$_REPO_MAIN_DIR" \
+             rev-parse --verify -q "refs/remotes/origin/main:.agent-backup/README.md" 2> /dev/null) || have=""
+    [ "$want" = "$have" ] || return 1
+  fi
+  if [ -n "$last_hash" ] && [ "$hash" = "$last_hash" ] \
+     && [ -n "$_REPO_MAIN_TREE" ] && [ "$_REPO_MAIN_TREE" = "$last_tree" ]; then
+    echo "backup-$unit: no changes since last backup (hash $last_hash)"
+    backup_dest_record "$unit" no-change "$hash"
+    _REPO_MAIN_UTREE="$last_tree"
+    _REPO_MAIN_VERIFIED=1
+    _repo_main_done "$unit" "$state"
+    _repo_end
+    return 0
+  fi
+  return 1
+}
+
+# _repo_main_publish UNIT UNIT_CACHE HASH STATE [README]: M2 steps 5, 7, 8 and 9.
+# Sets _REPO_MAIN_COMMIT ("-" when main already holds this tree). rc 1 to stop.
+_repo_main_publish() {
+  local unit="$1" ucache="$2" hash="$3" state="$4" readme="${5:-}" last_tree utree commit rc=0
+  utree=$(GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C "$ucache" rev-parse 'HEAD^{tree}' 2> /dev/null) || utree=""
+  if [ -z "$utree" ]; then
+    _repo_fail "$unit" error "$hash" "commit"
+    return 1
+  fi
+  _REPO_MAIN_UTREE="$utree"
+  if ! backup_main_link "$_REPO_MAIN_DIR" "$ucache"; then
+    _repo_fail "$unit" error "$hash" "commit"
+    return 1
+  fi
+  last_tree=$(_repo_state_field "$state" last_tree)
+  if [ -n "$_REPO_MAIN_TREE" ] && [ -n "$last_tree" ] && [ "$_REPO_MAIN_TREE" != "$last_tree" ] \
+     && [ "$_REPO_MAIN_TREE" != "$utree" ]; then
+    echo "backup-$unit: .agent-backup/$unit in main was changed outside the launcher - restoring it" >&2
+  fi
+  local readme_ok=1 want="" have=""
+  if [ -n "$readme" ]; then
+    want=$(GIT_CONFIG_GLOBAL=/dev/null git hash-object "$readme" 2> /dev/null) || want=""
+    have=$(GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C "$_REPO_MAIN_DIR" \
+             rev-parse --verify -q "refs/remotes/origin/main:.agent-backup/README.md" 2> /dev/null) || have=""
+    [ "$want" = "$have" ] || readme_ok=0
+  fi
+  if [ "$_REPO_MAIN_FETCHED" = "0" ] && { [ "$_REPO_MAIN_TREE" != "$utree" ] || [ -n "$readme" ]; }; then
+    if ! _REPO_MAIN_TIP=$(backup_main_fetch "$_REPO_MAIN_DIR"); then
+      _repo_fail "$unit" unreachable "$hash"
+      return 1
+    fi
+    _REPO_MAIN_FETCHED=1
+    _REPO_MAIN_TREE=$(backup_main_tree "$_REPO_MAIN_DIR" "$unit")
+    if [ -n "$readme" ]; then
+      have=$(GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C "$_REPO_MAIN_DIR" \
+               rev-parse --verify -q "refs/remotes/origin/main:.agent-backup/README.md" 2> /dev/null) || have=""
+      if [ "$want" = "$have" ]; then readme_ok=1; else readme_ok=0; fi
+    fi
+  fi
+  if [ "$_REPO_MAIN_TREE" = "$utree" ] && [ "$readme_ok" = "1" ]; then
+    _REPO_MAIN_COMMIT="-"
+    _REPO_MAIN_VERIFIED=1
+    return 0
+  fi
+  commit=$(backup_main_publish "$_REPO_MAIN_DIR" "$unit" "$(_repo_agent_name)" "$utree" "$readme") || rc=$?
+  case "$rc" in
+    0) ;;
+    3) _repo_fail "$unit" main-busy "$hash"; return 1 ;;
+    4)
+      # Contract P: main refuses a direct push; open a pull request and merge it.
+      local pcommit
+      pcommit=$(backup_main_build_commit "$_REPO_MAIN_DIR" "$unit" "$(_repo_agent_name)" "$utree" "$readme") || pcommit=""
+      if [ -z "$pcommit" ] || ! command -v backup_pr_merge > /dev/null 2>&1 \
+         || ! backup_pr_merge "$_REPO_MAIN_DIR" "$unit" "$(_repo_agent_name)" "$pcommit" \
+                "$(_repo_dest_url)"; then
+        _repo_fail "$unit" main-protected "$hash"
+        return 1
+      fi
+      commit="$pcommit" ;;
+    *) _repo_fail "$unit" push-failed "$hash"; return 1 ;;
+  esac
+  _REPO_MAIN_COMMIT="$commit"
+  if backup_main_verify "$_REPO_MAIN_DIR" "$unit" "$utree"; then
+    _REPO_MAIN_VERIFIED=1
+  else
+    _REPO_MAIN_VERIFIED=0
+  fi
+  return 0
+}
+
+# _repo_main_done UNIT STATE: the main fields of the state (data-model section 3) and
+# the legacy branch (contract L, US4). Never changes the outcome of the run.
+_repo_main_done() {
+  local unit="$1" state="$2" dir tmp base='{}'
+  dir=$(dirname "$state")
+  mkdir -p "$dir" 2> /dev/null || return 0
+  if [ -s "$state" ] && jq -e 'type == "object"' "$state" > /dev/null 2>&1; then
+    base=$(cat "$state")
+  fi
+  tmp=$(mktemp "$dir/.$unit-main.XXXXXX" 2> /dev/null) || return 0
+  local tip="$_REPO_MAIN_TIP"
+  if [ -n "$_REPO_MAIN_COMMIT" ] && [ "$_REPO_MAIN_COMMIT" != "-" ]; then tip="$_REPO_MAIN_COMMIT"; fi
+  [ "$_REPO_MAIN_VERIFIED" = "1" ] || tip=""
+  if jq --arg tree "$_REPO_MAIN_UTREE" --arg tip "$tip" \
+        '. + {location:"main", last_tree:$tree, main_tip:$tip}' <<< "$base" > "$tmp" 2> /dev/null; then
+    mv -f "$tmp" "$state"
+  else
+    rm -f "$tmp"
+  fi
+  if command -v _repo_main_legacy > /dev/null 2>&1; then
+    _repo_main_legacy "$unit" "$state" || true
+  fi
+  [ "$unit" = "config" ] && _repo_main_size_refresh
+  return 0
+}
+
+# _repo_main_size_refresh: the repository size GitHub reports (GET /repos/{o}/{r},
+# field size, in KB), at most once a day, into scripts/heartbeat/backup-repo-size.json
+# (contract D4; not the destination record, which backup_dest_verify rewrites).
+# backup-status reads it and never touches the network itself.
+_repo_main_size_refresh() {
+  command -v _backup_pr_call > /dev/null 2>&1 || return 0
+  [ -n "${GITHUB_PAT:-}" ] || return 0
+  local f="$HEARTBEAT_DIR/backup-repo-size.json" now last url cfg resp size tmp base='{}'
+  now=$(date +%s)
+  last=$(jq -r '.repo_size_checked_epoch // 0' "$f" 2> /dev/null) || last=0
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  [ $((now - last)) -ge 86400 ] || return 0
+  url=$(_repo_dest_url) || return 0
+  cfg=$(mktemp "${TMPDIR:-/tmp}/backup-size-cfg.XXXXXX") || return 0
+  chmod 600 "$cfg"
+  printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_PAT" > "$cfg"
+  resp=$(_backup_pr_call "$cfg" GET "$(_backup_pr_api_base)/repos/$(_backup_pr_repo_path "$url")")
+  rm -f "$cfg"
+  [ "${resp%% *}" = "200" ] || return 0
+  size=$(jq -r '.size // empty' <<< "${resp#* }" 2> /dev/null) || size=""
+  case "$size" in ''|*[!0-9]*) return 0 ;; esac
+  [ -s "$f" ] && jq -e 'type == "object"' "$f" > /dev/null 2>&1 && base=$(cat "$f")
+  tmp=$(mktemp "$(dirname "$f")/.backup-repo-size.XXXXXX") || return 0
+  if jq --argjson s "$size" --argjson e "$now" '. + {repo_size_kb:$s, repo_size_checked_epoch:$e}' <<< "$base" > "$tmp"; then
+    mv -f "$tmp" "$f"
+  else
+    rm -f "$tmp"
+  fi
+  return 0
+}
+
+# _repo_main_legacy UNIT STATE: contract L. Deletes the unit's legacy backup/<unit>
+# branch only when main verifiably holds this unit's tree and the branch carries this
+# agent's mark. Records legacy_branch; never changes the result of the run.
+_repo_main_legacy() {
+  local unit="$1" state="$2" head verdict value="" line=""
+  head=$(backup_dest_branch_head "$_REPO_MAIN_HEADS" "backup/$unit")
+  if [ -z "$head" ]; then
+    value="none"
+  elif [ "$_REPO_MAIN_VERIFIED" != "1" ]; then
+    value="kept: not-verified"
+  else
+    verdict=$(backup_main_legacy_owner "$_REPO_MAIN_DIR" "$unit" "$(_repo_agent_name)")
+    case "$verdict" in
+      ok)
+        if backup_main_delete_branch "$_REPO_MAIN_DIR" "$unit"; then
+          value="deleted $(_repo_now_iso)"
+          line="backup-$unit: legacy branch backup/$unit deleted (its backup is in main)"
+        else
+          value="kept: delete-failed"
+        fi ;;
+      no-mark)     value="kept: no-mark";     echo "backup-$unit: legacy branch backup/$unit has no launcher mark - left alone" >&2 ;;
+      unreachable) value="kept: not-verified" ;;
+      other-agent) value="kept: other-agent"; echo "backup-$unit: legacy branch backup/$unit belongs to another agent - left alone" >&2 ;;
+      *)           value="kept: not-verified" ;;
+    esac
+  fi
+  [ -n "$line" ] && echo "$line"
+  local dir tmp base='{}'
+  dir=$(dirname "$state")
+  if [ -s "$state" ] && jq -e 'type == "object"' "$state" > /dev/null 2>&1; then
+    base=$(cat "$state")
+  fi
+  # A branch deleted in an earlier cycle stays recorded as deleted.
+  case "$value" in none) case "$(jq -r '.legacy_branch // ""' <<< "$base" 2> /dev/null)" in deleted*) return 0 ;; esac ;; esac
+  tmp=$(mktemp "$dir/.$unit-legacy.XXXXXX" 2> /dev/null) || return 0
+  if jq --arg v "$value" '. + {legacy_branch:$v}' <<< "$base" > "$tmp" 2> /dev/null; then
+    mv -f "$tmp" "$state"
+  else
+    rm -f "$tmp"
+  fi
+  return 0
+}
+
 # identity, repo path: the thirteen steps of U1 (U2).
 _bi_run_repo() {
   local url="$1" dry_run="${2:-0}"
@@ -1365,20 +1629,15 @@ _bi_run_repo() {
   _repo_verify identity "$url" "$current_hash" "$base/identity-repo.heads" || return "$_REPO_RC"
 
   last_commit=$(_repo_state_field "$IDENTITY_BACKUP_STATE_FILE" last_commit)
-  if [ -n "$last_hash" ] && [ "$current_hash" = "$last_hash" ] \
-     && [ -n "$_REPO_REMOTE_HEAD" ] && [ "$_REPO_REMOTE_HEAD" = "$last_commit" ]; then
-    echo "backup-identity: no changes since last backup (hash $last_hash)"
-    backup_dest_record identity no-change "$current_hash"
-    _repo_end
-    return 0
-  fi
+  # 048: the destination is .agent-backup/identity/ of main.
+  _repo_main_begin identity "$url" "$base/identity-repo" "$current_hash" "$base/identity-repo.heads" "$IDENTITY_BACKUP_STATE_FILE" || return "$_REPO_RC"
+  if _repo_main_unchanged identity "$IDENTITY_BACKUP_STATE_FILE" "$current_hash" "$last_hash"; then return 0; fi
 
   local dir
-  if ! dir=$(identity_repo_prepare "$url" "$_REPO_REMOTE_HEAD"); then
+  if ! dir=$(identity_repo_prepare "$url" ""); then
     _repo_fail identity unreachable "$current_hash"
     return "$_REPO_RC"
   fi
-  _repo_owner_ok identity "$dir" "$current_hash" || return "$_REPO_RC"
 
   local result rc=0 sha mode push
   result=$(identity_repo_commit_and_push "$dir" "$IDENTITY_STATE_DIR" "$recipient" "$secrets" \
@@ -1390,17 +1649,21 @@ _bi_run_repo() {
   esac
   sha="${result%% *}"
   mode="${result##* }"
+  _repo_main_publish identity "$dir" "$current_hash" "$IDENTITY_BACKUP_STATE_FILE" || return "$_REPO_RC"
+  sha="$_REPO_MAIN_COMMIT"
   if [ "$sha" = "-" ]; then
     push=$(_repo_state_field "$IDENTITY_BACKUP_STATE_FILE" last_push)
-    [ -n "$push" ] || push=$(_repo_commit_iso "$dir" "$_REPO_REMOTE_HEAD")
-    identity_repo_write_state "$IDENTITY_BACKUP_STATE_FILE" "$current_hash" "$mode" "$_REPO_REMOTE_HEAD" "$push"
+    [ -n "$push" ] || push=$(_repo_now_iso)
+    identity_repo_write_state "$IDENTITY_BACKUP_STATE_FILE" "$current_hash" "$mode" "${last_commit:-$_REPO_MAIN_TIP}" "$push"
     echo "backup-identity: no changes after stage-diff (hash $current_hash)"
     backup_dest_record identity no-change "$current_hash"
+    _repo_main_done identity "$IDENTITY_BACKUP_STATE_FILE"
     _repo_end
     return 0
   fi
   identity_repo_write_state "$IDENTITY_BACKUP_STATE_FILE" "$current_hash" "$mode" "$sha" "$(_repo_now_iso)"
   backup_dest_record identity ok "$current_hash"
+  _repo_main_done identity "$IDENTITY_BACKUP_STATE_FILE"
   printf 'backup-identity: %s pushed (%s)\n' "${sha:0:8}" "$mode"
   _repo_end
   return 0
@@ -1458,21 +1721,16 @@ _bv_run_repo() {
   _repo_verify vault "$url" "$current_hash" "$base/vault-repo.heads" || return "$_REPO_RC"
 
   last_commit=$(_repo_state_field "$VAULT_BACKUP_STATE_FILE" last_commit)
-  if [ -n "$last_hash" ] && [ "$current_hash" = "$last_hash" ] \
-     && [ -n "$_REPO_REMOTE_HEAD" ] && [ "$_REPO_REMOTE_HEAD" = "$last_commit" ]; then
-    echo "backup-vault: no changes since last backup (hash $last_hash)"
-    backup_dest_record vault no-change "$current_hash"
-    _repo_end
-    return 0
-  fi
+  # 048: the destination is .agent-backup/vault/ of main.
+  _repo_main_begin vault "$url" "$base/vault-repo" "$current_hash" "$base/vault-repo.heads" "$VAULT_BACKUP_STATE_FILE" || return "$_REPO_RC"
+  if _repo_main_unchanged vault "$VAULT_BACKUP_STATE_FILE" "$current_hash" "$last_hash"; then return 0; fi
 
   local dir keep=0 store_recip="__keep__"
   [ "$sensitive" = "true" ] && keep=1
-  if ! dir=$(vault_repo_prepare "$url" "$_REPO_REMOTE_HEAD" "$keep"); then
+  if ! dir=$(vault_repo_prepare "$url" "" "$keep"); then
     _repo_fail vault unreachable "$current_hash"
     return "$_REPO_RC"
   fi
-  _repo_owner_ok vault "$dir" "$current_hash" || return "$_REPO_RC"
   if [ "$sensitive" = "true" ]; then
     if ! store_recip=$(_repo_store_pack vault "$dir" "$base/vault-repo" "$base/vault-repo.map" \
                          "$VAULT_BACKUP_STATE_FILE" "$recipient"); then
@@ -1491,17 +1749,21 @@ _bv_run_repo() {
     2) _repo_fail vault push-failed "$current_hash"; return "$_REPO_RC" ;;
     *) _repo_fail vault error "$current_hash" "commit"; return "$_REPO_RC" ;;
   esac
+  _repo_main_publish vault "$dir" "$current_hash" "$VAULT_BACKUP_STATE_FILE" || return "$_REPO_RC"
+  sha="$_REPO_MAIN_COMMIT"
   if [ "$sha" = "-" ]; then
     push=$(_repo_state_field "$VAULT_BACKUP_STATE_FILE" last_push)
-    [ -n "$push" ] || push=$(_repo_commit_iso "$dir" "$_REPO_REMOTE_HEAD")
-    vault_repo_write_state "$VAULT_BACKUP_STATE_FILE" "$current_hash" "$_REPO_REMOTE_HEAD" "$push" "$store_recip"
+    [ -n "$push" ] || push=$(_repo_now_iso)
+    vault_repo_write_state "$VAULT_BACKUP_STATE_FILE" "$current_hash" "${last_commit:-$_REPO_MAIN_TIP}" "$push" "$store_recip"
     echo "backup-vault: no changes after stage-diff (hash $current_hash)"
     backup_dest_record vault no-change "$current_hash"
+    _repo_main_done vault "$VAULT_BACKUP_STATE_FILE"
     _repo_end
     return 0
   fi
   vault_repo_write_state "$VAULT_BACKUP_STATE_FILE" "$current_hash" "$sha" "$(_repo_now_iso)" "$store_recip"
   backup_dest_record vault ok "$current_hash"
+  _repo_main_done vault "$VAULT_BACKUP_STATE_FILE"
   printf 'backup-vault: %s pushed\n' "${sha:0:8}"
   _repo_end
   return 0
@@ -1543,21 +1805,16 @@ _bc_run_repo() {
   _repo_verify config "$url" "$current_hash" "$base/config-repo.heads" || return "$_REPO_RC"
 
   last_commit=$(_repo_state_field "$CONFIG_BACKUP_STATE_FILE" last_commit)
-  if [ -n "$last_hash" ] && [ "$current_hash" = "$last_hash" ] \
-     && [ -n "$_REPO_REMOTE_HEAD" ] && [ "$_REPO_REMOTE_HEAD" = "$last_commit" ]; then
-    echo "backup-config: no changes since last backup (hash $last_hash)"
-    backup_dest_record config no-change "$current_hash"
-    _repo_end
-    return 0
-  fi
+  # 048: the destination is .agent-backup/config/ of main.
+  _repo_main_begin config "$url" "$base/config-repo" "$current_hash" "$base/config-repo.heads" "$CONFIG_BACKUP_STATE_FILE" || return "$_REPO_RC"
+  if _repo_main_unchanged config "$CONFIG_BACKUP_STATE_FILE" "$current_hash" "$last_hash"; then return 0; fi
 
   local dir keep=0 store_recip="__keep__"
   [ "$sensitive" = "true" ] && keep=1
-  if ! dir=$(config_repo_prepare "$url" "$_REPO_REMOTE_HEAD" "$keep"); then
+  if ! dir=$(config_repo_prepare "$url" "" "$keep"); then
     _repo_fail config unreachable "$current_hash"
     return "$_REPO_RC"
   fi
-  _repo_owner_ok config "$dir" "$current_hash" || return "$_REPO_RC"
   if ! config_repo_stage_plain "$dir" "$base/config-repo.plain"; then
     _repo_fail config error "$current_hash" "staging"
     return "$_REPO_RC"
@@ -1577,17 +1834,22 @@ _bc_run_repo() {
     2) _repo_fail config push-failed "$current_hash"; return "$_REPO_RC" ;;
     *) _repo_fail config error "$current_hash" "commit"; return "$_REPO_RC" ;;
   esac
+  config_main_readme "$(_repo_agent_name)" > "$base/agent-backup-readme.md" || true
+  _repo_main_publish config "$dir" "$current_hash" "$CONFIG_BACKUP_STATE_FILE" "$base/agent-backup-readme.md" || return "$_REPO_RC"
+  sha="$_REPO_MAIN_COMMIT"
   if [ "$sha" = "-" ]; then
     push=$(_repo_state_field "$CONFIG_BACKUP_STATE_FILE" last_push)
-    [ -n "$push" ] || push=$(_repo_commit_iso "$dir" "$_REPO_REMOTE_HEAD")
-    config_repo_write_state "$CONFIG_BACKUP_STATE_FILE" "$current_hash" "$_REPO_REMOTE_HEAD" "$push" "$store_recip"
+    [ -n "$push" ] || push=$(_repo_now_iso)
+    config_repo_write_state "$CONFIG_BACKUP_STATE_FILE" "$current_hash" "${last_commit:-$_REPO_MAIN_TIP}" "$push" "$store_recip"
     echo "backup-config: no changes after stage-diff (hash $current_hash)"
     backup_dest_record config no-change "$current_hash"
+    _repo_main_done config "$CONFIG_BACKUP_STATE_FILE"
     _repo_end
     return 0
   fi
   config_repo_write_state "$CONFIG_BACKUP_STATE_FILE" "$current_hash" "$sha" "$(_repo_now_iso)" "$store_recip"
   backup_dest_record config ok "$current_hash"
+  _repo_main_done config "$CONFIG_BACKUP_STATE_FILE"
   printf 'backup-config: %s pushed\n' "${sha:0:8}"
   _repo_end
   return 0
@@ -1640,18 +1902,13 @@ _repo_store_unit() {
   last_hash=$(_repo_state_field "$state" hash)
   _repo_verify "$unit" "$url" "$current_hash" "$base/$unit-repo.heads" || return "$_REPO_RC"
   last_commit=$(_repo_state_field "$state" last_commit)
-  if [ -n "$last_hash" ] && [ "$current_hash" = "$last_hash" ] \
-     && [ -n "$_REPO_REMOTE_HEAD" ] && [ "$_REPO_REMOTE_HEAD" = "$last_commit" ]; then
-    echo "backup-$unit: no changes since last backup (hash $last_hash)"
-    backup_dest_record "$unit" no-change "$current_hash"
-    _repo_end
-    return 0
-  fi
-  if ! dir=$("${unit}_repo_prepare" "$url" "$_REPO_REMOTE_HEAD"); then
+  # 048: the destination is .agent-backup/<unit>/ of main.
+  _repo_main_begin "$unit" "$url" "$base/$unit-repo" "$current_hash" "$base/$unit-repo.heads" "$state" || return "$_REPO_RC"
+  if _repo_main_unchanged "$unit" "$state" "$current_hash" "$last_hash"; then return 0; fi
+  if ! dir=$("${unit}_repo_prepare" "$url" ""); then
     _repo_fail "$unit" unreachable "$current_hash"
     return "$_REPO_RC"
   fi
-  _repo_owner_ok "$unit" "$dir" "$current_hash" || return "$_REPO_RC"
   if [ -n "$plain" ] && ! memory_repo_stage_plain "$dir" "$plain"; then
     _repo_fail "$unit" error "$current_hash" "staging"
     return "$_REPO_RC"
@@ -1666,17 +1923,21 @@ _repo_store_unit() {
     2) _repo_fail "$unit" push-failed "$current_hash"; return "$_REPO_RC" ;;
     *) _repo_fail "$unit" error "$current_hash" "commit"; return "$_REPO_RC" ;;
   esac
+  _repo_main_publish "$unit" "$dir" "$current_hash" "$state" || return "$_REPO_RC"
+  sha="$_REPO_MAIN_COMMIT"
   if [ "$sha" = "-" ]; then
     push=$(_repo_state_field "$state" last_push)
-    [ -n "$push" ] || push=$(_repo_commit_iso "$dir" "$_REPO_REMOTE_HEAD")
-    "${unit}_repo_write_state" "$state" "$current_hash" "$_REPO_REMOTE_HEAD" "$push" "$store_recip"
+    [ -n "$push" ] || push=$(_repo_now_iso)
+    "${unit}_repo_write_state" "$state" "$current_hash" "${last_commit:-$_REPO_MAIN_TIP}" "$push" "$store_recip"
     echo "backup-$unit: no changes after stage-diff (hash $current_hash)"
     backup_dest_record "$unit" no-change "$current_hash"
+    _repo_main_done "$unit" "$state"
     _repo_end
     return 0
   fi
   "${unit}_repo_write_state" "$state" "$current_hash" "$sha" "$(_repo_now_iso)" "$store_recip"
   backup_dest_record "$unit" ok "$current_hash"
+  _repo_main_done "$unit" "$state"
   printf 'backup-%s: %s pushed\n' "$unit" "${sha:0:8}"
   _repo_end
   return 0
@@ -1807,7 +2068,9 @@ _bs_unit_json() {  # UNIT ENABLED MAX_HOURS STATE_FILE CACHE_DIR
   jq -c --arg unit "$unit" --argjson enabled "$enabled" --argjson max "$max" \
      --argjson cache "$(_bs_bytes "$cache")" \
      '{unit:$unit, enabled:$enabled, last_push:(.last_push // ""), last_attempt:(.last_attempt // ""),
-       last_result:(.last_result // ""), max_age_hours:$max, cache_bytes:$cache}' <<< "$base"
+       last_result:(.last_result // ""), max_age_hours:$max, cache_bytes:$cache}
+      + (if has("location") or has("legacy_branch") then
+           {location:(.location // ""), legacy_branch:(.legacy_branch // "")} else {} end)' <<< "$base"
 }
 
 _bs_flag() {  # YQ_PATH -> true unless explicitly false
@@ -1892,10 +2155,12 @@ cmd_backup_status() {
               --arg rtype "$rtype" --arg rfp "$rfp" --arg rcomment "$rcomment" \
               --argjson declared "$declared" --argjson missing "$missing_json" --argjson bytes "$bytes" \
               --arg wdir "$wdir" --argjson present "$present" --argjson unpub "${unpub:-0}" --argjson dirty "${dirty:-0}" \
+              --argjson size "$(jq -c '.repo_size_kb // null' "$HEARTBEAT_DIR/backup-repo-size.json" 2> /dev/null || echo null)" \
        '. + {credential:$cred, sensitive:$sensitive,
              recipient:{configured:$rconf, type:$rtype, fingerprint:$rfp, comment:$rcomment},
              extra_paths:{declared:$declared, missing:$missing, bytes:$bytes},
              cache_bytes_total:([.units[].cache_bytes] | add // 0),
+             repo_size_kb:$size,
              work_clone:{path:$wdir, present:$present, unpublished_commits:$unpub, dirty_files:$dirty}}' <<< "$json")
   fi
 
@@ -1938,6 +2203,12 @@ _bs_print() {
     case "$result" in ''|ok|no-change) ;; *) status="$status, last attempt $result" ;; esac
     printf '%-9s %-8s %-21s %-14s %s\n' "$unit" "$enabled" "${push:--}" "${result:--}" "$status"
   done < <(jq -r '.units[] | [.unit, (.enabled | tostring), .last_push, .last_result, (.max_age_hours | tostring)] | join("|")' <<< "$json")
+  # 048: where each unit lives with a repository, and the size GitHub reports.
+  if [ "$(jq -r '.destination.kind' <<< "$json")" = "repo" ]; then
+    jq -r '.units[] | select((.location // "") != "")
+           | "location \(.unit): \(if .location == "main" then "main:.agent-backup/" + .unit else "branch:backup/" + .unit end)\(if (.legacy_branch // "") != "" then " (legacy branch: " + .legacy_branch + ")" else "" end)"' <<< "$json"
+    jq -r 'if .repo_size_kb != null then "repository size: \(.repo_size_kb) KB" else empty end' <<< "$json"
+  fi
 }
 
 cmd_kick_channel() {

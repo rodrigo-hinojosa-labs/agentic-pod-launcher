@@ -116,7 +116,8 @@ _tr_restored_sig() {  # ARCHIVO -> "<tamano> <sha256>"
 
 @test "TR02: without the backup/history branch the other four are restored and the output names the missing one" {
   _tr_origin tr02
-  _br_git -C "$TR_BARE" update-ref -d refs/heads/backup/history
+  # 048: the backups live in main; "without history" = no .agent-backup/history/.
+  _tr_main_edit tr02 history 'rm -rf "$1"' 
   export RESTORE_IDENTITY_KEY="$BR_KEY_A"
   run _tr_restore
   [ "$status" -eq 0 ]
@@ -172,31 +173,58 @@ _tr_restored_sig() {  # ARCHIVO -> "<tamano> <sha256>"
   [ ! -e "$TR_DEST/.state/.claude-mem/claude-mem.db" ]
 }
 
-# _tr_forge_block NOMBRE RAMA: reemplaza un bloque del almacen de la rama por otro
-# contenido cifrado de forma valida para su recipient, en un commit nuevo.
+# 048: _tr_main_edit NOMBRE UNIDAD SCRIPT: un commit ajeno en main que corre SCRIPT
+# (sh, con $1 = el directorio .agent-backup/<unidad>/ de un clon de main).
+_tr_main_edit() {
+  local work="$BATS_TEST_TMPDIR/main-edit-$RANDOM"
+  _br_git clone -q "$(br_bare "$1")" "$work"
+  sh -c "$3" _ "$work/.agent-backup/$2"
+  _br_git -C "$work" add -A
+  _br_git -C "$work" commit -q -m forged
+  _br_git -C "$work" push -q origin HEAD:refs/heads/main
+  rm -rf "$work"
+}
+
+# 048: _tr_main_put NOMBRE UNIDAD RUTA CONTENIDO: un commit ajeno en main que deja
+# CONTENIDO en .agent-backup/<unidad>/RUTA.
+_tr_main_put() {
+  local work="$BATS_TEST_TMPDIR/main-put-$RANDOM"
+  _br_git clone -q "$(br_bare "$1")" "$work"
+  mkdir -p "$(dirname "$work/.agent-backup/$2/$3")"
+  printf '%s\n' "$4" > "$work/.agent-backup/$2/$3"
+  _br_git -C "$work" add -A
+  _br_git -C "$work" commit -q -m seeded
+  _br_git -C "$work" push -q origin HEAD:refs/heads/main
+  rm -rf "$work"
+}
+
+# _tr_forge_block NOMBRE RAMA: reemplaza un bloque del almacen de la unidad por otro
+# contenido cifrado de forma valida para su recipient, en un commit nuevo de main
+# (048; antes, de la rama backup/<unidad>).
 _tr_forge_block() {
-  local clone="$BATS_TEST_TMPDIR/forge-${2//\//-}"
-  br_clone_branch "$1" "$2" "$clone"
-  local block
+  local work="$BATS_TEST_TMPDIR/forge-${2//\//-}"
+  _br_git clone -q "$(br_bare "$1")" "$work"
+  local clone="$work/.agent-backup/${2#backup/}" block
   block=$(find "$clone/store/blocks" -type f -name '*.age' | LC_ALL=C sort | head -n 1)
   printf 'forged\n' | gzip -n | age -r "$(cat "$clone/store/recipient")" -o "$block"
-  _br_git -C "$clone" add -A
-  _br_git -C "$clone" commit -q -m forged
-  _br_git -C "$clone" push -q origin "HEAD:refs/heads/$2"
+  _br_git -C "$work" add -A
+  _br_git -C "$work" commit -q -m forged
+  _br_git -C "$work" push -q origin HEAD:refs/heads/main
 }
 
 # _tr_forge_manifest NOMBRE RAMA FILTRO_JQ: reescribe el manifiesto del almacen de la
 # rama con FILTRO_JQ y lo cifra de forma valida para su recipient, en un commit nuevo:
 # lo que puede hacer cualquiera que escriba en el repositorio (age no autentica).
 _tr_forge_manifest() {
-  local clone="$BATS_TEST_TMPDIR/forge-m-$RANDOM-${2//\//-}"
-  br_clone_branch "$1" "$2" "$clone"
-  age -d -i "$BR_KEY_A" -o "$clone.key" "$clone/store/key.age"
-  age -d -i "$clone.key" -o "$clone.m.json" "$clone/store/manifest.json.age"
-  jq "$3" "$clone.m.json" > "$clone.m2.json"
-  age -r "$(cat "$clone/store/recipient")" -o "$clone/store/manifest.json.age" "$clone.m2.json"
-  _br_git -C "$clone" commit -q -am forged
-  _br_git -C "$clone" push -q origin "HEAD:refs/heads/$2"
+  local work="$BATS_TEST_TMPDIR/forge-m-$RANDOM-${2//\//-}"
+  _br_git clone -q "$(br_bare "$1")" "$work"
+  local clone="$work/.agent-backup/${2#backup/}"
+  age -d -i "$BR_KEY_A" -o "$work.key" "$clone/store/key.age"
+  age -d -i "$work.key" -o "$work.m.json" "$clone/store/manifest.json.age"
+  jq "$3" "$work.m.json" > "$work.m2.json"
+  age -r "$(cat "$clone/store/recipient")" -o "$clone/store/manifest.json.age" "$work.m2.json"
+  _br_git -C "$work" commit -q -am forged
+  _br_git -C "$work" push -q origin HEAD:refs/heads/main
 }
 
 @test "TR05: an altered block in backup/memory writes nothing for that unit, and the other units are restored" {
@@ -278,7 +306,7 @@ _tr_forge_manifest() {
   [ ! -e "$TR_DEST/.state/.vault/wiki/run.py" ]
   # A vault.path that leaves the workspace is not followed: the vault goes to
   # .state/.vault, with a line that says so.
-  br_seed_branch tr08 backup/config KEEP agent.yml "$(yq '.vault.path = "../outside-vault"' "$BR_WS/agent.yml")"
+  _tr_main_put tr08 config agent.yml "$(yq '.vault.path = "../outside-vault"' "$BR_WS/agent.yml")"
   rm -rf "$TR_DEST"
   run _tr_restore
   [ "$status" -eq 0 ]
@@ -286,7 +314,7 @@ _tr_forge_manifest() {
   grep -qF "restore: vault.path '../outside-vault' leaves the workspace — restoring into .state/.vault" <<< "$output"
   _tr_same "$BR_WS/.state/.vault/wiki/concepts/page.md" "$TR_DEST/.state/.vault/wiki/concepts/page.md"
   # Nor one under the workspace's .git.
-  br_seed_branch tr08 backup/config KEEP agent.yml "$(yq '.vault.path = ".git/notes"' "$BR_WS/agent.yml")"
+  _tr_main_put tr08 config agent.yml "$(yq '.vault.path = ".git/notes"' "$BR_WS/agent.yml")"
   rm -rf "$TR_DEST"
   _br_git init -q "$TR_DEST"
   run _tr_restore
@@ -343,21 +371,9 @@ _tr_forge_manifest() {
   # lands, and nothing is written through a link.
   local out="$BATS_TEST_TMPDIR/outside" out2="$BATS_TEST_TMPDIR/outside2" clone
   mkdir -p "$out" "$out2"
-  clone="$BATS_TEST_TMPDIR/sym-config"
-  br_clone_branch tr11 backup/config "$clone"
-  rm -rf "$clone/personas"
-  ln -s "$out" "$clone/personas"
-  mkdir -p "$clone/.claude/other"
-  printf 'other\n' > "$clone/.claude/other/x.md"
-  _br_git -C "$clone" add -A
-  _br_git -C "$clone" commit -q -m forged
-  _br_git -C "$clone" push -q origin HEAD:refs/heads/backup/config
-  clone="$BATS_TEST_TMPDIR/sym-identity"
-  br_clone_branch tr11 backup/identity "$clone"
-  ln -s "$out2" "$clone/.claude/projects"
-  _br_git -C "$clone" add -A
-  _br_git -C "$clone" commit -q -m forged
-  _br_git -C "$clone" push -q origin HEAD:refs/heads/backup/identity
+  # 048: the forged content goes into the units' directories of main.
+  _tr_main_edit tr11 config "rm -rf \"\$1/personas\"; ln -s '$out' \"\$1/personas\"; mkdir -p \"\$1/.claude/other\"; printf 'other\\n' > \"\$1/.claude/other/x.md\""
+  _tr_main_edit tr11 identity "ln -s '$out2' \"\$1/.claude/projects\"" 
   rm -rf "$TR_DEST"
   run _tr_restore
   [ "$status" -eq 0 ]
@@ -394,7 +410,7 @@ _tr_forge_manifest() {
   # them to the encrypted manifest, with the login file and an undeclared path: only
   # the declared, allowed extra paths come back.
   local login=".credentials.json" copy='(.files[] | select(.path == "extra/.custom/data.txt"))'
-  br_seed_branch tr12 backup/config KEEP agent.yml \
+  _tr_main_put tr12 config agent.yml \
     "$(yq '.backup.extra_paths += ["scripts", "setup.sh"]' "$BR_WS/agent.yml")"
   _tr_forge_manifest tr12 backup/memory ".files += [($copy | .path = \"extra/scripts/lib/render.sh\"), ($copy | .path = \"extra/setup.sh\"), ($copy | .path = \"extra/.state/extra-data/$login\"), ($copy | .path = \"extra/.other/x.txt\")]"
   rm -rf "$TR_DEST"

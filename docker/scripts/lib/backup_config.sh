@@ -154,7 +154,17 @@ config_repo_prepare() {
   local base="${CONFIG_BACKUP_CACHE_DIR:-/home/agent/.cache/agent-backup}"
   local dir="$base/config-repo"
   mkdir -p "$base" || return 2
-  if [ -z "$remote_head" ] || [ ! -d "$dir/.git" ]; then
+  # 048: with BACKUP_REPO_TARGET=main the cache is local only: it keeps its own
+  # history (its tree is what goes into main) and never fetches backup/config.
+  if [ "${BACKUP_REPO_TARGET:-}" = "main" ] && [ -d "$dir/.git" ]; then
+    # 048: a fresh local history each run, so the cache never accumulates every past
+    # store (046 got the same by fetching the branch at depth 1). The worktree, with
+    # store/ and the block map next to it, is kept.
+    rm -rf "$dir/.git"
+    _config_repo_git -C "$dir" init -q > /dev/null 2>&1 || return 2
+    _config_repo_git -C "$dir" symbolic-ref HEAD refs/heads/backup/config || return 2
+  fi
+  if [ ! -d "$dir/.git" ] || { [ -z "$remote_head" ] && [ "${BACKUP_REPO_TARGET:-}" != "main" ]; }; then
     rm -rf "$dir"
     mkdir -p "$dir" || return 2
     _config_repo_git -C "$dir" init -q > /dev/null 2>&1 || return 2
@@ -164,7 +174,7 @@ config_repo_prepare() {
     _config_repo_git -C "$dir" remote set-url origin "$url" > /dev/null 2>&1 \
       || _config_repo_git -C "$dir" remote add origin "$url" > /dev/null 2>&1 || return 2
   fi
-  if [ -n "$remote_head" ]; then
+  if [ -n "$remote_head" ] && [ "${BACKUP_REPO_TARGET:-}" != "main" ]; then
     _config_repo_git -C "$dir" fetch -q --depth 1 origin \
       "+refs/heads/backup/config:refs/remotes/origin/backup/config" > /dev/null 2>&1 || return 2
     _config_repo_git -C "$dir" checkout -q -f -B backup/config \
@@ -191,7 +201,11 @@ config_repo_commit_and_push() {
   fi
   _config_repo_git -C "$dir" -c user.email=config-backup@localhost -c user.name=config-backup \
     commit -q -m "config snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ)" > /dev/null 2>&1 || return 3
-  _config_repo_git -C "$dir" push -q origin HEAD:refs/heads/backup/config > /dev/null 2>&1 || return 2
+  # 048: with BACKUP_REPO_TARGET=main the commit stays local; heartbeatctl publishes
+  # its tree into main (backup_main.sh).
+  if [ "${BACKUP_REPO_TARGET:-}" != "main" ]; then
+    _config_repo_git -C "$dir" push -q origin HEAD:refs/heads/backup/config > /dev/null 2>&1 || return 2
+  fi
   sha=$(_config_repo_git -C "$dir" rev-parse HEAD 2> /dev/null) || return 3
   printf '%s\n' "$sha"
 }
@@ -262,3 +276,38 @@ config_repo_stage_plain() {
   done < "$map"
   return 0
 }
+
+# config_main_readme AGENT -> the text of .agent-backup/README.md (048, research R8).
+# ASCII only, fixed: it changes only when this template changes.
+config_main_readme() {
+  local agent="${1:-agent}"
+  cat << EOF
+# .agent-backup
+
+This directory holds the backups of the agent \`$agent\`, written by the
+agentic-pod-launcher. Do not edit, move or delete anything under it: every backup
+unit rewrites its own directory on its next run.
+
+| Directory | What it holds |
+| --- | --- |
+| \`identity/\` | chat pairing, plugin config, settings and the encrypted secrets file |
+| \`vault/\` | the vault's markdown (in \`store/\`, encrypted, when the agent is sensitive) |
+| \`config/\` | \`agent.yml\`, the persona, \`CLAUDE.md\` and the workspace \`.claude/\` config |
+| \`memory/\` | auto memory, the claude-mem store and declared extra paths |
+| \`history/\` | conversation transcripts, always encrypted |
+
+Each directory carries \`.agentic-pod-backup.json\` (its owner). Encrypted pieces open
+only with the private half of the operator's ssh key. Restore from a launcher clone:
+
+    ./setup.sh --restore-from-repo <this repository URL> --identity-key <private key>
+
+To keep a clone of this repository light, clone without the backup blobs and leave
+this directory out of the checkout:
+
+    git clone --filter=blob:none --no-checkout <url> && cd <dir>
+    git sparse-checkout set --no-cone '/*' '!/.agent-backup/' && git checkout main
+
+Backup commits carry \`[skip ci]\` and the trailer \`Agentic-Pod-Backup: <agent>/<unit>\`.
+EOF
+}
+

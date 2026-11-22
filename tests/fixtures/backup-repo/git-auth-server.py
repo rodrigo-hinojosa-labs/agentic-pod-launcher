@@ -24,6 +24,15 @@ MODES (words in GIT_TEST_MODE_FILE):
   deny-push        answers 403 to every push, even an authenticated one
   stall-auth       accepts every authenticated request and does not answer it
   stall-push       accepts every authenticated push and does not answer it
+  protected-main   (048) the repositories' pre-receive hook rejects updates of
+                   refs/heads/main with GitHub's GH006 text (br_new_repo installs it)
+  inject-once      (048) consumed by the NEXT authenticated push request (the POST to
+                   git-receive-pack): before relaying it, a foreign commit touching
+                   README-work.md is created on main in the target repository, so the
+                   push being relayed is no longer a fast-forward. One word, one commit.
+
+Partial clones (048): the backend runs with uploadpack.allowFilter and
+uploadpack.allowAnySHA1InWant, as GitHub does.
 
 The two -once modes exist because of how git talks: every authenticated operation starts
 with an unauthenticated request that the server rejects with 401 (measured on 14-11-2026
@@ -91,6 +100,46 @@ def consume_once(word):
             fh.write(" ".join(words) + ("\n" if words else ""))
         os.replace(tmp, MODE_FILE)
         return True
+
+
+def inject_foreign_commit(bare):
+    """Creates a commit on refs/heads/main of BARE that changes README-work.md (048)."""
+    env = dict(os.environ, GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1",
+               GIT_INDEX_FILE=os.path.join(bare, "inject.index"),
+               GIT_AUTHOR_NAME="someone", GIT_AUTHOR_EMAIL="someone@example.invalid",
+               GIT_COMMITTER_NAME="someone", GIT_COMMITTER_EMAIL="someone@example.invalid")
+
+    def git(*args, data=None):
+        return subprocess.run(["git", "-C", bare] + list(args), input=data, env=env,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              check=True).stdout.decode().strip()
+    head = git("rev-parse", "refs/heads/main")
+    git("read-tree", head)
+    blob = git("hash-object", "-w", "--stdin", data=("foreign %f\n" % time.time()).encode())
+    git("update-index", "--add", "--cacheinfo", "100644,%s,README-work.md" % blob)
+    tree = git("write-tree")
+    commit = git("commit-tree", tree, "-p", head, "-m", "foreign work on main")
+    git("update-ref", "refs/heads/main", commit, head)
+    os.remove(os.path.join(bare, "inject.index"))
+    return commit
+
+
+def push_refs(body):
+    """The ref names a receive-pack request updates (pkt-lines up to the flush)."""
+    names, i = [], 0
+    while i + 4 <= len(body):
+        try:
+            n = int(body[i:i + 4], 16)
+        except ValueError:
+            break
+        if n == 0:
+            break
+        line = body[i + 4:i + n].split(b"\0")[0].decode("latin-1").strip()
+        parts = line.split(" ")
+        if len(parts) >= 3:
+            names.append(parts[2])
+        i += n
+    return names
 
 
 def log(line):
@@ -178,6 +227,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
         body = self._body() if self.command == "POST" else b""
+        if is_push and self.command == "POST":
+            log("push-refs %s %s" % (path.split("/git-receive-pack")[0].lstrip("/"), " ".join(push_refs(body))))
+        if is_push and self.command == "POST" and consume_once("inject-once"):
+            repo = path.split("/git-receive-pack")[0].lstrip("/")
+            commit = inject_foreign_commit(os.path.join(ROOT, repo))
+            log("inject %s %s" % (repo, commit))
         env = {
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
             "GIT_PROJECT_ROOT": ROOT,
@@ -192,7 +247,12 @@ class Handler(BaseHTTPRequestHandler):
             "REMOTE_USER": "agent" if auth == "ok" else "",
             "REMOTE_ADDR": "127.0.0.1",
             "GIT_HTTP_MAX_REQUEST_BUFFER": "200m",
+            "GIT_CONFIG_COUNT": "2",
+            "GIT_CONFIG_KEY_0": "uploadpack.allowFilter", "GIT_CONFIG_VALUE_0": "true",
+            "GIT_CONFIG_KEY_1": "uploadpack.allowAnySHA1InWant", "GIT_CONFIG_VALUE_1": "true",
         }
+        if "protected-main" in active:
+            env["GIT_TEST_PROTECT_MAIN"] = "1"
         if self.headers.get("Content-Encoding"):
             env["HTTP_CONTENT_ENCODING"] = self.headers["Content-Encoding"]
         if self.headers.get("Git-Protocol"):
