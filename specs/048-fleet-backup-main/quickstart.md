@@ -26,7 +26,7 @@ Esperado: 0 `not ok` en los dos; el conteo total es la línea base medida al emp
 
 ## 2. Carrera contra `main` (SC-001, SC-002)
 
-La prueba de carrera de `backup-main-units.bats` corre 100 ciclos con un commit ajeno inyectado entre el `fetch` y el `push` (un `git` envoltorio en el `PATH` que empuja un commit al servidor de prueba la primera vez que ve un `push`). Al final:
+La prueba de carrera de `backup-main-units.bats` (TM15) corre 25 ciclos con un commit ajeno inyectado entre el `fetch` y el `push` (un `git` envoltorio en el `PATH` que empuja un commit al servidor de prueba la primera vez que ve un `push`). Al final:
 
 - todos los commits ajenos son ancestros de `main`;
 - `git log --format=%H main` del servidor no muestra ningún commit de respaldo que cambie rutas fuera de `.agent-backup/<u>/`;

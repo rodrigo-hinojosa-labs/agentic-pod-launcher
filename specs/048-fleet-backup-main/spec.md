@@ -256,7 +256,7 @@ Tras el merge, el operador lleva la versión nueva a cbum primero, ensaya una re
 
 ### Measurable Outcomes
 
-- **SC-001**: En 100 ciclos de prueba con `main` adelantada por commits ajenos, el 100 % de los commits ajenos sigue en `main` y ningún empuje fue forzado.
+- **SC-001**: En los ciclos de prueba con `main` adelantada por commits ajenos (100 en el gate local del 22-11-2026, en los dos bash; 25 en la regresión de la CI, porque la inyección es determinista y cada ciclo recorre el mismo camino), el 100 % de los commits ajenos sigue en `main` y ningún empuje fue forzado.
 - **SC-002**: En el mismo conjunto, ningún commit de respaldo cambia un archivo fuera de su directorio (0 casos).
 - **SC-003**: Una restauración desde `main` deja el mismo conjunto de archivos que la restauración desde las ramas de 046 sobre el mismo contenido (diferencias: 0).
 - **SC-004**: Un segundo ciclo sin cambios no crea commits en ninguna de las cinco unidades.
@@ -304,4 +304,8 @@ Tras el merge, el operador lleva la versión nueva a cbum primero, ensaya una re
 - D: restos de despliegues anteriores a pre033 en ferrari → A: borrados el 21-11-2026 (8 imágenes de rollback, 5 tgz de código y el clon `~/apl-donna-src`, cuyo commit local ya estaba en main por el squash de 037); se conservan pre033 y `~/old-clones-20261121/` hasta el cierre de US7.
 - D: rodri-cenco-admin (deprecado, detenido desde el 24-10-2026) → A: fuera del alcance de 048; su retiro es una decisión aparte (vault de 2899 páginas y Syncthing en dos equipos).
 - D: commit `9d2dda8` del clon de linus en la Mac → A: publicar solo la rama `001-n8n-agentic-ops` sin tocar lo sin commitear (hecho el 21-11-2026: remoto en `9d2dda8`).
+
+### 2026-11-22 session
+
+- D: el brazo macOS de la CI del PR #138 agotó su tope de 60 min (980 de 2267 pruebas, sin fallas) → A: subir el tope del job `bats` a 90 min y bajar TM15 de 100 a 25 ciclos; SC-001 se enmienda (los 100 ciclos quedan medidos en el gate local).
 

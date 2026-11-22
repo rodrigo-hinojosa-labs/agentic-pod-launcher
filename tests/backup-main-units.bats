@@ -380,10 +380,10 @@ _tm_one_unit_only() {
   [ "$(br_force_count tm14)" -eq 0 ]
 }
 
-@test "TM15 100 cycles with a foreign commit in every push: none lost, none forced, none outside its directory (SC-001, SC-002)" {
+@test "TM15 25 cycles with a foreign commit in every push: none lost, none forced, none outside its directory (SC-001, SC-002)" {
   _tm_ws tm15
   local i u
-  for i in $(seq 1 100); do
+  for i in $(seq 1 25); do
     if [ $((i % 2)) -eq 0 ]; then
       u=vault
       printf '# Cycle %s\n' "$i" > "$BR_WS/.state/.vault/wiki/concepts/cycle.md"
@@ -397,12 +397,12 @@ _tm_one_unit_only() {
   br_server_mode
   local injected sha paths
   injected=$(grep -cE '^inject tm15\.git ' "$BR_SRV_LOG")
-  [ "$injected" -eq 100 ]
+  [ "$injected" -eq 25 ]
   for sha in $(grep -E '^inject tm15\.git ' "$BR_SRV_LOG" | awk '{print $3}'); do
     br_is_ancestor tm15 "$sha"
   done
   [ "$(br_force_count tm15)" -eq 0 ]
-  [ "$(_tm_launcher_commits tm15 | wc -l | tr -d ' ')" -ge 100 ]
+  [ "$(_tm_launcher_commits tm15 | wc -l | tr -d ' ')" -ge 25 ]
   while read -r sha paths; do
     _tm_one_unit_only "$paths"
   done < <(_tm_launcher_commits tm15)
