@@ -326,7 +326,15 @@ _doctor_backup_repo() {
   total=$(jq -r '.cache_bytes_total // 0' <<< "$json")
   max_mb="${DOCTOR_BACKUP_CACHE_MAX_MB:-800}"
   if [ "${total:-0}" -gt $((max_mb * 1048576)) ]; then
-    _doctor_warn "Backup size: $(awk -v b="$total" 'BEGIN { printf "%.1f", b / 1073741824 }') GB in the backup caches - prune a backup branch (see README)"
+    _doctor_warn "Backup size: $(awk -v b="$total" 'BEGIN { printf "%.1f", b / 1073741824 }') GB in the backup caches - see README, Backups (size and pruning)"
+  fi
+  # 048: with the backups in main the repository itself grows and cannot be pruned
+  # by deleting a branch.
+  local size_kb
+  size_kb=$(jq -r '.repo_size_kb // 0' <<< "$json")
+  case "$size_kb" in ''|*[!0-9]*) size_kb=0 ;; esac
+  if [ "$size_kb" -gt "${DOCTOR_REPO_SIZE_MAX_KB:-1048576}" ]; then
+    _doctor_warn "Agent repository is $((size_kb / 1024)) MB; backups in main cannot be pruned without rewriting history (see README, Backups)"
   fi
   return 0
 }
@@ -723,12 +731,12 @@ cmd_doctor() {
   [ -n "$yml" ] && hb_enabled=$(yq -r '.features.heartbeat.enabled' "$yml" 2>/dev/null)
   if [ "$hb_enabled" = "true" ]; then
     local hb_status
-    hb_status=$(_in_container "$agent" sh -c 'cat /workspace/scripts/heartbeat/logs/state.json 2>/dev/null | jq -r ".last_run.status // empty"' 2>/dev/null)
+    hb_status=$(_in_container "$agent" sh -c 'cat /workspace/scripts/heartbeat/state.json 2>/dev/null | jq -r ".last_run.status // empty"' 2>/dev/null)
     case "$hb_status" in
       ok)
         local hb_at hb_ms
-        hb_at=$(_in_container "$agent" sh -c 'cat /workspace/scripts/heartbeat/logs/state.json | jq -r ".last_run.ended_at"' 2>/dev/null)
-        hb_ms=$(_in_container "$agent" sh -c 'cat /workspace/scripts/heartbeat/logs/state.json | jq -r ".last_run.duration_ms"' 2>/dev/null)
+        hb_at=$(_in_container "$agent" sh -c 'cat /workspace/scripts/heartbeat/state.json | jq -r ".last_run.ts"' 2>/dev/null)
+        hb_ms=$(_in_container "$agent" sh -c 'cat /workspace/scripts/heartbeat/state.json | jq -r ".last_run.duration_ms"' 2>/dev/null)
         _doctor_pass "Heartbeat last run: ok @ $hb_at (${hb_ms}ms)"
         ;;
       "")

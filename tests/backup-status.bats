@@ -238,3 +238,36 @@ _tb_status_json() {
   grep -qF 'Backup memory: pushed' <<< "$output"
   grep -qF 'Backup history: never pushed yet' <<< "$output"
 }
+
+# ── 048 (US5): where each unit lives and the size of the repository ─────────
+
+@test "TS501 backup-status gives each unit's location and legacy branch, and the repository size, in the table and in --json" {
+  _tb_repo
+  _tb_state vault "{\"hash\":\"h\",\"last_push\":\"$(_tb_iso_ago 60)\",\"last_result\":\"ok\",\"location\":\"main\",\"last_tree\":\"t\",\"legacy_branch\":\"deleted 2026-11-22T00:00:00Z\"}"
+  jq -n '{repo_size_kb:2048, repo_size_checked_epoch:1}' > "$BR_WS/scripts/heartbeat/backup-repo-size.json"
+  run br_ctl backup-status --json
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.units[] | select(.unit == "vault") | .location' <<< "$output")" = "main" ]
+  [ "$(jq -r '.units[] | select(.unit == "vault") | .legacy_branch' <<< "$output")" = "deleted 2026-11-22T00:00:00Z" ]
+  # A unit whose state records no location carries neither field (the 046 shape).
+  [ "$(jq -r '.units[] | select(.unit == "memory") | has("location") or has("legacy_branch")' <<< "$output")" = "false" ]
+  [ "$(jq -r '.repo_size_kb' <<< "$output")" = "2048" ]
+  run br_ctl backup-status
+  [ "$status" -eq 0 ]
+  grep -qxF 'location vault: main:.agent-backup/vault (legacy branch: deleted 2026-11-22T00:00:00Z)' <<< "$output"
+  grep -qxF 'repository size: 2048 KB' <<< "$output"
+  # and the table claims no location for it.
+  [ "$(grep -c '^location ' <<< "$output")" -eq 1 ]
+}
+
+@test "TS503 the doctor warns when the repository passes 1 GB, and not below" {
+  _tb_repo
+  run br_ctl backup-status --json
+  local json="$output"
+  _tb_docker "$(jq '.repo_size_kb = 1048577' <<< "$json")"
+  run _tb_doctor
+  grep -qF 'Agent repository is 1024 MB; backups in main cannot be pruned without rewriting history (see README, Backups)' <<< "$output"
+  _tb_docker "$(jq '.repo_size_kb = 1048576' <<< "$json")"
+  run _tb_doctor
+  if grep -qF 'Agent repository is' <<< "$output"; then false; fi
+}

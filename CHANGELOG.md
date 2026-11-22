@@ -2,7 +2,38 @@
 
 ## [Unreleased]
 
+### Changed
+- **The agent repository's backups live in its `main` branch — `048-fleet-backup-main`**
+  (VERSION 0.33.0 → 0.34.0; docker mode; the image must be rebuilt). With `backup.repo.url`
+  the five units (`identity`, `vault`, `config`, `memory`, `history`) write
+  `.agent-backup/<unit>/` of `main` instead of `backup/<unit>` orphan branches, with the
+  same content, encryption, ownership mark, privacy check and hash idempotency as 046. Each
+  unit still stages and commits in its own local cache; a shared piece
+  (`docker/scripts/lib/backup_main.sh`) publishes that tree from a bare `blob:none` clone of
+  depth 1, rebuilding the commit over the current tip with `mktree --missing`, so no unit
+  downloads another one's blobs and nothing outside its directory changes. Never forced:
+  when `main` moved, the commit is rebuilt and retried (5 attempts, then `main-busy`).
+  Backup commits carry `[skip ci]` and the trailer `Agentic-Pod-Backup: <agent>/<unit>`. A
+  protected `main` takes a pull-request path merged with `GITHUB_PAT`
+  (`docker/scripts/lib/backup_pr.sh`, token through `curl -K` 0600), else `main-protected`.
+  Migration: after verifying on the remote that `main` holds its tree, each unit deletes its
+  legacy `backup/<unit>` branch, only when it carries this agent's mark. `--restore-from-repo`
+  reads `main` first and the branches otherwise. The agent's work clone leaves
+  `.agent-backup/` out of its tree (sparse checkout, `blob:none`, a launcher `pre-commit`
+  hook). `backup-status` shows each unit's location and legacy branch and the repository
+  size; `agentctl doctor` warns above 1 GB. With a fork or no destination nothing changes.
+  Constitution 1.1.0 → 1.2.0 (Principle V). Accepted cost: the history of `main` keeps every
+  backup and cannot be pruned by deleting a branch.
+
 ### Fixed
+- **`agentctl doctor` false warnings in docker mode — `048-fleet-backup-main`.** The
+  Atlassian token probe asks Confluence (`<site>/wiki/rest/api/user/current`) when Jira
+  answers 404 (a site without Jira), and warns only when no product accepts the token; the
+  heartbeat check reads `scripts/heartbeat/state.json` and `.last_run.ts` (it read a
+  `logs/state.json` that never exists, so every agent with a heartbeat said "no run recorded
+  yet"); the Claude probe reports a login by `CLAUDE_CODE_OAUTH_TOKEN` as
+  `skipped ... login by environment token (expiry not observable)` instead of
+  `malformed expiresAt`.
 - **Local healthcheck false alarms and repeated notices — `047-local-healthcheck`, #111**
   (VERSION 0.32.0 → 0.33.0; local mode). Login renewal is assessed from the complete
   `claudeAiOauth` profile and `refreshTokenExpiresAt`, with a seven-day warning;

@@ -75,7 +75,28 @@ _tu_msg() {
     push-failed)    printf 'backup-%s: push failed' "$u" ;;
     locked)         printf 'backup-%s: another run holds the lock - skipping' "$u" ;;
     nothing)        printf 'backup-%s: nothing to back up yet' "$u" ;;
+    no-main)        printf 'backup-%s: the repository has no main branch - nothing pushed' "$u" ;;
+    foreign-dir)    printf 'backup-%s: .agent-backup/%s exists in main and is not a launcher backup - refusing to write' "$u" "$u" ;;
+    other-agent-dir) printf 'backup-%s: .agent-backup/%s in main belongs to another agent - refusing to write' "$u" "$u" ;;
   esac
+}
+
+# 048: _tu_main_edit NAME SCRIPT: a commit on main of the test repository made by
+# "someone else", running SCRIPT (sh) in a clone of main.
+_tu_main_edit() {
+  local seed="$BATS_TEST_TMPDIR/edit-$1-$RANDOM"
+  _br_git clone -q "$(br_bare "$1")" "$seed"
+  (cd "$seed" && sh -c "$2")
+  _br_git -C "$seed" add -A
+  _br_git -C "$seed" commit -q -m "edited by someone else"
+  _br_git -C "$seed" push -q origin HEAD:refs/heads/main
+  rm -rf "$seed"
+}
+
+# 048: _tu_unit_rev NAME UNIT N: the Nth newest commit of main that touches the
+# unit's directory (1 = the newest).
+_tu_unit_rev() {
+  _br_git -C "$(br_bare "$1")" rev-list refs/heads/main -- ".agent-backup/$2" | sed -n "${3}p"
 }
 
 _tu_mtime() { perl -e 'print((stat shift)[9])' "$1"; }
@@ -103,14 +124,14 @@ _tu_mtime() { perl -e 'print((stat shift)[9])' "$1"; }
   [ "$(br_state identity last_result)" = "ok" ]
   br_branch_files tu01 backup/identity | grep -qx '.claude.json'
 
-  # Segunda pierna: un repositorio vacio, sin ninguna rama.
+  # Segunda pierna (048): un repositorio vacio no tiene main, asi que no se escribe
+  # nada y se dice (antes, 046 creaba la rama huerfana).
   _tu_repo tu01e --empty
   run br_unit identity
   [ "$status" -eq 0 ]
-  grep -qE '^backup-identity: [0-9a-f]{8} pushed \(partial\)$' <<< "$output"
-  [ "$(br_branch_commits tu01e backup/identity)" = "1" ]
-  [ "$(jq -r '.unit' <<< "$(br_branch_show tu01e backup/identity .agentic-pod-backup.json)")" = "identity" ]
-  [ "$(br_state identity last_result)" = "ok" ]
+  [ "$output" = "$(_tu_msg identity no-main)" ]
+  [ "$(br_state identity last_result)" = "no-main" ]
+  [ "$(br_log_count '/tu01e\.git/.*service=receive-pack')" -eq 0 ]
 }
 
 @test "TU02: a second cycle without changes creates no commit, also with --gc" {
@@ -217,30 +238,32 @@ _tu_mtime() { perl -e 'print((stat shift)[9])' "$1"; }
   done
 }
 
-@test "TU17: a backup branch without the ownership mark is not written: foreign-branch" {
+@test "TU17: a backup branch without the ownership mark is never written; the unit backs up into main (048)" {
   local u head
   for u in identity vault config; do
     _tu_repo "tu17$u"
     br_seed_branch "tu17$u" "backup/$u" NONE
-    head=$(br_branch_head "tu17$u" "backup/$u")
+    head=$(_br_git -C "$(br_bare "tu17$u")" rev-parse "refs/heads/backup/$u")
     run br_unit "$u"
     [ "$status" -eq 0 ]
-    [ "$output" = "$(_tu_msg "$u" foreign-branch)" ]
-    [ "$(br_branch_head "tu17$u" "backup/$u")" = "$head" ]
-    [ "$(br_state "$u" last_result)" = "foreign-branch" ]
+    grep -qE "^backup-$u: [0-9a-f]{8} pushed" <<< "$output"
+    [ "$(_br_git -C "$(br_bare "tu17$u")" rev-parse "refs/heads/backup/$u")" = "$head" ]
+    [ -n "$(br_main_tree "tu17$u" "$u")" ]
+    [ "$(br_state "$u" last_result)" = "ok" ]
   done
 }
 
-@test "TU18: a backup branch marked by another agent is not written: other-agent" {
+@test "TU18: a backup branch marked by another agent is never written; a directory of another agent in main is refused (048)" {
   local u head
   for u in identity vault config; do
     _tu_repo "tu18$u"
     br_seed_branch "tu18$u" "backup/$u" "{\"schema\":1,\"agent\":\"someone-else\",\"unit\":\"$u\"}"
-    head=$(br_branch_head "tu18$u" "backup/$u")
+    head=$(_br_git -C "$(br_bare "tu18$u")" rev-parse "refs/heads/backup/$u")
+    _tu_main_edit "tu18$u" "mkdir -p .agent-backup/$u && printf '{\"schema\":1,\"agent\":\"someone-else\",\"unit\":\"$u\"}\n' > .agent-backup/$u/.agentic-pod-backup.json"
     run br_unit "$u"
     [ "$status" -eq 0 ]
-    [ "$output" = "$(_tu_msg "$u" other-agent)" ]
-    [ "$(br_branch_head "tu18$u" "backup/$u")" = "$head" ]
+    [ "$output" = "$(_tu_msg "$u" other-agent-dir)" ]
+    [ "$(_br_git -C "$(br_bare "tu18$u")" rev-parse "refs/heads/backup/$u")" = "$head" ]
     [ "$(br_state "$u" last_result)" = "other-agent" ]
   done
 }
@@ -276,34 +299,34 @@ _tu_mtime() { perl -e 'print((stat shift)[9])' "$1"; }
   [ "$(br_dest_field anon_checked_epoch)" = "1800000100" ]
 }
 
-@test "TU23: a deleted backup branch is recreated, a modified one gets the unit tree back, an unmarked one is not written" {
+@test "TU23: a deleted backup directory is recreated, a modified one gets the unit tree back, an unmarked one is not written (048)" {
   _tu_repo tu23
   br_unit config > /dev/null
   local files1 head
   files1=$(br_branch_files tu23 backup/config)
   grep -qx 'agent.yml' <<< "$files1"
 
-  # Pierna 1: la rama borrada vuelve, con su marca y los mismos archivos.
-  _br_git -C "$(br_bare tu23)" update-ref -d refs/heads/backup/config
+  # Pierna 1: alguien borra el directorio de main; el ciclo lo recrea igual.
+  _tu_main_edit tu23 'rm -rf .agent-backup/config'
   run br_unit config
   [ "$status" -eq 0 ]
   grep -qE '^backup-config: [0-9a-f]{8} pushed$' <<< "$output"
   [ "$(br_branch_files tu23 backup/config)" = "$files1" ]
-  [ "$(br_branch_commits tu23 backup/config)" = "1" ]
 
   # Pierna 2: un commit ajeno que conserva la marca; el ciclo deja el arbol de la unidad.
-  br_seed_branch tu23 backup/config KEEP intruder.txt "not ours"
+  _tu_main_edit tu23 'printf "not ours\n" > .agent-backup/config/intruder.txt'
   run br_unit config
   [ "$status" -eq 0 ]
+  grep -qF 'backup-config: .agent-backup/config in main was changed outside the launcher - restoring it' <<< "$output"
   [ "$(br_branch_files tu23 backup/config)" = "$files1" ]
 
   # Pierna 3: sin la marca, no se escribe.
-  br_seed_branch tu23 backup/config NONE intruder.txt "still not ours"
-  head=$(br_branch_head tu23 backup/config)
+  _tu_main_edit tu23 'rm -f .agent-backup/config/.agentic-pod-backup.json; printf "still not ours\n" > .agent-backup/config/intruder.txt'
+  head=$(_br_git -C "$(br_bare tu23)" rev-parse refs/heads/main)
   run br_unit config
   [ "$status" -eq 0 ]
-  [ "$output" = "$(_tu_msg config foreign-branch)" ]
-  [ "$(br_branch_head tu23 backup/config)" = "$head" ]
+  [ "$output" = "$(_tu_msg config foreign-dir)" ]
+  [ "$(_br_git -C "$(br_bare tu23)" rev-parse refs/heads/main)" = "$head" ]
 }
 
 @test "TU26: a credential that stops working is seen on the next cycle without content changes" {
@@ -590,8 +613,20 @@ EOF
       br_unit "$u" > /dev/null
     done
   done
-  [ "$(br_work_heads tu03)" = "$heads_before" ]
-  [ "$(br_backup_refs tu03 | tr '\n' ' ')" = "refs/heads/backup/config refs/heads/backup/history refs/heads/backup/identity refs/heads/backup/memory refs/heads/backup/vault " ]
+  # 048: main receives the backup commits, so its head moves; every work commit
+  # stays an ancestor, the other work branches keep their heads, and no backup/*
+  # branch exists: one directory per unit in main.
+  local ref sha
+  while read -r ref sha; do
+    if [ "$ref" = "refs/heads/main" ]; then
+      br_is_ancestor tu03 "$sha"
+    else
+      [ "$(_br_git -C "$(br_bare tu03)" rev-parse "$ref")" = "$sha" ]
+    fi
+  done <<< "$heads_before"
+  [ -z "$(br_backup_refs tu03)" ]
+  [ "$(_br_git -C "$(br_bare tu03)" ls-tree --name-only refs/heads/main:.agent-backup | tr '\n' ' ')" = "README.md config history identity memory vault " ]
+  [ "$(br_force_count tu03)" -eq 0 ]
 }
 
 @test "TU06: without the sensitive mark, backup/vault carries the markdown in plaintext, with its structure" {
@@ -638,16 +673,17 @@ EOF
     [ -n "$(br_state "$u" hash)" ]
     [ "$(br_state "$u" last_commit)" = "$(br_branch_head "tu33$u" "backup/$u")" ]
     br_state "$u" last_push | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
-    cache="$BR_CACHE/agent-backup/$u-repo"
-    [ -f "$cache/.git/FETCH_HEAD" ]
-    cp "$cache/.git/FETCH_HEAD" "$BATS_TEST_TMPDIR/fh.before"
-    m1=$(_tu_mtime "$cache/.git/FETCH_HEAD")
+    # 048: the unit cache is local; the fetches happen in the publishing clone.
+    cache="$BR_CACHE/agent-backup/$u-main"
+    [ -f "$cache/FETCH_HEAD" ]
+    cp "$cache/FETCH_HEAD" "$BATS_TEST_TMPDIR/fh.before"
+    m1=$(_tu_mtime "$cache/FETCH_HEAD")
     sleep 1
     run br_unit "$u"
     [ "$status" -eq 0 ]
     [ "$output" = "backup-$u: no changes since last backup (hash $(br_state "$u" hash))" ]
-    cmp -s "$cache/.git/FETCH_HEAD" "$BATS_TEST_TMPDIR/fh.before"
-    [ "$(_tu_mtime "$cache/.git/FETCH_HEAD")" = "$m1" ]
+    cmp -s "$cache/FETCH_HEAD" "$BATS_TEST_TMPDIR/fh.before"
+    [ "$(_tu_mtime "$cache/FETCH_HEAD")" = "$m1" ]
   done
 
   # La pierna del almacen: history pierde su estado y su cache. Sin la cache tampoco
@@ -668,8 +704,11 @@ EOF
   run br_unit history
   [ "$status" -eq 0 ]
   [ "$(br_branch_files tu33h backup/history | grep -c '^store/blocks/' || true)" = "$before_blocks" ]
-  [ "$(_br_git -C "$bare" diff --name-only --diff-filter=A refs/heads/backup/history~1 refs/heads/backup/history -- store/blocks | wc -l | tr -d ' ')" = "$before_blocks" ]
-  [ "$(_br_git -C "$bare" diff --name-only --diff-filter=D refs/heads/backup/history~1 refs/heads/backup/history -- store/blocks | wc -l | tr -d ' ')" = "$before_blocks" ]
+  local c_new c_old
+  c_new=$(_tu_unit_rev tu33h history 1)
+  c_old=$(_tu_unit_rev tu33h history 2)
+  [ "$(_br_git -C "$bare" diff --name-only --diff-filter=A "$c_old" "$c_new" -- .agent-backup/history/store/blocks | wc -l | tr -d ' ')" = "$before_blocks" ]
+  [ "$(_br_git -C "$bare" diff --name-only --diff-filter=D "$c_old" "$c_new" -- .agent-backup/history/store/blocks | wc -l | tr -d ' ')" = "$before_blocks" ]
   run br_unit history
   [ "$status" -eq 0 ]
   [ "$output" = "backup-history: no changes since last backup (hash $(br_state history hash))" ]
@@ -976,14 +1015,14 @@ except Exception:
     run br_unit "$u"
     br_server_mode
     [ "$output" = "$(_tu_msg "$u" not-private)" ]
-    br_seed_branch "tu39a$u" "backup/$u" NONE
+    _tu_main_edit "tu39a$u" "mkdir -p .agent-backup/$u && printf 'x\n' > .agent-backup/$u/x.txt"
     run br_unit "$u"
-    [ "$output" = "$(_tu_msg "$u" foreign-branch)" ]
+    [ "$output" = "$(_tu_msg "$u" foreign-dir)" ]
     _tu_repo "tu39b$u"
     yq -i ".backup.identity.recipient = \"$BR_KEY_A_PUB\"" "$BR_WS/agent.yml"
-    br_seed_branch "tu39b$u" "backup/$u" "{\"schema\":1,\"agent\":\"someone-else\",\"unit\":\"$u\"}"
+    _tu_main_edit "tu39b$u" "mkdir -p .agent-backup/$u && printf '{\"schema\":1,\"agent\":\"someone-else\",\"unit\":\"$u\"}\n' > .agent-backup/$u/.agentic-pod-backup.json"
     run br_unit "$u"
-    [ "$output" = "$(_tu_msg "$u" other-agent)" ]
+    [ "$output" = "$(_tu_msg "$u" other-agent-dir)" ]
     [ "$(br_log_count "/tu39[ab]$u\\.git/.*service=receive-pack")" -eq 0 ]
   done
   # memory sin ninguna fuente.
@@ -1045,7 +1084,7 @@ with open(sys.argv[1], "a") as fh:
   run br_unit history
   [ "$status" -eq 0 ]
   local added
-  added=$(_br_git -C "$(br_bare tu12)" diff --name-only --diff-filter=A refs/heads/backup/history~1 refs/heads/backup/history -- store/blocks | wc -l | tr -d ' ')
+  added=$(_br_git -C "$(br_bare tu12)" diff --name-only --diff-filter=A "$(_tu_unit_rev tu12 history 2)" "$(_tu_unit_rev tu12 history 1)" -- .agent-backup/history/store/blocks | wc -l | tr -d ' ')
   [ "$added" -ge 1 ]
   [ "$added" -le 2 ]
 }
@@ -1065,11 +1104,13 @@ with open(sys.argv[1], "a") as fh:
   bare=$(br_bare tu40)
   # Todos los bloques cambian: el nombre es el SHA-256 del archivo cifrado (D37), asi
   # que cada bloque de la cabeza nueva es un archivo nuevo y ninguno viejo queda.
-  local total added kept
-  total=$(_br_git -C "$bare" ls-tree -r --name-only refs/heads/backup/history -- store/blocks | wc -l | tr -d ' ')
-  added=$(_br_git -C "$bare" diff --name-only --diff-filter=A refs/heads/backup/history~1 refs/heads/backup/history -- store/blocks | wc -l | tr -d ' ')
-  kept=$(comm -12 <(_br_git -C "$bare" ls-tree -r --name-only refs/heads/backup/history~1 -- store/blocks | LC_ALL=C sort) \
-                  <(_br_git -C "$bare" ls-tree -r --name-only refs/heads/backup/history -- store/blocks | LC_ALL=C sort) | wc -l | tr -d ' ')
+  local total added kept c_new c_old
+  c_new=$(_tu_unit_rev tu40 history 1)
+  c_old=$(_tu_unit_rev tu40 history 2)
+  total=$(_br_git -C "$bare" ls-tree -r --name-only "$c_new" -- .agent-backup/history/store/blocks | wc -l | tr -d ' ')
+  added=$(_br_git -C "$bare" diff --name-only --diff-filter=A "$c_old" "$c_new" -- .agent-backup/history/store/blocks | wc -l | tr -d ' ')
+  kept=$(comm -12 <(_br_git -C "$bare" ls-tree -r --name-only "$c_old" -- .agent-backup/history/store/blocks | LC_ALL=C sort) \
+                  <(_br_git -C "$bare" ls-tree -r --name-only "$c_new" -- .agent-backup/history/store/blocks | LC_ALL=C sort) | wc -l | tr -d ' ')
   [ "$total" -ge 1 ]
   [ "$added" = "$total" ]
   [ "$kept" = "0" ]
@@ -1077,12 +1118,15 @@ with open(sys.argv[1], "a") as fh:
   br_unpack tu40 backup/history "$BR_KEY_B" "$BATS_TEST_TMPDIR/out-b"
   if br_unpack tu40 backup/history "$BR_KEY_A" "$BATS_TEST_TMPDIR/out-a"; then false; fi
 
-  # Segunda pierna: alguien reemplaza store/recipient en la rama y conserva la marca.
+  # Segunda pierna (048): alguien reemplaza store/recipient en main y conserva la
+  # marca. La cache de la unidad es local, asi que nada de main decide a quien se
+  # cifra: el ciclo restaura el directorio con el destinatario del operador.
   age-keygen -o "$BATS_TEST_TMPDIR/foreign.key" 2> /dev/null
-  br_seed_branch tu40 backup/history KEEP store/recipient "$(age-keygen -y "$BATS_TEST_TMPDIR/foreign.key")"
+  _tu_main_edit tu40 "age-keygen -y '$BATS_TEST_TMPDIR/foreign.key' > .agent-backup/history/store/recipient"
   run br_unit history
   [ "$status" -eq 0 ]
-  grep -qF 'backup-history: store key rotated (recipient-mismatch) - full upload' <<< "$output"
+  grep -qF 'backup-history: .agent-backup/history in main was changed outside the launcher - restoring it' <<< "$output"
+  if br_branch_show tu40 backup/history store/recipient | grep -qF "$(age-keygen -y "$BATS_TEST_TMPDIR/foreign.key")"; then false; fi
   local f n=0 clone="$BATS_TEST_TMPDIR/tu40-head"
   br_clone_branch tu40 backup/history "$clone"
   while IFS= read -r f; do

@@ -254,3 +254,94 @@ STUB
   echo "$output" | grep -q "recovered"
   echo "$output" | grep -q "github"
 }
+
+# ── 048: Atlassian probe falls back to Confluence when Jira is absent ─
+
+# A curl stub that answers by URL: JIRA_CODE for .../rest/api/3/myself and
+# CONF_CODE for .../wiki/rest/api/user/current; every URL is logged, one per
+# line, to curl.calls so a test can count the requests.
+_stub_curl_route() {
+  local jira="$1" conf="$2"
+  cat > "$STUB_DIR/curl" <<STUB
+#!/bin/sh
+url=""
+for a in "\$@"; do url="\$a"; done
+printf '%s\n' "\$url" >> "$STUB_DIR/curl.calls"
+case "\$url" in
+  */wiki/rest/api/user/current) printf '%s' "$conf" ;;
+  */rest/api/3/myself) printf '%s' "$jira" ;;
+  *) printf '000' ;;
+esac
+exit 0
+STUB
+  chmod +x "$STUB_DIR/curl"
+  : > "$STUB_DIR/curl.calls"
+  PATH="$STUB_DIR:$ORIG_PATH"
+}
+
+@test "TD01 probe_atlassian: Jira 200 -> ok, one request, Confluence never asked" {
+  _stub_curl_route 200 200
+  run probe_atlassian "https://acme.atlassian.net" "a@x" "tk"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qE '^ok 200 [0-9]+ ?$'
+  [ "$(wc -l < "$STUB_DIR/curl.calls" | tr -d ' ')" = "1" ]
+  if grep -q '/wiki/' "$STUB_DIR/curl.calls"; then false; fi
+}
+
+@test "TD02 probe_atlassian: Jira 401/403 -> auth_fail, Confluence never asked" {
+  local c
+  for c in 401 403; do
+    _stub_curl_route "$c" 200
+    run probe_atlassian "https://acme.atlassian.net" "a@x" "tk"
+    echo "$output" | grep -qE "^auth_fail $c [0-9]+ HTTP $c\$"
+    [ "$(wc -l < "$STUB_DIR/curl.calls" | tr -d ' ')" = "1" ]
+  done
+}
+
+@test "TD03 probe_atlassian: Jira 5xx or no answer -> network, Confluence never asked" {
+  local c
+  for c in 500 503 000; do
+    _stub_curl_route "$c" 200
+    run probe_atlassian "https://acme.atlassian.net" "a@x" "tk"
+    echo "$output" | grep -q '^network '
+    [ "$(wc -l < "$STUB_DIR/curl.calls" | tr -d ' ')" = "1" ]
+  done
+}
+
+@test "TD04 probe_atlassian: Jira 404 + Confluence 200 -> ok via confluence" {
+  _stub_curl_route 404 200
+  run probe_atlassian "https://acme.atlassian.net" "a@x" "tk"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qE '^ok 200 [0-9]+ via confluence$'
+  [ "$(wc -l < "$STUB_DIR/curl.calls" | tr -d ' ')" = "2" ]
+  grep -qx 'https://acme.atlassian.net/wiki/rest/api/user/current' "$STUB_DIR/curl.calls"
+}
+
+@test "TD05 probe_atlassian: Jira 404 + Confluence 401/403 -> auth_fail naming confluence" {
+  local c
+  for c in 401 403; do
+    _stub_curl_route 404 "$c"
+    run probe_atlassian "https://acme.atlassian.net" "a@x" "tk"
+    echo "$output" | grep -qE "^auth_fail $c [0-9]+ confluence HTTP $c\$"
+  done
+}
+
+@test "TD06 probe_atlassian: Jira 404 + Confluence 404/5xx/none -> network naming both" {
+  _stub_curl_route 404 404
+  run probe_atlassian "https://acme.atlassian.net" "a@x" "tk"
+  echo "$output" | grep -qE '^network 404 [0-9]+ jira HTTP 404, confluence HTTP 404$'
+  _stub_curl_route 404 502
+  run probe_atlassian "https://acme.atlassian.net" "a@x" "tk"
+  echo "$output" | grep -qE '^network 502 [0-9]+ jira HTTP 404, confluence HTTP 502$'
+  _stub_curl_route 404 000
+  run probe_atlassian "https://acme.atlassian.net" "a@x" "tk"
+  echo "$output" | grep -qE '^network 000 [0-9]+ jira HTTP 404, confluence curl exit'
+}
+
+@test "TD07 probe_atlassian: a configured URL ending in /wiki does not double /wiki" {
+  _stub_curl_route 404 200
+  run probe_atlassian "https://acme.atlassian.net/wiki/" "a@x" "tk"
+  echo "$output" | grep -q '^ok 200 .* via confluence$'
+  grep -qx 'https://acme.atlassian.net/rest/api/3/myself' "$STUB_DIR/curl.calls"
+  grep -qx 'https://acme.atlassian.net/wiki/rest/api/user/current' "$STUB_DIR/curl.calls"
+}

@@ -51,6 +51,46 @@ _agent_repo_settings() {
   _agent_repo_git -C "$dir" config --unset-all "$key" > /dev/null 2>&1 || true
   _agent_repo_git -C "$dir" config --add "$key" "" || return 1
   _agent_repo_git -C "$dir" config --add "$key" "$helper" || return 1
+  _agent_repo_main_settings "$dir"
+  return 0
+}
+
+# 048 (contract W): the backups live in .agent-backup/ of main. The clone leaves that
+# directory out of its tree (sparse checkout), never downloads blobs it does not
+# check out (blob:none promisor), and a launcher hook refuses a commit that stages a
+# path under it. A pre-commit hook that is not the launcher's is never replaced.
+_agent_repo_main_settings() {
+  local dir="$1" hook
+  _agent_repo_git -C "$dir" config core.repositoryformatversion 1 || return 1
+  _agent_repo_git -C "$dir" config extensions.partialClone origin || return 1
+  _agent_repo_git -C "$dir" config remote.origin.promisor true || return 1
+  _agent_repo_git -C "$dir" config remote.origin.partialclonefilter blob:none || return 1
+  _agent_repo_git -C "$dir" config core.sparseCheckout true || return 1
+  _agent_repo_git -C "$dir" config core.sparseCheckoutCone false || return 1
+  mkdir -p "$dir/.git/info" || return 1
+  printf '/*\n!/.agent-backup/\n' > "$dir/.git/info/sparse-checkout" || return 1
+  if _agent_repo_git -C "$dir" rev-parse --verify -q HEAD > /dev/null 2>&1; then
+    _agent_repo_git -C "$dir" sparse-checkout reapply > /dev/null 2>&1 \
+      || _agent_repo_log "could not reapply the sparse checkout in $dir"
+  fi
+  hook="$dir/.git/hooks/pre-commit"
+  mkdir -p "$dir/.git/hooks" || return 1
+  if [ -e "$hook" ] && ! grep -qF '# agentic-pod-launcher: agent-backup guard' "$hook" 2> /dev/null; then
+    _agent_repo_log "$hook is not the launcher's pre-commit hook - leaving it alone (no .agent-backup/ guard)"
+    return 0
+  fi
+  cat > "$hook" << 'HOOK'
+#!/bin/sh
+# agentic-pod-launcher: agent-backup guard
+# The launcher's backups live in .agent-backup/ of main; a work commit never
+# changes them.
+if git -c core.quotePath=false diff --cached --name-only | grep -q '^\.agent-backup/'; then
+  echo ".agent-backup/ belongs to the launcher's backups - unstage it (git restore --staged .agent-backup)" >&2
+  exit 1
+fi
+exit 0
+HOOK
+  chmod +x "$hook" || return 1
   return 0
 }
 
@@ -122,7 +162,7 @@ _agent_repo_create() {
     return 0
   fi
   _agent_repo_capped env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 \
-    git -C "$dir" fetch -q origin > /dev/null 2>&1 || return 1
+    git -C "$dir" fetch -q --filter=blob:none origin > /dev/null 2>&1 || return 1
   _agent_repo_git -C "$dir" checkout -q -B "$branch" --track "refs/remotes/origin/$branch" > /dev/null 2>&1 || return 1
   return 0
 }

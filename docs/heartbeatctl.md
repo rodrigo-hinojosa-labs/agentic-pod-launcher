@@ -221,8 +221,14 @@ Where they go is resolved on every run by one rule
 (`backup_dest_resolve`, `docker/scripts/lib/backup_dest.sh`):
 
 - **an associated repository** (`backup.repo.url`, docker mode only, 046): five
-  branches, `backup/identity`, `backup/vault`, `backup/config`,
-  `backup/memory` and `backup/history`;
+  units; since 0.34.0 (048) each one is the directory `.agent-backup/<unit>/` of
+  the repository's `main` branch (before, the branches `backup/identity`,
+  `backup/vault`, `backup/config`, `backup/memory` and `backup/history`). New
+  results: `no-main`, `main-busy` (exit 2), `main-protected` (exit 2),
+  `foreign-dir` and `other-agent` for a directory of main; success keeps the 046
+  text (`backup-<unit>: <sha8> pushed`), and after a verified write a marked legacy
+  branch is deleted (`legacy branch backup/<unit> deleted (its backup is in main)`).
+  `backup-status` adds `location`, `legacy_branch` and `repo_size_kb`;
 - **else the agent's fork** (`scaffold.fork.url`): the three branches of
   before (identity, vault, config), on the pre-046 code path, with its
   messages, exit codes and state files unchanged;

@@ -92,6 +92,11 @@ probe_telegram_bot() {
 # URL should be the Jira base (without /wiki) — Cloud's /rest/api/3/myself
 # returns 200 for any authenticated user, with no scope requirement.
 # Empty inputs → status=skipped.
+#
+# 048: a site where Jira does not exist answers 404 to /rest/api/3/myself even for
+# a valid token (measured on a Confluence-only site, 21-11-2026). Only on a Jira 404
+# does the probe ask Confluence (<base>/wiki/rest/api/user/current) with the same
+# credential, and that answer decides. Any other Jira result is final, as before.
 probe_atlassian() {
   local url="${1:-}" email="${2:-}" token="${3:-}"
   if [ -z "$url" ] || [ -z "$email" ] || [ -z "$token" ]; then
@@ -99,8 +104,24 @@ probe_atlassian() {
     return 0
   fi
   url="${url%/}"
-  _th_run_probe "${url}/rest/api/3/myself" \
-    -u "${email}:${token}"
+  url="${url%/wiki}"
+  local jira jstatus jcode jms
+  jira=$(_th_run_probe "${url}/rest/api/3/myself" -u "${email}:${token}")
+  read -r jstatus jcode jms _ <<< "$jira"
+  if [ "$jcode" != "404" ]; then
+    printf '%s\n' "$jira"
+    return 0
+  fi
+  local conf cstatus ccode cms cerr
+  conf=$(_th_run_probe "${url}/wiki/rest/api/user/current" -u "${email}:${token}")
+  read -r cstatus ccode cms cerr <<< "$conf"
+  local ms=$(( ${jms:-0} + ${cms:-0} ))
+  case "$cstatus" in
+    ok)        printf 'ok %s %s via confluence\n' "$ccode" "$ms" ;;
+    auth_fail) printf 'auth_fail %s %s confluence HTTP %s\n' "$ccode" "$ms" "$ccode" ;;
+    *)         printf 'network %s %s jira HTTP 404, confluence %s\n' "$ccode" "$ms" "${cerr:-HTTP $ccode}" ;;
+  esac
+  return 0
 }
 
 # probe_claude_oauth [CRED_FILE] → STATUS HTTP_CODE LATENCY_MS [ERROR]
@@ -123,6 +144,13 @@ probe_atlassian() {
 # treats it identically — surface a warning early enough to give the
 # user time to /login before the heartbeat actually breaks.
 probe_claude_oauth() {
+  # 048: an agent that authenticates with CLAUDE_CODE_OAUTH_TOKEN (all docker agents
+  # of the fleet, measured 21-11-2026) has no expiry the launcher can observe
+  # without spending quota; a leftover login file says nothing about that token.
+  if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+    printf 'skipped 000 0 login by environment token (expiry not observable)\n'
+    return 0
+  fi
   local cred_file="${1:-$HOME/.claude/.credentials.json}"
   if [ ! -f "$cred_file" ]; then
     printf 'skipped 000 0 missing cred file\n'

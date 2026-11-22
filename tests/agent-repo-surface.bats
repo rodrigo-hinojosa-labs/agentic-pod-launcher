@@ -397,15 +397,18 @@ SH
   done
 }
 
-@test "TA07: with a repository CLAUDE.md lists the five branches, adds Your repository and the Not covered point" {
+@test "TA07: with a repository CLAUDE.md lists the five .agent-backup/ directories of main, adds Your repository and the Not covered point (048)" {
   cd "$TMP_TEST_DIR"
   _ta_write_agent_yml
   yq -i '.backup.repo.url = "https://github.com/example/repo-bot"' agent.yml
   _ta_regen
   local b
-  for b in backup/identity backup/vault backup/config backup/memory backup/history; do
-    grep -qF "| \`$b\` |" CLAUDE.md
+  for b in identity vault config memory history; do
+    grep -qF "| \`.agent-backup/$b/\` |" CLAUDE.md
   done
+  grep -qF 'in the `main` branch' CLAUDE.md
+  grep -qF '**Backup**: `.agent-backup/` in `main` holds your recoverable state' CLAUDE.md
+  if grep -qF 'orphan branches' CLAUDE.md; then false; fi
   grep -qx '## Your repository' CLAUDE.md
   grep -qF '**Not covered**' CLAUDE.md
   grep -qF 'backup.extra_paths' CLAUDE.md

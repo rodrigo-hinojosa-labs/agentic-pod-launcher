@@ -188,7 +188,7 @@ _run_all() {
   # early (≤30 min before expiry) so the user has time to /login before the
   # next heartbeat actually fails with API 401.
   local claude_cred="${TH_CLAUDE_CRED_OVERRIDE:-$HOME/.claude/.credentials.json}"
-  if [ -f "$claude_cred" ]; then
+  if [ -f "$claude_cred" ] || [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
     _check_one "claude_oauth" "claude_oauth" "$(probe_claude_oauth "$claude_cred")"
   fi
 }
