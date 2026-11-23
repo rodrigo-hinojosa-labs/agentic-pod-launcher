@@ -25,11 +25,20 @@ independent fixes that improve Telegram chat reliability + observability:
    replay-before-bot.start (B2), mark-pending in handleInbound (B3),
    ack-pending in case 'reply' (B4).
 
-3. Stderr-capture patch (v1) — tees process.stderr to
+3. Stderr-capture patch (v2) — tees process.stderr to
    /workspace/scripts/heartbeat/logs/telegram-mcp-stderr.log AND wires
    uncaught/unhandled handlers that append the trace there. Without this,
    bun crashes leave no forensic evidence (the stderr the existing
    handlers write to is consumed by claude's MCP transport and dropped).
+   v2 (049, #139) bounds and unloops it. Before each append the log rotates
+   at TELEGRAM_STDERR_LOG_MAX_BYTES (default 10 MiB) into .1 and .2, and an
+   inherited file of two thresholds or more keeps only its last threshold of
+   bytes. A closed stderr (EPIPE and kin) stops the forwarding for good with
+   one `[stderr-closed]` line: in bun the failed write does not throw, the
+   EPIPE arrives later as an uncaughtException, and the vendor handler
+   reported it by writing to stderr again, a loop measured at ~10 MB/s that
+   starves the event loop. An in-place upgrader replaces the frozen v1 twin
+   (its on-disk shape, see STDERR_HOOK_V1) on every boot.
 
 4. Primary lock patch (v1) — turns upstream's "any new instance kills any
    stale PID" into "primary-secondary with mtime heartbeat". Without this,
@@ -110,7 +119,8 @@ MARKER_TYPING_V3 = "agentic-pod-launcher: typing refresh patch v3"
 MARKER_TYPING_V2 = "agentic-pod-launcher: typing refresh patch v2"
 MARKER_TYPING_V1 = "agentic-pod-launcher: typing refresh patch v1"
 MARKER_OFFSET = "agentic-pod-launcher: offset persistence patch v1"
-MARKER_STDERR = "agentic-pod-launcher: stderr-capture patch v1"
+MARKER_STDERR = "agentic-pod-launcher: stderr-capture patch v2"
+MARKER_STDERR_V1 = "agentic-pod-launcher: stderr-capture patch v1"
 MARKER_PRIMARY = "agentic-pod-launcher: primary lock patch v1"
 MARKER_PENDING = "agentic-pod-launcher: pending-reply marker patch v1"
 MARKER_ASKQ_GIVEUP = "agentic-pod-launcher: askq-guard give-up delivery patch v1"
@@ -430,6 +440,88 @@ STDERR_HOOK = (
     "// " + MARKER_STDERR + "\n"
     "try {\n"
     "  const _STDERR_LOG = '/workspace/scripts/heartbeat/logs/telegram-mcp-stderr.log'\n"
+    "  const _stderrFs = require('node:fs')\n"
+    "  const _stderrPath = require('node:path')\n"
+    "  const _STDERR_MAX = (() => {\n"
+    "    const v = process.env.TELEGRAM_STDERR_LOG_MAX_BYTES ?? ''\n"
+    "    const n = /^[0-9]+$/.test(v) ? Number(v) : 0\n"
+    "    return Number.isSafeInteger(n) && n > 0 ? n : 10485760\n"
+    "  })()\n"
+    "  const _stderrRotate = () => {\n"
+    "    try {\n"
+    "      const size = _stderrFs.statSync(_STDERR_LOG).size\n"
+    "      if (size < _STDERR_MAX) return\n"
+    "      const g1 = _STDERR_LOG + '.1'\n"
+    "      try { _stderrFs.renameSync(g1, _STDERR_LOG + '.2') } catch {}\n"
+    "      if (size < 2 * _STDERR_MAX) { _stderrFs.renameSync(_STDERR_LOG, g1); return }\n"
+    "      try {\n"
+    "        const fd = _stderrFs.openSync(_STDERR_LOG, 'r')\n"
+    "        try {\n"
+    "          const buf = Buffer.alloc(_STDERR_MAX)\n"
+    "          const n = _stderrFs.readSync(fd, buf, 0, _STDERR_MAX, size - _STDERR_MAX)\n"
+    "          _stderrFs.writeFileSync(g1 + '.tmp', buf.subarray(0, n))\n"
+    "        } finally { _stderrFs.closeSync(fd) }\n"
+    "        _stderrFs.renameSync(g1 + '.tmp', g1)\n"
+    "      } catch {\n"
+    "        try { _stderrFs.unlinkSync(g1 + '.tmp') } catch {}\n"
+    "      }\n"
+    "      _stderrFs.unlinkSync(_STDERR_LOG)\n"
+    "    } catch {}\n"
+    "  }\n"
+    "  const _stderrAppend = (data: any) => {\n"
+    "    try {\n"
+    "      _stderrFs.mkdirSync(_stderrPath.dirname(_STDERR_LOG), { recursive: true })\n"
+    "      _stderrRotate()\n"
+    "      _stderrFs.appendFileSync(_STDERR_LOG, typeof data === 'string' ? data : Buffer.from(data))\n"
+    "    } catch {}\n"
+    "  }\n"
+    "  const _STDERR_CLOSED = new Set(['EPIPE', 'ERR_STREAM_DESTROYED', 'ERR_STREAM_WRITE_AFTER_END', 'EBADF'])\n"
+    "  let _stderrForward = true\n"
+    "  const _stderrCut = (code: any) => {\n"
+    "    if (!_stderrForward) return\n"
+    "    _stderrForward = false\n"
+    "    _stderrAppend(`[${new Date().toISOString()}] [stderr-closed] ${code} - forwarding to stderr stopped, log only\\n`)\n"
+    "  }\n"
+    "  process.stderr.on('error', (e: any) => {\n"
+    "    if (e && _STDERR_CLOSED.has(e.code)) { _stderrCut(e.code); return }\n"
+    "    _stderrAppend(`[${new Date().toISOString()}] [stderr-error] ${e && (e.code || e)}\\n`)\n"
+    "  })\n"
+    "  const _origWrite = process.stderr.write.bind(process.stderr)\n"
+    "  process.stderr.write = ((chunk: any, ...rest: any[]) => {\n"
+    "    _stderrAppend(chunk)\n"
+    "    if (!_stderrForward) {\n"
+    "      const cb = rest[rest.length - 1]\n"
+    "      if (typeof cb === 'function') queueMicrotask(() => cb())\n"
+    "      return true\n"
+    "    }\n"
+    "    try {\n"
+    "      return _origWrite(chunk, ...rest)\n"
+    "    } catch (e: any) {\n"
+    "      if (e && _STDERR_CLOSED.has(e.code)) { _stderrCut(e.code); return true }\n"
+    "      throw e\n"
+    "    }\n"
+    "  }) as typeof process.stderr.write\n"
+    "  process.on('uncaughtException', (e: Error) => {\n"
+    "    _stderrAppend(`[${new Date().toISOString()}] [uncaught] ${e.stack || e}\\n`)\n"
+    "  })\n"
+    "  process.on('unhandledRejection', (r: unknown) => {\n"
+    "    _stderrAppend(`[${new Date().toISOString()}] [unhandled] ${r}\\n`)\n"
+    "  })\n"
+    "} catch {}\n"
+)
+
+
+# 049: frozen twin of the stderr-capture v1 block AS IT SITS ON DISK in every fleet plugin.
+# NEVER edit it. It is not a copy of the old constant: the old apply_stderr passed the block
+# as the TEMPLATE of re.subn, which turned each two-character "\\n" of the [uncaught] and
+# [unhandled] lines into a real newline inside the template literal (harmless in JS; the 032
+# class of defect). Measured on the golden: count(old constant) = 0, count(this twin) = 1
+# (specs/049-telegram-stderr-log-bound/research.md D4b). upgrade_stderr_v1_to_v2 finds it
+# verbatim; tests/apply-telegram-patches.bats S4 checks it against the 0.34.0 golden.
+STDERR_HOOK_V1 = (
+    "// " + MARKER_STDERR_V1 + "\n"
+    "try {\n"
+    "  const _STDERR_LOG = '/workspace/scripts/heartbeat/logs/telegram-mcp-stderr.log'\n"
     "  const _origWrite = process.stderr.write.bind(process.stderr)\n"
     "  process.stderr.write = ((chunk: any, ...rest: any[]) => {\n"
     "    try {\n"
@@ -443,18 +535,17 @@ STDERR_HOOK = (
     "  process.on('uncaughtException', (e: Error) => {\n"
     "    try {\n"
     "      const fs = require('node:fs')\n"
-    "      fs.appendFileSync(_STDERR_LOG, `[${new Date().toISOString()}] [uncaught] ${e.stack || e}\\n`)\n"
+    "      fs.appendFileSync(_STDERR_LOG, `[${new Date().toISOString()}] [uncaught] ${e.stack || e}\n`)\n"
     "    } catch {}\n"
     "  })\n"
     "  process.on('unhandledRejection', (r: unknown) => {\n"
     "    try {\n"
     "      const fs = require('node:fs')\n"
-    "      fs.appendFileSync(_STDERR_LOG, `[${new Date().toISOString()}] [unhandled] ${r}\\n`)\n"
+    "      fs.appendFileSync(_STDERR_LOG, `[${new Date().toISOString()}] [unhandled] ${r}\n`)\n"
     "    } catch {}\n"
     "  })\n"
     "} catch {}\n"
 )
-
 
 # 033: frozen v1 (032) twins of the five voice constants the v1→v2 upgrader
 # rewrites. Each is a byte-for-byte copy of what 032 shipped — NEVER edited
@@ -1769,17 +1860,43 @@ def apply_askq_giveup(src: str) -> tuple[str, bool]:
     return new_src, True
 
 
+def upgrade_stderr_v1_to_v2(src: str) -> tuple[str, bool]:
+    """049: replace the frozen v1 block with v2, all-or-nothing. Returns (new_src, applied).
+
+    str.replace, never a regex (034 D14). A v1 block edited out of band is left alone and
+    named in a WARN; the channel keeps its working v1 capture.
+    """
+    if MARKER_STDERR_V1 not in src:
+        return src, False
+    if MARKER_STDERR in src:
+        # Rolled back and forward: the 0.34.0 patcher looks only for the v1 marker, so on a
+        # rollback it stacks "\n" + v1 on top of v2. Remove that stack; turning it into a
+        # second v2 would log every line twice for good (049 independent review).
+        stacked = "\n" + STDERR_HOOK_V1
+        if src.count(stacked) != 1:
+            warn("stderr v1→v2 upgrade: v1 block stacked on v2 not found exactly once (edited out-of-band?) — leaving both in place")
+            return src, False
+        return src.replace(stacked, "", 1), True
+    if src.count(STDERR_HOOK_V1) != 1:
+        warn("stderr v1→v2 upgrade: v1 block not found exactly once (edited out-of-band?) — leaving v1 in place")
+        return src, False
+    return src.replace(STDERR_HOOK_V1, STDERR_HOOK, 1), True
+
+
 def apply_stderr(src: str) -> tuple[str, bool]:
     """Tee process.stderr to disk + log uncaught/unhandled. Returns (new_src, applied)."""
-    if MARKER_STDERR in src:
+    if MARKER_STDERR in src or MARKER_STDERR_V1 in src:
         return src, False
     # Anchor BEFORE `const TOKEN = process.env.TELEGRAM_BOT_TOKEN`. That sits
     # right after the import block + .env loader try/catch, and BEFORE the
     # `if (!TOKEN) { process.stderr.write(...); process.exit(1) }` block,
     # so a missing-token death also gets captured in the stderr log.
+    # 049: the replacement is a function, never a template string. As a template, re.subn
+    # turned every two-character "\\n" of the block into a real newline (research D4b); a
+    # function's return value is inserted verbatim.
     new_src, n = re.subn(
         r"(\nconst TOKEN = )",
-        "\n" + STDERR_HOOK + r"\1",
+        lambda m: "\n" + STDERR_HOOK + m.group(1),
         src,
         count=1,
     )
@@ -2074,6 +2191,9 @@ def main(argv: list[str]) -> int:
     new_src, t = apply_typing(new_src)
     new_src, o = apply_offset(new_src)
     new_src, pm = apply_pending_marker(new_src)
+    # 049: v1 → v2 before the fresh-install path, so a fleet plugin (v1) is upgraded in place;
+    # apply_stderr then sees a marker and leaves the file alone.
+    new_src, su1 = upgrade_stderr_v1_to_v2(new_src)
     new_src, s = apply_stderr(new_src)
     new_src, p = apply_primary(new_src)
     # 031: give-up delivery wiring runs LAST — it anchors on the typing helpers'
@@ -2091,7 +2211,7 @@ def main(argv: list[str]) -> int:
     new_src, vu2 = upgrade_voice_v2_to_v3(new_src)
     new_src, v = apply_voice(new_src)
 
-    if not (tu1 or tu2 or tu3 or tu4 or tu5 or t or o or pm or s or p or ag or vu1 or vu2 or v):
+    if not (tu1 or tu2 or tu3 or tu4 or tu5 or t or o or pm or su1 or s or p or ag or vu1 or vu2 or v):
         # Either everything is already patched, or some set of anchors missed.
         # 034: say which — a silent no-op was indistinguishable from a refused
         # upgrade in the boot log (analyze I3). Never writes the file.
@@ -2123,6 +2243,8 @@ def main(argv: list[str]) -> int:
         parts.append("offset")
     if pm:
         parts.append("pending-marker")
+    if su1:
+        parts.append("stderr-upgrade-v1→v2")
     if s:
         parts.append("stderr")
     if p:
