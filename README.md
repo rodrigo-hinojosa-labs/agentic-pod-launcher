@@ -492,8 +492,11 @@ Then pick up the runtime for your mode:
 
   ```bash
   docker compose build && ./scripts/agentctl up
+  ./scripts/agentctl heartbeat token-check   # fresh token probes, so doctor does not show a pre-upgrade result
   ./scripts/agentctl doctor            # verify; agentctl versions --check compares the toolchain
   ```
+
+  `doctor` reports the last stored token probe, not a new one: without the `token-check` above, a warning from before the upgrade (with an age such as `probed 15m ago`) can still be on screen after a fix that removes it.
 
 - **Local mode** — `--regenerate` reinstalls the systemd units when non-interactive `sudo` is available (otherwise it prints the exact commands). Restart the session to pick up the new code:
 
@@ -529,6 +532,8 @@ Caveats worth knowing:
 - **`VERSION` must ship with the swap.** `--regenerate` stamps `meta.launcher_version` from the workspace `VERSION`; copying it in step 2 keeps that honest.
 - **Moving hosts is different** — that's a `rsync`/`cp -a` of the whole workspace directory (see *Self-contained workspace*) or a restore from the backups (see *Backups*), not this in-place swap.
 - **0.32.0 adds the agent repository but associates none by itself.** A workspace upgraded without setting `backup.repo.url` keeps exactly its previous backups (fork, or none). To adopt it, follow *Associating a repository* under *Backups*; the backup code is image-baked, so the docker rebuild above is required.
+- **Compare `CLAUDE.md` before restarting after `--force-claude-md`.** The forced re-render replaces the whole file with the template, the persona and the overlay blocks. Anything else written into it by hand or by a deployment script is gone: `diff` the previous copy against the new one before the restart, and move each lost section to `personas/<agent>.md` or to a block your overlay governs, so the next upgrade keeps it.
+- **From 0.34.0 the first backup cycle deletes the legacy `backup/*` branches** of an agent repository, once `main` holds each unit's tree and the branch carries this agent's mark. The launcher cannot bring them back: if you want a way back from the upgrade, save them first (`git clone --mirror <repo>` and `git bundle create <file> --all`).
 
 ## Testing
 

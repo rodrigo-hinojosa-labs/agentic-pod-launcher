@@ -300,16 +300,39 @@ run 44748525430): 62/62 ejecutados, sin saltos ni fallas. El cierre posterior al
 en la rama `docs/047-post-merge`, con aprobación propia del operador y no con la de PR #136. No mover el checkout principal con AGENTS.md ajeno ni ejecutar agent-context, que
 reemplaza este historial. El receptor auxiliar del M4 y las autorizaciones de 046 se registran aparte.
 
-**048-fleet-backup-main SPEC + REFINE + PLAN + TASKS + ANALYZE + IMPLEMENT EN CURSO (2026-11-21/22; rama
-`048-fleet-backup-main` en el checkout principal, sin worktree, desde `origin/main` = `6170dda`; VERSION 0.33.0 ->
-**0.34.0**; constitución 1.1.0 -> 1.2.0).** Una sola feature para los pendientes de la flota tras desplegar 046:
-respaldos del repositorio del agente en `.agent-backup/<unit>/` de `main` (decisión del operador, con los costos
-expuestos: historial de main que no se poda borrando una rama), borrado verificado de las ramas `backup/*` heredadas
-(decisión del operador), camino de PR si `main` está protegida, clon de trabajo con checkout parcial, y tres avisos
-falsos del doctor docker medidos en linus, donna y cbum (Atlassian 404 en un sitio sin Jira, heartbeat leído de
-`logs/state.json`, Claude `malformed expiresAt` con token de entorno). Gates de flota: cbum canario, ensayo de
-restauración del operador con la llave M4, después linus y donna, y limpieza. Checkpoint WIP local `d3d499d`.
-Estado y mediciones: Registro de `specs/048-fleet-backup-main/tasks.md`.
+**048-fleet-backup-main MERGEADA, DESPLEGADA Y LIMPIA (2026-11-21/22; PR #138, merge `e0221bf`, árbol idéntico
+al de la cabeza validada `d06b523`; VERSION 0.33.0 -> **0.34.0**; constitución 1.1.0 -> 1.2.0).** Una sola feature
+para los pendientes de la flota tras desplegar 046:
+
+- respaldos del repositorio del agente en `.agent-backup/<unit>/` de `main` (decisión del operador, con los costos
+  expuestos: el historial de main no se poda borrando una rama);
+- borrado verificado de las ramas `backup/*` heredadas (decisión del operador);
+- camino de PR si `main` está protegida;
+- clon de trabajo con checkout parcial;
+- tres avisos falsos del doctor docker, medidos en linus, donna y cbum: Atlassian 404 en un sitio sin Jira, heartbeat
+  leído de `logs/state.json` y Claude `malformed expiresAt` con token de entorno.
+
+**CI del PR:** cuatro checks en verde sobre `d06b523`, 2267 de 2267 en cada brazo. El brazo macOS tardó 1 h 15 min
+frente a un tope de 90: margen de unos 15 min.
+
+**Flota, 22-11-2026, con las compuertas del operador:**
+
+- cbum como canario (G2);
+- ensayo de restauración desde `main` con la llave M4 (G3): 33 de 37 archivos idénticos y las 4 diferencias de
+  claude-mem explicadas;
+- linus y donna (G4): en los tres agentes, cinco unidades en `main`, cinco ramas `backup/*` borradas, segundo ciclo
+  sin cambios, ramas de trabajo y `main` previa intactas, y doctor `All checks passed`;
+- limpieza (G5): pre033, pre034, imágenes y clones viejos.
+
+**Dos hallazgos en donna:**
+
+- una sección escrita a mano en el `CLAUDE.md` vivo por el despliegue de su feature 002 se perdió con
+  `--force-claude-md`. Se repuso antes del reinicio y ahora es un bloque de su overlay (PR #15 de custom-config);
+- el log de stderr del canal pesaba 26,7 GB por un bucle de EPIPE (issue #139).
+
+El README de *Upgrade an existing agent* suma `token-check` antes del doctor y la comparación del `CLAUDE.md` antes de
+reiniciar. Pendiente: la primera nocturna sobre `e0221bf` (T049). Estado y mediciones: Registro de
+`specs/048-fleet-backup-main/tasks.md`.
 
 **046-agent-backup-repo SPEC + CLARIFY + PLAN + TASKS + ANALYZE + IMPLEMENT LOCAL VALIDADO (2026-11-13/16; rama
 `046-agent-backup-repo` en el worktree `.claude/worktrees/046-agent-backup-repo`, desde `origin/main` = `10f22a7`,
