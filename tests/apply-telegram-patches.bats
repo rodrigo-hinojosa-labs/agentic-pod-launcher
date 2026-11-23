@@ -40,7 +40,7 @@ teardown() { teardown_tmp_dir; }
   grep -q "agentic-pod-launcher: typing refresh patch v6" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: offset persistence patch v1" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: pending-reply marker patch v1" "$TMP_TEST_DIR/server.ts"
-  grep -q "agentic-pod-launcher: stderr-capture patch v1" "$TMP_TEST_DIR/server.ts"
+  grep -q "agentic-pod-launcher: stderr-capture patch v2" "$TMP_TEST_DIR/server.ts"  # 049: the patcher installs stderr v2
   grep -q "agentic-pod-launcher: primary lock patch v1" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: askq-guard give-up delivery patch v1" "$TMP_TEST_DIR/server.ts"
 }
@@ -178,9 +178,9 @@ teardown() { teardown_tmp_dir; }
   rm -f "$TMP_TEST_DIR/server.ts.bak"
   run python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
   [ "$status" -eq 0 ]
-  ! grep -q "agentic-pod-launcher: typing refresh patch v6" "$TMP_TEST_DIR/server.ts"
+  if grep -q "agentic-pod-launcher: typing refresh patch v6" "$TMP_TEST_DIR/server.ts"; then false; fi  # 049 review: a mid-test `!` is dead in bats
   grep -q "agentic-pod-launcher: offset persistence patch v1" "$TMP_TEST_DIR/server.ts"
-  grep -q "agentic-pod-launcher: stderr-capture patch v1" "$TMP_TEST_DIR/server.ts"
+  grep -q "agentic-pod-launcher: stderr-capture patch v2" "$TMP_TEST_DIR/server.ts"  # 049: the patcher installs stderr v2
 }
 
 @test "anchor drift: missing const TOKEN anchor → stderr skipped, typing+offset still apply" {
@@ -191,7 +191,7 @@ teardown() { teardown_tmp_dir; }
   [ "$status" -eq 0 ]
   grep -q "agentic-pod-launcher: typing refresh patch v6" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: offset persistence patch v1" "$TMP_TEST_DIR/server.ts"
-  ! grep -q "agentic-pod-launcher: stderr-capture patch v1" "$TMP_TEST_DIR/server.ts"
+  ! grep -q "agentic-pod-launcher: stderr-capture patch v2" "$TMP_TEST_DIR/server.ts"  # 049: v2 is the current stderr marker
 }
 
 @test "anchor drift: missing handleInbound chat_id anchor → offset group skipped (rolls back B1+B2)" {
@@ -205,7 +205,7 @@ teardown() { teardown_tmp_dir; }
   ! grep -q "agentic-pod-launcher: offset persistence patch v1" "$TMP_TEST_DIR/server.ts"
   ! grep -q "_pendingUpdates" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: typing refresh patch v6" "$TMP_TEST_DIR/server.ts"
-  grep -q "agentic-pod-launcher: stderr-capture patch v1" "$TMP_TEST_DIR/server.ts"
+  grep -q "agentic-pod-launcher: stderr-capture patch v2" "$TMP_TEST_DIR/server.ts"  # 049: the patcher installs stderr v2
 }
 
 @test "anchor drift: missing case 'reply' result anchor → offset group skipped (rolls back B1+B2+B3)" {
@@ -610,7 +610,7 @@ TS
   [ "$status" -eq 0 ]
   ! grep -q "agentic-pod-launcher: askq-guard give-up delivery patch v1" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: offset persistence patch v1" "$TMP_TEST_DIR/server.ts"
-  grep -q "agentic-pod-launcher: stderr-capture patch v1" "$TMP_TEST_DIR/server.ts"
+  grep -q "agentic-pod-launcher: stderr-capture patch v2" "$TMP_TEST_DIR/server.ts"  # 049: the patcher installs stderr v2
 }
 
 @test "typing v6: idempotent re-run on already-v6 server.ts is a no-op" {
@@ -954,7 +954,7 @@ PY
   [ "$(grep -c "voice_text: {" "$TMP_TEST_DIR/golden.ts")" -eq 1 ]
   grep -q "agentic-pod-launcher: offset persistence patch v1" "$TMP_TEST_DIR/golden.ts"
   grep -q "agentic-pod-launcher: pending-reply marker patch v1" "$TMP_TEST_DIR/golden.ts"
-  grep -q "agentic-pod-launcher: stderr-capture patch v1" "$TMP_TEST_DIR/golden.ts"
+  grep -q "agentic-pod-launcher: stderr-capture patch v2" "$TMP_TEST_DIR/golden.ts"  # 049: the golden's stderr v1 is upgraded to v2 by this run
   grep -q "agentic-pod-launcher: primary lock patch v1" "$TMP_TEST_DIR/golden.ts"
   grep -q "agentic-pod-launcher: askq-guard give-up delivery patch v1" "$TMP_TEST_DIR/golden.ts"
   grep -q "agentic-pod-launcher: typing refresh patch v6" "$TMP_TEST_DIR/golden.ts"
@@ -1261,7 +1261,7 @@ PY
   [ "$(grep -c "voice helpers end (033)" "$TMP_TEST_DIR/server.ts")" -eq 1 ]
   grep -q "agentic-pod-launcher: typing refresh patch v6" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: offset persistence patch v1" "$TMP_TEST_DIR/server.ts"
-  grep -q "agentic-pod-launcher: stderr-capture patch v1" "$TMP_TEST_DIR/server.ts"
+  grep -q "agentic-pod-launcher: stderr-capture patch v2" "$TMP_TEST_DIR/server.ts"  # 049: the patcher installs stderr v2
   grep -q "agentic-pod-launcher: primary lock patch v1" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: pending-reply marker patch v1" "$TMP_TEST_DIR/server.ts"
   grep -q "agentic-pod-launcher: askq-guard give-up delivery patch v1" "$TMP_TEST_DIR/server.ts"
@@ -1324,7 +1324,12 @@ assert ok12, "upgrade_voice_v1_to_v2 refused the golden v1"
 assert out12 == golden2, "upgrade_voice_v1_to_v2(golden v1) != golden v2 (the re-pointed v1→v2 does not reproduce v0.24.0 output)"
 out23, ok23 = p.upgrade_voice_v2_to_v3(golden2)
 assert ok23, "upgrade_voice_v2_to_v3 refused the golden v2"
-assert out23 == fresh3, "upgrade_voice_v2_to_v3(golden v2) != fresh v3 install"
+# 049: the golden v2 carries stderr-capture v1 and a fresh install now carries v2. The voice
+# upgrader must not touch the stderr group, so bring that group up with its own upgrader and
+# compare the rest exactly, as before.
+out23s, oks = p.upgrade_stderr_v1_to_v2(out23)
+assert oks, "upgrade_stderr_v1_to_v2 refused the voice-upgraded golden v2"
+assert out23s == fresh3, "upgrade_voice_v2_to_v3(golden v2) != fresh v3 install"
 assert p.VOICE_HELPERS_V2 != p.VOICE_HELPERS
 assert p.MARKER_VOICE_V2 in p.VOICE_HELPERS_V2
 PY
@@ -1378,7 +1383,7 @@ PY
   grep -qF '_voiceTruncate(text, VOICE_SPOKEN_CHAR_CAP)' "$TMP_TEST_DIR/golden2.ts"
   grep -q "agentic-pod-launcher: offset persistence patch v1" "$TMP_TEST_DIR/golden2.ts"
   grep -q "agentic-pod-launcher: pending-reply marker patch v1" "$TMP_TEST_DIR/golden2.ts"
-  grep -q "agentic-pod-launcher: stderr-capture patch v1" "$TMP_TEST_DIR/golden2.ts"
+  grep -q "agentic-pod-launcher: stderr-capture patch v2" "$TMP_TEST_DIR/golden2.ts"  # 049: the golden's stderr v1 is upgraded to v2 by this run
   grep -q "agentic-pod-launcher: primary lock patch v1" "$TMP_TEST_DIR/golden2.ts"
   grep -q "agentic-pod-launcher: askq-guard give-up delivery patch v1" "$TMP_TEST_DIR/golden2.ts"
   grep -q "agentic-pod-launcher: typing refresh patch v6" "$TMP_TEST_DIR/golden2.ts"
@@ -1774,4 +1779,181 @@ PY
   # …and prints no marker, which is what the doctor must key on.
   run bash -c "python3 '$old' --list-markers 2>&1 | grep -cF 'agentic-pod-launcher:'"
   [ "$output" = "0" ]
+}
+
+# ---------------------------------------------------------------------------
+# 049-telegram-stderr-log-bound: stderr-capture group v1 -> v2.
+# Contracts: specs/049-telegram-stderr-log-bound/contracts/patcher-stderr-upgrade.md.
+# The golden (tests/fixtures/telegram-server-patched-v034.ts) was generated ONCE with the
+# patcher of main at 9a0b93e on telegram-server-pristine.ts: it is what every fleet plugin
+# carries today (research D4). Never regenerate it with the branch's patcher.
+# ---------------------------------------------------------------------------
+
+GOLDEN_V034="$REPO_ROOT/tests/fixtures/telegram-server-patched-v034.ts"
+
+# Prints the value of a patcher constant, read by importing the patcher (never retyped).
+_patcher_const() {
+  python3 -I - "$PATCHER" "$1" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("apl_patcher", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+sys.stdout.write(getattr(mod, sys.argv[2]))
+PY
+}
+
+@test "049 S4: the frozen STDERR_HOOK_V1 twin is contained verbatim in the 0.34.0 golden" {
+  # Fidelity guard (lesson 033): the twin is checked against the real output of the old
+  # patcher, never against itself. On disk the v1 block has REAL newlines inside the
+  # [uncaught]/[unhandled] template literals, because re.subn read the old replacement as a
+  # template (research D4b): a twin copied from the old constant would match nothing.
+  run python3 -I - "$PATCHER" "$GOLDEN_V034" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("apl_patcher", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+golden = open(sys.argv[2]).read()
+print("count=%d" % golden.count(mod.STDERR_HOOK_V1))
+print("marker=%s" % mod.MARKER_STDERR_V1)
+PY
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "count=1" ]
+  [ "${lines[1]}" = "marker=agentic-pod-launcher: stderr-capture patch v1" ]
+}
+
+@test "049 S8: every TS escape of the stderr block reaches server.ts as two bytes, and no control byte leaks" {
+  # 034 D14 / 049 D4b: a "\n" meant for the TS must be "\\n" in the Python literal AND must not
+  # be read as a template by re.subn. Either mistake turns it into a real newline, which TS
+  # accepts and no parser flags. The sequences are written here by hand, never derived from
+  # the patcher, so a wrong literal cannot also fix the oracle.
+  cp "$REPO_ROOT/tests/fixtures/telegram-server-pristine.ts" "$TMP_TEST_DIR/server.ts"
+  run python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  [ "$status" -eq 0 ]
+  grep -qF '[uncaught] ${e.stack || e}\n`)' "$TMP_TEST_DIR/server.ts"
+  grep -qF '[unhandled] ${r}\n`)' "$TMP_TEST_DIR/server.ts"
+  grep -qF '[stderr-closed] ${code} - forwarding to stderr stopped, log only\n`)' "$TMP_TEST_DIR/server.ts"
+  grep -qF '[stderr-error] ${e && (e.code || e)}\n`)' "$TMP_TEST_DIR/server.ts"
+  # No control byte other than tab and LF anywhere in the patched file.
+  [ "$(LC_ALL=C grep -c $'[\x01-\x08\x0b-\x1f\x7f]' "$TMP_TEST_DIR/server.ts" || true)" -eq 0 ]
+}
+
+@test "049 S9: the patched server.ts transpiles under bun (a syntax error would flap the channel at boot)" {
+  if ! command -v bun >/dev/null 2>&1; then
+    skip "bun not on PATH: the patched file is parsed by the local gate and DOCKER_E2E (049 research D6)"
+  fi
+  cp "$REPO_ROOT/tests/fixtures/telegram-server-pristine.ts" "$TMP_TEST_DIR/server.ts"
+  run python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  [ "$status" -eq 0 ]
+  run bun build --no-bundle "$TMP_TEST_DIR/server.ts" --outfile "$TMP_TEST_DIR/server.js"
+  [ "$status" -eq 0 ]
+  [ -s "$TMP_TEST_DIR/server.js" ]
+}
+
+_sha() { shasum -a 256 "$1" | cut -d' ' -f1; }
+
+@test "049 S1: a pristine server.ts gets stderr v2 once, no v1, and the unchanged log path inside the block" {
+  cp "$REPO_ROOT/tests/fixtures/telegram-server-pristine.ts" "$TMP_TEST_DIR/server.ts"
+  run python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'agentic-pod-launcher: stderr-capture patch v2' "$TMP_TEST_DIR/server.ts")" -eq 1 ]
+  [ "$(grep -c 'agentic-pod-launcher: stderr-capture patch v1' "$TMP_TEST_DIR/server.ts" || true)" -eq 0 ]
+  # FR-014: the log path literal sits between the v2 marker and the const TOKEN anchor.
+  run awk '/stderr-capture patch v2/{on=1} on && /^const TOKEN = /{exit} on' "$TMP_TEST_DIR/server.ts"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qF "const _STDERR_LOG = '/workspace/scripts/heartbeat/logs/telegram-mcp-stderr.log'"
+}
+
+@test "049 S2: upgrading the 0.34.0 golden gives exactly the file a pristine install gives (FR-011)" {
+  cp "$GOLDEN_V034" "$TMP_TEST_DIR/golden.ts"
+  cp "$REPO_ROOT/tests/fixtures/telegram-server-pristine.ts" "$TMP_TEST_DIR/server.ts"
+  run python3 "$PATCHER" "$TMP_TEST_DIR/golden.ts"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qF 'stderr-upgrade-v1→v2'
+  run python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  [ "$status" -eq 0 ]
+  [ "$(_sha "$TMP_TEST_DIR/golden.ts")" = "$(_sha "$TMP_TEST_DIR/server.ts")" ]
+}
+
+@test "049 S3: outside the stderr group nothing changed: v2 swapped back for the v1 twin equals the golden (FR-013)" {
+  cp "$REPO_ROOT/tests/fixtures/telegram-server-pristine.ts" "$TMP_TEST_DIR/server.ts"
+  run python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
+  [ "$status" -eq 0 ]
+  run python3 -I - "$PATCHER" "$TMP_TEST_DIR/server.ts" "$TMP_TEST_DIR/back.ts" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("apl_patcher", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+src = open(sys.argv[2]).read()
+if src.count(mod.STDERR_HOOK) != 1:
+    sys.exit("v2 block not found exactly once")
+open(sys.argv[3], "w").write(src.replace(mod.STDERR_HOOK, mod.STDERR_HOOK_V1, 1))
+PY
+  [ "$status" -eq 0 ]
+  cmp "$TMP_TEST_DIR/back.ts" "$GOLDEN_V034"
+}
+
+@test "049 S5: a second pass changes nothing on pristine, golden and v2, and says all groups are present" {
+  local start
+  for start in pristine golden; do
+    if [ "$start" = pristine ]; then
+      cp "$REPO_ROOT/tests/fixtures/telegram-server-pristine.ts" "$TMP_TEST_DIR/s5.ts"
+    else
+      cp "$GOLDEN_V034" "$TMP_TEST_DIR/s5.ts"
+    fi
+    run python3 "$PATCHER" "$TMP_TEST_DIR/s5.ts"
+    [ "$status" -eq 0 ]
+    local once
+    once=$(_sha "$TMP_TEST_DIR/s5.ts")
+    # The file is now v2: this pass is also the "start from v2" case.
+    run python3 "$PATCHER" "$TMP_TEST_DIR/s5.ts"
+    [ "$status" -eq 0 ]
+    echo "$output" | grep -qF 'all patch groups already present'
+    [ "$(_sha "$TMP_TEST_DIR/s5.ts")" = "$once" ]
+  done
+}
+
+@test "049 S6: a v1 block edited out of band stays v1, warns, and every other group is present" {
+  cp "$GOLDEN_V034" "$TMP_TEST_DIR/edited.ts"
+  # One byte changed inside the v1 block (an extra space); the line exists only there.
+  perl -0pi -e 's/return _origWrite\(chunk, \.\.\.rest\)/return _origWrite(chunk,  ...rest)/' "$TMP_TEST_DIR/edited.ts"
+  [ "$(grep -c 'return _origWrite(chunk,  ...rest)' "$TMP_TEST_DIR/edited.ts")" -eq 1 ]
+  run python3 "$PATCHER" "$TMP_TEST_DIR/edited.ts"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qF 'stderr v1→v2 upgrade: v1 block not found exactly once (edited out-of-band?) — leaving v1 in place'
+  [ "$(grep -c 'agentic-pod-launcher: stderr-capture patch v1' "$TMP_TEST_DIR/edited.ts")" -eq 1 ]
+  [ "$(grep -c 'agentic-pod-launcher: stderr-capture patch v2' "$TMP_TEST_DIR/edited.ts" || true)" -eq 0 ]
+  grep -q 'agentic-pod-launcher: typing refresh patch v6' "$TMP_TEST_DIR/edited.ts"
+  grep -q 'agentic-pod-launcher: offset persistence patch v1' "$TMP_TEST_DIR/edited.ts"
+  grep -q 'agentic-pod-launcher: pending-reply marker patch v1' "$TMP_TEST_DIR/edited.ts"
+  grep -q 'agentic-pod-launcher: primary lock patch v1' "$TMP_TEST_DIR/edited.ts"
+  grep -q 'agentic-pod-launcher: askq-guard give-up delivery patch v1' "$TMP_TEST_DIR/edited.ts"
+  grep -q 'agentic-pod-launcher: telegram voice roundtrip patch v3' "$TMP_TEST_DIR/edited.ts"
+}
+
+@test "049 S7: --list-markers prints seven markers and the stderr one is v2" {
+  run python3 "$PATCHER" --list-markers
+  [ "$status" -eq 0 ]
+  [ "${#lines[@]}" -eq 7 ]
+  [ "${lines[2]}" = "agentic-pod-launcher: stderr-capture patch v2" ]
+}
+
+@test "049 S10: rollback then roll forward leaves exactly one capture block, identical to a fresh install" {
+  # A rollback runs the 0.34.0 patcher on a v2 file: it looks only for the v1 marker, so it
+  # stacks a v1 block on top of v2 (found by the 049 independent review). Rolling forward must
+  # remove that stacked v1, not turn it into a second v2 that would double every log line.
+  git -C "$REPO_ROOT" show 9a0b93e:docker/scripts/apply_telegram_typing_patch.py > "$TMP_TEST_DIR/old-patcher.py"
+  cp "$REPO_ROOT/tests/fixtures/telegram-server-pristine.ts" "$TMP_TEST_DIR/fresh.ts"
+  run python3 "$PATCHER" "$TMP_TEST_DIR/fresh.ts"
+  [ "$status" -eq 0 ]
+  cp "$TMP_TEST_DIR/fresh.ts" "$TMP_TEST_DIR/rb.ts"
+  run python3 "$TMP_TEST_DIR/old-patcher.py" "$TMP_TEST_DIR/rb.ts"
+  [ "$status" -eq 0 ]
+  # The measured rollback shape: both blocks present.
+  [ "$(grep -c 'stderr-capture patch v2' "$TMP_TEST_DIR/rb.ts")" -eq 1 ]
+  [ "$(grep -c 'stderr-capture patch v1' "$TMP_TEST_DIR/rb.ts")" -eq 1 ]
+  run python3 "$PATCHER" "$TMP_TEST_DIR/rb.ts"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'stderr-capture patch v2' "$TMP_TEST_DIR/rb.ts")" -eq 1 ]
+  [ "$(grep -c 'stderr-capture patch v1' "$TMP_TEST_DIR/rb.ts" || true)" -eq 0 ]
+  cmp "$TMP_TEST_DIR/rb.ts" "$TMP_TEST_DIR/fresh.ts"
 }

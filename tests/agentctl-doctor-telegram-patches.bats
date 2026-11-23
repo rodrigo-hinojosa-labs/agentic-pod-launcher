@@ -285,3 +285,75 @@ YAML
   done < <(_all_markers)
   [ "$found" -eq 0 ]
 }
+
+# ── 049 US4: size of the Telegram stderr log ─────────────────────────────────
+# Contract: specs/049-telegram-stderr-log-bound/contracts/doctor-stderr-size.md.
+# The doctor reads only the SIZE, through the bind mount, never the content.
+
+_stderr_log() { printf '%s\n' "$TMP_TEST_DIR/scripts/heartbeat/logs/telegram-mcp-stderr.log"; }
+
+# A sparse file of $1 bytes: the size is real, no data is written.
+_sparse_log() {
+  mkdir -p "$TMP_TEST_DIR/scripts/heartbeat/logs"
+  dd if=/dev/null of="$(_stderr_log)" bs=1 seek="$1" 2>/dev/null
+}
+
+@test "049 A1: without the log file the doctor prints no stderr-log line" {
+  cd "$TMP_TEST_DIR"
+  _install_docker_shim
+  _markers_file
+  AGENT_NAME=testagent run "$AGENTCTL" doctor
+  printf '%s\n' "$output" > out.txt
+  run bash -c "grep -cF 'Telegram stderr log' out.txt"
+  [ "$output" = "0" ]
+}
+
+@test "049 A2: a 5 MiB log is an informational line with no warning" {
+  cd "$TMP_TEST_DIR"
+  _install_docker_shim
+  _markers_file
+  _sparse_log 5242880
+  AGENT_NAME=testagent run "$AGENTCTL" doctor
+  printf '%s\n' "$output" > out.txt
+  run bash -c "grep -cF '✓ Telegram stderr log: 5 MiB' out.txt"
+  [ "$output" = "1" ]
+  run bash -c "grep -cF '⚠ Telegram stderr log' out.txt"
+  [ "$output" = "0" ]
+}
+
+@test "049 A3: a 101 MiB log warns with its size and the truncate command, whatever the heartbeat notifier" {
+  cd "$TMP_TEST_DIR"
+  # The Telegram plugin-patch block of the doctor only runs when the heartbeat notifier is
+  # telegram; the stderr-log line must not depend on that (contract D3).
+  cat > "$TMP_TEST_DIR/agent.yml" <<YAML
+agent:
+  name: testagent
+notifications:
+  channel: none
+vault:
+  enabled: false
+YAML
+  _install_docker_shim
+  _markers_file
+  _sparse_log 105906176
+  AGENT_NAME=testagent run "$AGENTCTL" doctor
+  printf '%s\n' "$output" > out.txt
+  run bash -c "grep -cF '⚠ Telegram stderr log is 101 MiB (rotation not active?)' out.txt"
+  [ "$output" = "1" ]
+  run bash -c "grep -cF 'docker exec -u agent testagent truncate -s 0 /workspace/scripts/heartbeat/logs/telegram-mcp-stderr.log' out.txt"
+  [ "$output" = "1" ]
+}
+
+@test "049 A4: the doctor never prints the content of the log" {
+  cd "$TMP_TEST_DIR"
+  _install_docker_shim
+  _markers_file
+  mkdir -p "$TMP_TEST_DIR/scripts/heartbeat/logs"
+  printf 'SENTINEL-049-CONTENT-%s\n' "$$" > "$(_stderr_log)"
+  AGENT_NAME=testagent run "$AGENTCTL" doctor
+  printf '%s\n' "$output" > out.txt
+  run bash -c "grep -cF 'SENTINEL-049-CONTENT' out.txt"
+  [ "$output" = "0" ]
+  run bash -c "grep -cF '✓ Telegram stderr log: 0 MiB' out.txt"
+  [ "$output" = "1" ]
+}

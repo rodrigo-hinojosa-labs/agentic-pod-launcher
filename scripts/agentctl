@@ -127,6 +127,31 @@ _file_mode() {
   stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null
 }
 
+# 049: portable size in bytes, GNU first for the same reason as _file_mode. Empty on failure.
+_file_size() {
+  stat -c '%s' "$1" 2>/dev/null || stat -f '%z' "$1" 2>/dev/null
+}
+
+# 049 (#139): size of the Telegram channel's stderr log, read through the bind mount. Only the
+# size, never the content. Above 100 MiB the rotation of the stderr-capture patch v2 is not
+# running (an old image, or a patch that did not apply): the cap is about 30 MiB.
+_doctor_check_stderr_log() {
+  local ws="$1" agent="$2" f size mib
+  f="$ws/scripts/heartbeat/logs/telegram-mcp-stderr.log"
+  [ -f "$f" ] || return 0
+  size=$(_file_size "$f")
+  case "$size" in
+    ''|*[!0-9]*) return 0 ;;
+  esac
+  mib=$((size / 1048576))
+  if [ "$size" -gt 104857600 ]; then
+    _doctor_warn "Telegram stderr log is $mib MiB (rotation not active?)" \
+      "Rebuild the image so the stderr-capture patch v2 applies, then empty it: docker exec -u agent $agent truncate -s 0 /workspace/scripts/heartbeat/logs/telegram-mcp-stderr.log"
+  else
+    _doctor_pass "Telegram stderr log: $mib MiB"
+  fi
+}
+
 # Story C: surface plugins the supervisor failed to install. Reads the
 # bind-mounted state file (host-side; no exec needed) and prints a copy-paste
 # retry command per residual failure (FR-C3).
@@ -896,6 +921,9 @@ EOF
   # could not install (bounded retry exhausted), each with a retry command.
   if [ -n "$WORKSPACE" ]; then
     _doctor_check_plugin_failures "$WORKSPACE"
+    # 049: outside the Telegram plugin-patch block on purpose; that block runs before
+    # WORKSPACE is set and only when the heartbeat notifier is telegram (contract D3).
+    _doctor_check_stderr_log "$WORKSPACE" "$agent"
   fi
 
   # 16-18. Token health — read state files written by the hourly
