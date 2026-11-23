@@ -51,5 +51,6 @@ El reemplazo de `re.subn` se pasa como función (`lambda`), no como string: el b
 | S6 | v1 editada (un byte cambiado dentro del bloque) → WARN de P2, marcador v1 intacto, cero v2, y los demás marcadores presentes |
 | S7 | `--list-markers` imprime siete líneas y la de stderr es v2 |
 | S8 | escapes (034 G15 y G16): cada `\n` esperado del bloque aparece como dos bytes `\` y `n` en la salida, y la salida no tiene bytes de control fuera de tab y LF |
-| S10 | rollback y vuelta: prístino, patcher nuevo, patcher de `9a0b93e` (apila v1) y patcher nuevo deja un solo v2, cero v1, y el archivo es byte por byte igual al de una instalación fresca |
+| S10 | rollback y vuelta: prístino, patcher nuevo, patcher de `9a0b93e` (apila v1) y patcher nuevo deja un solo v2, cero v1, y el archivo es byte por byte igual al de una instalación fresca. El patcher viejo es el fixture `tests/fixtures/apply-telegram-patcher-v034.py` (sha256 fijado en la prueba), porque la CI clona con profundidad 1 y no puede hacer `git show` de un commit anterior |
+| G1 | todo `python3 … -` de las pruebas que importa un archivo del repo con `spec_from_file_location` lleva `-B`, para no dejar `docker/scripts/__pycache__/` (que TU31 tomaría por un archivo horneado sin su `COPY`) |
 | S9 | parse: con bun presente, la salida parcheada pasa `bun build --no-bundle <archivo> --outfile <temporal>` (la opción existe en bun 1.3.12, verificado con `bun build --help` el 23-11-2026); sin bun, se salta con motivo |

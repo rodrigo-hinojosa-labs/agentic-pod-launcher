@@ -1793,7 +1793,7 @@ GOLDEN_V034="$REPO_ROOT/tests/fixtures/telegram-server-patched-v034.ts"
 
 # Prints the value of a patcher constant, read by importing the patcher (never retyped).
 _patcher_const() {
-  python3 -I - "$PATCHER" "$1" <<'PY'
+  python3 -I -B - "$PATCHER" "$1" <<'PY'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("apl_patcher", sys.argv[1])
 mod = importlib.util.module_from_spec(spec)
@@ -1807,7 +1807,7 @@ PY
   # patcher, never against itself. On disk the v1 block has REAL newlines inside the
   # [uncaught]/[unhandled] template literals, because re.subn read the old replacement as a
   # template (research D4b): a twin copied from the old constant would match nothing.
-  run python3 -I - "$PATCHER" "$GOLDEN_V034" <<'PY'
+  run python3 -I -B - "$PATCHER" "$GOLDEN_V034" <<'PY'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("apl_patcher", sys.argv[1])
 mod = importlib.util.module_from_spec(spec)
@@ -1878,7 +1878,7 @@ _sha() { shasum -a 256 "$1" | cut -d' ' -f1; }
   cp "$REPO_ROOT/tests/fixtures/telegram-server-pristine.ts" "$TMP_TEST_DIR/server.ts"
   run python3 "$PATCHER" "$TMP_TEST_DIR/server.ts"
   [ "$status" -eq 0 ]
-  run python3 -I - "$PATCHER" "$TMP_TEST_DIR/server.ts" "$TMP_TEST_DIR/back.ts" <<'PY'
+  run python3 -I -B - "$PATCHER" "$TMP_TEST_DIR/server.ts" "$TMP_TEST_DIR/back.ts" <<'PY'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("apl_patcher", sys.argv[1])
 mod = importlib.util.module_from_spec(spec)
@@ -1941,7 +1941,11 @@ PY
   # A rollback runs the 0.34.0 patcher on a v2 file: it looks only for the v1 marker, so it
   # stacks a v1 block on top of v2 (found by the 049 independent review). Rolling forward must
   # remove that stacked v1, not turn it into a second v2 that would double every log line.
-  git -C "$REPO_ROOT" show 9a0b93e:docker/scripts/apply_telegram_typing_patch.py > "$TMP_TEST_DIR/old-patcher.py"
+  # The 0.34.0 patcher is a committed fixture, not `git show 9a0b93e:`: the CI checkout is
+  # shallow (depth 1), so the first CI of PR #141 failed here with "invalid object name".
+  local old="$REPO_ROOT/tests/fixtures/apply-telegram-patcher-v034.py"
+  [ "$(shasum -a 256 "$old" | cut -d' ' -f1)" = 449d25724740a0c061ccb30e07c34fdc0ed6fb2fa1b8d0c00fa18f7cade8ac4c ]
+  cp "$old" "$TMP_TEST_DIR/old-patcher.py"
   cp "$REPO_ROOT/tests/fixtures/telegram-server-pristine.ts" "$TMP_TEST_DIR/fresh.ts"
   run python3 "$PATCHER" "$TMP_TEST_DIR/fresh.ts"
   [ "$status" -eq 0 ]
@@ -1956,4 +1960,22 @@ PY
   [ "$(grep -c 'stderr-capture patch v2' "$TMP_TEST_DIR/rb.ts")" -eq 1 ]
   [ "$(grep -c 'stderr-capture patch v1' "$TMP_TEST_DIR/rb.ts" || true)" -eq 0 ]
   cmp "$TMP_TEST_DIR/rb.ts" "$TMP_TEST_DIR/fresh.ts"
+}
+
+@test "049 G1: every stdin python that imports a repo file disables bytecode (-B)" {
+  # Found by the first CI of PR #141: Python 3.14 on the runners writes
+  # docker/scripts/__pycache__/ when a test imports the patcher with importlib, and TU31 then
+  # finds a baked file without its COPY line. Apple's /usr/bin/python3 under -I never writes
+  # bytecode (measured: sys.flags.dont_write_bytecode == 1), so only this guard sees it locally.
+  local f bad files=0
+  for f in "$REPO_ROOT"/tests/*.bats "$REPO_ROOT"/tests/*.bash; do
+    grep -q 'spec_from_file_location' "$f" || continue
+    files=$((files + 1))
+    bad=$(grep -nE 'python3( -[A-Za-z]+)* - ' "$f" | grep -v -- ' -B' || true)
+    if [ -n "$bad" ]; then
+      echo "${f#"$REPO_ROOT"/}: $bad" >&2
+      false
+    fi
+  done
+  [ "$files" -ge 2 ]
 }

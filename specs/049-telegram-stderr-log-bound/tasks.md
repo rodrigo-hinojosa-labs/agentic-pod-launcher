@@ -224,7 +224,7 @@ description: "Lista de tareas de la feature 049: log de stderr del canal de Tele
   - suite completa en serie con bash 5.3.15 y 3.2.57, con stderr vacío; esperado = línea base de T001 + pruebas nuevas, 0 `not ok`;
   - la suite de bun también con SIGPIPE ignorada en los dos bash: `perl -e '$SIG{PIPE}="IGNORE"; exec @ARGV' bats tests/telegram-stderr-hook.bats`, porque así corre el runner;
   - auditoría de bytes: `LC_ALL=C grep -c $'\xcc\x80'` = 0 en el patcher y en los archivos de pruebas nuevos o tocados.
-- [ ] T024 COMPUERTA (commit): commits locales en español, en imperativo y sin atribución, en este orden: artefactos de spec-kit; fixture dorado y gemela; implementación con sus pruebas; documentación, VERSION y CHANGELOG. Ninguno intermedio en rojo.
+- [X] T024 COMPUERTA (commit): commits locales en español, en imperativo y sin atribución, en este orden: artefactos de spec-kit; fixture dorado y gemela; implementación con sus pruebas; documentación, VERSION y CHANGELOG. Ninguno intermedio en rojo.
 - [ ] T025 COMPUERTA (push y PR): push de la rama y PR contra `main` con `Closes #139`, el resumen, la evidencia de T018 a T023 y el plan de despliegue. CI verde en los checks, con los conteos por brazo y los saltados por motivo en el Registro. El merge lo hace el operador.
 - [ ] T026 Después del merge, verificar `main` (árbol igual al de la cabeza validada, VERSION 0.35.0) y la primera nocturna `docker-e2e` (`e2e summary` sin fallas ni saltados inesperados).
 - [ ] T027 COMPUERTA (despliegue): cbum como canario, después linus y donna, con el runbook *Upgrade an existing agent* del README y la verificación de quickstart §4 (`token-check`, doctor, `grep -c` de los marcadores v2 y v1, `ls -l` del log y un mensaje por Telegram respondido). En donna, después de `--force-claude-md`, correr `custom-apply --no-regenerate` y comparar el `CLAUDE.md` antes de reiniciar.
@@ -428,4 +428,15 @@ Corrido en serie sobre el árbol de la rama, con la huella `e4137f1f8cdb427e` (s
 - **shellcheck**, con el comando exacto de la CI: rc 0.
 - **Suite de bun con SIGPIPE ignorada** (`perl -e '$SIG{PIPE}="IGNORE"; exec @ARGV' bats tests/telegram-stderr-hook.bats`): 15 de 15 en bash 5.3.15 y en 3.2.57, sin saltadas, stderr vacío y ningún bun sobreviviente.
 - **Auditoría de bytes** (`LC_ALL=C grep -c $'\xcc\x80'`): 0 en el patcher, `scripts/agentctl`, los cinco archivos de pruebas nuevos o tocados y el fixture `vendor-handlers.ts`.
+
+### 23-11-2026: T024 y primera CI del PR #141
+
+**T024**, autorizado por el operador: cuatro commits locales, `1d39d7d` (artefactos de spec-kit), `a93c8c7` (dorado v034), `83ef321` (implementación y pruebas) y `ba34439` (documentación, VERSION y CHANGELOG), con la huella del gate intacta. Push y PR #141 autorizados el mismo día.
+
+**Primera CI (run 45241065986, cabeza `ba34439`)**: shellcheck y local-healthcheck-integration en verde. Los dos brazos de bats cayeron en las **mismas dos pruebas**, con 2.297 `ok` de 2.299. Ubuntu (bash 5.3.9) tardó 24 min 53 s y macOS (bash 3.2.57) 1 h 14 min 37 s. Ninguna de las dos fallas es del producto, y el gate local no podía ver ninguna:
+
+- **S10**, `fatal: invalid object name '9a0b93e'`: la CI clona con profundidad 1, así que una prueba no puede hacer `git show` de un commit anterior. Reproducido en un clon local `--depth 1`. Remedio: el patcher de 0.34.0 pasa a ser el fixture `tests/fixtures/apply-telegram-patcher-v034.py`, con su sha256 (`449d2572…ac4c`) fijado en la prueba.
+- **TU31**, `no COPY line for scripts/__pycache__/apply_telegram_typing_patch.cpython-314.pyc`: las pruebas de 049 importan el patcher con `python3 -I -` sin `-B`, y el Python 3.14 del runner escribe `docker/scripts/__pycache__/`. El `/usr/bin/python3` de este Mac (3.9.6) nunca escribe bytecode bajo `-I` (medido: `sys.flags.dont_write_bytecode` = 1), por eso el gate local quedó verde. Reproducido en `python:3.14-alpine`: sin `-B` deja 1 `.pyc`, con `-B` ninguno. Remedio: `-B` en las cuatro invocaciones y la guarda **G1**, que exige `-B` en todo `python3 … -` de un archivo de pruebas que use `spec_from_file_location`. G1 se vio en ROJO con las tres líneas de `apply-telegram-patches.bats` antes del arreglo.
+
+**VERDE, en un clon con profundidad 1**: patcher, bun y doctor (161 pruebas) en los dos bash, y TU31 en verde. Total esperado en la CI: **2.300 por brazo** (2.299 + G1).
 

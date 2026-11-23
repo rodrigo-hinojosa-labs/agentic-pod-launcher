@@ -41,7 +41,7 @@ stderr_hook_build() {
     V2) attr=STDERR_HOOK ;;
     *) echo "stderr_hook_build: unknown block '$which'" >&2; return 2 ;;
   esac
-  python3 -I - "$(stderr_hook_patcher)" "$attr" "$out" "$log" <<'PY'
+  python3 -I -B - "$(stderr_hook_patcher)" "$attr" "$out" "$log" <<'PY'
 import importlib.util, json, sys
 patcher, attr, out, log = sys.argv[1:5]
 spec = importlib.util.spec_from_file_location("apl_patcher", patcher)
