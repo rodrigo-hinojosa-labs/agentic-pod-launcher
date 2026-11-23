@@ -164,14 +164,14 @@ description: "Tareas de 048-fleet-backup-main"
 
 **Goal**: el contrato G de `contracts/fleet-gate.md`.
 
-- [ ] T047 [US7] COMPUERTA (commit): commits locales en español e imperativo, sin atribución: artefactos de spec-kit y registro de 046; enmienda de la constitución; implementación con sus pruebas; documentación. Ninguno intermedio en rojo.
-- [ ] T048 [US7] COMPUERTA (push y PR): push de `048-fleet-backup-main` y PR contra `main` con el resumen, la evidencia de T042 a T046 y el plan de G; CI en verde en los tres checks, con los conteos por brazo en el Registro. El merge lo hace el operador.
-- [ ] T049 [US7] Tras el merge: verificar `main` (árbol igual a la cabeza validada, VERSION 0.34.0, constitución 1.2.0) y la primera nocturna posterior (`e2e summary` sin fallas ni saltadas inesperadas).
-- [ ] T050 [US7] COMPUERTA (cbum): G2 de `contracts/fleet-gate.md`, con respaldo `pre034` y `--force-claude-md`; comprobar cinco `location: main`, cinco `legacy: deleted`, `.agent-backup/` y README en `main` del repo de cbum, segundo ciclo sin cambios y doctor sin los tres avisos (SC-009).
-- [ ] T051 [US7] COMPUERTA (ensayo, lo corre el operador): G3, restauración de cbum desde `main` en la Mac con la llave del M4 en un destino desechable; el asistente compara nombres y sha256 contra cbum vivo sin imprimir contenidos (SC-011) y borra los destinos temporales.
-- [ ] T052 [US7] COMPUERTA (linus y donna): G4, uno por vez; ambos con `--force-claude-md` y luego `custom-apply --no-regenerate`, comprobando el bloque `BEGIN overlay` y los MCP del overlay de donna; comprobar que todos los commits previos de su `main` siguen siendo ancestros (SC-005) y que un commit de respaldo no dispara el workflow de donna (M4, SC-007).
-- [ ] T053 [US7] COMPUERTA (limpieza): G5, borrar en ferrari y mclaren los respaldos `pre033`, `pre034`, `~/old-clones-20261121/` y `~/<host>-preUpgrade-v033-*`, registrando fecha, ruta y tamaño (SC-012).
-- [ ] T054 [US7] Registro final: actualizar la memoria del proyecto y el bloque de 048 en CLAUDE.md con el resultado de la flota.
+- [X] T047 [US7] COMPUERTA (commit): commits locales en español e imperativo, sin atribución: artefactos de spec-kit y registro de 046; enmienda de la constitución; implementación con sus pruebas; documentación. Ninguno intermedio en rojo.
+- [X] T048 [US7] COMPUERTA (push y PR): push de `048-fleet-backup-main` y PR contra `main` con el resumen, la evidencia de T042 a T046 y el plan de G; CI en verde en los tres checks, con los conteos por brazo en el Registro. El merge lo hace el operador.
+- [ ] T049 [US7] Tras el merge: verificar `main` (árbol igual a la cabeza validada, VERSION 0.34.0, constitución 1.2.0) y la primera nocturna posterior (`e2e summary` sin fallas ni saltadas inesperadas). _Parcial (22-11-2026): `main` verificada; falta la primera nocturna sobre `e0221bf`._
+- [X] T050 [US7] COMPUERTA (cbum): G2 de `contracts/fleet-gate.md`, con respaldo `pre034` y `--force-claude-md`; comprobar cinco `location: main`, cinco `legacy: deleted`, `.agent-backup/` y README en `main` del repo de cbum, segundo ciclo sin cambios y doctor sin los tres avisos (SC-009).
+- [X] T051 [US7] COMPUERTA (ensayo, lo corre el operador): G3, restauración de cbum desde `main` en la Mac con la llave del M4 en un destino desechable; el asistente compara nombres y sha256 contra cbum vivo sin imprimir contenidos (SC-011) y borra los destinos temporales.
+- [X] T052 [US7] COMPUERTA (linus y donna): G4, uno por vez; ambos con `--force-claude-md` y luego `custom-apply --no-regenerate`, comprobando el bloque `BEGIN overlay` y los MCP del overlay de donna; comprobar que todos los commits previos de su `main` siguen siendo ancestros (SC-005) y que un commit de respaldo no dispara el workflow de donna (M4, SC-007).
+- [X] T053 [US7] COMPUERTA (limpieza): G5, borrar en ferrari y mclaren los respaldos `pre033`, `pre034`, `~/old-clones-20261121/` y `~/<host>-preUpgrade-v033-*`, registrando fecha, ruta y tamaño (SC-012).
+- [X] T054 [US7] Registro final: actualizar la memoria del proyecto y el bloque de 048 en CLAUDE.md con el resultado de la flota.
 
 ---
 
@@ -228,3 +228,61 @@ _(Las mediciones, decisiones y resultados de cada tarea se anotan aquí con fech
 - **T045 segundo gate (22-11-2026, sobre el árbol de trabajo posterior a `faad4be`: el `sha` del merge, TP06 y TS501)**: `shellcheck` con el comando de la CI, rc 0 y salida vacía. bash 3.2.57: 2266 ok, 1 not ok, 74 saltadas, 3178 s; bash 5.3.15: 2266 ok, 1 not ok, 73 saltadas, 3521 s; stderr vacío en los dos; total 2267 = 2196 de la línea base + 71 de 048. La falla, TU31 en los dos bash, y dos de las saltadas de más (las dos `037 claude-md.tpl`, que piden la rama `main`) son del armado del gate: la copia con `git archive` no tenía `.git` y TU31 usa `git ls-files`. Las tres se repitieron en el checkout real, que sí lo tiene, y pasan en los dos bash. Las otras saltadas nuevas son EM01 y EM03, e2e de 048 que piden `DOCKER_E2E=1` (T046). La diferencia de una saltada entre los bash es la de siempre (`read -t` de qmd_watch pide bash 4+).
 - **T046 (22-11-2026)**: `DOCKER_E2E=1 bats tests/docker-e2e-backup-repo.bats` en arm64 local (Docker 29.8.0) sobre el mismo árbol del segundo gate: 10 de 10 en 180 s, stderr vacío, incluidos EM01 y EM03 de 048 y TE1 a TE8 leyendo main a través del adaptador.
 - **Primera CI del PR #138 (22-11-2026, run 45041261082)**: shellcheck, `local-healthcheck-integration` y ubuntu (bash 5.x) en verde: 2267 ok, 0 not ok, 66 saltadas, 33 min 54 s. El brazo macOS (bash 3.2) se canceló al agotar su tope de 60 min con 980 de 2267 pruebas ejecutadas y ninguna falla. En `main` (6170dda) las mismas primeras 978 tardaron 30,7 min y en el PR 57,5 min: las suites de 048 con muchas operaciones de git corren unas 7 veces más lento allí que en ubuntu (TM15 868 s contra 127 s; TU03 309 s contra 47 s). El reintento no espera (`BACKUP_MAIN_RETRY_SLEEP=0` en las cuatro suites), así que el costo es de procesos. Decisión del operador: tope del job `bats` 60 -> 90 min (oráculo CI04701, visto en ROJO antes de cambiar el workflow) y TM15 de 100 a 25 ciclos, con SC-001 enmendado. Verificado después del cambio: TM15 con 25 ciclos pasa en bash 3.2.57 (123 s) y 5.3.15 (116 s); `ci-workflows.bats` y `nightly-alert.bats` 63 de 63 en los dos. Un empuje forzado plantado (`push -q -f`) no hace caer a TM15 ni con 25 ni lo hacía con 100 (M02 del catálogo siempre fue de TM14 y TM24); TM24 lo caza, así que reducir los ciclos no pierde ninguna mutación del catálogo.
+- **Segunda CI del PR #138 y merge (T048 y T049, 22-11-2026)**: sobre `d06b523` (run 45054470791), los cuatro checks en verde. ubuntu (bash 5.x): 2267 ok, 0 not ok, 66 saltadas, 28 min 52 s; macOS (bash 3.2.57, comprobada en el log): 2267 ok, 0 not ok, 74 saltadas, 1 h 15 min 8 s. La estimación era de unos 63 min: el margen real frente al tope de 90 es de unos 15 min. TM15, con 25 ciclos, terminó a los 19 min del job (prueba 433), así que el exceso está en el resto de las suites de backup. El operador mergeó: `main` = `e0221bf`, con el árbol `6391d1b4` idéntico al de la cabeza validada, VERSION 0.34.0 y la constitución en 1.2.0. Falta la primera nocturna sobre `e0221bf`: la del 22-11 (13:10Z) corrió sobre `6170dda`, antes del merge.
+- **G2, cbum (T050, 22-11-2026, entre las 17:09 y las 17:16)**:
+  - Despliegue desde el clon de ferrari (`e0221bf`). Antes, respaldo de los archivos sin `.state` (18 MB), un bundle con las seis ramas que tenía el repo e imagen `agentic-pod:cbum-pre034`.
+  - Swap del README, `--regenerate` y `--force-claude-md`. En el `CLAUDE.md` cambiaron solo las 16 líneas de la sección de respaldos; `docker-compose.yml` quedó idéntico.
+  - Build (5 s), stop, 150 s y up: sano al primer intento, canal en 35 s, 0 reinicios.
+  - Las cinco unidades quedaron en `main:.agent-backup/<u>` con el README (commits `1e73f48` a `548f18d`, todos `[skip ci]`) y las cinco ramas `backup/*` se borraron. `a43d62c` sigue siendo ancestro (5 adelante, 0 atrás), 0 corridas de Actions, segundo ciclo sin cambios. El clon de trabajo deja fuera `!/.agent-backup/`, con `blob:none` y el hook.
+  - Doctor `All checks passed`, pero solo después de `token-check`: el primer doctor mostró el aviso de Atlassian de una sonda anterior al despliegue (`probed 15m ago`). La sonda nueva dio 200 con `action=recover`. El aviso de heartbeat no se puede observar en cbum (heartbeat apagado).
+- **G3, ensayo de restauración (T051, 22-11-2026, cerca de las 18:00)**:
+  - Origen: un espejo local del repo de cbum (`main` = `548f18d`, sin ramas `backup/*`), con `restore_from_fork` cargado desde `setup.sh` sin el wizard, un HOME vacío y la llave del M4.
+  - El comando con la llave lo corrió el operador: el hook `protect-secrets` bloquea cualquier comando del asistente que nombre `~/.ssh`. Antes, una pasada sin llave comprobó la ruta: config e identity `(from main)`, rc 0, y las piezas cifradas se saltan y se informan.
+  - Con la llave: las cinco unidades `(from main)`, rc 0, nada saltado.
+  - Comparación por nombre y sha256 contra cbum vivo, sin imprimir contenidos: 37 archivos, 33 idénticos. Las 4 diferencias son de claude-mem:
+    - dos JSON modificados después del respaldo: 20:18Z y 21:03Z, frente al respaldo de memory a las 20:14Z;
+    - dos bases SQLite con `integrity_check` ok y el mismo conteo de filas que la viva en todas las tablas.
+  - Una base WAL restaurada no abre con `mode=ro` mientras no tenga su `-shm`; abre normal. No es un defecto de la restauración.
+  - Los temporales con datos descifrados y los scripts del ensayo se borraron.
+- **G4, linus y donna (T052, 22-11-2026, entre las 18:06 y las 18:25)**:
+  - Mismo procedimiento que G2, más `custom-apply --no-regenerate` y `token-check` antes del doctor. Respaldos `~/linus-pre034-*` (43 MB) y `~/donna-pre034-*` (26 GB, ver abajo), cada uno con el bundle de todas las ramas.
+  - Los dos quedaron sanos al primer intento y sin reinicios.
+  - Respaldos en `main` en los dos: las cinco unidades, las cinco ramas `backup/*` borradas y un segundo ciclo sin cambios.
+  - Ramas de trabajo intactas: linus `001-n8n-agentic-ops`; donna `002-registro-costos` y `003-readme-donna`.
+  - La `main` previa sigue siendo ancestro: linus `0d4ca24` y donna `884939c`, cada una 5 adelante y 0 atrás (SC-005).
+  - El workflow `gate` de donna sigue en 27 corridas; solo corre en `pull_request` (SC-007).
+  - MCP: linus 8 antes y 8 después; donna 15 y 15, con el bloque `BEGIN overlay` presente en los dos.
+  - Doctor `All checks passed` en los dos. En donna se ve el arreglo del heartbeat: `Heartbeat last run: ok @ 2026-11-22T15:00:00Z`. Con eso, los tres avisos de SC-009 quedan verificados en vivo.
+  - **Hallazgo 1, donna, ya resuelto:**
+    - El despliegue de su feature 002 (paso C9 de su contrato, 22-11 a las 12:52) escribió la sección "Registro de costos y gastos (autorización acotada)" directamente en el `CLAUDE.md` vivo. El `--force-claude-md` la borró y `custom-apply` no la repuso.
+    - Se detectó comparando con el `CLAUDE.md` anterior y se repuso tal cual, en el mismo lugar, antes del reinicio. El primer intento arrastró 190 líneas comunes; se revirtió antes de reiniciar.
+    - El diff final contra el anterior quedó en las mismas 16 líneas que en linus y cbum.
+    - Para que no se repita, pasó a ser un bloque gobernado del overlay de donna (PR #15 de custom-config, más abajo).
+  - **Hallazgo 2, donna:**
+    - `scripts/heartbeat/logs/telegram-mcp-stderr.log` pesaba 26,7 GB: 434 907 306 líneas, casi todas `uncaught exception: Error: EPIPE: broken pipe, write` en bucle. La última marca de tiempo del archivo es del 30-09-2026; no crecía después del reinicio y nada lo rota. En linus pesa 5,7 MB y en cbum 276 KB.
+    - Se vació con `truncate -s 0` (22-11, 18:31), sin reiniciar: el parche lo abre con `appendFileSync` en cada escritura.
+    - Seguimiento en el issue #139.
+- **G5, limpieza (T053, 22-11-2026, 18:30; el operador decidió borrar también los `pre034`)**:
+
+  | Fecha | Host | Ruta | Tamaño |
+  |---|---|---|---|
+  | 22-11-2026 18:30:08 | ferrari | `~/cbum-pre033-20261121-184956` | 17M |
+  | 22-11-2026 18:30:08 | ferrari | `~/cbum-pre034-20261122-171008` | 18M |
+  | 22-11-2026 18:30:08 | ferrari | `~/linus-pre033-20261121-184302` | 33M |
+  | 22-11-2026 18:30:08 | ferrari | `~/linus-pre034-20261122-180653` | 43M |
+  | 22-11-2026 18:30:08 | ferrari | `~/donna-pre033-20261121-184836` | 25G |
+  | 22-11-2026 18:30:08 | ferrari | `~/donna-pre034-20261122-181308` | 26G |
+  | 22-11-2026 18:30:08 | ferrari | `~/old-clones-20261121` | 2.3M |
+  | 22-11-2026 18:30:08 | ferrari | `~/ferrari-preUpgrade-v033-20261121-151745` | 35M |
+  | 22-11-2026 18:30:09 a 18:30:11 | ferrari | imágenes `agentic-pod:{cbum,linus,donna}-pre03{3,4}` (seis) | 2.05 a 2.07GB c/u |
+  | 22-11-2026 18:30:12 | mclaren | `~/mclaren-preUpgrade-v033-20261121-151417` | 33M |
+
+  - Espacio libre en ferrari: de 708G a 761G. Después del vaciado del log de donna, 786G. Los tres agentes siguen sanos.
+  - Con los `pre034` se fueron también los bundles con las ramas `backup/*` antiguas: ya no se pueden recuperar desde ferrari.
+  - Quedan fuera de alcance los `.tar.gz` `*-preUpgrade-v017`, `v019` y `v0250`, y los `rodri-*`.
+- **Seguimiento (22-11-2026)**:
+  - Issue #139 del launcher: rotación del log de stderr del canal y corte del bucle EPIPE de `STDERR_HOOK`.
+  - PR #15 de custom-config (merge `2f7aa6a`): la sección de costos de donna pasa a `overlays/common/registro-costos/claude-md.d/autorizacion-acotada`. Ajusta D1 a D4 de `doctor.bats` y O3 de `persona-apply.bats`, que asumían un solo bloque por agente; esas cuatro fallaron con el cambio y pasaban en `main`, así que el ROJO quedó visto.
+  - Aplicado en donna con `custom-apply`: `ADOPTADO` en su lugar (solo se agregan las dos marcas) y la segunda aplicación da `SIN_CAMBIOS`. `custom-doctor` termina con rc 0, con los dos bloques AL DÍA y 4 de 4 MCP. Sin reinicio.
+  - El paso C9 del contrato de la feature 002 vive en el repo de donna y no se tocó.
+  - El README gana tres pasos o avisos en *Upgrade an existing agent*: `token-check` antes del doctor, comparar el `CLAUDE.md` antes de reiniciar tras `--force-claude-md`, y guardar las ramas `backup/*` antes del primer ciclo de 0.34.0 si se quiere una vuelta atrás.
