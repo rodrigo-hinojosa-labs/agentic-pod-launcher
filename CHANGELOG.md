@@ -26,6 +26,24 @@
   backup and cannot be pruned by deleting a branch.
 
 ### Fixed
+- **The Telegram channel's stderr log is bounded and no longer loops on a closed stderr — `049-telegram-stderr-log-bound`**
+  (#139; VERSION 0.34.0 → 0.35.0; docker mode; the image must be rebuilt). The stderr-capture
+  patch of the Telegram plugin goes from v1 to v2. Measured cause: in bun a write to a closed
+  stderr does not throw; the EPIPE arrives later as an `uncaughtException`, the vendor handler
+  reports it by writing to stderr again, and v1 tee'd every one of those writes to the log: a
+  loop of about 10 MB/s that also starves the event loop, so the channel stays alive without
+  serving (donna's log reached 26.7 GB). v2 listens for the stream's `error` event and, on a
+  closed destination (`EPIPE`, `ERR_STREAM_DESTROYED`, `ERR_STREAM_WRITE_AFTER_END`, `EBADF`),
+  stops forwarding for the rest of the process with a single `[stderr-closed]` line; capture
+  to the file goes on. Before each append the log rotates at `TELEGRAM_STDERR_LOG_MAX_BYTES`
+  (default 10 MiB, set in the workspace `.env`) into `.1` and `.2`, and an inherited file of
+  two thresholds or more keeps only its last threshold of bytes. A healthy stderr behaves byte
+  for byte as v1; the path, the line format, the guard hooks (028, 031) and the other six patch
+  groups are unchanged. The boot patcher upgrades an already-patched plugin in place through a
+  frozen v1 twin, which is the block's ON-DISK shape: the old `apply_stderr` passed the block
+  to `re.subn` as a template, which turned its `\\n` escapes into real newlines (harmless in
+  JS; the replacement is now a function). `agentctl doctor` prints the log's size and warns
+  above 100 MiB.
 - **`agentctl doctor` false warnings in docker mode — `048-fleet-backup-main`.** The
   Atlassian token probe asks Confluence (`<site>/wiki/rest/api/user/current`) when Jira
   answers 404 (a site without Jira), and warns only when no product accepts the token; the
