@@ -1,0 +1,356 @@
+---
+description: "Tareas de implementación y validación de la carrera de arranque del e2e QMD (#117)"
+---
+
+# Tasks: Migración QMD independiente del orden de arranque
+
+**Input**: documentos de `specs/050-e2e-qmd-boot-race/`.
+
+**Prerequisites**: [plan.md](plan.md), [spec.md](spec.md), [research.md](research.md), [data-model.md](data-model.md), [contratos](contracts/host-oracle.md) y [quickstart.md](quickstart.md).
+
+**Branch**: `050-e2e-qmd-boot-race`. **Created**: 2026-11-24. **Estado inicial**: tareas generadas, ninguna ejecutada por este comando.
+
+**Tests**: obligatorios por FR-006/FR-009 y el Principio III. Se escribe y se ve el ROJO pertinente antes de cambiar comportamiento; controles que ya nacen verdes no se presentan como ROJO. Diseño inicial H00-H14: 15 pruebas host; M01-M18: 18 identificadores, 20 variantes mínimas al separar M12a/b y M13a/b. La prueba Docker existente conserva su título y no aumenta el total de e2e.
+
+**Organization**: US1 (P1) entrega el escenario sano y su demostración de orden; US2 (P2) comprueba la capacidad de fallar ante defectos. Ambas comparten un único e2e, por lo que su implementación no se paraleliza sobre esos archivos.
+
+## Format: `[ID] [P?] [Story] Description`
+
+- `[P]` indica trabajo en archivos distintos con contrato ya fijado y sin depender de la otra tarea del grupo. No autoriza ejecución concurrente de suites pesadas.
+- `[US1]` y `[US2]` enlazan con las historias de la spec. Setup, Foundational y Polish no llevan etiqueta de historia.
+- Las rutas son relativas a la raíz del repo. Al ejecutar herramientas sobre el filesystem se resuelven desde la raíz verificada; la evidencia se guarda en una ruta absoluta externa.
+- Cada fase de Spec Kit y cada fase de implementación se inicia según la instrucción del operador. Este archivo no ejecuta implement, analyze, Docker ni acciones Git.
+
+## Phase 1: Setup
+
+**Propósito:** confirmar checkout, dependencias y una base de comparación anterior a cambios de pruebas. Los archivos de evidencia quedan fuera del checkout; el Registro de este documento enlaza sus rutas.
+
+**Salida:** hashes y línea base por bash, sin alterar producto ni pruebas.
+
+- [X] T001 Verificar `pwd`, rama `050-e2e-qmd-boot-race`, estado Git, bash 3.2/5.x, Bats, yq v4, jq y Python 3; registrar HEAD, base `a45beaefaa68da17ce16d956351337bd5ce3b9d5`, hashes de `tests/docker-e2e-qmd.bats`, `tests/qmd-e2e-lock.bats`, `tests/helper-qmd-e2e.bash` y runtime en `specs/050-e2e-qmd-boot-race/tasks.md`. Crear un directorio de evidencia nuevo o vacío fuera del checkout según `specs/050-e2e-qmd-boot-race/quickstart.md`; conservar intacto el `AGENTS.md` sin seguimiento.
+
+- [X] T002 Medir antes de cualquier edición la línea base de `bats --tap tests/` en bash 5.x y después en 3.2, sobre los mismos archivos congelados; guardar TAP, stderr, versiones, duración y skips por motivo en la evidencia externa y resumirlos en `specs/050-e2e-qmd-boot-race/tasks.md`. Si un rojo no está explicado, clasificarlo antes de usar la base; no atribuirlo a #117 ni continuar presentándolo como verde.
+
+---
+
+## Phase 2: Foundational — extractor y arnés compartidos
+
+**Propósito:** preparar la extracción de sentencias reales y demostrar que el propio arnés distingue un fallo de aserción de un error de ejecución.
+
+**Bloquea ambas historias.** Solo T003 modifica el e2e en esta fase y únicamente agrega comentarios delimitadores. No cuenta como ROJO de comportamiento una extracción vacía o un Bats hijo que no arrancó.
+
+En el cuerpo anterior, `tick1` está dentro de `observe`: los delimitadores pueden anidarse correctamente. Rechazar orden invertido significa rechazar un cierre anterior a su apertura o límites cruzados, no exigir anticipadamente el orden final del fix. El replay ejecuta una única vez el tramo textual original de `precondition` a `verify`, sin concatenar secciones de modo que se reordenen o dupliquen sentencias; H05/H14 y B2 comprueban después el orden corregido.
+
+- [X] T003 Añadir en el único bloque legacy de `tests/docker-e2e-qmd.bats` anclas únicas `# 050:<section>:begin`/`end` para `fixture`, `precondition`, `tick1`, `observe` y `verify`; cubrir desde la preparación real hasta la última aserción sin alterar sentencias, fixture ni orden. Comprobar diff solo de comentarios y conservar la identificación por título completo.
+
+- [X] T004 Escribir primero H00 en `tests/qmd-e2e-boot-race.bats`: extracción ausente/duplicada/vacía/invertida, sentencias fuera de secciones, TAP vacío, skip, intérprete distinto y error del arnés deben rechazarse. Exigir un hijo sano de control y negativos con causa identificada conforme a `specs/050-e2e-qmd-boot-race/contracts/host-oracle.md`; registrar el ROJO por funciones aún no implementadas solo como ROJO del arnés.
+
+- [X] T005 Implementar `tests/helper-qmd-e2e-boot-race.bash` para superar H00: costura `QMD_BOOT_RACE_E2E_FILE`, extracción que exige exactamente un sujeto y secciones no vacías, Bats hijo con sentencias directas en el orden original y sin duplicaciones, launcher exterior y `env -i` con whitelist mínima y mismo bash/Bats. Exigir TAP `1..1`, un único resultado sin skip, retorno esperado, línea/condición fallida y traza de fakes; transportar código por archivos, no por argv/env grandes. No envolver el segmento como función bajo `run`, `if` o `||`; no modificar `tests/helper-qmd-e2e.bash`.
+
+- [X] T006 Validar H00 y la carga sin efectos del ayudante nuevo en bash 5.x y 3.2; probar que un comando inexistente o fake incompleto no se registra como captura válida y que el hijo no hereda `BATS_*` del padre. Guardar resultados en `specs/050-e2e-qmd-boot-race/tasks.md`; mantener intacta la suite de locks de `tests/qmd-e2e-lock.bats` antes de reforzar B2.
+
+---
+
+## Phase 3: US1 — Una migración sana pasa cualquiera sea la velocidad de arranque (P1, MVP)
+
+**Objetivo:** migrar una sola vez en el primer reindex, conservar idempotencia y obtener el mismo resultado con setup temprano o tardío.
+
+**Prueba independiente:** el oráculo host reproduce el contrato del fixture y de los ticks; la matriz Docker D1-D4 demuestra la causa anterior y el candidato con los dos órdenes controlados; el escenario normal pasa sin instrumentación. El índice vacío sigue siendo un stand-in del motor falso, no una base SQLite real.
+
+### Pruebas antes de cambiar comportamiento
+
+T007-T011 se ejecutan antes de T012-T016. Es válido que algunos controles nazcan verdes; el Registro debe distinguirlos del ROJO pertinente al defecto. Se incluye desde esta historia el conjunto compartido H01-H14 que US2 reutiliza para los defectos inducidos.
+
+- [X] T007 [US1] Escribir H01-H03 en `tests/qmd-e2e-boot-race.bats` antes del fix: ejecutar preparación/YAML reales, comprobar índice y setup presentes, migración pendiente, wiki presembrada y calendario imposible antes del up; rechazar índice/setup ausentes, colección ya migrada, replace previo y texto válido con rc 7. Usar `scripts/lib/qmd_index.sh` real y los stubs de `tests/helper.bash` solo para demostrar que el setup no invoca el motor en el estado esperado; seguir `specs/050-e2e-qmd-boot-race/data-model.md`.
+
+- [X] T008 [US1] Escribir H04-H07 en `tests/qmd-e2e-boot-race.bats`: retornos 1/3 o `REINDEX_STATUS=7` de tick 1 fallan; log ausente y después disponible pasa; log que nunca llega u omite migración falla sin relanzar tick 1; caso sano completo pasa. Un avance del reloj mayor que 45 s durante tick 1 debe dejar 45 s de observación posteriores. Contar exactamente un tick antes de observar y dos en total, con reloj/espera falsos.
+
+- [X] T009 [US1] Escribir H08-H14 en `tests/qmd-e2e-boot-race.bats`: detectar operación/máscara/cleanup faltantes, orden incorrecto, remove/add duplicados, confirmación ausente aunque el estado sea `done`, estado distinto de `done`, inspecciones con rc 7 y texto correcto, errores de tick 2 y migración repetida. H14 conserva las guardias de topes y de cableado del sujeto, incluyendo ausencia de `[[ ]]` y negaciones intermedias; todos los negativos acreditan la aserción fallida.
+
+- [X] T010 [US1] Reforzar B2 en `tests/qmd-e2e-lock.bats` antes de mover el tick: exigir tick 1 y sus dos guardias antes del `while`, además de las dos llamadas al ayudante, retornos/status, lectura con `|| true`, presupuesto de 45 s y diagnóstico antes del teardown. Cambiar solo título/comentario pertinentes; no aflojar la cobertura de #109 ni otras guardias de 043.
+
+- [X] T011 [US1] Ejecutar el oráculo nuevo y B2 sobre las sentencias anteriores en bash 5.x y 3.2, con H00 sano; registrar en `specs/050-e2e-qmd-boot-race/tasks.md` cuáles H01-H14 fallan por las condiciones originales, cuáles ya pasan y las líneas responsables. Un error de parser, extracción o fake no satisface este ROJO; la diferencia de `[[ ]]` entre ambos bash debe quedar explícita.
+
+- [X] T012 [US1] Preparar en `tests/docker-e2e-qmd.bats`, antes del up, `index.sqlite`: «Presente, stand-in vacío del motor falso», `.qmd-setup-ok`: «Presente» y `.qmd-collection-wiki`: «Ausente». Conservar prefijo/manifest/hash del motor falso; presembrar una página fija bajo `wiki/` y usar calendario `0 0 31 2 *` solo en este fixture. No escribir luego en el vault ni alterar el motor de producto.
+
+- [X] T013 [US1] Reemplazar la premisa de setup todavía pendiente por la precondición real en `tests/docker-e2e-qmd.bats`: inspección como `agent`, rc 0 y texto exacto `LEGACY_PENDING` solo con índice/setup presentes, marcador de colección ausente y ningún remove/add previo. Un log inexistente representa cero llamadas previas, pero no convierte cualquier error de inspección en éxito; la precondición no depende de que el proceso de setup haya corrido.
+
+- [X] T014 [US1] Mover la única llamada lógica de tick 1 y sus guardias de retorno/`REINDEX_STATUS` antes del bucle de lectura en `tests/docker-e2e-qmd.bats`. Calcular el deadline de observación después de aceptar tick 1, conservar 45 s y lectura tolerante con `|| true`, y dejar dentro del bucle solo observación y espera. Mantener intactos los 120 s de lock, cadencia de 2 s y cap de intento 600 s con KILL posterior de 10 s del ayudante compartido.
+
+- [X] T015 [US1] Exigir en `tests/docker-e2e-qmd.bats` para tick 1 `collection remove`: «Exactamente 1» y `collection add`: «Exactamente 1, con máscara `wiki/**/*.md`»; comprobar remove anterior a add y add anterior a cleanup, `.qmd-collection-wiki`: «Presente» y migración `pending` a `done`. Usar `[ ]` y validar rc antes del contenido en las inspecciones de `HAVE_SENTINEL` y `.migration`; no cortar pipes con consumidores que salen temprano.
+
+- [X] T016 [US1] Conservar y completar tick 2 en `tests/docker-e2e-qmd.bats`: llamada por `qmd_e2e_reindex_wait`, retorno 0 y `REINDEX_STATUS=0`, inspección rc 0 y conteos de colección idénticos a los de tick 1. Mantener el volcado de logs de teardown, reportes de contención y plazos; quitar los dos `[[ ]]` intermedios del sujeto sin tocar otras pruebas.
+
+- [X] T017 [US1] Ejecutar H00-H14, las 26 pruebas de `tests/qmd-e2e-lock.bats` y las regresiones pertinentes de `tests/qmd-setup.bats` en ambos bash, secuencialmente; exigir todos los casos del oráculo nuevo ejecutados sin skip. Registrar VERDE, total realmente agregado, motivos de skips y hashes en `specs/050-e2e-qmd-boot-race/tasks.md`; no usar el número histórico de la suite como esperado.
+
+- [X] T018 [P] [US1] Implementar `specs/050-e2e-qmd-boot-race/tools/reproduce.py` conforme a `specs/050-e2e-qmd-boot-race/contracts/evidence-protocol.md`: CLI `--baseline`, `--candidate-root`, `--output-dir`; snapshots aislados por `git archive` y overlay allowlisted de pruebas, runtime idéntico, hashes, anclas únicas y aislamiento común cron/vault. Asignar un `COMPOSE_PROJECT_NAME` único por caso y propagarlo a todos los Compose, incluido el teardown; rechazar sin tocarlo el contenedor fijo `qmd-migrate-e2e` si está ocupado y verificar labels antes de limpiar recursos propios. Rechazar salida no vacía o dentro del checkout, no copiar `AGENTS.md` sin seguimiento ni estado/credenciales, ejecutar D1-D4 en serie y clasificar el resultado por causa; topes de 90 s por señal y 1.800 s por caso después del build, salida por archivos y limpieza solo del proyecto propio.
+
+- [X] T019 [P] [US1] Implementar `specs/050-e2e-qmd-boot-race/tools/start-services-gate.sh` contra el mismo contrato: wrapper de solo lectura que sourcea la copia byte-idéntica del supervisor original sin iniciar `main`, renombra la función real de setup, instala gates y llama al `main` original. Conservar entrypoint e identidad `agent`; usar `entered`, `release` y `returned` nuevos por caso fuera del vault. Early exige retorno real antes de inspeccionar; late exige entrada sin retorno, inspección, release y observación posterior de `returned` con retorno 0 y desenlace de setup válido antes de tick 1. Liberar el gate sin observar ese retorno invalida el caso; conservar el límite de 90 s por señal. Acotar esperas, registrar la señal faltante y terminar procesos propios al vencer o salir.
+
+- [X] T020 [US1] Integrar y comprobar primero sin Docker las herramientas `specs/050-e2e-qmd-boot-race/tools/reproduce.py` y `specs/050-e2e-qmd-boot-race/tools/start-services-gate.sh` usando snapshots y procesos de prueba en scratch: rechazar anclas ambiguas, runtime distinto, evidencia reutilizada, una causa de rojo incorrecta, señal vencida y limpieza incompleta. Incluir release sin `returned` aunque el reindex simulado sea sano, y un contenedor ajeno ocupado que se rechaza antes de up, sin llamadas de down sobre él. Verificar también propagación de identidad Compose y rechazo de labels ajenas. Verificar sintaxis Python/shell y que el coordinador no acepte un fallo del arnés como D1; registrar los controles en `specs/050-e2e-qmd-boot-race/tasks.md`.
+
+- [X] T021 [US1] COMPUERTA Docker local: con un daemon disponible y autorización aplicable, ejecutar el smoke de cableado de `specs/050-e2e-qmd-boot-race/tools/reproduce.py` y `specs/050-e2e-qmd-boot-race/tools/start-services-gate.sh`; acreditar usuario `agent`, hashes, entrada/retorno real de setup y ejecución del boot original, incluido `returned` válido tras release en late. Verificar `COMPOSE_PROJECT_NAME` único, preflight de nombre ocupado y labels `com.docker.compose.project` coincidentes antes de aceptar la limpieza propia. No iniciar servicios del host sin autorización ni usar exec como root. Si el cableado no cumple el contrato, corregir el arnés antes de considerar válida la matriz y dejar evidencia en `specs/050-e2e-qmd-boot-race/tasks.md`.
+
+- [X] T022 [US1] Ejecutar en serie la matriz D1-D4 con `specs/050-e2e-qmd-boot-race/tools/reproduce.py`: base early roja en bash 5.x exactamente en la aserción original de `SKIPPED`, base late verde, candidato early y late verdes con migración pendiente antes de tick 1 e idempotencia. Acreditar cada gate, exigir en D2/D4 `returned` con retorno 0 y desenlace válido después de release y antes de tick 1, registrar proyecto/contenedor/labels propios y guardar TAP/logs, versiones, arquitectura y hashes en la evidencia externa, enlazada en `specs/050-e2e-qmd-boot-race/tasks.md`; otro rojo o gate ausente es inconcluyente, no una reproducción válida de #117.
+
+- [X] T023 [US1] Ejecutar sin wrapper ni gates el único test legacy de `tests/docker-e2e-qmd.bats`, seleccionándolo por su título según `specs/050-e2e-qmd-boot-race/quickstart.md`; exigir exactamente un test ejecutado y verde, sin skip y sin activar modelos de 041. Registrar su hash y resultado en `specs/050-e2e-qmd-boot-race/tasks.md` y comprobar que el coordinador retiró solo contenedores/redes propios, conservando imágenes y cachés compartidos.
+
+---
+
+## Phase 4: US2 — Una migración defectuosa deja un rojo útil (P2)
+
+**Objetivo:** demostrar que el fix estable detecta migración omitida, confirmación ausente, repetición y ejecuciones inválidas con una causa identificable.
+
+**Prueba independiente:** ejecutar controles negativos sobre copias de las secciones reales en Bats hijo, en ambos intérpretes. Cada defecto debe fallar por la aserción correspondiente, con CTRL sano y diagnóstico disponible. Usa el oráculo compartido escrito antes del fix en US1; esta fase valida y endurece su capacidad de detectar regresiones, sin inventar trabajo de implementación si ya cumple.
+
+**Dependencia real:** el análisis de mutaciones completo requiere el candidato sano de US1. No se afirma que las historias puedan editar en paralelo el mismo e2e/ayudante.
+
+- [X] T024 [US2] Preparar en el directorio externo de evidencia un corredor reproducible y copias mutadas de `tests/docker-e2e-qmd.bats` para M01-M18 de `specs/050-e2e-qmd-boot-race/contracts/host-oracle.md`, separando M12a/M12b y M13a/M13b: 20 variantes mínimas. Cada reemplazo debe tener exactamente una coincidencia; usar `QMD_BOOT_RACE_E2E_FILE` en `tests/qmd-e2e-boot-race.bats` para apuntar a la copia, sin modificar el checkout. Clasificar cada resultado como captura conductual, rechazo estructural esperado o error inesperado del arnés; M18 exige rechazo estructural esperado con motivo acreditado y CTRL sano. Registrar catálogo, hashes y asociación a H00-H14 en `specs/050-e2e-qmd-boot-race/tasks.md`.
+
+- [X] T025 [US2] Ejecutar CTRL, las 20 variantes mínimas y CTRL restaurado bajo bash 5.x con `tests/qmd-e2e-boot-race.bats` apuntando a cada copia. Ejecutar B2 de `tests/qmd-e2e-lock.bats` aparte, antes/después, como regresión del candidato sano: no consume esa costura ni detecta las copias mutadas. Atribuir M14 a H05/H06/H14 de la copia. Acreditar detector y causa por variante en `specs/050-e2e-qmd-boot-race/tasks.md`; para M03/M04 distinguir la guardia textual del efecto conductual equivalente en 5.x, sin atribuirles un rojo de comportamiento inexistente.
+
+- [X] T026 [US2] Repetir después la misma matriz de mutaciones bajo bash 3.2, incluyendo la detección conductual de M03/M04 por precondición/confirmación y los controles de status con texto válido. Exigir CTRL sano antes/después y B2 como regresión separada del candidato sano, sin skips ni errores inesperados del arnés como capturas. M18 cuenta solo como rechazo estructural esperado del extractor, con motivo acreditado, no como una aserción conductual; guardar TAP y matriz de resultados en `specs/050-e2e-qmd-boot-race/tasks.md`.
+
+- [X] T027 [US2] Comprobar cero supervivientes en la matriz, distinguiendo capturas conductuales y rechazos estructurales esperados como M18; cualquier error inesperado del arnés invalida su fila; si alguno sobrevive, añadir primero el control que lo expone y endurecer `tests/qmd-e2e-boot-race.bats` o `tests/helper-qmd-e2e-boot-race.bash`, repitiendo el detector y ambos CTRL. Cambiar `tests/docker-e2e-qmd.bats` solo si se demuestra una brecha del contrato, con ROJO previo. Registrar en `specs/050-e2e-qmd-boot-race/tasks.md` correcciones, variantes equivalentes y evidencias que queden invalidadas por cambios de código.
+
+- [X] T028 [US2] Verificar explícitamente H06/H10/H13 y H04/H12 en `tests/qmd-e2e-boot-race.bats`: migración omitida, confirmación ausente, repetición y ejecuciones inválidas producen un rojo por su condición, en ambos bash. Correlacionar trazas de fakes y aserciones con el diagnóstico real de D1 y la guardia B2 de `tests/qmd-e2e-lock.bats`, que exige logs antes del down; registrar el límite entre controles host y evidencia Docker en `specs/050-e2e-qmd-boot-race/tasks.md`.
+
+- [X] T029 [US2] Cerrar la historia sobre el árbol corregido ejecutando el oráculo host y las 26 pruebas de locks en ambos bash, en serie. Si T027 cambió código probado por T022/T023, repetir la matriz Docker y/o corrida normal afectada antes de aceptarlas; registrar hashes vigentes y el cumplimiento de SC-003 en `specs/050-e2e-qmd-boot-race/tasks.md`.
+
+---
+
+## Phase 5: Polish & Cross-Cutting Concerns
+
+**Propósito:** documentación, revisión independiente, gates finales y cierre remoto trazable. Esta fase depende de ambas historias. Las compuertas de autorización no se ejecutan por el hecho de aparecer en el archivo; una autorización vigente para el mismo paso no se solicita otra vez.
+
+**Regla de evidencia:** cualquier edición posterior obliga a revalidar lo afectado y actualizar hashes antes de publicar. Ambas suites completas y las corridas Docker permanecen en serie. No hay despliegue de flota para un fix de pruebas.
+
+- [X] T030 Actualizar `CHANGELOG.md` con el fix de #117 y, cuando las herramientas existan, ajustar `specs/050-e2e-qmd-boot-race/quickstart.md` a sus comandos reales sin reescribir la evidencia histórica de `research.md`. Mantener VERSION 0.35.0 y el contrato tests-only; no editar el `AGENTS.md` generado/sin seguimiento ni otros proyectos.
+
+- [X] T031 Solicitar revisión independiente de solo lectura del diff en `tests/docker-e2e-qmd.bats`, `tests/qmd-e2e-lock.bats`, `tests/qmd-e2e-boot-race.bats`, `tests/helper-qmd-e2e-boot-race.bash` y `specs/050-e2e-qmd-boot-race/tools/`: priorizar aserciones vacuas, extracción parcial, contaminación de Bats, falsos negativos por arnés, gates fabricados, timeouts, limpieza y menor privilegio. Guardar hallazgos/refutaciones con fuentes en `specs/050-e2e-qmd-boot-race/tasks.md`; el revisor no ejecuta suites pesadas ni edita archivos.
+
+- [X] T032 Triar y resolver los hallazgos de revisión en los archivos afectados de `tests/` y `specs/050-e2e-qmd-boot-race/tools/`; todo cambio de comportamiento lleva control ROJO previo. Repetir los checks y evidencias afectados, incluyendo D1-D4 o el e2e normal si cambiaron sus entradas, y registrar hallazgos aceptados/refutados y hashes vigentes en `specs/050-e2e-qmd-boot-race/tasks.md` antes del gate completo.
+
+- [X] T033 Congelar el código y comprobar alcance: diff de `scripts/`, `docker/`, `modules/`, `setup.sh`, `VERSION`, `.github/workflows/` y `tests/helper-qmd-e2e.bash` vacío respecto de la base/main verificada. Ejecutar shellcheck con el comando de `.github/workflows/shellcheck.yml`, sintaxis de los ayudantes/wrapper en ambos bash y compilación de `specs/050-e2e-qmd-boot-race/tools/reproduce.py` sin dejar `__pycache__` en el repo. Verificar modos ejecutables y que los hashes de la evidencia Docker coincidan con los archivos finales; guardar el manifiesto en `specs/050-e2e-qmd-boot-race/tasks.md`.
+
+- [X] T034 Ejecutar el gate completo `bats --tap tests/` en bash 5.x sobre el árbol congelado; guardar TAP, stderr y duración, y exigir cero fallos, con total igual a la base de T002 más los tests realmente agregados y skips comparados por motivo. Registrar el resultado en `specs/050-e2e-qmd-boot-race/tasks.md`; no editar código ni ejecutar otra suite pesada durante la corrida.
+
+- [X] T035 Ejecutar después el mismo gate completo de `tests/` bajo bash 3.2, con el mismo árbol y condiciones; exigir cero fallos y justificar cualquier diferencia de skips frente a T002. Registrar en `specs/050-e2e-qmd-boot-race/tasks.md` versiones, resultados y huella común; si hubo cambios tras T034, invalidar y repetir el gate afectado antes de cerrar.
+
+- [X] T036 Consolidar en el Registro de `specs/050-e2e-qmd-boot-race/tasks.md` el ROJO/VERDE, H00-H14, 20 variantes mínimas, D1-D4, e2e normal, revisión, shellcheck, gates y huellas, incluyendo retorno tardío acreditado, identidad/labels Compose y clasificación de cada mutación; enlazar evidencia externa sin copiar secretos ni estado. Actualizar solo lo necesario de plan/contratos si una medición cambió un hecho técnico y comprobar enlaces, `git diff --check`, FR-001 a FR-010 y SC-001 a SC-006. Declarar explícitamente CI/PR aún pendientes.
+
+- [ ] T037 COMPUERTA de commit: preparar el diff verificable y la propuesta de agrupación de commits de los archivos permitidos en `tests/`, `CHANGELOG.md`, `.specify/feature.json` y `specs/050-e2e-qmd-boot-race/`; con autorización aplicable, crear los commits locales y comprobar que el código coincide con el manifiesto validado. No stagear `AGENTS.md`, evidencia externa, secretos ni archivos ajenos; usar mensajes concisos en español sin atribución automática y registrar SHA en `specs/050-e2e-qmd-boot-race/tasks.md`.
+
+- [ ] T038 COMPUERTA de publicación: con confirmación explícita vigente, publicar únicamente `050-e2e-qmd-boot-race` y verificar el SHA remoto esperado; no force-push ni publicar main. Registrar rama/commit y autorización del paso en `specs/050-e2e-qmd-boot-race/tasks.md`; el acceso completo del entorno no sustituye esta compuerta.
+
+- [ ] T039 COMPUERTA de CI: con confirmación explícita vigente y el SHA remoto corregido, lanzar el dispatch normal de `.github/workflows/docker-e2e.yml` sobre la rama 050, sin ensayo de alertas ni cambios de workflow/secretos. Identificar la corrida por rama y commit, y guardar run ID/URL en `specs/050-e2e-qmd-boot-race/tasks.md`; no abrir todavía el PR.
+
+- [ ] T040 Esperar y verificar la CI de T039 en solo lectura: workflow y job e2e verdes, Linux amd64 registrado, resumen sin fallos y línea `ok` del título legacy de `tests/docker-e2e-qmd.bats` sin `# skip`. Correlacionar el SHA con el manifiesto local; cualquier salto, otra revisión o rojo impide satisfacer el gate antes del PR. Registrar resultado y enlaces en `specs/050-e2e-qmd-boot-race/tasks.md`.
+
+- [ ] T041 COMPUERTA de PR: preparar título/cuerpo centrados en #117 con alcance tests-only, reproducción inducida, evidencia host/Docker, commit y enlace de CI, y límites; con confirmación explícita vigente, abrir el PR contra main incluyendo `Closes #117`. Verificar el diff y la URL, sin merge, y registrarlos en `specs/050-e2e-qmd-boot-race/tasks.md`.
+
+- [ ] T042 Verificar en solo lectura que los checks ordinarios del PR estén verdes sobre su cabeza actual; comprobar que la corrida e2e previa de T040 siga correspondiendo al código propuesto y resolver cualquier cambio posterior con revalidación. Registrar estado de checks y revisión en `specs/050-e2e-qmd-boot-race/tasks.md`; no asumir que un PR abierto equivale a aceptación ni merge.
+
+- [ ] T043 COMPUERTA del operador: después de que el operador haga el merge en GitHub, verificar en solo lectura su SHA y el árbol integrado frente a la cabeza validada, VERSION sin cambio y el cierre de #117. Registrar referencias reales en `specs/050-e2e-qmd-boot-race/tasks.md`; no ejecutar merge ni actualizar flota por iniciativa propia.
+
+- [ ] T044 Cerrar el Registro de `specs/050-e2e-qmd-boot-race/tasks.md` con resultados y enlaces verificados, diferencias finales explicadas y estado del issue; dejar la limpieza de rama y evidencia como opcional pendiente del operador, sin borrados automáticos. El registro posterior al merge queda local hasta que se autorice su publicación documental; no declararlo publicado por inferencia. Si falta un gate, dejarlo sin marcar y declarar el pendiente; no afirmar cierre completo solo por agotar la sesión.
+
+---
+
+## Dependencies & Execution Order
+
+### Fases y tareas
+
+```text
+T001 -> T002
+     -> T003 -> T004 -> T005 -> T006
+     -> T007 -> T008 -> T009 -> T010 -> T011  (tests antes del fix)
+     -> T012 -> T013 -> T014 -> T015 -> T016 -> T017
+     -> [T018 || T019] -> T020 -> T021 -> T022 -> T023  (US1 / MVP)
+     -> T024 -> T025 -> T026 -> T027 -> T028 -> T029    (US2)
+     -> T030 -> T031 -> T032 -> T033 -> T034 -> T035 -> T036
+     -> T037 -> T038 -> T039 -> T040 -> T041 -> T042 -> T043 -> T044
+```
+
+Las flechas expresan dependencia de aceptación; solo T018/T019 pueden editarse en paralelo. Si T027 o T032 cambia entradas de una evidencia ya obtenida, se repite lo afectado de T017/T020-T023 antes de aceptar T029/T033. No se repiten pruebas por rutina si nada pertinente cambió.
+
+### Dependencias por historia
+
+- **US1:** depende de Setup y Foundational; el checkpoint T023 permite demostrar el MVP local de forma independiente. T021 requiere Docker operativo y la autorización aplicable para su uso; no significa iniciar un servicio del host sin instrucción.
+- **US2:** reutiliza el candidato y el oráculo sanos de US1; comienza después de T023. Sus controles se evalúan por la causa de fallo, sin Docker ni red, y demuestran capacidad de regresión independientemente de una nocturna.
+- **Polish:** depende de ambas historias. La revisión antecede al gate completo. T040 debe estar cumplida antes de T041: CI después del merge no satisface FR-009.
+- **Compuertas:** T037, T038, T039 y T041 requieren autorización aplicable; T043 lo ejecuta el operador y el agente verifica. Una autorización previa suficiente para el mismo paso se reutiliza; no se pide de nuevo. No se agrupan pasos remotos no autorizados por inferencia.
+
+### Criterios de independencia
+
+| Historia | Prueba independiente | Evidencia mínima de su checkpoint |
+| --- | --- | --- |
+| US1 | Misma precondición legacy y migración única con setup early/late; tick 2 sin nuevas operaciones | H00-H14 y locks sanos, D1-D4 con gates acreditados y e2e normal ejecutado sin skip |
+| US2 | Cada defecto controlado falla en su aserción y CTRL permanece sano | Matriz de mutaciones en ambos bash, confirmación de los tres defectos de SC-003 y diagnóstico preservado |
+
+## Parallel Examples
+
+### US1: dos archivos de herramientas
+
+Después de T017 y contra el contrato de evidencia ya fijado:
+
+```text
+T018: implementar specs/050-e2e-qmd-boot-race/tools/reproduce.py
+T019: implementar specs/050-e2e-qmd-boot-race/tools/start-services-gate.sh
+Después de ambas: T020 integra y comprueba el protocolo.
+```
+
+Cada responsable edita solo su archivo y respeta el trabajo de otros. La escritura del Registro se consolida en serie. No se ejecutan Docker ni suites simultáneamente por esta marca.
+
+### US2: ejecución secuencial deliberada
+
+No hay una pareja de tareas elegible para `[P]` dentro de US2: usa el mismo oráculo, las mismas copias controladas y dos intérpretes que deben medirse por separado.
+
+```text
+T024: preparar copias y catálogo
+T025: matriz en bash 5.x
+T026: matriz en bash 3.2, después de 5.x
+T027-T029: cierre de supervivientes y regresión vigente
+```
+
+## Implementation Strategy
+
+### MVP first
+
+1. Completar Setup y Foundational.
+2. Implementar US1 test-first y demostrar los dos órdenes de arranque.
+3. Detenerse en su checkpoint con resultados locales verificables; no equivale a permiso para publicar ni a cierre del issue.
+4. Completar US2, revisión y gates antes de la evidencia de CI acordada.
+
+### Entrega incremental y autoridad
+
+El código de producto permanece idéntico. El flujo completo es local validado -> commit/publicación autorizados -> CI e2e verde -> PR autorizado -> merge del operador -> cierre verificado. No hay deploy de flota, nuevas credenciales ni limpieza automática.
+
+## Coverage Map
+
+| Requisito o criterio | Tareas principales |
+| --- | --- |
+| FR-001 / SC-001 | T007, T012, T013, T021-T023 |
+| FR-002 | T007, T012, T021, T022 |
+| FR-003 / SC-002 | T008, T009, T014-T016, T022, T023 |
+| FR-004 | T009, T016, T028 |
+| FR-005 | T008-T010, T014, T016, T025-T029 |
+| FR-006 | T004-T009, T013, T015, T016, T025-T029 |
+| FR-007 | T008, T010, T014, T016, T028 |
+| FR-008 / SC-004 | T018-T023 |
+| FR-009 / SC-003 / SC-005 | T024-T029, T031-T036, T039, T040 |
+| FR-010 / SC-006 | T001, T030, T033, T036-T038, T043 |
+
+## Registro
+
+- **25-11-2026 — T035/T036 completadas; validación local cerrada:** ambos gates completos terminaron sobre los mismos 293 archivos y modos, sin ediciones ni suites pesadas concurrentes. `gate-comparison.json` verifica plan único, IDs consecutivos, total 2.315 = base 2.300 + 15, rc 0, cero fallos, stderr vacío y los 15 casos H00-H14 ejecutados sin salto en ambos. Los saltos coinciden exactamente por título y motivo con la base de cada intérprete. La única diferencia de títulos existentes es el cambio previsto de B2; no desapareció ninguna prueba.
+
+| Gate final | Resultados TAP | Ejecutadas y aprobadas | Fallos | Saltadas | Duración | stderr |
+| --- | ---: | ---: | ---: | ---: | --- | --- |
+| bash 5.3.15, Bats 1.13.0 | 2.315 | 2.225 | 0 | 90 | 50 min 38 s | 0 bytes |
+| bash 3.2.57, Bats 1.13.0 | 2.315 | 2.224 | 0 | 91 | 47 min 46 s | 0 bytes |
+
+- **Horarios y base de comparación:** bash 5 corrió del 24-11-2026 22:59:58 al 24-11-2026 23:50:37; bash 3.2, del 24-11-2026 23:50:45 al 25-11-2026 00:38:32, hora de Santiago. Los 90 saltos comunes mantienen los motivos de T002: 67 Docker opt-in, 16 Bun ausente del PATH mínimo, cinco por `flock`, uno por `timeout` y uno por `/proc`. Bash 3.2 conserva únicamente el salto adicional de `qmd_watch` por el retorno de `read` al vencer su plazo. Ningún salto nuevo de 050; tampoco se atribuye cobertura ejecutada a esos saltos.
+- **T036, evidencia consolidada:** ROJO/VERDE de implementación y fixture en Fase 3; veinte variantes por bash y once modos negativos con línea/condición y traza verificadas en Fase 4; D1-D4 actuales y revisión con LOW resuelta en Fase 5. Se reutiliza el e2e normal de Fase 4 porque sus entradas no cambiaron. `review.json`, `preflight/report.json`, `docker-acceptance.json`, `gate-comparison.json`, `coverage.json`, `source-manifest.json` y `metadata.json` en la evidencia de Fase 5 enlazan esos resultados y las huellas. FR-001 a FR-008 y FR-010, SC-001 a SC-004 y SC-006 cuentan con aceptación local. FR-009 y SC-005 conservan la parte de CI Linux amd64 pendiente antes del PR; los checks ordinarios del PR tampoco se sustituyen por evidencia local.
+- **T036, integridad final y documentación:** huella común `7273f8ea6c7c8d998d5536b43b7704805f9279097ddd54c1ce02d34560550ccb`; coordinador `57b1eb8b132c6e89a04c4efde9348c9765a630d322f7007184ef626fbf3e49ae`, wrapper `cf33c5d0fa322db8b20472d108e5f50b391eb39ab201a845b3c3aab4d58dd723`. Runtime, workflows, VERSION 0.35.0 y ayudante compartido de locks siguen idénticos a la base. El contrato de evidencia aclara la congelación de ambas herramientas; `research.md` conserva su evidencia histórica. Enlaces relativos y `git diff --check` revisados; el índice Git real permanece sin cambios.
+- **Compuerta T037 preparada, pendiente de autorización:** propuesta de un commit `test: elimina la carrera de arranque del e2e de qmd`, con los 18 archivos explícitos del fix, artefactos Spec Kit y documentación. Diff y manifiesto de publicación en `candidate.patch`/`commit-proposal.json`, fuera del checkout. No se incluyen AGENTS.md, estado, evidencia externa ni archivos ajenos. T037-T044 permanecen sin marcar: no se han creado commits, hecho push/dispatch, abierto PR, mergeado ni desplegado. El siguiente paso es obtener autorización aplicable para commit, publicación de la rama 050 y CI; el PR requiere su compuerta después del e2e verde.
+
+- **24-11-2026 — T034 completada, T035 en curso:** bash 5.3.15 terminó con un plan TAP íntegro `1..2315`, rc 0, 2.225 ejecutadas/aprobadas, cero fallos, 90 saltos y stderr vacío, en 50 min 38 s. Los 15 casos H00-H14 se ejecutaron sin salto; los motivos de salto coinciden con la base. El runner verificó los 293 hashes y modos antes de iniciar bash 3.2.57 en serie, sobre el mismo árbol. Evidencia `runs/bash5/summary.json` y TAP; T035 sigue sin marcar hasta su aceptación.
+
+- **24-11-2026 — T031-T033 completadas:** revisión independiente de solo lectura (`phase5_independent_review`, code-reviewer) sin críticos ni defectos funcionales bloqueantes. Una sugerencia LOW defensiva se resolvió: el coordinador releía el wrapper por fila aunque registraba un único hash. El control sintético del `main` real, con Docker sustituido en sus fronteras, cambió una copia externa del wrapper después de D1: antes aceptó cuatro filas con dos hashes (ROJO); ahora rechaza antes de D2 con rc 2 y `wrapper source changed during matrix` (VERDE). El control sano completa las cuatro filas con un solo hash; los 30 controles previos del coordinador pasan. No son evidencia de contenedor. Reporte/controles en `review.json`, `wrapper-freeze-{red,green,healthy}/` e `independent-controls-4ylarz_k/report.json` de la evidencia de Fase 5.
+- **T032, revisión del arreglo y refutación:** el mismo revisor confirmó que el hash registrado y cada copia usan los mismos bytes, sin regresiones ni observaciones adicionales. La sospecha de que un fallo de teardown pudiera aceptarse como D1 quedó refutada: `_hook` persiste el error, `classify_case` lo rechaza y el cleanup final vuelve a validar identidad. No cambió el wrapper original, el e2e ni el oráculo host.
+- **T032, evidencia Docker actualizada:** se repitieron D1-D4 en `docker-revalidation/` por el nuevo hash del coordinador. D1 rojo por `SKIPPED` con `RAN`; D2 verde; D3/D4 verdes con `LEGACY_PENDING`. Early mantiene returned antes de inspección; late mantiene inspección -> release -> returned real rc 0 -> tick 1. Usuario agent UID 501/GID 20; `aarch64`. Consultas independientes por label confirmaron cero recursos restantes en los cuatro proyectos. `docker-acceptance.json` acredita hashes y orden. La corrida normal de Fase 4 (7,17 s, un ok sin skip) sigue vigente: sus cuatro archivos de prueba son idénticos, por lo que no se repitió sin un cambio pertinente.
+- **T033, checks estáticos y congelación:** el texto exacto de `Run shellcheck` del workflow pasó con stderr vacío sobre un snapshot de `git archive HEAD` más el overlay permitido; esto reproduce el checkout de CI y excluye superficies personales ignoradas. Sintaxis de ambos ayudantes y wrapper pasó en bash 5.3/3.2; ShellCheck del ayudante privado y compilación Python en memoria pasaron, sin bytecode en el repo. Detalle/modos en `preflight/report.json`. Diff vacío respecto de la base en runtime, workflows, VERSION y ayudante de locks; VERSION 0.35.0. Se congelaron 293 archivos de código y sus modos en `source-manifest.json`/`metadata.json`, huella `7273f8ea6c7c8d998d5536b43b7704805f9279097ddd54c1ce02d34560550ccb`. Coordinador vigente `57b1eb8b132c6e89a04c4efde9348c9765a630d322f7007184ef626fbf3e49ae`; wrapper conserva `cf33c5d0fa322db8b20472d108e5f50b391eb39ab201a845b3c3aab4d58dd723`.
+- **Gate T034/T035 preparado:** `run-gate.py` ejecuta las suites completas en serie, con el mismo entorno mínimo de la base y HOME/TMPDIR nuevos. Esperado 2.315 = 2.300 + 15; exige plan/IDs TAP íntegros, cero fallos, stderr vacío y fuentes/modos intactos. Estado, PID, comando, versiones y progreso en `status.json`; TAP y resúmenes en `runs/<bash>/`. Las tareas permanecen sin marcar hasta verificar su resultado. No hay suites de agentes ni Docker concurrentes, ni operaciones Git/remotas autorizadas.
+
+- **24-11-2026 — Fase 5 iniciada; T030 completada:** CHANGELOG registra #117 como tests-only, sin bump. El quickstart ahora usa las herramientas existentes, intérpretes/PATH explícitos, selección exacta del e2e normal, identidad Compose propia y resultados esperados del host; mantiene CI previa al PR como compuerta. T031 está en revisión independiente de solo lectura; no se ha iniciado el gate completo ni autorizado ninguna operación Git/remota. Evidencia de esta fase: `/Users/rodrigo-hinojosa/.cache/agentic-pod-launcher/050/phase5-5_tp73lz/`.
+
+- **24-11-2026 — T024-T029 completadas; Fase 4 cerrada:** se ejecutaron las 20 variantes mínimas (M01-M18, con M12a/b y M13a/b separadas) en copias externas y en serie: primero bash 5.3.15 y después 3.2.57, Bats 1.13.0. Cero supervivientes y cero errores inesperados en las matrices aceptadas. Evidencia: `/Users/rodrigo-hinojosa/.cache/agentic-pod-launcher/050/phase4-d5up5off/`. `acceptance.json` consolida matrices, controles negativos, cierre host, Docker y hashes; los intentos de desarrollo conservan su clasificación aparte.
+- **T024, corredor reproducible:** `mutate.py prepare` generó `copies/CTRL.bats`, veinte copias y `catalogue.json`, con cada reemplazo único acreditado y SHA por copia. `mutate.py matrix --label bash5` y después `--label bash32` usan la costura `QMD_BOOT_RACE_E2E_FILE`, entorno mínimo, HOME/TMPDIR nuevos, proceso propio y tope de 180 s. El corredor está fuera del checkout y no edita el sujeto. Cada variante ejecuta sus detectores declarados; CTRL ejecuta H00-H14 completos antes/después y B2 se ejecuta aparte sobre el candidato real. TAP, stderr, comando, duración, clasificación y artefactos de cada hijo se conservan en `<bash>/<variante>/`; fuentes congeladas en `<bash>/source-manifest.json`.
+- **T025/T026, controles y clasificación:** los cuatro CTRL completos (15 casos cada uno, sin skip) y los cuatro B2 terminaron con rc 0 y stderr vacío. En 5.3 hay 17 capturas conductuales, dos guardias de forma (M03/M04 equivalentes por comportamiento allí) y un rechazo estructural esperado (M18). En 3.2 hay 19 capturas conductuales y M18 estructural. M03 produce un falso verde de `no-index` en H02; M04, de `sentinel-missing` en H10. H14 también rechaza ambas formas. M18 vacía tick1: H00 exige `structural:empty-section:tick1` y no genera ningún hijo; no se contabiliza como aserción conductual.
+
+| Variante | Detector observado en 5.3 | Detector observado en 3.2 | Causa acreditada |
+| --- | --- | --- | --- |
+| M01 | H01 | H01 | Fixture real sin marcador de setup |
+| M02 | H01 | H01 | Fixture real ya migrado; H02 sigue siendo un control independiente |
+| M03 | H14, forma | H02/H14, conductual | Precondición `[[ ]]` inactiva solo en 3.2 |
+| M04 | H14, forma | H10/H14, conductual | Confirmación `[[ ]]` inactiva solo en 3.2 |
+| M05 | H03 | H03 | Texto válido con inspección inicial rc 7 aceptado indebidamente |
+| M06 | H11 | H11 | `done` con inspección de estado rc 7 aceptado indebidamente |
+| M07 | H09 | H09 | Add anterior a remove aceptado indebidamente |
+| M08 | H08/H09 | H08/H09 | Remove ausente o duplicado aceptado sin su conteo exacto |
+| M09 | H10 | H10 | Confirmación ausente aceptada |
+| M10 | H11 | H11 | Estado pendiente aceptado |
+| M11 | H13 | H13 | Reemplazo repetido en tick 2 aceptado |
+| M12a | H04 | H04 | Retorno 1 de tick 1 aceptado pese a efecto sano |
+| M12b | H04 | H04 | REINDEX_STATUS 7 de tick 1 aceptado pese a efecto sano |
+| M13a | H12 | H12 | Retorno 1 de tick 2 aceptado |
+| M13b | H12 | H12 | REINDEX_STATUS 7 de tick 2 aceptado |
+| M14 | H05/H06/H14 | H05/H06/H14 | Tick 1 vuelve al bucle; H06 registra 23 ejecuciones |
+| M15 | H01/H14 | H01/H14 | Calendario real vuelve a `*/5` |
+| M16 | H05 | H05 | Primera lectura sin log aborta el replay sano |
+| M17 | H12 | H12 | Inspección de conteo rc 7 aceptada |
+| M18 | H00, estructural | H00, estructural | Tick1 vacío rechazado antes del replay |
+
+- **Precisiones de atribución:** M08 retira únicamente la comparación exacta de remove; add/máscara permanecen, sin reclamar tres variantes separadas. B2 no consume las copias mutadas ni detecta M14: sus cuatro corridas son regresiones del candidato sano. `contracts/host-oracle.md` se ajustó a la atribución empírica de M02, M03 y M08.
+- **T027, endurecimiento del oráculo con ROJO previo:** `bash5-preflight-before/` reveló errores de atribución del propio arnés, que invalidaron esas filas y no cuentan como capturas: alias equivalente de M03/M04, ordinal desplazado de status en M06 y fallo posterior de efecto en M12a. El oráculo ahora identifica el status por su lector, acepta el alias semántico solo para atribuir la aserción y conserva H14 como guardia de forma. El fake publica el efecto sano antes de inyectar un retorno/status inválido, de modo que las guardias de ejecución se prueban independientemente del efecto (otro actor legítimo pudo completarlo). `bash5-preflight-after/` acredita las capturas corregidas; las dos matrices completas posteriores tienen CTRL antes/después y ninguna fila inválida. El sujeto e2e no cambió en esta fase.
+- **Evidencia sintética opcional:** `QMD_BOOT_RACE_ARTIFACT_DIR` conserva fuera del checkout una lista explícita de código, TAP, metadatos y trazas sintéticas del hijo. No copia HOME ni estado y permanece desactivada por defecto. Permite auditar los falsos verdes de cada mutación sin depender solo del fallo exterior. Los cambios al oráculo y al fake reemplazan los hashes host de Fase 3; por ello se repitieron D1-D4 y el e2e normal, en lugar de presentar aquellas huellas como actuales.
+- **T028 / SC-003:** `negative-controls.json` verifica once modos por bash en el CTRL final, todos con clasificación `assertion`, rc 1, condición exacta, versiones correctas y traza idéntica a la prevista: H06 (`no-log`, `no-migration`), H10 (`sentinel-missing`), H13 (`repeated`), H04 (retornos 1/3 y status 7 del tick 1) y H12 (retornos 1/3, status 7 e inspección de conteo rc 7 del tick 2). H06 ejecuta tick 1 una sola vez y 23 lecturas/esperas controladas de 2 s antes del fallo de conteo. H10 falla en `HAVE_SENTINEL`; H13, en la igualdad de conteos. Son controles host de aserciones; la carrera real queda acreditada por D1, cuyo diagnóstico `RAN` contra `SKIPPED` y logs antes del down se conserva. B2 mantiene la guardia de ese diagnóstico y el orden logs -> down.
+- **T029, cierre host:** `close-host.py` verificó controles y ejecutó en serie `bats --tap --print-output-on-failure tests/qmd-e2e-boot-race.bats tests/qmd-e2e-lock.bats`, primero con `/opt/homebrew/bin/bash` y después `/bin/bash`, PATH e intérprete explícitos. Cada corrida dio 41 resultados: 40 ejecutados/aprobados, cero fallos, un salto O1 por ausencia de `/proc` en Darwin y stderr de 0 bytes. Duraciones: 25,80 s y 23,18 s. Los 15 casos nuevos se ejecutaron sin skip. TAP/resumen en `closure/<bash>/`; `host-acceptance.json` consolida esta evidencia. `bash -n` en ambos intérpretes, ShellCheck `-S error` del ayudante y `git diff --check` pasaron.
+- **T029, revalidación Docker vigente:** `docker-revalidation/summary.json` acredita D1 rojo exactamente en la aserción original `SKIPPED` con salida `RAN`; D2 verde con `SKIPPED`; D3/D4 verdes con `LEGACY_PENDING`, migración única e idempotencia. Cada fila verificó boot original y usuario agent UID 501/GID 20 sobre `aarch64`; early acredita retorno antes de inspección y late, inspección -> release -> retorno real 0 con desenlace válido -> tick 1. `normal/` ejecutó después el título legacy completo sin wrapper/gates: rc 0, exactamente un `ok` sin skip, stderr vacío y 7,17 s. `acceptance.json` incluye consultas independientes posteriores por label: los cinco proyectos distintos quedaron sin contenedores, redes ni volúmenes. Imágenes y cachés compartidos se conservaron. Docker 29.9.3, Compose 5.7.1. Esta repetición sustituye las huellas anteriores para el árbol actual; no mide frecuencia ni CI amd64.
+- **Huellas y alcance:** `frozen.json` guarda las siete fuentes, el catálogo y el corredor. E2e `03790f3530db84a3752890a603a729545b53b2f1d9f626b7f9a2c870a0c0d29f`; oráculo `dd1444aa733156ec70083a992699959a2abb4903fdd3523fd27e4af1e1b87ef4`; ayudante privado `0cfb022d39adcd366b91d7b9bca9964e2dee621ca234a367639b5797603f3a2c`. Los overlays de Docker coinciden con esas fuentes finales; coordinador y wrapper mantienen los hashes de Fase 3. Diff vacío contra HEAD en runtime, workflows, VERSION y ayudante compartido de locks; VERSION 0.35.0. El runner de mutaciones tiene SHA `e8e4a8d1f2ae2053a169cb133d901b3c9e3d19da9ed97f89b81897afa6bb8c0f` y el catálogo `8ef72371ed9e03c907cef9ecf5b961693c0fb64a466df450acfafde68d10fa49`.
+- **Límite del cierre:** T001-T029 completas, T030-T044 pendientes. La revisión independiente, CHANGELOG, el gate host completo de 2.315 casos y CI Linux amd64 corresponden a Fase 5. No se hicieron commit, push, dispatch, PR, merge ni despliegue. Siguiente inicio manual: `$speckit-implement Fase 5: T030-T044`; las compuertas remotas conservan sus requisitos de autorización.
+
+- **24-11-2026 — T021-T023 completadas; Fase 3 cerrada:** `docker-matrix-3` ejecutó D1-D4 en serie y el coordinador terminó con rc 0. D1 (base early) produjo el rojo esperado, exactamente en la aserción original `SKIPPED` con salida `RAN`; D2 (base late) fue verde; D3/D4 (candidato early/late) fueron verdes con precondición `LEGACY_PENDING`, migración única e idempotencia. No se atribuye una frecuencia de CI a esta reproducción inducida. La evidencia vigente está en `/Users/rodrigo-hinojosa/.cache/agentic-pod-launcher/050/phase3-yrqt2t9d/docker-matrix-3/`; los intentos 1/2 conservan su clasificación inconcluyente.
+- **T021, smoke real y T022, orden acreditado:** las cuatro filas verificaron wrapper en modo `container`, usuario `agent` UID 501/GID 20, SHA del supervisor original y llamada a su `main`, corroborados con exec como agent y arquitectura `aarch64`. Los dos casos late acreditan inspección aceptada -> release -> returned real rc 0 con desenlace válido de setup -> tick 1. Early acredita returned antes de inspeccionar. Base registra `setup: complete`; candidato, `setup: already done`. Los cuatro proyectos Compose son distintos y sus recursos llevan la label propia; se conservaron TAP, logs de build/boot/setup, señales, identidad, inspección y recursos por fila. Los controles de ocupación y labels ajenas se acreditaron sin Docker en T020; la limpieza real de cada proyecto se acreditó en la matriz.
+- **T023, corrida normal independiente:** el título legacy completo seleccionó exactamente una prueba en el checkout actual, sin wrapper, gates ni flag de modelos. Resultado: rc 0, un `ok` sin skip, 6,50 s y stderr vacío. Comando registrado en `normal/command.json`; TAP/stderr/resumen en `normal/`. Se usó un proyecto Compose exclusivo y solo el endpoint local, con HOME limpio y configuración sintética del cliente Docker.
+- **Verificación final de Fase 3:** `docker-acceptance.json` en la evidencia de Fase 3 enlaza las cuatro filas y la corrida normal; consultas independientes por label confirmaron cero contenedores, redes y volúmenes restantes en los cinco proyectos. No se borraron imágenes ni cachés compartidos. Bash host 5.3.15, Bats 1.13.0, Docker 29.9.3 y Compose 5.7.1. Los hashes del candidato coinciden con T017 y con `inputs.json` de la matriz; coordinador `49543c4a781738d087cb59dd76041491228666aa359cc5b0240a7baf7ad84749`, wrapper `cf33c5d0fa322db8b20472d108e5f50b391eb39ab201a845b3c3aab4d58dd723`. Runtime, workflows, VERSION y ayudante compartido de locks conservan diff vacío contra HEAD. El conteo actual del host es 2.315 (base 2.300 más H00-H14), medido con `bats --count tests/`; la suite completa posterior al cambio sigue pendiente de su gate.
+- **Límite de este cierre:** T001-T023 están completas; T024-T044 quedan pendientes. No se ejecutó el catálogo de mutaciones de Fase 4, el gate host completo ni CI amd64; tampoco commit, push, PR o merge. Próximo inicio manual: Fase 4, T024-T029. El gate de CI antes del PR sigue siendo obligatorio.
+
+- **24-11-2026 — T018/T020 cerradas nuevamente tras corrección:** el plazo posterior al build se mide con el reloj monotónico del padre desde que observa el marcador, sin restar relojes entre procesos. El control determinista en Python 3.9.6 acredita ROJO anterior y ventana completa hasta 1.800 s tras observación; también prueba vencimiento, edición de fuente rechazada y conservación del rc del build al redirigirlo a `build.log`. Eventos incluyen UTC/PID. Evidencia `coordinator-clock-controls-vkqrfpd_/report.json`; los 30 controles independientes volvieron a pasar en `independent-controls-34z4nue0/report.json`. SHA vigente del coordinador: `49543c4a781738d087cb59dd76041491228666aa359cc5b0240a7baf7ad84749`; wrapper y tests host conservan sus hashes. Los intentos Docker previos siguen inconcluyentes; se repite en evidencia nueva.
+
+- **24-11-2026 — T018/T020 reabiertas por portabilidad del coordinador:** `docker-matrix-1` terminó antes de crear contenedores porque el PATH de la invocación omitía `/usr/local/bin` (cliente Docker). `docker-matrix-2` inició D1/build, pero se detectó que Python 3.9/macOS usa orígenes de `monotonic()` distintos por proceso: el hook registró 0,104 s, incompatible con restarlo al reloj del padre para un plazo que excluye el build. Se interrumpió el coordinador propio con SIGINT (rc 130), ejecutó su cleanup y las tres consultas independientes de contenedores/redes/volúmenes por su label devolvieron vacío. Ambos intentos son inconcluyentes; no acreditan T021/T022 ni un fallo del producto. T018/T020 esperan la corrección y su control determinista; T019 conserva la corrección de umask y su evidencia válida.
+
+- **24-11-2026 — T018-T020 completadas:** coordinador y wrapper implementados en los dos archivos de `tools/`. `reproduce.py` verifica snapshots `git archive`, runtime idéntico y overlay de cuatro tests, anclas únicas, entorno limpio, proyecto Compose por caso, preflight, identidad/labels, causa del rojo D1, retornos y limpieza; limita señales a 90 s y casos a 1.800 s tras build. El wrapper verifica SHA/identidad antes del source, llama al `main` original y gatea la función real de setup; ejecuta la llamada fuera de contextos que deshabilitan errexit, captura su retorno y retira procesos propios. No se cambia runtime del repositorio.
+- **T020, evidencia sin Docker:** 30 controles independientes del coordinador en `independent-controls-t6bgi7yi/report.json`, más controles del responsable en `coordinator-controls-8as2zt7b/`. Se rechazan runtime distinto, anclas rotas/ambiguas, evidencia reutilizada o dentro del checkout, nombre ocupado, labels ajenas, limpieza incompleta, proyecto no propagado, señal vencida, release sin returned aunque el reindex simulado pudiera pasar, causa/línea roja incorrecta, skip y TAP extra. La publicación de `returned=0` por sí sola no basta sin marcador y desenlace reales del setup. Son controles sobre scratch y Docker falso, no evidencia de contenedor.
+- **T020, wrapper:** las sondas sintéticas cubren early/late, retorno/errexit, timeout y señal sin returned, procesos descendientes, salida anticipada de main, identidad/hash/rutas inválidos, source sin efectos y topes. La integración detectó deriva de umask: hubo ROJO con entradas 022/027 en ambos bash; se restauró la máscara recibida antes del source original y se verificaron las ocho celdas (dos bash por dos máscaras por dos órdenes). Regresión completa y sintaxis de ambos bash, más ShellCheck, verdes. Evidencia vigente: `wrapper-controls/umask-fix-vh945uhg/verification.json`. Todas las rutas de este registro son relativas a la evidencia de Fase 3, `/Users/rodrigo-hinojosa/.cache/agentic-pod-launcher/050/phase3-yrqt2t9d`.
+- **Huellas al cerrar T020:** coordinador `6679b75a022a8e53cf1cb491c4e51792421ed2897bbe20f09b6d5630ef9dfb06`; wrapper ejecutable `cf33c5d0fa322db8b20472d108e5f50b391eb39ab201a845b3c3aab4d58dd723`. Los inputs host de T017 siguen intactos. T021-T023 permanecen pendientes; se inicia ahora el smoke/matriz Docker local autorizado por esta fase, con daemon ya disponible y recursos propios.
+
+- **24-11-2026 — T007-T017 completadas (Fase 3 en curso):** H01-H14 se escribieron antes del fix y B2 se reforzó sin quitar sus guardias previas. El ROJO de T011 está en `/Users/rodrigo-hinojosa/.cache/agentic-pod-launcher/050/phase3-yrqt2t9d/red/`, con TAP, stderr, manifiesto previo al fix y `classification.json`. En bash 5.3.15 hubo 15 fallos entre 41 casos: H01 falla por el marcador de setup ausente; H02-H13 se detienen en el control sano, cuya aserción original `SKIPPED` recibe `RAN`; H14 y B2 rechazan la forma/posición anterior. En bash 3.2.57 hubo 12 fallos: H00/H04/H07/H13 ya pasan; H02/H03/H09-H12 exponen falsos verdes o status ignorados, H05 vence su plazo anterior al tick y H06/H08 registran ticks repetidos. No hubo comando inexistente, error de parser ni fake incompleto. H00 permanece sano en ambos. La diferencia de las aserciones `[[ ]]` queda observada sin presentar controles ya verdes como ROJO.
+- **T012-T016:** el fixture presembró índice, setup y página wiki antes del up, dejó pendiente el marcador de colección y usa el calendario imposible. La precondición ejecuta la inspección real, valida rc y `LEGACY_PENDING`, incluidos cero remove/add previos. Tick 1 y sus dos guardias preceden a la observación de 45 s; el bucle solo lee y espera. Se exigen conteos exactos de remove/add/máscara, orden, confirmación y estado `done`, con rc antes del contenido; tick 2 conserva guardias y conteos idénticos. Todas las aserciones son activas en 3.2/5.x. Runtime y el ayudante de locks no cambian.
+- **T017, VERDE:** con Bats 1.13.0 se ejecutaron en serie H00-H14, las 26 pruebas de locks y las 11 de setup: 52 resultados por bash, 50 ejecutados/aprobados, cero fallos y dos saltos (O1 sin `/proc` y serialización de setup sin `flock`, ambos del host Darwin). H00-H14 no saltan. Duración: 28,79 s en bash 5.3.15 y 27,59 s en 3.2.57; stderr vacío. Comando: `bats --tap --print-output-on-failure tests/qmd-e2e-boot-race.bats tests/qmd-e2e-lock.bats tests/qmd-setup.bats`, con intérprete y PATH explícitos. Evidencia `green/<bash>/` y `host-frozen.json` en el directorio de Fase 3. El total nuevo de la feature es 15 pruebas (H00 más H01-H14); la suite completa aún no se repitió. H14 corrigió una expectativa del propio oráculo para nombrar el comando real `/usr/local/bin/heartbeatctl` y su constante de cadencia.
+- **Pendiente de Fase 3:** T018/T019 desarrollan en paralelo únicamente los dos archivos de herramientas autorizados; Docker local disponible (Desktop, servidor 29.9.3, Compose 5.7.1, aarch64). T020-T023 aún no acreditados; no se han ejecutado contenedores de esta fase ni acciones remotas. La evidencia local arm64 no sustituye el gate posterior de CI Linux amd64.
+
+- **24-11-2026 — T003-T006 completadas; Fase 2 cerrada:** se agregaron diez delimitadores al único test legacy. Al retirar únicamente esas líneas, `tests/docker-e2e-qmd.bats` es byte a byte igual a HEAD; fixture, aserciones y tick dentro del bucle conservan el comportamiento anterior. Se crearon `tests/qmd-e2e-boot-race.bats` con H00 y `tests/helper-qmd-e2e-boot-race.bash`. El extractor conserva un intervalo textual continuo, admite el tick anidado anterior y rechaza secciones incompletas, cruzadas, vacías o con sentencias descubiertas. Solo T001-T006 están cerradas; T007-T044 siguen pendientes.
+- **T004, ROJO observado antes del ayudante:** H00 terminó con rc 1 en bash 5.3.15 y 3.2.57 por `qmd_boot_race_extract: command not found`. Es un ROJO de implementación del arnés, no de la migración. Evidencia en `/Users/rodrigo-hinojosa/.cache/agentic-pod-launcher/050/phase2-ix7jdpwh/red/<bash>/`. Las corridas de desarrollo quedan separadas y no sustituyen el VERDE final.
+- **T005, interfaz implementada:** `qmd_boot_race_extract OUT` toma `QMD_BOOT_RACE_E2E_FILE` o el e2e del checkout y exige un directorio de salida nuevo; genera secciones `.bash`, `replay.bash` y `extraction.json` con líneas/hashes. `qmd_boot_race_replay OUT BOOTSTRAP EXPECTED_RC` genera un único test Bats hijo con sentencias directas y lo ejecuta con el mismo bash y launcher exterior, entorno vacío más whitelist, HOME/TMPDIR propios y fd 3/4 cerrados. `OUT/expected.trace` es obligatorio; para rc 1 se exige `expected.assertion` y, si la condición se repite, puede precisarse `expected.line` del hijo. `qmd_boot_race_validate` retorna 0 solo ante evidencia válida, clasificada en `result.json` como `healthy` o `assertion`; rechaza evidencia inválida con rc 2 y causa `harness:*`. Los rechazos del extractor usan rc 2 y causa `structural:*`.
+- **T006, controles acreditados:** H00 acepta un hijo sano y una aserción roja en su línea esperada, con trazas exactas. Comprueba once rechazos estructurales y once rechazos de ejecución/evidencia, incluidos skip real, TAP vacío/extra, bash/Bats distintos, retorno inesperado, atribución errónea, traza incorrecta, comando inexistente, fake incompleto y fallo de setup. El marcador exportado `BATS_050_PARENT_ONLY` no llega al hijo. La carga del ayudante no escribe, imprime, cambia PATH/cwd ni opciones del shell. Un control adicional altera PATH en una copia: expuso una comparación intermedia inicialmente inactiva en el probe (ROJO en ambos bash, `source-guard-red/`) y ahora exige su rechazo explícito. También se corrigió el `unset` de la costura en setup: `seam-before/` acredita el problema y `verified/<bash>/seam-probe.tap` prueba que una selección externa inexistente llega al extractor y es rechazada por su causa.
+
+| T006, Bats 1.13.0 | Casos | Ejecutados y aprobados | Fallos | Saltados | Duración | stderr |
+| --- | ---: | ---: | ---: | ---: | --- | --- |
+| bash 5.3.15 | 27 | 26 | 0 | 1 | 6,31 s | 0 bytes |
+| bash 3.2.57 | 27 | 26 | 0 | 1 | 6,35 s | 0 bytes |
+
+- **Comando y evidencia final de T006:** `bats --tap --print-output-on-failure tests/qmd-e2e-boot-race.bats tests/qmd-e2e-lock.bats`, ejecutado primero con `/opt/homebrew/bin/bash` y luego con `/bin/bash`, PATH correspondiente y entorno mínimo. TAP, stderr, comandos, versiones y hashes están en `/Users/rodrigo-hinojosa/.cache/agentic-pod-launcher/050/phase2-ix7jdpwh/verified/<bash>/`; el único salto es O1 de locks por ausencia de `/proc` en Darwin. H00 se ejecuta sin skip; el total nuevo de esta fase es una prueba. No se repitió la suite completa de T002, que queda como base anterior a cambios.
+- **Alcance y checks de Fase 2:** `scope.json` en el mismo directorio acredita el diff solo de comentarios del e2e y que runtime, workflows, VERSION y las dos superficies de locks siguen intactos. El ayudante pasa `bash -n` en 5.3/3.2 y `shellcheck -S error`. Hashes finales: e2e `d79344ef229864a2c4d8a8c8270ed4320d778f54119583f3061ebb3cb8ab7c75`; H00 `a89277af1a574f0cbc82ed30af3af6effafbdbf49c42ea79935ed7f4b71fe1d6`; ayudante nuevo `d0419fc8da1eb431489a38a5413f756f06d845ea6c545626195b38693cda0357`. Hooks de extensión sin entradas. No se ejecutaron Docker, CI ni operaciones de publicación. El arreglo de #117 y H01-H14 siguen pendientes; siguiente inicio manual: Fase 3, T007-T023.
+
+- **24-11-2026 — T002 completada; Fase 1 cerrada:** se ejecutó la suite completa en serie, primero bash 5.3.15 y después 3.2.57, con Bats 1.13.0 y el entorno explícito de T001. Comandos: `/opt/homebrew/bin/bash /opt/homebrew/bin/bats --tap <raíz>/tests` y `/bin/bash /opt/homebrew/bin/bats --tap <raíz>/tests`; `<raíz>` corresponde al checkout absoluto registrado en `metadata.json`. Ambos TAP tienen un único plan `1..2300`, IDs consecutivos y los mismos títulos. Cada corrida terminó con rc 0 y stderr de 0 bytes.
+
+| Bash | Total TAP | Ejecutadas y aprobadas | Fallos | Saltadas | Duración |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 5.3.15 | 2.300 | 2.210 | 0 | 90 | 50 min 31 s |
+| 3.2.57 | 2.300 | 2.209 | 0 | 91 | 50 min 29 s |
+
+- **Evidencia de T002:** `/Users/rodrigo-hinojosa/.cache/agentic-pod-launcher/050/baseline-e1kmp9n4/baseline-comparison.json` contiene versiones, horarios UTC, hashes del TAP/stderr/resumen, casos saltados y motivos exactos; los archivos originales están en `runs/bash5/` y `runs/bash32/`. La primera corrida transcurrió de 17:24:07 a 18:14:38 y la segunda de 18:14:47 a 19:05:17, hora de Santiago del 24-11-2026. No hubo suites concurrentes.
+- **Saltos de T002:** en ambos bash, 67 por Docker opt-in desactivado, 16 porque Bun no está en el PATH mínimo de la corrida, 5 por ausencia de `flock`, 1 por ausencia de `timeout` y 1 por ausencia de `/proc` en Darwin. Bash 3.2 suma únicamente el caso 1531, `qmd_watch fires exactly one reindex via the debounce-quiet (timeout) path`: su skip declara que `read` retorna 1 al vencer el plazo y el caso requiere el comportamiento de bash 4+. Ningún salto se presenta como prueba ejecutada ni como cobertura Docker/Bun acreditada por esta fase.
+- **Integridad y límite de T002:** HEAD y rama permanecen en los valores de T001; los 283 hashes del manifiesto coinciden al terminar las dos corridas y en la verificación final, con huella `57787ce91fb4ed741636f4dd013bffa612c457bdae5146d2b5efe3ff5da46852`. El diff contra HEAD de runtime, pruebas, VERSION y workflows está vacío. Checklist 16/16 sin editar; hooks `after_implement` sin entradas. T001-T002 son las únicas tareas cerradas; T003-T044 permanecen pendientes. Esta evidencia fija la base anterior al arreglo y no demuestra la corrección de #117. Siguiente paso: iniciar manualmente la Fase 2 (T003-T006), sin encadenarla desde este cierre.
+
+- **24-11-2026 — T002 en curso:** conteo previo de la suite: 2.300 pruebas. Medición secuencial iniciada con `run-baseline.py` en `/Users/rodrigo-hinojosa/.cache/agentic-pod-launcher/050/baseline-e1kmp9n4`; primero bash 5.x, después 3.2 solo si la primera corrida termina correctamente. Entorno mínimo explícito, HOME nuevo por corrida, locale C, UTC y Git con identidad de prueba; sin gate Docker. TAP/stderr/resúmenes en `runs/<bash>/`; estado y PID en `status.json` (runner PID 95400). T002 permanece sin marcar hasta verificar ambos resultados y la huella congelada.
+
+- **24-11-2026 — T001 completada:** checkout y rama verificados; HEAD/origin/main = `a45beaefaa68da17ce16d956351337bd5ce3b9d5`. Dependencias: bash 5.3.15 y 3.2.57, Bats 1.13.0, yq v4.52.5, jq 1.7.1, Python 3.9.6, Git 2.53.0 y tmux 3.6a. Checklist `requirements.md`: 16/16, intacta. Ignores existentes revisados; sin cambios necesarios para esta fase con evidencia externa y sin build. Evidencia: `/Users/rodrigo-hinojosa/.cache/agentic-pod-launcher/050/baseline-e1kmp9n4` (`metadata.json`, `source-manifest.json`, `status.json`). Huella de 283 archivos de código seleccionados por lista permitida: `57787ce91fb4ed741636f4dd013bffa612c457bdae5146d2b5efe3ff5da46852`. No había otra corrida Bats identificada al iniciar. T002 pendiente; pruebas, runtime y workflows intactos.
+
+- **24-11-2026 — Remediación aprobada del análisis:** U1 agrega confirmación del retorno tardío y su control de ausencia; U2 exige proyecto Compose único, preflight y labels de recursos propios; I1 deja B2 como regresión del candidato y M14 en el oráculo de copias; A1 clasifica M18 como rechazo estructural esperado. Se actualizaron contratos, modelo, plan, guía y T018-T027/T036 según correspondía. Las 44 tareas de implementación permanecen pendientes; estas ediciones no acreditan Docker, CI ni una nueva ejecución de `/speckit-analyze`.
+
+- **24-11-2026 — Generación:** tareas derivadas de la spec clarificada y el plan; no se ejecutó ninguna tarea de implementación. Se conserva la separación entre mediciones previas de diseño y evidencia pendiente del fix.
+- Al ejecutar una tarea, agregar fecha local, tarea/alcance, commit o hash de código, comando, resultado observado, ruta de evidencia y límite de lo demostrado. Marcarla solo después de verificar su resultado.
+- Los bloqueos y autorizaciones se registran con su alcance real. Un proceso visible, un script preparado, un PR abierto o un resultado inferido no sustituyen una ejecución verificada.

@@ -412,13 +412,14 @@ PY
 # 037 T037: an agent scaffolded before the 0.27.0 wiki/-only mask migrates its
 # qmd collection automatically, once, on the first reindex tick. Pre-seeds a
 # "legacy" index (index.sqlite present, NO .qmd-collection-wiki sentinel) so
-# qmd_setup_if_needed skips entirely (its `[ ! -f index.sqlite ]` guard is
-# false) and the ONLY path that can migrate is _qmd_reindex_locked's own
+# qmd_setup_if_needed skips entirely (index AND setup marker exist), while
+# the layout marker is absent. The ONLY path that can migrate is reindex's
 # pending-state check (T015) -- proving the real boot plumbing, not a stub
 # shortcut. The manual reindex is invoked through qmd_e2e_reindex_wait (043:
 # deterministic, and it waits for a lock held by another run) rather than
 # waiting for the */5 cron backstop.
 @test "qmd e2e (037): a legacy vault-root collection migrates to wiki/-only on the first reindex tick" {
+  # 050:fixture:begin
   local D2="$TMP_TEST_DIR/agent-qmd-migrate-e2e" N2="qmd-migrate-e2e"
   mkdir -p "$D2"
   cat > "$D2/agent.yml" <<YML
@@ -438,7 +439,7 @@ vault:
   seed_skeleton: true
   initial_sources: []
   mcp: {enabled: true, server: vault}
-  qmd: {enabled: true, version: "2.5.3", schedule: "*/5 * * * *"}
+  qmd: {enabled: true, version: "2.5.3", schedule: "0 0 31 2 *"}
   schema: {frontmatter_required: true, log_format: "## [{date}] {op} | {title}"}
 plugins: []
 YML
@@ -456,7 +457,7 @@ CL
   chmod +x "$D2/bin/claude"
 
   # Pre-seed the managed prefix (installed, so no `bun install`/network) PLUS a
-  # legacy index.sqlite with NO sentinel -- the exact shape qmd_collection_
+  # legacy index.sqlite with NO layout sentinel -- the shape qmd_collection_
   # migration_state reads as "pending" (index present, sentinel absent).
   local _prefix="$D2/.state/.cache/qmd/pkg"
   mkdir -p "$_prefix/node_modules/.bin" "$D2/.state/.cache/qmd"
@@ -465,6 +466,9 @@ CL
   printf '%s' "$(_qmd_manifest "2.5.3")" > "$_prefix/package.json"
   printf '%s' "$(_qmd_manifest "2.5.3")" | _qmd_sha > "$_prefix/.installed-hash"
   : > "$D2/.state/.cache/qmd/index.sqlite"
+  : > "$D2/.state/.cache/qmd/.qmd-setup-ok"
+  mkdir -p "$D2/.state/.vault/wiki/concepts"
+  printf '# Legacy migration fixture\n\nA stable wiki page before boot.\n' > "$D2/.state/.vault/wiki/concepts/migration.md"
   cat > "$_prefix/node_modules/.bin/qmd" <<'QS'
 #!/bin/sh
 mkdir -p "$HOME/.cache/qmd" 2>/dev/null || true
@@ -495,28 +499,34 @@ if inject not in txt:
 open(path, 'w').write(txt)
 PY
 
+  # 050:fixture:end
   (cd "$D2" && docker compose build)
   (cd "$D2" && docker compose up -d)
   in_container() { (cd "$D2" && docker compose exec -T -u agent "$N2" "$@"); }
 
-  # boot must NOT have run collection setup (index.sqlite already existed) —
-  # confirms the only path exercised below is the reindex-time migration.
-  run in_container sh -c 'test -f "$HOME/.cache/qmd/.qmd-setup-ok" && echo RAN || echo SKIPPED'
-  [[ "$output" == *"SKIPPED"* ]]
+  # 050:precondition:begin
+  # Setup may already have returned. Its completed marker is independent of
+  # migration; only the first manual tick below may replace this collection.
+  run in_container sh -c '
+    n=0
+    if test -f "$HOME/.cache/qmd/engine-calls.log"; then
+      n=$(grep -Ec "^collection (remove|add)" "$HOME/.cache/qmd/engine-calls.log" || true)
+    fi
+    if test -f "$HOME/.cache/qmd/index.sqlite" && test -f "$HOME/.cache/qmd/.qmd-setup-ok" && test ! -e "$HOME/.cache/qmd/.qmd-collection-wiki" && test "$n" -eq 0; then
+      echo LEGACY_PENDING
+    else
+      echo INVALID_LEGACY
+    fi'
+  [ "$status" -eq 0 ]
+  [ "$output" = "LEGACY_PENDING" ]
+  # 050:precondition:end
 
   # qmd_setup_if_needed and qmd_reindex share the SAME .reindex.lock
-  # (non-blocking flock -n). 043: a manual reindex that loses it does nothing
-  # and exits 0 (`already running`), so each tick goes through
-  # qmd_e2e_reindex_wait (tests/helper-qmd-e2e.bash), which waits for the
-  # holder and retries that skip only; the loop below stays only for the
-  # engine log and the migration call to show up, and its read of the log
-  # tolerates a log that does not exist yet (#109: a bare `cat` there aborted
-  # the test on its first round). The product's reindex always exits 0, so a
-  # tick that ran but exited otherwise (the exec, the cap, the shell) ends the
-  # loop with its output instead of retrying in silence. If the test fails
-  # anywhere, teardown dumps the logs of its container.
-  local retry_deadline=$(( $(date +%s) + 45 )) calls="" rc1=0
-  while [ "$(date +%s)" -lt "$retry_deadline" ]; do
+  # (non-blocking flock -n). Each tick waits through the 043 helper. The
+  # observation loop never repeats work, and gets its own 45 s after tick 1.
+  # A missing log remains tolerated (#109); teardown still dumps failures.
+    # 050:tick1:begin
+  local rc1=0
     rc1=0
     qmd_e2e_reindex_wait in_container "test 13 tick 1" || rc1=$?
     if [ "$rc1" -ne 0 ]; then
@@ -526,26 +536,38 @@ PY
       _qmd_e2e_note "test 13 tick 1: qmd-reindex exited $REINDEX_STATUS; its output:" "$REINDEX_OUTPUT"
       false
     fi
+    # 050:tick1:end
+  # 050:observe:begin
+  local retry_deadline=$(( $(date +%s) + 45 )) calls=""
+  while [ "$(date +%s)" -lt "$retry_deadline" ]; do
     calls=$(in_container sh -c 'cat "$HOME/.cache/qmd/engine-calls.log" 2>/dev/null' || true)
-    echo "$calls" | grep -q '^collection remove' && break
+    case "$calls" in *'collection remove'*) break ;; esac
     sleep 2
   done
+  # 050:observe:end
+  # 050:verify:begin
   # order: remove -> add (wiki/-only mask) -> update -> cleanup (sentinel
   # write happens between add/update and cleanup, in-process — not an engine
   # call, so it can't appear in this log; checked separately below).
-  local remove_line add_line cleanup_line
-  remove_line=$(echo "$calls" | grep -n '^collection remove' | head -1 | cut -d: -f1)
-  add_line=$(echo "$calls" | grep -n -- '^collection add.*--mask wiki/\*\*/\*\.md' | head -1 | cut -d: -f1)
-  cleanup_line=$(echo "$calls" | grep -n '^cleanup' | head -1 | cut -d: -f1)
-  [ -n "$remove_line" ]
-  [ -n "$add_line" ]
-  [ -n "$cleanup_line" ]
+  local remove_count add_count mask_count remove_line add_line cleanup_line
+  remove_count=$(printf '%s\n' "$calls" | grep -c '^collection remove' || true)
+  add_count=$(printf '%s\n' "$calls" | grep -c '^collection add' || true)
+  mask_count=$(printf '%s\n' "$calls" | grep -c '^collection add.*--mask wiki/\*\*/\*\.md' || true)
+  [ "$remove_count" -eq 1 ]
+  [ "$add_count" -eq 1 ]
+  [ "$mask_count" -eq 1 ]
+  remove_line=$(printf '%s\n' "$calls" | awk '/^collection remove/ && !n {n=NR} END {print n+0}')
+  add_line=$(printf '%s\n' "$calls" | awk '/^collection add/ && !n {n=NR} END {print n+0}')
+  cleanup_line=$(printf '%s\n' "$calls" | awk '/^cleanup/ && !n {n=NR} END {print n+0}')
+  [ "$cleanup_line" -gt 0 ]
   [ "$remove_line" -lt "$add_line" ]
   [ "$add_line" -lt "$cleanup_line" ]
 
-  run in_container sh -c 'test -f "$HOME/.cache/qmd/.qmd-collection-wiki" && echo HAVE_SENTINEL'
-  [[ "$output" == *"HAVE_SENTINEL"* ]]
+  run in_container sh -c 'if test -f "$HOME/.cache/qmd/.qmd-collection-wiki"; then echo HAVE_SENTINEL; else echo MISSING_SENTINEL; fi'
+  [ "$status" -eq 0 ]
+  [ "$output" = "HAVE_SENTINEL" ]
   run in_container sh -c 'jq -r .migration /workspace/scripts/heartbeat/qmd-index.json'
+  [ "$status" -eq 0 ]
   [ "$output" = "done" ]
 
   # a second tick must NOT migrate again (idempotent) -- no new remove/add.
@@ -556,7 +578,9 @@ PY
   [ "$rc2" -eq 0 ]
   [ "$REINDEX_STATUS" -eq 0 ]
   run in_container sh -c 'grep -c "^collection" "$HOME/.cache/qmd/engine-calls.log"'
+  [ "$status" -eq 0 ]
   [ "$output" = "$calls_before" ]
+  # 050:verify:end
 }
 
 # 037 T037 (Phase 4.5 extension): the SAME PARA fixture the host suite uses to

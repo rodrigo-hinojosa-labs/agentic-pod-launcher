@@ -629,13 +629,23 @@ STATE present indexed 0 abc123 abc123'
   [ "$l2" -gt "$l1" ]
 }
 
-@test "B2: test 13 waits through the helper in its loop and in its second tick, which must have run, and teardown dumps its logs" {
+@test "B2: test 13 waits before observation and in its second tick, which must have run, and teardown dumps its logs" {
   local code td line n a d
   code=$(_body_037_migrate | _code)
   [ -n "$code" ]
   n=$(printf '%s\n' "$code" | grep -c -F -- 'qmd_e2e_reindex_wait in_container' || true)
   [ "$n" = "2" ]
-  # the loop: a deadline (1) or a cap (3) ends the test, the helper already reported
+  # tick 1 and both guards precede the observation loop
+  printf '%s\n' "$code" > "$TMP_TEST_DIR/b2-body.bash"
+  python3 - "$TMP_TEST_DIR/b2-body.bash" <<'PY'
+import sys
+from pathlib import Path
+code=Path(sys.argv[1]).read_text()
+loop=code.index('while [')
+for guard in ['qmd_e2e_reindex_wait in_container "test 13 tick 1"', 'if [ "$rc1" -ne 0 ]', 'if [ "$REINDEX_STATUS" -ne 0 ]']:
+    assert code.index(guard)<loop, guard+' must precede observation'
+PY
+  # a deadline (1) or a cap (3) ends the test, the helper already reported
   _has "$code" 'qmd_e2e_reindex_wait in_container "test 13 tick 1" || rc1=$?'
   _has "$code" 'if [ "$rc1" -ne 0 ]; then
       false
