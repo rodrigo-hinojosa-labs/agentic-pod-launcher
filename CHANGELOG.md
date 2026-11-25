@@ -26,6 +26,13 @@
   backup and cannot be pruned by deleting a branch.
 
 ### Fixed
+- **QMD's legacy migration e2e no longer depends on boot order — `050-e2e-qmd-boot-race`, #117.**
+  The fixture starts with setup completed and collection migration pending, seeds its wiki
+  before boot and disables its scheduled reindex. The first manual tick runs once before
+  observing the log; exact operation counts, status checks and assertions active in bash
+  3.2 and 5.x verify migration and second-tick idempotence. Host negative controls and an
+  isolated Docker reproduction cover both boot orders. Tests and documentation only;
+  runtime, workflows, wait budgets and VERSION 0.35.0 are unchanged.
 - **The Telegram channel's stderr log is bounded and no longer loops on a closed stderr — `049-telegram-stderr-log-bound`**
   (#139; VERSION 0.34.0 → 0.35.0; docker mode; the image must be rebuilt). The stderr-capture
   patch of the Telegram plugin goes from v1 to v2. Measured cause: in bun a write to a closed
